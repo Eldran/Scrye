@@ -37,6 +37,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session = new MudSession(profile);
         _session.LineReady += line => _pending.Enqueue(line);
         _session.StateChanged += s => _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
+        _session.MsspReceived += mssp =>
+        {
+            string name = mssp.TryGetValue("NAME", out var n) ? n : Title;
+            string players = mssp.TryGetValue("PLAYERS", out var pc) ? $" - {pc} players online" : "";
+            AppendSystem($"server: {name}{players}");
+        };
 
         // scripting: trigger/alias/timer script callbacks run on the session loop
         _scriptHost = new LuaScriptHost(new SessionWorldApi(_session));

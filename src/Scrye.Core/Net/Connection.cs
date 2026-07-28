@@ -1,34 +1,51 @@
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using Scrye.Core.Model;
 
 namespace Scrye.Core.Net;
 
 /// <summary>
-/// Async TCP transport. Connects, pumps a background read loop that raises
-/// <see cref="BytesReceived"/>, and exposes <see cref="SendAsync"/>. TLS/proxy
-/// slot in here later behind the same surface.
+/// Async TCP transport with optional TLS. Connects, pumps a background read loop
+/// that raises <see cref="BytesReceived"/>, and exposes <see cref="SendAsync"/>.
+/// When TLS is requested the network stream is wrapped in an <see cref="SslStream"/>
+/// after connect — the same stream-wrapping seam MCCP decompression will reuse.
 /// </summary>
 public sealed class Connection : IAsyncDisposable
 {
     private TcpClient? _tcp;
-    private NetworkStream? _stream;
+    private Stream? _stream;
     private CancellationTokenSource? _cts;
     private Task? _readLoop;
 
     public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
 
-    /// <summary>Raised (on a background thread) with a fresh copy of received bytes.</summary>
     public event Action<byte[]>? BytesReceived;
     public event Action<ConnectionState>? StateChanged;
 
-    public async Task ConnectAsync(string host, int port, CancellationToken ct = default)
+    public async Task ConnectAsync(string host, int port, bool useTls, bool acceptInvalidCerts, CancellationToken ct = default)
     {
         SetState(ConnectionState.Connecting);
         try
         {
             _tcp = new TcpClient { NoDelay = true };
             await _tcp.ConnectAsync(host, port, ct).ConfigureAwait(false);
-            _stream = _tcp.GetStream();
+
+            Stream stream = _tcp.GetStream();
+            if (useTls)
+            {
+                RemoteCertificateValidationCallback? validate =
+                    acceptInvalidCerts ? (_, _, _, _) => true : null;
+                var ssl = new SslStream(stream, leaveInnerStreamOpen: false, validate);
+                await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = host,
+                    EnabledSslProtocols = SslProtocols.None,   // OS-chosen (TLS 1.2/1.3)
+                }, ct).ConfigureAwait(false);
+                stream = ssl;
+            }
+
+            _stream = stream;
             _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             SetState(ConnectionState.Connected);
             _readLoop = Task.Run(() => ReadLoopAsync(_cts.Token));
@@ -55,7 +72,7 @@ public sealed class Connection : IAsyncDisposable
             while (!ct.IsCancellationRequested && _stream is not null)
             {
                 int n = await _stream.ReadAsync(buffer, ct).ConfigureAwait(false);
-                if (n <= 0) break;                          // server closed
+                if (n <= 0) break;
                 BytesReceived?.Invoke(buffer.AsSpan(0, n).ToArray());
             }
         }

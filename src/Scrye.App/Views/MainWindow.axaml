@@ -12,6 +12,7 @@
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
             <TextBox Width="260" Watermark="host" Text="{Binding Host}" />
             <TextBox Width="70" Watermark="port" Text="{Binding Port}" />
+            <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
             <Button Content="Connect" Command="{Binding ConnectCommand}" />
         </StackPanel>
 

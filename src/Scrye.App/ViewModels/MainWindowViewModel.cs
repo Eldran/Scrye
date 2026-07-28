@@ -14,6 +14,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string _port = "23";
     public string Port { get => _port; set => SetField(ref _port, value); }
 
+    private bool _useTls;
+    public bool UseTls { get => _useTls; set => SetField(ref _useTls, value); }
+
     private WorldViewModel? _active;
     public WorldViewModel? Active { get => _active; set => SetField(ref _active, value); }
 
@@ -24,7 +27,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(Host) || !int.TryParse(Port, out int port))
             return;
 
-        var vm = new WorldViewModel(new WorldProfile { Name = Host, Host = Host, Port = port });
+        var vm = new WorldViewModel(new WorldProfile { Name = Host, Host = Host, Port = port, UseTls = UseTls, AcceptInvalidCertificates = UseTls });
         Worlds.Add(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }

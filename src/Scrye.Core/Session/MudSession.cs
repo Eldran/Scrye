@@ -9,11 +9,11 @@ namespace Scrye.Core.Session;
 
 /// <summary>
 /// The live world. Owns the connection and the receive pipeline
-/// (telnet → decode → ANSI → line), the automation engine, and drives everything
-/// through a single serialized mailbox loop. Implements <see cref="IWorldActions"/>
-/// so the engine can act (send / echo / variables / script) without referencing
-/// the session type directly. Raises events the UI subscribes to; never reaches
-/// into the UI. One instance per connected world.
+/// (telnet -> decode -> ANSI -> line), the automation engine, and drives
+/// everything through a single serialized mailbox loop. Implements
+/// <see cref="IWorldActions"/> so the engine can act without referencing the
+/// session type. Surfaces protocol events (GMCP/MSSP/echo) the UI can use.
+/// One instance per connected world.
 /// </summary>
 public sealed class MudSession : IAsyncDisposable, IWorldActions
 {
@@ -38,17 +38,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public AutomationEngine Automation => _automation;
     public VariableStore Variables => _variables;
 
-    /// <summary>Set by the host to route trigger/alias/timer script callbacks to the
-    /// script engine. Invoked on the session loop, so single-threaded w.r.t. processing.</summary>
     public Action<string, IReadOnlyList<string>>? ScriptDispatcher { get; set; }
-
-    /// <summary>Set by the host to execute an arbitrary script chunk (the `/` console).
-    /// Invoked on the session loop for single-threaded script access.</summary>
     public Action<string>? ScriptExecutor { get; set; }
 
-    /// <summary>Raised on the session loop for every completed line (server output + local echoes).</summary>
+    // ---- events the UI/host can subscribe to ----
     public event Action<Line>? LineReady;
     public event Action<ConnectionState>? StateChanged;
+    /// <summary>Out-of-band GMCP: (package, json-or-empty).</summary>
+    public event Action<string, string>? GmcpReceived;
+    /// <summary>Parsed MSSP server-status variables.</summary>
+    public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
+    /// <summary>Server ECHO changed — true means the client should mask local input (passwords).</summary>
+    public event Action<bool>? EchoModeChanged;
 
     public MudSession(WorldProfile profile)
     {
@@ -59,8 +60,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _automation = new AutomationEngine(_variables);
 
         _ansi.LineCompleted += OnLineCompleted;
+
         _connection.BytesReceived += bytes => _mailbox.Writer.TryWrite(new SessionMessage.DataArrived(bytes));
         _connection.StateChanged += s => StateChanged?.Invoke(s);
+
+        _telnet.SendData += bytes => _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
+        _telnet.GmcpReceived += (pkg, json) => GmcpReceived?.Invoke(pkg, json);
+        _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
+        _telnet.ServerEchoChanged += on => EchoModeChanged?.Invoke(on);
+        _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)
@@ -68,7 +76,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
-        await _connection.ConnectAsync(Profile.Host, Profile.Port, _cts.Token).ConfigureAwait(false);
+        await _connection.ConnectAsync(Profile.Host, Profile.Port, Profile.UseTls,
+            Profile.AcceptInvalidCertificates, _cts.Token).ConfigureAwait(false);
     }
 
     /// <summary>Queue a line of user input (runs through aliases before sending).</summary>
@@ -76,6 +85,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     /// <summary>Queue a script chunk to run on the session loop (the `/` console).</summary>
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
+
+    /// <summary>Send an out-of-band GMCP message.</summary>
+    public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
 
     // ---- IWorldActions (called by the automation engine, on the loop) --------
 
@@ -102,7 +114,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         HandleInput(u.Text);
                         break;
                     case SessionMessage.SendText s:
-                        await SendRawAsync(s.Text, ct).ConfigureAwait(false);
+                        await SendRawAsync(_encoding.GetBytes(s.Text + "\r\n"), ct).ConfigureAwait(false);
+                        break;
+                    case SessionMessage.SendBytes sb:
+                        await SendRawAsync(sb.Bytes, ct).ConfigureAwait(false);
                         break;
                     case SessionMessage.Tick:
                         _automation.Tick(1.0, this);
@@ -130,30 +145,27 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private async Task HandleDataAsync(byte[] bytes, CancellationToken ct)
     {
-        byte[] data = _telnet.Process(bytes, out byte[] response);
-        if (response.Length > 0)
-            await _connection.SendAsync(response, ct).ConfigureAwait(false);
+        byte[] data = _telnet.Process(bytes);   // telnet replies come back via SendData -> SendBytes
         if (data.Length > 0)
-            _ansi.Feed(Decode(data));   // emits lines via OnLineCompleted
+            _ansi.Feed(Decode(data));           // emits lines via OnLineCompleted
+        await Task.CompletedTask;
     }
 
     private void OnLineCompleted(Line line)
     {
-        LineReady?.Invoke(line);                        // display first
-        _automation.ProcessLine(line.PlainText, this);  // then react (may Send/Echo/script)
+        LineReady?.Invoke(line);                         // display first
+        _automation.ProcessLine(line.PlainText, this);   // then react
     }
 
     private void HandleInput(string text)
     {
-        // aliases get first crack; if none consumes it, send raw
         if (!_automation.ProcessInput(text, this))
             _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     }
 
-    private async Task SendRawAsync(string text, CancellationToken ct)
+    private async Task SendRawAsync(byte[] bytes, CancellationToken ct)
     {
-        byte[] outBytes = _encoding.GetBytes(text + "\r\n");
-        await _connection.SendAsync(outBytes, ct).ConfigureAwait(false);
+        await _connection.SendAsync(bytes, ct).ConfigureAwait(false);
     }
 
     private string Decode(byte[] data)
