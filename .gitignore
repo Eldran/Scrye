@@ -1,0 +1,16 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+# Rider
+.idea/
+# NuGet local
+packages/
+# OS
+.DS_Store
+Thumbs.db
+# Build output
+[Dd]ebug/
+[Rr]elease/
+artifacts/

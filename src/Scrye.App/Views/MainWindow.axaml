@@ -1,0 +1,38 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Scrye.App.ViewModels"
+        x:Class="Scrye.App.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="Scrye" Width="960" Height="640"
+        FontFamily="Cascadia Mono, Consolas, monospace">
+
+    <DockPanel>
+        <!-- quick-connect bar -->
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
+            <TextBox Width="260" Watermark="host" Text="{Binding Host}" />
+            <TextBox Width="70" Watermark="port" Text="{Binding Port}" />
+            <Button Content="Connect" Command="{Binding ConnectCommand}" />
+        </StackPanel>
+
+        <!-- one tab per connected world -->
+        <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}">
+            <TabControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:WorldViewModel">
+                    <TextBlock Text="{Binding Title}" />
+                </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+                <DataTemplate x:DataType="vm:WorldViewModel">
+                    <DockPanel>
+                        <TextBox DockPanel.Dock="Bottom" Margin="4"
+                                 Text="{Binding Input}" Watermark="type a command and press Enter…"
+                                 KeyDown="OnInputKeyDown" />
+                        <TextBox Margin="4" IsReadOnly="True" AcceptsReturn="True"
+                                 TextWrapping="Wrap" VerticalContentAlignment="Top"
+                                 Text="{Binding Output}" />
+                    </DockPanel>
+                </DataTemplate>
+            </TabControl.ContentTemplate>
+        </TabControl>
+    </DockPanel>
+</Window>

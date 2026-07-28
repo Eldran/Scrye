@@ -1,0 +1,3 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Engine core: depends ONLY on the base framework (no NuGet). UI-free. -->
+</Project>

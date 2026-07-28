@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
+    <!-- Pure-managed Lua (no native dependency). Swap for NLua later if perf demands. -->
+    <PackageReference Include="MoonSharp" Version="2.0.0" />
+  </ItemGroup>
+</Project>
