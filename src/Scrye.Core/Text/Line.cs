@@ -19,6 +19,12 @@ public sealed class Line
         ReceivedUtc = receivedUtc;
     }
 
+    /// <summary>Convenience factory for a single-run, single-colour line
+    /// (echoed input, system notices, etc.).</summary>
+    public static Line FromText(string text, Rgb? fore = null, bool isPrompt = false) =>
+        new(new[] { new StyledRun(text, fore ?? Rgb.DefaultFore, Rgb.DefaultBack, RunFlags.None) },
+            isPrompt, DateTimeOffset.UtcNow);
+
     /// <summary>The line's text with styling stripped (for logging, triggers, search).</summary>
     public string PlainText => string.Concat(Runs.Select(r => r.Text));
 

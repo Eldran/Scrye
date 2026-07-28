@@ -1,4 +1,4 @@
-using System.Text;
+using System.Collections.Concurrent;
 using Avalonia.Threading;
 using Scrye.Core.Model;
 using Scrye.Core.Session;
@@ -7,20 +7,24 @@ using Scrye.Core.Text;
 namespace Scrye.App.ViewModels;
 
 /// <summary>
-/// Wraps a live <see cref="MudSession"/> for one world tab. For the skeleton the
-/// output is a growing plain-text string bound to a read-only TextBox — colour
-/// and virtualization arrive with the dedicated OutputControl (Milestone 2).
+/// Wraps a live <see cref="MudSession"/> for one world tab. Engine lines land on
+/// the session loop (background); we enqueue them and drain to the
+/// <see cref="ScrollbackBuffer"/> on a UI-thread timer, so the renderer sees at
+/// most one update per frame instead of one per line (firehose-safe).
 /// </summary>
 public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 {
+    private static readonly Rgb EchoColour = new(0x60, 0xC0, 0xF0);   // cyan-ish for local echo
+    private static readonly Rgb SystemColour = new(0xF0, 0xC0, 0x40); // amber for system notices
+
     private readonly MudSession _session;
-    private readonly StringBuilder _buffer = new();
+    private readonly ConcurrentQueue<Line> _pending = new();
+    private readonly DispatcherTimer _flushTimer;
+    private readonly List<Line> _drainBuffer = new(256);
 
     public string Title { get; }
+    public ScrollbackBuffer Scrollback { get; } = new();
     public RelayCommand SubmitCommand { get; }
-
-    private string _output = "";
-    public string Output { get => _output; private set => SetField(ref _output, value); }
 
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
@@ -29,30 +33,39 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         Title = profile.Name;
         _session = new MudSession(profile);
-        _session.LineReady += OnLine;
-        _session.StateChanged += s => AppendSystem($"[{s}]");
+        _session.LineReady += line => _pending.Enqueue(line);
+        _session.StateChanged += s => _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
         SubmitCommand = new RelayCommand(Submit);
+
+        _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
+        _flushTimer.Tick += (_, _) => Flush();
+        _flushTimer.Start();
     }
 
     public Task ConnectAsync() => _session.ConnectAsync();
 
-    private void OnLine(Line line) => Dispatcher.UIThread.Post(() => Append(line.PlainText));
+    public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
 
-    public void AppendSystem(string text) => Dispatcher.UIThread.Post(() => Append("* " + text));
-
-    private void Append(string text)
+    private void Flush()
     {
-        _buffer.AppendLine(text);
-        Output = _buffer.ToString();   // skeleton: O(n) rebuild; the OutputControl replaces this
+        if (_pending.IsEmpty) return;
+        _drainBuffer.Clear();
+        while (_pending.TryDequeue(out Line? line))
+            _drainBuffer.Add(line);
+        Scrollback.AddRange(_drainBuffer);
     }
 
     private void Submit()
     {
         string text = Input ?? "";
         Input = "";
-        Append("> " + text);
+        _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
         _session.Submit(text);
     }
 
-    public ValueTask DisposeAsync() => _session.DisposeAsync();
+    public async ValueTask DisposeAsync()
+    {
+        _flushTimer.Stop();
+        await _session.DisposeAsync();
+    }
 }

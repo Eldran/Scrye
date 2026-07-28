@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Scrye.App.ViewModels"
+        xmlns:controls="using:Scrye.App.Controls"
         x:Class="Scrye.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Scrye" Width="960" Height="640"
@@ -27,9 +28,11 @@
                         <TextBox DockPanel.Dock="Bottom" Margin="4"
                                  Text="{Binding Input}" Watermark="type a command and press Enter…"
                                  KeyDown="OnInputKeyDown" />
-                        <TextBox Margin="4" IsReadOnly="True" AcceptsReturn="True"
-                                 TextWrapping="Wrap" VerticalContentAlignment="Top"
-                                 Text="{Binding Output}" />
+                        <ScrollViewer Margin="4" Background="#1E1E1E"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Auto">
+                            <controls:OutputView Source="{Binding Scrollback}" />
+                        </ScrollViewer>
                     </DockPanel>
                 </DataTemplate>
             </TabControl.ContentTemplate>
