@@ -10,7 +10,13 @@ public interface IWorldApi
 {
     void Send(string text);
     void Note(string text);
+
     string? GetVariable(string name);
     void SetVariable(string name, string value);
-    // int AddTrigger(...), bool DeleteTrigger(...), etc. — later milestones.
+
+    // Simplified rule registration from script (full option set comes later):
+    void AddTrigger(string name, string pattern, string send);
+    void AddAlias(string name, string pattern, string send);
+    bool DeleteTrigger(string name);
+    bool DeleteAlias(string name);
 }

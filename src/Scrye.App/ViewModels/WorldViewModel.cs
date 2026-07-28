@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using Scrye.Core.Model;
 using Scrye.Core.Session;
 using Scrye.Core.Text;
+using Scrye.Scripting;
 
 namespace Scrye.App.ViewModels;
 
@@ -18,6 +19,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private static readonly Rgb SystemColour = new(0xF0, 0xC0, 0x40); // amber for system notices
 
     private readonly MudSession _session;
+    private readonly LuaScriptHost _scriptHost;
     private readonly ConcurrentQueue<Line> _pending = new();
     private readonly DispatcherTimer _flushTimer;
     private readonly List<Line> _drainBuffer = new(256);
@@ -35,6 +37,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session = new MudSession(profile);
         _session.LineReady += line => _pending.Enqueue(line);
         _session.StateChanged += s => _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
+
+        // scripting: trigger/alias/timer script callbacks run on the session loop
+        _scriptHost = new LuaScriptHost(new SessionWorldApi(_session));
+        _session.ScriptDispatcher = (fn, wildcards) => _scriptHost.CallFunction(fn, wildcards.ToArray());
+        _session.ScriptExecutor = code => _scriptHost.Execute(code);
+
         SubmitCommand = new RelayCommand(Submit);
 
         _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
@@ -59,6 +67,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         string text = Input ?? "";
         Input = "";
+
+        // "/..." is a local Lua console — runs on the session loop, not sent to the MUD.
+        // e.g.  /world.AddAlias("greet", "hi *", "say hello %1")
+        if (text.StartsWith('/') && text.Length > 1)
+        {
+            _pending.Enqueue(Line.FromText(text, EchoColour));
+            _session.RunScript(text[1..]);
+            return;
+        }
+
         _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
         _session.Submit(text);
     }
