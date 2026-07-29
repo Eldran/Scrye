@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Scrye.App.ViewModels"
         xmlns:controls="using:Scrye.App.Controls"
+        xmlns:behaviors="using:Scrye.App.Behaviors"
         xmlns:conv="using:Avalonia.Data.Converters"
         x:Class="Scrye.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
@@ -44,7 +45,12 @@
                 </TabControl.ItemTemplate>
                 <TabControl.ContentTemplate>
                     <DataTemplate x:DataType="vm:WorldViewModel">
-                        <Grid ColumnDefinitions="*,Auto">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="{Binding DebuggerColWidth}" />
+                            </Grid.ColumnDefinitions>
                             <!-- main column: output + input row -->
                             <DockPanel Grid.Column="0">
                                 <DockPanel DockPanel.Dock="Bottom" Margin="4">
@@ -60,8 +66,12 @@
                                 </ScrollViewer>
                             </DockPanel>
 
-                            <!-- debugger (toggle-able, fixed width): Live timeline + Replay transport -->
-                            <Border Grid.Column="1" Width="400" IsVisible="{Binding ShowDebugger}"
+                            <!-- drag handle to resize the debugger panel -->
+                            <GridSplitter Grid.Column="1" Width="5" ResizeDirection="Columns"
+                                          Background="#333" IsVisible="{Binding ShowDebugger}" />
+
+                            <!-- debugger (toggle-able, resizable): Live timeline + Replay transport -->
+                            <Border Grid.Column="2" MinWidth="280" IsVisible="{Binding ShowDebugger}"
                                     Background="#181818" BorderBrush="#333" BorderThickness="1,0,0,0" Padding="6">
                                 <TabControl>
                                     <!-- LIVE: the running event timeline -->
@@ -104,6 +114,7 @@
 
                                             <!-- the event stream -->
                                             <ListBox ItemsSource="{Binding Debugger.Rows}" SelectedItem="{Binding Debugger.SelectedRow}"
+                                                     behaviors:AutoScroll.Enabled="True"
                                                      Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">
@@ -133,8 +144,14 @@
                                                 <Button Content="{Binding Replay.PlayLabel}" Command="{Binding Replay.PlayPauseCommand}" />
                                                 <Button Content="Step" Command="{Binding Replay.StepCommand}" />
                                                 <Button Content="Restart" Command="{Binding Replay.RestartCommand}" />
+                                                <ComboBox ItemsSource="{Binding Replay.SpeedOptions}" SelectedItem="{Binding Replay.Speed}"
+                                                          Width="64" VerticalAlignment="Center" />
                                                 <TextBlock Text="{Binding Replay.PositionLabel}" VerticalAlignment="Center" Foreground="#AAA" />
                                             </StackPanel>
+
+                                            <!-- scrub the timeline -->
+                                            <Slider DockPanel.Dock="Top" Minimum="0" Maximum="{Binding Replay.Total}"
+                                                    Value="{Binding Replay.Position, Mode=TwoWay}" Margin="0,0,0,4" />
 
                                             <TextBlock DockPanel.Dock="Top" Text="{Binding Replay.Status}"
                                                        TextWrapping="Wrap" Foreground="#AAA" Margin="0,0,0,4" />
@@ -142,6 +159,21 @@
                                             <!-- the killer feature -->
                                             <Button DockPanel.Dock="Bottom" Margin="0,4,0,0" HorizontalAlignment="Stretch"
                                                     Content="Re-run vs current triggers" Command="{Binding Replay.AnalyzeCommand}" />
+
+                                            <!-- diff results from the re-run -->
+                                            <Border DockPanel.Dock="Bottom" IsVisible="{Binding Replay.HasDiffs}" Margin="0,4,0,0" Padding="6"
+                                                    Background="#101010" BorderBrush="#333" BorderThickness="1">
+                                                <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto">
+                                                    <ItemsControl ItemsSource="{Binding Replay.DiffLines}" x:CompileBindings="False">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#E0B0FF"
+                                                                           FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </ScrollViewer>
+                                            </Border>
 
                                             <!-- drill-down: full text of the selected recorded row -->
                                             <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6"
@@ -155,6 +187,7 @@
 
                                             <!-- recorded events, revealed up to the current position -->
                                             <ListBox ItemsSource="{Binding Replay.Rows}" SelectedItem="{Binding Replay.SelectedRow}"
+                                                     behaviors:AutoScroll.Enabled="True"
                                                      Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">

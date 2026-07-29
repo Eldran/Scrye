@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Scrye.Core.Model;
 using Scrye.Core.Profiles;
@@ -40,7 +41,20 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public string Input { get => _input; set => SetField(ref _input, value); }
 
     private bool _showDebugger;
-    public bool ShowDebugger { get => _showDebugger; set => SetField(ref _showDebugger, value); }
+    public bool ShowDebugger
+    {
+        get => _showDebugger;
+        set
+        {
+            if (SetField(ref _showDebugger, value))
+                DebuggerColWidth = value ? new GridLength(400) : new GridLength(0);
+        }
+    }
+
+    // Width of the debugger's grid column. Bound two-way in spirit: the GridSplitter
+    // overrides it live while dragging; toggling the panel resets it (0 hidden / 400 shown).
+    private GridLength _debuggerColWidth = new(0);
+    public GridLength DebuggerColWidth { get => _debuggerColWidth; set => SetField(ref _debuggerColWidth, value); }
 
     public WorldViewModel(WorldProfile profile)
     {
