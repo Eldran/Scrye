@@ -111,7 +111,47 @@ public sealed class LuaPluginRuntime : IDisposable
             return DynValue.Nil;
         });
 
+        // scrye.addPanel({ title=..., widgets={ {type=...,...}, ... } })
+        t["addPanel"] = Fn(a =>
+        {
+            if (a.Count >= 1 && a[0].Type == DataType.Table)
+                _host.AddPanel(Id, ToPanelSpec(a[0].Table));
+            return DynValue.Nil;
+        });
+
         return t;
+    }
+
+    private static PanelSpec ToPanelSpec(Table tbl)
+    {
+        var widgets = new List<WidgetSpec>();
+        DynValue w = tbl.Get("widgets");
+        if (w.Type == DataType.Table)
+        {
+            Table arr = w.Table;
+            for (int i = 1; i <= arr.Length; i++)
+            {
+                DynValue item = arr.Get(i);
+                if (item.Type == DataType.Table) widgets.Add(ToWidgetSpec(item.Table));
+            }
+        }
+        return new PanelSpec { Title = Field(tbl, "title") ?? "", Widgets = widgets };
+    }
+
+    private static WidgetSpec ToWidgetSpec(Table w) => new()
+    {
+        Type = Field(w, "type") ?? "label",
+        Text = Field(w, "text"),
+        Bind = Field(w, "bind"),
+        Value = Field(w, "value"),
+        Max = Field(w, "max"),
+        Color = Field(w, "color"),
+    };
+
+    private static string? Field(Table t, string key)
+    {
+        DynValue v = t.Get(key);
+        return v.IsNil() ? null : v.CastToString();
     }
 
     private static DynValue Fn(Func<CallbackArguments, DynValue> f) =>

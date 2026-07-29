@@ -1,0 +1,9 @@
+{
+  "id": "vitals-hud",
+  "name": "MIP Vitals HUD",
+  "version": "1.0.0",
+  "author": "Scrye",
+  "description": "A HUD showing HP/SP bars plus enemy and combat round, driven by 3Scapes MIP state.",
+  "mudIds": ["3Scapes"],
+  "entry": "main.lua"
+}

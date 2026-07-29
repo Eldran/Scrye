@@ -14,13 +14,15 @@ public sealed class SessionPluginHost : IPluginHost
 {
     private readonly MudSession _session;
     private readonly IWorldActions _actions;
-    private readonly Action<string, string> _print;   // (pluginId, text)
+    private readonly Action<string, string> _print;             // (pluginId, text)
+    private readonly Action<string, PanelSpec> _addPanel;       // (pluginId, panel) → App builds the HUD VM
 
-    public SessionPluginHost(MudSession session, Action<string, string> print)
+    public SessionPluginHost(MudSession session, Action<string, string> print, Action<string, PanelSpec> addPanel)
     {
         _session = session;
         _actions = session;   // MudSession implements IWorldActions
         _print = print;
+        _addPanel = addPanel;
     }
 
     public void Send(string text) => _actions.Send(text);
@@ -33,4 +35,6 @@ public sealed class SessionPluginHost : IPluginHost
 
     public IDisposable WatchState(string path, Action<string, string> onChange) =>
         _session.GameState.Watch(path, (p, v) => onChange(p, v.Text));
+
+    public void AddPanel(string pluginId, PanelSpec panel) => _addPanel(pluginId, panel);
 }

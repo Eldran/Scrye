@@ -26,4 +26,8 @@ public interface IPluginHost
     /// <summary>Watch a state path/subtree; callback gets (changedPath, valueText).
     /// Returns an <see cref="IDisposable"/> the runtime disposes when the plugin unloads.</summary>
     IDisposable WatchState(string path, Action<string, string> onChange);
+
+    /// <summary>Contribute a declarative HUD panel. The host renders it and keeps its
+    /// bound widgets in sync with state (Foundation D).</summary>
+    void AddPanel(string pluginId, PanelSpec panel);
 }

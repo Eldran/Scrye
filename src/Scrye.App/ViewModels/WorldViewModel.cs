@@ -43,6 +43,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Replay transport: load/step recordings and re-run them against the current triggers.</summary>
     public ReplayViewModel Replay { get; }
 
+    /// <summary>Declarative HUD panels contributed by plugins (Foundation D).</summary>
+    public HudViewModel Hud { get; }
+
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
 
@@ -87,6 +90,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // replay: analysis re-runs recordings against this session's current rule set.
         Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
 
+        // HUD: plugins add declarative panels during load (below); this owns them.
+        Hud = new HudViewModel(_session.GameState);
+
         // plugins: discover the ones for this world, load them, and fan session events to them.
         var pluginRoots = new[]
         {
@@ -95,7 +101,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 "Scrye", "plugins"),
         };
         var host = new SessionPluginHost(_session,
-            (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)));
+            (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
+            (id, spec) => Hud.AddPanel(id, spec));
         _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem);
         _session.LineReady += line => _plugins.DispatchLine(line.PlainText);
         _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
@@ -154,6 +161,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _flushTimer.Stop();
         Replay.Stop();
         _plugins.Dispose();
+        Hud.Dispose();
         _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();
     }
