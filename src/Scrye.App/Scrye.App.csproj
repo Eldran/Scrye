@@ -19,4 +19,9 @@
     <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
     <ProjectReference Include="..\Scrye.Scripting\Scrye.Scripting.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- Bundled plugins: copied next to the exe so they auto-load on run. -->
+    <Content Include="plugins\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

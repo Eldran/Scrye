@@ -6,6 +6,7 @@ using Scrye.Core.Mip;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
 using Scrye.Core.Profiles;
+using Scrye.Core.State;
 using Scrye.Core.Text;
 
 namespace Scrye.Core.Session;
@@ -38,6 +39,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private readonly EventLog _log = new();
     private SessionRecorder? _recorder;
 
+    private readonly StateStore _state = new();
+
     private readonly MipParser _mip = new();
     private readonly MipProcessor _mipProc;
     private string _mipId = "";
@@ -59,6 +62,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public EventBus Events => _events;
     /// <summary>Always-on bounded ring buffer of recent events (for the timeline/debugger).</summary>
     public EventLog Log => _log;
+    /// <summary>Structured game state (GMCP/MIP → watchable tree). The HUD and inspector read this.</summary>
+    public StateStore GameState => _state;
     /// <summary>The active recorder, or null when not recording.</summary>
     public SessionRecorder? Recorder => _recorder;
     public bool IsRecording => _recorder is not null;
@@ -92,7 +97,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _connection.StateChanged += s => _mailbox.Writer.TryWrite(new SessionMessage.ConnectionStateChanged(s));
 
         _telnet.SendData += bytes => _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
-        _telnet.GmcpReceived += (pkg, json) => { _events.Emit(SessionEventKind.Gmcp, json, pkg); GmcpReceived?.Invoke(pkg, json); };
+        _telnet.GmcpReceived += (pkg, json) =>
+        {
+            _events.Emit(SessionEventKind.Gmcp, json, pkg);
+            if (!string.IsNullOrWhiteSpace(json)) _state.SetJson(pkg, json);   // GMCP → structured state
+            GmcpReceived?.Invoke(pkg, json);
+        };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
         _telnet.ServerEchoChanged += on => EchoModeChanged?.Invoke(on);
         _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
@@ -109,7 +119,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 _mipProc.Handle(m);
             }
         };
-        _mipProc.VitalsUpdated += () => MipVitalsUpdated?.Invoke();
+        _mipProc.VitalsUpdated += () => { MapMipVitals(); MipVitalsUpdated?.Invoke(); };
         _mipProc.Notice += text => Echo(text);
         _mipProc.Tell += text => LineReady?.Invoke(Line.FromText(text, MipColour));
         _mipProc.Channel += (ch, msg) => LineReady?.Invoke(Line.FromText($"[{ch}] {msg}", MipColour));
@@ -130,6 +140,31 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     {
         _events.Emit(SessionEventKind.Notice, text);
         LineReady?.Invoke(Line.FromText(text));
+    }
+
+    /// <summary>Mirror the MIP flat vitals variables into structured state paths, so a HUD
+    /// can bind to <c>character.health.current</c> regardless of whether the source is MIP or GMCP.</summary>
+    private void MapMipVitals()
+    {
+        void Num(string var, string path)
+        {
+            string? v = _variables.Get(var);
+            if (v is not null)
+                _state.Set(path, double.TryParse(v, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out double d) ? StateValue.Num(d) : StateValue.Str(v));
+        }
+        void Str(string var, string path)
+        {
+            string? v = _variables.Get(var);
+            if (v is not null) _state.Set(path, StateValue.Str(v));
+        }
+
+        Num("hp", "character.health.current");   Num("hpmax", "character.health.max");
+        Num("sp", "character.spell.current");    Num("spmax", "character.spell.max");
+        Num("gp1", "character.gold.a");           Num("gp1max", "character.gold.amax");
+        Num("gp2", "character.gold.b");           Num("gp2max", "character.gold.bmax");
+        Str("enemy_name", "enemy.name");          Num("enemy_hp", "enemy.health");
+        Num("round", "combat.round");
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)

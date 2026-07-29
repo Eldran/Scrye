@@ -1,11 +1,15 @@
+using System;
 using System.Collections.Concurrent;
+using System.IO;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Scrye.Core.Model;
+using Scrye.Core.Plugins;
 using Scrye.Core.Profiles;
 using Scrye.Core.Session;
 using Scrye.Core.Text;
 using Scrye.Scripting;
+using Scrye.Scripting.Plugins;
 
 namespace Scrye.App.ViewModels;
 
@@ -20,9 +24,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 {
     private static readonly Rgb EchoColour = new(0x60, 0xC0, 0xF0);   // cyan-ish for local echo
     private static readonly Rgb SystemColour = new(0xF0, 0xC0, 0x40); // amber for system notices
+    private static readonly Rgb PluginColour = new(0x90, 0xE0, 0x90); // green for plugin output
 
     private readonly MudSession _session;
     private readonly LuaScriptHost _scriptHost;
+    private readonly PluginManager _plugins;
     private readonly ConcurrentQueue<Line> _pending = new();
     private readonly DispatcherTimer _flushTimer;
     private readonly List<Line> _drainBuffer = new(256);
@@ -81,6 +87,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // replay: analysis re-runs recordings against this session's current rule set.
         Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
 
+        // plugins: discover the ones for this world, load them, and fan session events to them.
+        var pluginRoots = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "plugins"),                                 // bundled (next to exe)
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), // user plugins
+                "Scrye", "plugins"),
+        };
+        var host = new SessionPluginHost(_session,
+            (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)));
+        _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem);
+        _session.LineReady += line => _plugins.DispatchLine(line.PlainText);
+        _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
+
         SubmitCommand = new RelayCommand(Submit);
 
         _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
@@ -134,6 +153,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         _flushTimer.Stop();
         Replay.Stop();
+        _plugins.Dispose();
         _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();
     }

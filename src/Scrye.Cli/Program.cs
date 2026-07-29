@@ -4,8 +4,10 @@ using Scrye.Core.Events;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
 using Scrye.Core.Mip;
+using Scrye.Core.Plugins;
 using Scrye.Core.Profiles;
 using Scrye.Core.Session;
+using Scrye.Core.State;
 using Scrye.Core.Text;
 
 // Scrye.Cli — a dependency-free harness for the engine core.
@@ -22,9 +24,11 @@ if (args.Length >= 1 && args[0] == "--profile") { ProfileTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--worlds") { WorldsTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--events") { EventsTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--replay") { ReplayTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--state") { StateTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--plugins") { PluginsTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -301,6 +305,69 @@ static void EventsTest()
     Console.WriteLine($"    after simulate: hp still={vars.Get("hp") ?? "(unset)"} (was {hpBefore}), triggers still={engine.TriggerCount} (was {trigBefore})");
 
     Console.WriteLine("\nEvent-pipeline self-test complete.");
+}
+
+static void PluginsTest()
+{
+    Console.WriteLine("== Scrye plugin-catalog self-test ==\n");
+    string root = Path.Combine(Path.GetTempPath(), "scrye_plugins_" + Guid.NewGuid().ToString("N"));
+
+    void Make(string id, string manifest, bool withEntry = true)
+    {
+        string dir = Path.Combine(root, id);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "plugin.json"), manifest);
+        if (withEntry) File.WriteAllText(Path.Combine(dir, "main.lua"), "-- entry");
+    }
+
+    Make("hello", "{\"id\":\"hello\",\"name\":\"Hello\",\"version\":\"1.0.0\"}");                       // mudIds defaults to ["*"]
+    Make("threes", "{\"id\":\"threes-pack\",\"name\":\"3Scapes Pack\",\"mudIds\":[\"3Scapes\"]}");
+    Make("aard", "{\"id\":\"aard\",\"name\":\"Aard\",\"mudIds\":[\"Aardwolf\"],\"enabled\":false}");    // disabled
+    Make("broken", "{ this is not json ]");                                                              // ignored
+    Directory.CreateDirectory(Path.Combine(root, "notaplugin"));                                         // no manifest, ignored
+
+    Console.WriteLine("-- discover all --");
+    foreach (var d in PluginCatalog.Discover(root))
+        Console.WriteLine($"    {d.Manifest.Id,-14} v{d.Manifest.Version,-7} mudIds=[{string.Join(",", d.Manifest.MudIds)}] enabled={d.Manifest.Enabled} entry={Path.GetFileName(d.EntryPath)}");
+
+    Console.WriteLine("\n-- for mud '3Scapes' (enabled + applicable) --");
+    foreach (var d in PluginCatalog.ForMud("3Scapes", root)) Console.WriteLine($"    {d.Manifest.Id}");
+    Console.WriteLine("-- for mud 'Aardwolf' --");
+    foreach (var d in PluginCatalog.ForMud("Aardwolf", root)) Console.WriteLine($"    {d.Manifest.Id}");
+    Console.WriteLine("    (aard is disabled → should NOT appear; hello applies via '*')");
+
+    Directory.Delete(root, true);
+    Console.WriteLine("\nPlugin-catalog self-test complete.");
+}
+
+static void StateTest()
+{
+    Console.WriteLine("== Scrye state-model self-test ==\n");
+    var state = new StateStore();
+
+    Console.WriteLine("-- feed a GMCP Char.Vitals package --");
+    state.SetJson("Char.Vitals", "{\"hp\":42,\"maxhp\":100,\"sp\":10,\"alignment\":\"good\",\"fighting\":true}");
+    foreach (var kv in state.Snapshot()) Console.WriteLine($"    {kv.Key} = {kv.Value} [{kv.Value.Kind}]");
+
+    Console.WriteLine("\n-- watch a leaf (char.vitals.hp) and a subtree (char.vitals) --");
+    using var w1 = state.Watch("char.vitals.hp", (p, v) => Console.WriteLine($"    leaf watch fired: {p} -> {v}"));
+    using var w2 = state.Watch("char.vitals", (p, v) => Console.WriteLine($"    subtree watch fired: {p} -> {v}"));
+    Console.WriteLine("  set char.vitals.hp = 35 (both watchers should fire):");
+    state.Set("char.vitals.hp", StateValue.Num(35));
+    Console.WriteLine("  set char.vitals.sp = 8 (only subtree should fire):");
+    state.Set("char.vitals.sp", StateValue.Num(8));
+    Console.WriteLine($"  hp as number = {state.Get("char.vitals.hp").AsNumber()}");
+
+    Console.WriteLine("\n-- nested object + array (Room.Info) --");
+    state.SetJson("Room.Info", "{\"name\":\"The Plaza\",\"num\":1234,\"exits\":[\"north\",\"south\",\"east\"]}");
+    foreach (var kv in state.Snapshot()) if (kv.Key.StartsWith("room.")) Console.WriteLine($"    {kv.Key} = {kv.Value}");
+
+    Console.WriteLine("\n-- resend Char.Vitals WITHOUT 'alignment' (subtree cleared first) --");
+    state.SetJson("Char.Vitals", "{\"hp\":50,\"maxhp\":100}");
+    Console.WriteLine($"    char.vitals.alignment still present? {state.Has("char.vitals.alignment")}  (expect False)");
+    Console.WriteLine($"    char.vitals.hp = {state.Get("char.vitals.hp")}");
+
+    Console.WriteLine($"\n{state.Count} leaves in the tree. State-model self-test complete.");
 }
 
 static void ReplayTest()
