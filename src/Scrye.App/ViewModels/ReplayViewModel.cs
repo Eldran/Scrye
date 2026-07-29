@@ -27,6 +27,10 @@ public sealed class ReplayViewModel : ViewModelBase
     public ObservableCollection<string> Recordings { get; } = new();
     public ObservableCollection<EventRowViewModel> Rows { get; } = new();
 
+    private EventRowViewModel? _selectedRow;
+    /// <summary>The recorded row selected in the list; its <c>Full</c> text fills the detail pane.</summary>
+    public EventRowViewModel? SelectedRow { get => _selectedRow; set => SetField(ref _selectedRow, value); }
+
     public RelayCommand RefreshCommand { get; }
     public RelayCommand LoadCommand { get; }
     public RelayCommand PlayPauseCommand { get; }

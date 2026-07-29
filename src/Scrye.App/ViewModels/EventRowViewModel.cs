@@ -42,6 +42,20 @@ public sealed class EventRowViewModel
         }
     }
 
+    /// <summary>The full, untruncated detail shown in the drill-down pane when this row
+    /// is selected — the whole point being to read long MIP/GMCP/output payloads.</summary>
+    public string Full
+    {
+        get
+        {
+            string s = $"#{Seq}  {Time}  {Kind}";
+            if (Label.Length > 0) s += $"\nlabel:  {Label}";
+            if (Text.Length > 0) s += $"\ntext:   {Text}";
+            if (Detail.Length > 0) s += $"\ndetail: {Detail}";
+            return s;
+        }
+    }
+
     private static (string category, IBrush brush) Classify(SessionEventKind kind) => kind switch
     {
         SessionEventKind.LineReceived or SessionEventKind.Prompt

@@ -92,9 +92,19 @@
                                                          Watermark="test a line against triggers…" />
                                             </DockPanel>
 
+                                            <!-- drill-down: full text of the selected row (fixes truncation) -->
+                                            <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6"
+                                                    Background="#101010" BorderBrush="#333" BorderThickness="1"
+                                                    IsVisible="{Binding Debugger.SelectedRow, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                                <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
+                                                    <SelectableTextBlock Text="{Binding Debugger.SelectedRow.Full}" TextWrapping="Wrap"
+                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="#DDD" />
+                                                </ScrollViewer>
+                                            </Border>
+
                                             <!-- the event stream -->
-                                            <ListBox ItemsSource="{Binding Debugger.Rows}" Background="#181818"
-                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                            <ListBox ItemsSource="{Binding Debugger.Rows}" SelectedItem="{Binding Debugger.SelectedRow}"
+                                                     Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">
                                                         <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
@@ -133,9 +143,19 @@
                                             <Button DockPanel.Dock="Bottom" Margin="0,4,0,0" HorizontalAlignment="Stretch"
                                                     Content="Re-run vs current triggers" Command="{Binding Replay.AnalyzeCommand}" />
 
+                                            <!-- drill-down: full text of the selected recorded row -->
+                                            <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6"
+                                                    Background="#101010" BorderBrush="#333" BorderThickness="1"
+                                                    IsVisible="{Binding Replay.SelectedRow, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                                <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
+                                                    <SelectableTextBlock Text="{Binding Replay.SelectedRow.Full}" TextWrapping="Wrap"
+                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="#DDD" />
+                                                </ScrollViewer>
+                                            </Border>
+
                                             <!-- recorded events, revealed up to the current position -->
-                                            <ListBox ItemsSource="{Binding Replay.Rows}" Background="#181818"
-                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                            <ListBox ItemsSource="{Binding Replay.Rows}" SelectedItem="{Binding Replay.SelectedRow}"
+                                                     Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">
                                                         <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
