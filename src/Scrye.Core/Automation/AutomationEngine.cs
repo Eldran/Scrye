@@ -25,6 +25,11 @@ public sealed class AutomationEngine
     public int AliasCount => _aliases.Count;
     public int TimerCount => _timers.Count;
 
+    /// <summary>Raised whenever a rule fires, with a summary of what it did.
+    /// The session wires this to the event bus (trigger timeline / debugger).
+    /// Optional — null in headless/unit contexts.</summary>
+    public Action<AutomationHit>? Hit { get; set; }
+
     // ---- registration ----------------------------------------------------
 
     public void AddTrigger(TriggerDef def)
@@ -79,11 +84,36 @@ public sealed class AutomationEngine
             MatchResult? m = t.Pattern.Match(line);
             if (m is null) continue;
 
-            Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx);
+            string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx);
+            Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
             if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
             if (!t.Def.KeepEvaluating) break;
         }
+    }
+
+    /// <summary>Dry-run: evaluate a line against the triggers exactly as
+    /// <see cref="ProcessLine"/> would (order, enable state, keep-evaluating/break),
+    /// but with NO side effects — nothing is sent, no variable changes, no one-shot
+    /// is consumed. Returns the hits that would have fired. Powers the debugger's
+    /// "what would this line do?" simulation.</summary>
+    public IReadOnlyList<AutomationHit> Simulate(string line)
+    {
+        var hits = new List<AutomationHit>();
+        for (int i = 0; i < _triggers.Count; i++)
+        {
+            Trig t = _triggers[i];
+            if (!t.Enabled) continue;
+
+            MatchResult? m = t.Pattern.Match(line);
+            if (m is null) continue;
+
+            hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
+                Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m)));
+
+            if (!t.Def.KeepEvaluating) break;
+        }
+        return hits;
     }
 
     /// <summary>Run user input through the aliases. Returns true if an alias
@@ -99,7 +129,8 @@ public sealed class AutomationEngine
             MatchResult? m = a.Pattern.Match(input);
             if (m is null) continue;
 
-            Fire(a.Def.SendTo, a.Def.Send, a.Def.Variable, a.Def.Script, m, ctx);
+            string action = Fire(a.Def.SendTo, a.Def.Send, a.Def.Variable, a.Def.Script, m, ctx);
+            Hit?.Invoke(new AutomationHit(AutomationHitKind.Alias, a.Def.Name, a.Def.Group, input, action));
             consumed = true;
 
             if (a.Def.OneShot) { _aliases.RemoveAt(i); i--; }
@@ -120,7 +151,8 @@ public sealed class AutomationEngine
             if (t.Elapsed < t.Def.IntervalSeconds) continue;
 
             t.Elapsed -= t.Def.IntervalSeconds;
-            Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, null, ctx);
+            string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, null, ctx);
+            Hit?.Invoke(new AutomationHit(AutomationHitKind.Timer, t.Def.Name, t.Def.Group, "", action));
 
             if (t.Def.OneShot) { _timers.RemoveAt(i); i--; }
         }
@@ -128,7 +160,8 @@ public sealed class AutomationEngine
 
     // ---- firing ----------------------------------------------------------
 
-    private void Fire(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m, IWorldActions ctx)
+    /// <summary>Execute a rule's action and return a human-readable summary of what it did.</summary>
+    private string Fire(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m, IWorldActions ctx)
     {
         string text = Template.Expand(send, m, _vars);
 
@@ -143,6 +176,33 @@ public sealed class AutomationEngine
 
         if (!string.IsNullOrEmpty(script))
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
+
+        return Describe(sendTo, send, variable, script, m);
+    }
+
+    /// <summary>Build the same summary <see cref="Fire"/> returns, but WITHOUT
+    /// performing the action or mutating anything. Used by <see cref="Simulate"/>.</summary>
+    private string Describe(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m)
+    {
+        string text = Template.Expand(send, m, _vars);
+        string primary = sendTo switch
+        {
+            SendTo.World when text.Length > 0 => $"send: {text}",
+            SendTo.World => "send: (empty)",
+            SendTo.Output => $"echo: {text}",
+            SendTo.Command => $"command: {text}",
+            SendTo.Variable when !string.IsNullOrEmpty(variable) => $"var {variable}={text}",
+            SendTo.Variable => "var: (no target)",
+            SendTo.Script => "",
+            _ => "",
+        };
+
+        if (!string.IsNullOrEmpty(script))
+        {
+            string call = $"script: {script}";
+            return primary.Length == 0 ? call : $"{primary}; {call}";
+        }
+        return primary;
     }
 
     private static CompiledPattern Compile(string pattern, bool isRegex, bool ignoreCase) =>

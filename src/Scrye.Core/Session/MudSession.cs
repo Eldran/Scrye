@@ -1,9 +1,11 @@
 using System.Text;
 using System.Threading.Channels;
 using Scrye.Core.Automation;
+using Scrye.Core.Events;
 using Scrye.Core.Mip;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
+using Scrye.Core.Profiles;
 using Scrye.Core.Text;
 
 namespace Scrye.Core.Session;
@@ -32,6 +34,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private readonly VariableStore _variables = new();
     private readonly AutomationEngine _automation;
 
+    private readonly EventBus _events = new();
+    private readonly EventLog _log = new();
+    private SessionRecorder? _recorder;
+
     private readonly MipParser _mip = new();
     private readonly MipProcessor _mipProc;
     private string _mipId = "";
@@ -46,6 +52,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public ConnectionState State => _connection.State;
     public AutomationEngine Automation => _automation;
     public VariableStore Variables => _variables;
+
+    /// <summary>The instrumented event spine: every line, send, rule fire, protocol
+    /// message, and state change flows through here. Subscribe sinks or the
+    /// <see cref="EventBus.Emitted"/> event to build timelines, dashboards, etc.</summary>
+    public EventBus Events => _events;
+    /// <summary>Always-on bounded ring buffer of recent events (for the timeline/debugger).</summary>
+    public EventLog Log => _log;
+    /// <summary>The active recorder, or null when not recording.</summary>
+    public SessionRecorder? Recorder => _recorder;
+    public bool IsRecording => _recorder is not null;
 
     public Action<string, IReadOnlyList<string>>? ScriptDispatcher { get; set; }
     public Action<string>? ScriptExecutor { get; set; }
@@ -69,21 +85,51 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
         _ansi.LineCompleted += OnLineCompleted;
 
+        _events.Subscribe(_log);   // the ring buffer is always listening
+
         _connection.BytesReceived += bytes => _mailbox.Writer.TryWrite(new SessionMessage.DataArrived(bytes));
-        _connection.StateChanged += s => StateChanged?.Invoke(s);
+        // Route state changes through the mailbox so notification + emission happen on the loop thread.
+        _connection.StateChanged += s => _mailbox.Writer.TryWrite(new SessionMessage.ConnectionStateChanged(s));
 
         _telnet.SendData += bytes => _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
-        _telnet.GmcpReceived += (pkg, json) => GmcpReceived?.Invoke(pkg, json);
+        _telnet.GmcpReceived += (pkg, json) => { _events.Emit(SessionEventKind.Gmcp, json, pkg); GmcpReceived?.Invoke(pkg, json); };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
         _telnet.ServerEchoChanged += on => EchoModeChanged?.Invoke(on);
         _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
         _telnet.GoAhead += () => _ansi.FlushAsPrompt();
 
-        _mip.MessageReceived += m => { if (m.Id == _mipId) { _mipGotData = true; _mipProc.Handle(m); } };
+        _automation.Hit += OnAutomationHit;
+
+        _mip.MessageReceived += m =>
+        {
+            if (m.Id == _mipId)
+            {
+                _mipGotData = true;
+                _events.Emit(SessionEventKind.Mip, m.Data, $"{m.Id}/{m.Tag}");
+                _mipProc.Handle(m);
+            }
+        };
         _mipProc.VitalsUpdated += () => MipVitalsUpdated?.Invoke();
-        _mipProc.Notice += text => LineReady?.Invoke(Line.FromText(text));
+        _mipProc.Notice += text => Echo(text);
         _mipProc.Tell += text => LineReady?.Invoke(Line.FromText(text, MipColour));
         _mipProc.Channel += (ch, msg) => LineReady?.Invoke(Line.FromText($"[{ch}] {msg}", MipColour));
+    }
+
+    private void OnAutomationHit(AutomationHit hit)
+    {
+        SessionEventKind kind = hit.Kind switch
+        {
+            AutomationHitKind.Trigger => SessionEventKind.TriggerMatched,
+            AutomationHitKind.Alias => SessionEventKind.AliasMatched,
+            _ => SessionEventKind.TimerFired,
+        };
+        _events.Emit(kind, hit.Input, hit.Name, hit.Action);
+    }
+
+    private void Echo(string text)
+    {
+        _events.Emit(SessionEventKind.Notice, text);
+        LineReady?.Invoke(Line.FromText(text));
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)
@@ -104,6 +150,41 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
 
+    /// <summary>Load a resolved profile's triggers/aliases/timers/variables into the
+    /// engine. Call before ConnectAsync.</summary>
+    public void LoadProfileData(EffectiveProfile eff)
+    {
+        foreach (var t in eff.Triggers) _automation.AddTrigger(t);
+        foreach (var a in eff.Aliases) _automation.AddAlias(a);
+        foreach (var tm in eff.Timers) _automation.AddTimer(tm);
+        foreach (var kv in eff.Variables) _variables.Set(kv.Key, kv.Value);
+    }
+
+    /// <summary>Begin capturing the full event stream. Idempotent — returns the
+    /// active recorder. Records everything from this point until <see cref="StopRecording"/>.</summary>
+    public SessionRecorder StartRecording()
+    {
+        if (_recorder is null)
+        {
+            _recorder = new SessionRecorder(Profile.Name, _events.Clock());
+            _events.Subscribe(_recorder);
+        }
+        return _recorder;
+    }
+
+    /// <summary>Stop capturing and return the recording (null if not recording).</summary>
+    public SessionRecording? StopRecording()
+    {
+        if (_recorder is null) return null;
+        _events.Unsubscribe(_recorder);
+        var rec = new SessionRecording(_recorder.Header, _recorder.Events.ToArray());
+        _recorder = null;
+        return rec;
+    }
+
+    /// <summary>Save the current recording to a <c>.scryerec</c> file (no-op if not recording).</summary>
+    public void SaveRecording(string path) => _recorder?.Save(path);
+
     /// <summary>Force the MIP handshake now (manual `mipstart`).</summary>
     public void StartMip()
     {
@@ -114,9 +195,14 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     }
 
     void IWorldActions.Send(string text) => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
-    void IWorldActions.Echo(string text) => LineReady?.Invoke(Line.FromText(text));
+    void IWorldActions.Echo(string text) => Echo(text);
     string? IWorldActions.GetVariable(string name) => _variables.Get(name);
-    void IWorldActions.SetVariable(string name, string value) => _variables.Set(name, value);
+    void IWorldActions.SetVariable(string name, string value)
+    {
+        string? old = _variables.Get(name);
+        _variables.Set(name, value);
+        _events.Emit(SessionEventKind.VariableChanged, value, name, old);
+    }
     void IWorldActions.CallScript(string function, IReadOnlyList<string> wildcards) => ScriptDispatcher?.Invoke(function, wildcards);
 
     private async Task RunLoopAsync(CancellationToken ct)
@@ -134,7 +220,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         HandleInput(u.Text);
                         break;
                     case SessionMessage.SendText s:
+                        _events.Emit(SessionEventKind.Sent, s.Text);
                         await SendRawAsync(_encoding.GetBytes(s.Text + "\r\n"), ct).ConfigureAwait(false);
+                        break;
+                    case SessionMessage.ConnectionStateChanged cs:
+                        OnConnectionState(cs.State);
                         break;
                     case SessionMessage.SendBytes sb:
                         await SendRawAsync(sb.Bytes, ct).ConfigureAwait(false);
@@ -144,8 +234,13 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         MipTick();
                         break;
                     case SessionMessage.RunScript r:
+                        _events.Emit(SessionEventKind.ScriptRun, r.Code);
                         try { ScriptExecutor?.Invoke(r.Code); }
-                        catch (Exception ex) { LineReady?.Invoke(Line.FromText("lua: " + ex.Message)); }
+                        catch (Exception ex)
+                        {
+                            _events.Emit(SessionEventKind.ScriptError, ex.Message);
+                            LineReady?.Invoke(Line.FromText("lua: " + ex.Message));
+                        }
                         break;
                 }
             }
@@ -183,14 +278,37 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             _mipPending = false;
             SendMipHandshake();
         }
+        _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
         LineReady?.Invoke(line);
         _automation.ProcessLine(line.PlainText, this);
     }
 
     private void HandleInput(string text)
     {
+        _events.Emit(SessionEventKind.InputSubmitted, text);
         if (!_automation.ProcessInput(text, this))
             _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
+    }
+
+    private void OnConnectionState(ConnectionState state)
+    {
+        switch (state)
+        {
+            case ConnectionState.Connecting:
+                _events.Emit(SessionEventKind.Connecting, $"{Profile.Host}:{Profile.Port}");
+                break;
+            case ConnectionState.Connected:
+                _events.Emit(SessionEventKind.Connected, $"{Profile.Host}:{Profile.Port}");
+                break;
+            case ConnectionState.Failed:
+                _events.Emit(SessionEventKind.Disconnected, "connection failed");
+                break;
+            case ConnectionState.Disconnected:
+                _events.Emit(SessionEventKind.Disconnected);
+                break;
+            // Disconnecting is transient — no event.
+        }
+        StateChanged?.Invoke(state);
     }
 
     // ---- MIP handshake -------------------------------------------------------

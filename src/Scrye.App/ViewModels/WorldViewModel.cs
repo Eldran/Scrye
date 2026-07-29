@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Avalonia.Threading;
 using Scrye.Core.Model;
+using Scrye.Core.Profiles;
 using Scrye.Core.Session;
 using Scrye.Core.Text;
 using Scrye.Scripting;
@@ -54,6 +55,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
         _flushTimer.Tick += (_, _) => Flush();
         _flushTimer.Start();
+    }
+
+    /// <summary>Construct from a resolved profile: loads its triggers/aliases/timers/vars.</summary>
+    public WorldViewModel(EffectiveProfile eff) : this(eff.World)
+    {
+        _session.LoadProfileData(eff);
     }
 
     public Task ConnectAsync() => _session.ConnectAsync();

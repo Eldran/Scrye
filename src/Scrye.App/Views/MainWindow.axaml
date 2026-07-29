@@ -2,42 +2,90 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Scrye.App.ViewModels"
         xmlns:controls="using:Scrye.App.Controls"
+        xmlns:conv="using:Avalonia.Data.Converters"
         x:Class="Scrye.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="Scrye" Width="960" Height="640"
+        Title="Scrye" Width="1040" Height="680"
         FontFamily="Cascadia Mono, Consolas, monospace">
 
-    <DockPanel>
-        <!-- quick-connect bar -->
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
-            <TextBox Width="260" Watermark="host" Text="{Binding Host}" />
-            <TextBox Width="70" Watermark="port" Text="{Binding Port}" />
-            <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
-            <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
-            <Button Content="Connect" Command="{Binding ConnectCommand}" />
-        </StackPanel>
+    <Grid>
+        <DockPanel>
+            <!-- quick-connect bar (full width) -->
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
+                <TextBox Width="220" Watermark="host" Text="{Binding Host}" />
+                <TextBox Width="64" Watermark="port" Text="{Binding Port}" />
+                <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
+                <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
+                <Button Content="Quick Connect" Command="{Binding ConnectCommand}" />
+            </StackPanel>
 
-        <!-- one tab per connected world -->
-        <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}">
-            <TabControl.ItemTemplate>
-                <DataTemplate x:DataType="vm:WorldViewModel">
-                    <TextBlock Text="{Binding Title}" />
-                </DataTemplate>
-            </TabControl.ItemTemplate>
-            <TabControl.ContentTemplate>
-                <DataTemplate x:DataType="vm:WorldViewModel">
-                    <DockPanel>
-                        <TextBox DockPanel.Dock="Bottom" Margin="4"
-                                 Text="{Binding Input}" Watermark="type a command and press Enter…"
-                                 KeyDown="OnInputKeyDown" />
-                        <ScrollViewer Margin="4" Background="#1E1E1E"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      VerticalScrollBarVisibility="Auto">
-                            <controls:OutputView Source="{Binding Scrollback}" />
-                        </ScrollViewer>
-                    </DockPanel>
-                </DataTemplate>
-            </TabControl.ContentTemplate>
-        </TabControl>
-    </DockPanel>
+            <!-- world manager sidebar -->
+            <Border DockPanel.Dock="Left" Width="220" Background="#252526" Padding="8" BorderBrush="#333" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Worlds" FontWeight="Bold" Margin="2,0,0,6" />
+                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                        <Button Content="Connect" Command="{Binding ConnectWorldCommand}" HorizontalAlignment="Stretch" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Button Content="New" Command="{Binding NewWorldCommand}" />
+                            <Button Content="Edit" Command="{Binding EditWorldCommand}" />
+                            <Button Content="Delete" Command="{Binding DeleteWorldCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                    <ListBox ItemsSource="{Binding SavedWorlds}" SelectedItem="{Binding SelectedWorld}" />
+                </DockPanel>
+            </Border>
+
+            <!-- connected worlds -->
+            <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}">
+                <TabControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:WorldViewModel">
+                        <TextBlock Text="{Binding Title}" />
+                    </DataTemplate>
+                </TabControl.ItemTemplate>
+                <TabControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:WorldViewModel">
+                        <DockPanel>
+                            <TextBox DockPanel.Dock="Bottom" Margin="4"
+                                     Text="{Binding Input}" Watermark="type a command and press Enter…"
+                                     KeyDown="OnInputKeyDown" />
+                            <ScrollViewer Margin="4" Background="#1E1E1E"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                                <controls:OutputView Source="{Binding Scrollback}" />
+                            </ScrollViewer>
+                        </DockPanel>
+                    </DataTemplate>
+                </TabControl.ContentTemplate>
+            </TabControl>
+        </DockPanel>
+
+        <!-- settings form overlay -->
+        <Border IsVisible="{Binding Editor, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                Background="#99000000">
+            <Border Width="380" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="#2D2D30" BorderBrush="#555" BorderThickness="1" CornerRadius="6" Padding="16">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="{Binding Editor.Title}" FontWeight="Bold" FontSize="16" Margin="0,0,0,6" />
+                    <TextBlock Text="Name" />
+                    <TextBox Text="{Binding Editor.Name}" />
+                    <TextBlock Text="Host" />
+                    <TextBox Text="{Binding Editor.Host}" />
+                    <TextBlock Text="Port" />
+                    <TextBox Text="{Binding Editor.Port}" />
+                    <TextBlock Text="Username (optional)" />
+                    <TextBox Text="{Binding Editor.Username}" />
+                    <TextBlock Text="Encoding" />
+                    <TextBox Text="{Binding Editor.Encoding}" />
+                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
+                        <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
+                        <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,10,0,0">
+                        <Button Content="Cancel" Command="{Binding CancelEditorCommand}" />
+                        <Button Content="Save" Command="{Binding SaveEditorCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
 </Window>

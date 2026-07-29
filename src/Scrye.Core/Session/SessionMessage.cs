@@ -24,4 +24,8 @@ public abstract record SessionMessage
     /// <summary>A chunk of script to execute (runs on the loop, single-threaded
     /// with respect to trigger/alias script callbacks).</summary>
     public sealed record RunScript(string Code) : SessionMessage;
+
+    /// <summary>Connection state changed (raised on a socket thread, routed through
+    /// the mailbox so state notifications and event emission stay on the loop thread).</summary>
+    public sealed record ConnectionStateChanged(Scrye.Core.Model.ConnectionState State) : SessionMessage;
 }
