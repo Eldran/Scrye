@@ -33,6 +33,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>The trigger debugger / event timeline for this world's session.</summary>
     public DebuggerViewModel Debugger { get; }
 
+    /// <summary>Replay transport: load/step recordings and re-run them against the current triggers.</summary>
+    public ReplayViewModel Replay { get; }
+
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
 
@@ -60,6 +63,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // debugger: the event bus fires on the session loop; enqueue there, drain on the UI timer.
         Debugger = new DebuggerViewModel(_session, AppendSystem);
         _session.Events.Emitted += Debugger.Enqueue;
+
+        // replay: analysis re-runs recordings against this session's current rule set.
+        Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
 
         SubmitCommand = new RelayCommand(Submit);
 
@@ -113,6 +119,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _flushTimer.Stop();
+        Replay.Stop();
         _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();
     }

@@ -21,9 +21,10 @@ if (args.Length >= 1 && args[0] == "--mip") { MipTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--profile") { ProfileTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--worlds") { WorldsTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--events") { EventsTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--replay") { ReplayTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -300,6 +301,51 @@ static void EventsTest()
     Console.WriteLine($"    after simulate: hp still={vars.Get("hp") ?? "(unset)"} (was {hpBefore}), triggers still={engine.TriggerCount} (was {trigBefore})");
 
     Console.WriteLine("\nEvent-pipeline self-test complete.");
+}
+
+static void ReplayTest()
+{
+    Console.WriteLine("== Scrye replay-analyzer self-test ==\n");
+    var t0 = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+    var bus = new EventBus();
+    int c = 0;
+    bus.Clock = () => t0.AddMilliseconds(200 * c++);
+    var rec = new SessionRecorder("3Scapes", t0);
+    bus.Subscribe(rec);
+
+    var vars = new VariableStore();
+    var engine = new AutomationEngine(vars);
+    var actions = new BusActions(bus, vars);
+    engine.Hit += hit => { if (hit.Kind == AutomationHitKind.Trigger) bus.Emit(SessionEventKind.TriggerMatched, hit.Input, hit.Name, hit.Action); };
+
+    // rules as they were WHEN RECORDED
+    engine.AddTrigger(new TriggerDef { Name = "flee", Pattern = "*low on health*", Send = "flee" });
+    engine.AddTrigger(new TriggerDef { Name = "greet", Pattern = "* says hello", Send = "wave" });
+
+    Console.WriteLine("-- record a short session under the OLD rules --");
+    FeedLine(bus, engine, actions, "A wiremouth lunges at you!");
+    FeedLine(bus, engine, actions, "You are low on health!");
+    FeedLine(bus, engine, actions, "Bob says hello");
+    SessionRecording recording = SessionRecorder.Parse(rec.ToJsonLines());   // via serialize round-trip
+    Console.WriteLine($"   recorded {recording.Events.Count} events\n");
+
+    // rules as they are NOW: keep flee, drop greet, add a new 'defend'
+    var engineNow = new AutomationEngine(new VariableStore());
+    engineNow.AddTrigger(new TriggerDef { Name = "flee", Pattern = "*low on health*", Send = "flee" });
+    engineNow.AddTrigger(new TriggerDef { Name = "defend", Pattern = "*lunges at you*", Send = "defend" });
+
+    Console.WriteLine("-- replay the recording against the CURRENT rules --");
+    foreach (ReplayLineAnalysis a in ReplayAnalyzer.Analyze(recording, engineNow))
+    {
+        string then = a.FiredThen.Count == 0 ? "-" : string.Join(",", a.FiredThen);
+        string now = a.WouldFireNow.Count == 0 ? "-" : string.Join(",", a.WouldFireNow.Select(h => h.Name));
+        Console.WriteLine($"   \"{a.Line}\"");
+        Console.WriteLine($"       then: {then}   now: {now}{(a.Differs ? "   << DIFF" : "")}");
+        if (a.Added.Count > 0) Console.WriteLine($"       + would now fire: {string.Join(",", a.Added)}");
+        if (a.Removed.Count > 0) Console.WriteLine($"       - no longer fires: {string.Join(",", a.Removed)}");
+    }
+    Console.WriteLine($"\n   {ReplayAnalyzer.Diffs(recording, engineNow).Count} line(s) behave differently under current rules.");
+    Console.WriteLine("\nReplay-analyzer self-test complete.");
 }
 
 static void FeedLine(EventBus bus, AutomationEngine engine, IWorldActions actions, string line)

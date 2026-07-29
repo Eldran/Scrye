@@ -60,47 +60,91 @@
                                 </ScrollViewer>
                             </DockPanel>
 
-                            <!-- debugger / event timeline (toggle-able, fixed width) -->
+                            <!-- debugger (toggle-able, fixed width): Live timeline + Replay transport -->
                             <Border Grid.Column="1" Width="400" IsVisible="{Binding ShowDebugger}"
                                     Background="#181818" BorderBrush="#333" BorderThickness="1,0,0,0" Padding="6">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Top" Text="Event timeline" FontWeight="Bold" Margin="0,0,0,4" />
+                                <TabControl>
+                                    <!-- LIVE: the running event timeline -->
+                                    <TabItem Header="Live">
+                                        <DockPanel>
+                                            <!-- category filters -->
+                                            <WrapPanel DockPanel.Dock="Top" Margin="0,4,0,4">
+                                                <CheckBox Content="Output" IsChecked="{Binding Debugger.ShowOutput}" Margin="0,0,6,0" />
+                                                <CheckBox Content="Input" IsChecked="{Binding Debugger.ShowInput}" Margin="0,0,6,0" />
+                                                <CheckBox Content="Auto" IsChecked="{Binding Debugger.ShowAutomation}" Margin="0,0,6,0" />
+                                                <CheckBox Content="State" IsChecked="{Binding Debugger.ShowState}" Margin="0,0,6,0" />
+                                                <CheckBox Content="Proto" IsChecked="{Binding Debugger.ShowProtocol}" Margin="0,0,6,0" />
+                                                <CheckBox Content="Sys" IsChecked="{Binding Debugger.ShowSystem}" Margin="0,0,6,0" />
+                                            </WrapPanel>
 
-                                    <!-- category filters -->
-                                    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,4">
-                                        <CheckBox Content="Output" IsChecked="{Binding Debugger.ShowOutput}" Margin="0,0,6,0" />
-                                        <CheckBox Content="Input" IsChecked="{Binding Debugger.ShowInput}" Margin="0,0,6,0" />
-                                        <CheckBox Content="Auto" IsChecked="{Binding Debugger.ShowAutomation}" Margin="0,0,6,0" />
-                                        <CheckBox Content="State" IsChecked="{Binding Debugger.ShowState}" Margin="0,0,6,0" />
-                                        <CheckBox Content="Proto" IsChecked="{Binding Debugger.ShowProtocol}" Margin="0,0,6,0" />
-                                        <CheckBox Content="Sys" IsChecked="{Binding Debugger.ShowSystem}" Margin="0,0,6,0" />
-                                    </WrapPanel>
+                                            <!-- transport controls -->
+                                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                                                <ToggleButton Content="Pause" IsChecked="{Binding Debugger.Paused}" />
+                                                <Button Content="{Binding Debugger.RecordLabel}" Command="{Binding Debugger.RecordCommand}" />
+                                                <Button Content="Clear" Command="{Binding Debugger.ClearCommand}" />
+                                            </StackPanel>
 
-                                    <!-- transport controls -->
-                                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
-                                        <ToggleButton Content="Pause" IsChecked="{Binding Debugger.Paused}" />
-                                        <Button Content="{Binding Debugger.RecordLabel}" Command="{Binding Debugger.RecordCommand}" />
-                                        <Button Content="Clear" Command="{Binding Debugger.ClearCommand}" />
-                                    </StackPanel>
+                                            <!-- simulate a line against the triggers (dry-run) -->
+                                            <DockPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
+                                                <Button DockPanel.Dock="Right" Content="Simulate"
+                                                        Command="{Binding Debugger.SimulateCommand}" Margin="4,0,0,0" />
+                                                <TextBox Text="{Binding Debugger.SimulateInput}"
+                                                         Watermark="test a line against triggers…" />
+                                            </DockPanel>
 
-                                    <!-- simulate a line against the triggers (dry-run) -->
-                                    <DockPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
-                                        <Button DockPanel.Dock="Right" Content="Simulate"
-                                                Command="{Binding Debugger.SimulateCommand}" Margin="4,0,0,0" />
-                                        <TextBox Text="{Binding Debugger.SimulateInput}"
-                                                 Watermark="test a line against triggers…" />
-                                    </DockPanel>
+                                            <!-- the event stream -->
+                                            <ListBox ItemsSource="{Binding Debugger.Rows}" Background="#181818"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:EventRowViewModel">
+                                                        <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </DockPanel>
+                                    </TabItem>
 
-                                    <!-- the event stream -->
-                                    <ListBox ItemsSource="{Binding Debugger.Rows}" Background="#181818"
-                                             FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:EventRowViewModel">
-                                                <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
-                                            </DataTemplate>
-                                        </ListBox.ItemTemplate>
-                                    </ListBox>
-                                </DockPanel>
+                                    <!-- REPLAY: load a recording, step through it, re-run vs current triggers -->
+                                    <TabItem Header="Replay">
+                                        <DockPanel>
+                                            <!-- recording picker -->
+                                            <DockPanel DockPanel.Dock="Top" Margin="0,4,0,4">
+                                                <Button DockPanel.Dock="Right" Content="Load"
+                                                        Command="{Binding Replay.LoadCommand}" Margin="4,0,0,0" />
+                                                <Button DockPanel.Dock="Right" Content="↻"
+                                                        Command="{Binding Replay.RefreshCommand}" Margin="4,0,0,0" />
+                                                <ComboBox ItemsSource="{Binding Replay.Recordings}"
+                                                          SelectedItem="{Binding Replay.SelectedRecording}"
+                                                          HorizontalAlignment="Stretch" />
+                                            </DockPanel>
+
+                                            <!-- transport -->
+                                            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
+                                                <Button Content="{Binding Replay.PlayLabel}" Command="{Binding Replay.PlayPauseCommand}" />
+                                                <Button Content="Step" Command="{Binding Replay.StepCommand}" />
+                                                <Button Content="Restart" Command="{Binding Replay.RestartCommand}" />
+                                                <TextBlock Text="{Binding Replay.PositionLabel}" VerticalAlignment="Center" Foreground="#AAA" />
+                                            </StackPanel>
+
+                                            <TextBlock DockPanel.Dock="Top" Text="{Binding Replay.Status}"
+                                                       TextWrapping="Wrap" Foreground="#AAA" Margin="0,0,0,4" />
+
+                                            <!-- the killer feature -->
+                                            <Button DockPanel.Dock="Bottom" Margin="0,4,0,0" HorizontalAlignment="Stretch"
+                                                    Content="Re-run vs current triggers" Command="{Binding Replay.AnalyzeCommand}" />
+
+                                            <!-- recorded events, revealed up to the current position -->
+                                            <ListBox ItemsSource="{Binding Replay.Rows}" Background="#181818"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:EventRowViewModel">
+                                                        <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </DockPanel>
+                                    </TabItem>
+                                </TabControl>
                             </Border>
                         </Grid>
                     </DataTemplate>
