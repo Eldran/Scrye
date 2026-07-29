@@ -74,6 +74,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         string text = Input ?? "";
         Input = "";
 
+        if (text == "mipstart") { _pending.Enqueue(Line.FromText("> " + text, EchoColour)); _session.StartMip(); return; }
+
         // "/..." is a local Lua console — runs on the session loop, not sent to the MUD.
         // e.g.  /world.AddAlias("greet", "hi *", "say hello %1")
         if (text.StartsWith('/') && text.Length > 1)

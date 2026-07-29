@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.Channels;
 using Scrye.Core.Automation;
+using Scrye.Core.Mip;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
 using Scrye.Core.Text;
@@ -9,14 +10,16 @@ namespace Scrye.Core.Session;
 
 /// <summary>
 /// The live world. Owns the connection and the receive pipeline
-/// (telnet -> decode -> ANSI -> line), the automation engine, and drives
+/// (telnet -> decode -> MIP -> ANSI -> line), the automation engine, and drives
 /// everything through a single serialized mailbox loop. Implements
 /// <see cref="IWorldActions"/> so the engine can act without referencing the
-/// session type. Surfaces protocol events (GMCP/MSSP/echo) the UI can use.
-/// One instance per connected world.
+/// session type. One instance per connected world.
 /// </summary>
 public sealed class MudSession : IAsyncDisposable, IWorldActions
 {
+    private static readonly Rgb MipColour = new(0x80, 0xC0, 0xF0);
+    private static readonly Rgb SysColour = new(0xF0, 0xC0, 0x40);
+
     private readonly Channel<SessionMessage> _mailbox =
         Channel.CreateUnbounded<SessionMessage>(new UnboundedChannelOptions { SingleReader = true });
 
@@ -28,6 +31,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private readonly VariableStore _variables = new();
     private readonly AutomationEngine _automation;
+
+    private readonly MipParser _mip = new();
+    private readonly MipProcessor _mipProc;
+    private string _mipId = "";
+    private bool _mipPending, _mipGotData, _mipSent;
+    private int _mipRetries, _mipSecondsSinceHandshake;
 
     private Task? _loop;
     private Task? _ticker;
@@ -41,15 +50,13 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public Action<string, IReadOnlyList<string>>? ScriptDispatcher { get; set; }
     public Action<string>? ScriptExecutor { get; set; }
 
-    // ---- events the UI/host can subscribe to ----
     public event Action<Line>? LineReady;
     public event Action<ConnectionState>? StateChanged;
-    /// <summary>Out-of-band GMCP: (package, json-or-empty).</summary>
     public event Action<string, string>? GmcpReceived;
-    /// <summary>Parsed MSSP server-status variables.</summary>
     public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
-    /// <summary>Server ECHO changed — true means the client should mask local input (passwords).</summary>
     public event Action<bool>? EchoModeChanged;
+    /// <summary>Raised after MIP vitals/map variables change (drive a HUD from this).</summary>
+    public event Action? MipVitalsUpdated;
 
     public MudSession(WorldProfile profile)
     {
@@ -58,6 +65,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _decoder = _encoding.GetDecoder();
         _ansi = new AnsiParser();
         _automation = new AutomationEngine(_variables);
+        _mipProc = new MipProcessor(_variables);
 
         _ansi.LineCompleted += OnLineCompleted;
 
@@ -69,10 +77,22 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
         _telnet.ServerEchoChanged += on => EchoModeChanged?.Invoke(on);
         _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
+        _telnet.GoAhead += () => _ansi.FlushAsPrompt();
+
+        _mip.MessageReceived += m => { if (m.Id == _mipId) { _mipGotData = true; _mipProc.Handle(m); } };
+        _mipProc.VitalsUpdated += () => MipVitalsUpdated?.Invoke();
+        _mipProc.Notice += text => LineReady?.Invoke(Line.FromText(text));
+        _mipProc.Tell += text => LineReady?.Invoke(Line.FromText(text, MipColour));
+        _mipProc.Channel += (ch, msg) => LineReady?.Invoke(Line.FromText($"[{ch}] {msg}", MipColour));
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)
     {
+        if (Profile.EnableMip)
+        {
+            _mipId = EnsureMipId();
+            _mipPending = true; _mipGotData = false; _mipSent = false; _mipRetries = 0; _mipSecondsSinceHandshake = 0;
+        }
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
@@ -80,24 +100,24 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             Profile.AcceptInvalidCertificates, _cts.Token).ConfigureAwait(false);
     }
 
-    /// <summary>Queue a line of user input (runs through aliases before sending).</summary>
     public void Submit(string text) => _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text));
-
-    /// <summary>Queue a script chunk to run on the session loop (the `/` console).</summary>
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
-
-    /// <summary>Send an out-of-band GMCP message.</summary>
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
 
-    // ---- IWorldActions (called by the automation engine, on the loop) --------
+    /// <summary>Force the MIP handshake now (manual `mipstart`).</summary>
+    public void StartMip()
+    {
+        if (!Profile.EnableMip) { LineReady?.Invoke(Line.FromText("[MIP] not enabled for this world", SysColour)); return; }
+        _mipId = EnsureMipId();
+        _mipPending = false; _mipGotData = false; _mipRetries = 0;
+        SendMipHandshake();
+    }
 
     void IWorldActions.Send(string text) => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     void IWorldActions.Echo(string text) => LineReady?.Invoke(Line.FromText(text));
     string? IWorldActions.GetVariable(string name) => _variables.Get(name);
     void IWorldActions.SetVariable(string name, string value) => _variables.Set(name, value);
     void IWorldActions.CallScript(string function, IReadOnlyList<string> wildcards) => ScriptDispatcher?.Invoke(function, wildcards);
-
-    // ---- loop ----------------------------------------------------------------
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
@@ -121,6 +141,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         break;
                     case SessionMessage.Tick:
                         _automation.Tick(1.0, this);
+                        MipTick();
                         break;
                     case SessionMessage.RunScript r:
                         try { ScriptExecutor?.Invoke(r.Code); }
@@ -145,16 +166,25 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private async Task HandleDataAsync(byte[] bytes, CancellationToken ct)
     {
-        byte[] data = _telnet.Process(bytes);   // telnet replies come back via SendData -> SendBytes
-        if (data.Length > 0)
-            _ansi.Feed(Decode(data));           // emits lines via OnLineCompleted
+        byte[] data = _telnet.Process(bytes);
+        if (data.Length == 0) return;
+        string text = Decode(data);
+        if (Profile.EnableMip)
+            text = _mip.Process(text);   // strip MIP frames; raises MessageReceived
+        if (text.Length > 0)
+            _ansi.Feed(text);
         await Task.CompletedTask;
     }
 
     private void OnLineCompleted(Line line)
     {
-        LineReady?.Invoke(line);                         // display first
-        _automation.ProcessLine(line.PlainText, this);   // then react
+        if (_mipPending && line.PlainText.Trim() == ">")
+        {
+            _mipPending = false;
+            SendMipHandshake();
+        }
+        LineReady?.Invoke(line);
+        _automation.ProcessLine(line.PlainText, this);
     }
 
     private void HandleInput(string text)
@@ -163,10 +193,41 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     }
 
-    private async Task SendRawAsync(byte[] bytes, CancellationToken ct)
+    // ---- MIP handshake -------------------------------------------------------
+
+    private string EnsureMipId()
     {
-        await _connection.SendAsync(bytes, ct).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(Profile.MipClientId))
+            Profile.MipClientId = Random.Shared.Next(0, 100000).ToString("D5");
+        _variables.Set("mipid", Profile.MipClientId);
+        return Profile.MipClientId;
     }
+
+    private void SendMipHandshake()
+    {
+        _mailbox.Writer.TryWrite(new SessionMessage.SendText($"3klient {_mipId}~~Scrye"));
+        _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient LINEFEED on"));
+        _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient HAA off"));
+        _mailbox.Writer.TryWrite(new SessionMessage.SendText("forcehp"));
+        _mipSent = true;
+        _mipRetries++;
+        _mipSecondsSinceHandshake = 0;
+        LineReady?.Invoke(Line.FromText($"[MIP] handshake sent (id {_mipId})", SysColour));
+    }
+
+    private void MipTick()
+    {
+        if (!Profile.EnableMip || !_mipSent || _mipGotData) return;
+        _mipSecondsSinceHandshake++;
+        if (_mipSecondsSinceHandshake >= 10 && _mipRetries < 3)
+        {
+            LineReady?.Invoke(Line.FromText("[MIP] no data yet - retrying handshake", SysColour));
+            SendMipHandshake();
+        }
+    }
+
+    private async Task SendRawAsync(byte[] bytes, CancellationToken ct) =>
+        await _connection.SendAsync(bytes, ct).ConfigureAwait(false);
 
     private string Decode(byte[] data)
     {

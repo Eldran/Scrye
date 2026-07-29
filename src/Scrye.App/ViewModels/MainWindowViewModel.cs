@@ -17,6 +17,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _useTls;
     public bool UseTls { get => _useTls; set => SetField(ref _useTls, value); }
 
+    private bool _enableMip;
+    public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
+
     private WorldViewModel? _active;
     public WorldViewModel? Active { get => _active; set => SetField(ref _active, value); }
 
@@ -27,7 +30,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(Host) || !int.TryParse(Port, out int port))
             return;
 
-        var vm = new WorldViewModel(new WorldProfile { Name = Host, Host = Host, Port = port, UseTls = UseTls, AcceptInvalidCertificates = UseTls });
+        var vm = new WorldViewModel(new WorldProfile { Name = Host, Host = Host, Port = port, UseTls = UseTls, AcceptInvalidCertificates = UseTls, EnableMip = EnableMip });
         Worlds.Add(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }

@@ -13,6 +13,7 @@
             <TextBox Width="260" Watermark="host" Text="{Binding Host}" />
             <TextBox Width="70" Watermark="port" Text="{Binding Port}" />
             <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
+            <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
             <Button Content="Connect" Command="{Binding ConnectCommand}" />
         </StackPanel>
 

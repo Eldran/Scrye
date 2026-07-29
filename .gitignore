@@ -16,3 +16,5 @@ Thumbs.db
 artifacts/
 # milestone patch files (superseded by direct folder writes)
 *.patch
+# scratch dir used to sync files to the cloud build (not part of the project)
+_stage_tmp/

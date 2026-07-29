@@ -25,6 +25,11 @@ public sealed class WorldProfile
     public int TerminalColumns { get; set; } = 120;
     public int TerminalRows { get; set; } = 40;
 
+    /// <summary>Enable the 3Kingdoms/3Scapes in-band MIP protocol (handshake + frame parsing).</summary>
+    public bool EnableMip { get; set; } = false;
+    /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>
+    public string MipClientId { get; set; } = "";
+
     public Encoding ResolveEncoding()
     {
         try { return Encoding.GetEncoding(EncodingName); }

@@ -2,6 +2,7 @@ using System.Text;
 using Scrye.Core.Automation;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
+using Scrye.Core.Mip;
 using Scrye.Core.Session;
 using Scrye.Core.Text;
 
@@ -14,9 +15,10 @@ using Scrye.Core.Text;
 if (args.Length >= 1 && args[0] == "--selftest") { SelfTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--automation") { AutomationTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--protocol") { ProtocolTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--mip") { MipTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -111,6 +113,30 @@ static void ProtocolTest()
     Console.WriteLine("\n-- replies Scrye sent to the server --");
     foreach (byte[] s in sent) Console.WriteLine("    " + DescribeReply(s));
     Console.WriteLine("\nProtocol self-test complete.");
+}
+
+static void MipTest()
+{
+    Console.WriteLine("== Scrye MIP self-test ==\n");
+    var vars = new VariableStore();
+    var parser = new MipParser();
+    var proc = new MipProcessor(vars);
+    parser.MessageReceived += m => { Console.WriteLine($"    frame: id={m.Id} tag={m.Tag} data=\"{m.Data}\""); proc.Handle(m); };
+    proc.Notice += t => Console.WriteLine($"    NOTICE: {t}");
+    proc.Tell += t => Console.WriteLine($"    TELL: {t}");
+    proc.Channel += (c, msg) => Console.WriteLine($"    CHANNEL [{c}]: {msg}");
+
+    const string id = "12345";
+    string chunk1 = "You see a goblin.\r\n#K%" + id + "017FFFA~42~B~100~C~10~D~10~K~goblin~L~55\r\nHP: ok\r\n";
+    string chunk2 = "#K%" + id + "020BABt~Merlin~hi there\r\n#K%" + id + "030CAAsay~gossip~Bob~hello all\r\n";
+
+    Console.WriteLine("-- feed chunk 1 --");
+    Console.WriteLine("  visible: " + parser.Process(chunk1).Replace("\r\n", "\\n"));
+    Console.WriteLine("-- feed chunk 2 --");
+    Console.WriteLine("  visible: " + parser.Process(chunk2).Replace("\r\n", "\\n"));
+
+    Console.WriteLine($"\nvitals: hp={vars.Get("hp")}/{vars.Get("hpmax")} sp={vars.Get("sp")}/{vars.Get("spmax")} enemy={vars.Get("enemy_name")}({vars.Get("enemy_hp")})");
+    Console.WriteLine("\nMIP self-test complete.");
 }
 
 static void FeedT(TelnetLayer t, string label, byte[] bytes)

@@ -18,6 +18,7 @@ public sealed class TelnetLayer
     // commands
     private const byte IAC = 255, SE = 240, SB = 250, WILL = 251, WONT = 252, DO = 253, DONT = 254;
     // options
+    private const byte GA = 249, EOR = 239;   // prompt markers (Go-Ahead / End-Of-Record)
     private const byte OPT_ECHO = 1, OPT_SGA = 3, OPT_TTYPE = 24, OPT_NAWS = 31,
                        OPT_CHARSET = 42, OPT_MSSP = 70, OPT_MCCP2 = 86, OPT_GMCP = 201;
     // sub-negotiation markers
@@ -40,6 +41,8 @@ public sealed class TelnetLayer
     public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
     /// <summary>Server ECHO state changed. true = server echoes (client should mask local input).</summary>
     public event Action<bool>? ServerEchoChanged;
+    /// <summary>A prompt marker (IAC GA / IAC EOR) — flush any buffered prompt line.</summary>
+    public event Action? GoAhead;
 
     /// <summary>Supplies the current terminal size for NAWS.</summary>
     public Func<(int cols, int rows)>? WindowSize { get; set; }
@@ -87,7 +90,8 @@ public sealed class TelnetLayer
                     case DO: _state = P.Do; break;
                     case DONT: _state = P.Dont; break;
                     case SB: _state = P.Sb; break;
-                    default: _state = P.Data; break;                    // GA/EOR/NOP: ignore
+                    case GA: case EOR: GoAhead?.Invoke(); _state = P.Data; break;
+                    default: _state = P.Data; break;                    // NOP/other: ignore
                 }
                 break;
 
