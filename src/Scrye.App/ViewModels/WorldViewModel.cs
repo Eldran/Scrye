@@ -12,7 +12,8 @@ namespace Scrye.App.ViewModels;
 /// Wraps a live <see cref="MudSession"/> for one world tab. Engine lines land on
 /// the session loop (background); we enqueue them and drain to the
 /// <see cref="ScrollbackBuffer"/> on a UI-thread timer, so the renderer sees at
-/// most one update per frame instead of one per line (firehose-safe).
+/// most one update per frame instead of one per line (firehose-safe). The same
+/// timer drains the <see cref="Debugger"/>'s event queue.
 /// </summary>
 public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 {
@@ -29,8 +30,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public ScrollbackBuffer Scrollback { get; } = new();
     public RelayCommand SubmitCommand { get; }
 
+    /// <summary>The trigger debugger / event timeline for this world's session.</summary>
+    public DebuggerViewModel Debugger { get; }
+
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
+
+    private bool _showDebugger;
+    public bool ShowDebugger { get => _showDebugger; set => SetField(ref _showDebugger, value); }
 
     public WorldViewModel(WorldProfile profile)
     {
@@ -49,6 +56,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _scriptHost = new LuaScriptHost(new SessionWorldApi(_session));
         _session.ScriptDispatcher = (fn, wildcards) => _scriptHost.CallFunction(fn, wildcards.ToArray());
         _session.ScriptExecutor = code => _scriptHost.Execute(code);
+
+        // debugger: the event bus fires on the session loop; enqueue there, drain on the UI timer.
+        Debugger = new DebuggerViewModel(_session, AppendSystem);
+        _session.Events.Emitted += Debugger.Enqueue;
 
         SubmitCommand = new RelayCommand(Submit);
 
@@ -69,11 +80,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     private void Flush()
     {
-        if (_pending.IsEmpty) return;
-        _drainBuffer.Clear();
-        while (_pending.TryDequeue(out Line? line))
-            _drainBuffer.Add(line);
-        Scrollback.AddRange(_drainBuffer);
+        if (!_pending.IsEmpty)
+        {
+            _drainBuffer.Clear();
+            while (_pending.TryDequeue(out Line? line))
+                _drainBuffer.Add(line);
+            Scrollback.AddRange(_drainBuffer);
+        }
+        Debugger.Drain();   // always drain events, even on a frame with no output lines
     }
 
     private void Submit()
@@ -99,6 +113,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _flushTimer.Stop();
+        _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();
     }
 }
