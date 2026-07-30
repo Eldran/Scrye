@@ -37,6 +37,7 @@ public static class ProfileResolver
             if (layer.TerminalRows is not null) world.TerminalRows = layer.TerminalRows.Value;
             if (layer.EnableMip is not null) world.EnableMip = layer.EnableMip.Value;
             if (layer.MipClientId is not null) world.MipClientId = layer.MipClientId;
+            if (layer.EnableMxp is not null) world.EnableMxp = layer.EnableMxp.Value;
 
             if (layer.FontFamily is not null) font = layer.FontFamily;
             if (layer.FontSize is not null) fontSize = layer.FontSize;

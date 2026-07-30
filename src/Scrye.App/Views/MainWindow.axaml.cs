@@ -55,6 +55,13 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>An MXP command link was clicked in a world's output.</summary>
+    private void OnCommandLinkClicked(object? sender, Controls.CommandLinkClickedEventArgs e)
+    {
+        if (sender is not Control c || c.DataContext is not WorldViewModel vm) return;
+        vm.HandleCommandLink(e.Command, e.Prompt);
+    }
+
     private void OnFindKeyDown(object? sender, KeyEventArgs e)
     {
         if (sender is not TextBox box || box.DataContext is not WorldViewModel vm) return;

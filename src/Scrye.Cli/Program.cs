@@ -35,9 +35,10 @@ if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -314,6 +315,88 @@ static void LoginTest()
     if (early.Feed("Password:", out _) is not null) throw new Exception("password sent before username");
 
     Console.WriteLine("\nAuto-login self-test complete.");
+}
+
+static void MxpTest()
+{
+    Console.WriteLine("== Scrye MXP self-test ==\n");
+
+    var lines = new List<Scrye.Core.Text.Line>();
+    var replies = new List<string>();
+    var p = new AnsiParser { MxpEnabled = true };
+    p.LineCompleted += lines.Add;
+    p.MxpResponse += replies.Add;
+
+    // 1. secure line: SEND link with href
+    p.Feed("\x1b[1z<SEND href=\"kill rat\">a scrawny rat</SEND> scurries by.\n");
+    var l = lines[^1];
+    Console.WriteLine($"send: '{l.PlainText}' links={l.Links.Count} action='{l.Links[0].Link.Action}' span={l.Links[0].Start}+{l.Links[0].Length}");
+    if (l.PlainText != "a scrawny rat scurries by." || l.Links.Count != 1 ||
+        l.Links[0].Link.Action != "kill rat" || l.Links[0].Start != 0 || l.Links[0].Length != 13)
+        throw new Exception("SEND link wrong");
+
+    // 2. SEND without href -> the link text IS the command; &text; substitutes
+    p.Feed("\x1b[1zGo <SEND>north</SEND> or <SEND href=\"look &text;\">east</SEND>.\n");
+    l = lines[^1];
+    if (l.Links.Count != 2 || l.Links[0].Link.Action != "north" || l.Links[1].Link.Action != "look east")
+        throw new Exception("SEND defaults/&text; wrong");
+    Console.WriteLine($"defaults: '{l.Links[0].Link.Action}' / '{l.Links[1].Link.Action}'");
+
+    // 3. open mode blocks SEND (tag stripped, text kept, no link) — line modes reset each newline
+    p.Feed("<SEND \"steal gold\">gold pile</SEND> here\n");
+    l = lines[^1];
+    Console.WriteLine($"open-mode: '{l.PlainText}' links={l.Links.Count}");
+    if (l.PlainText != "gold pile here" || l.Links.Count != 0) throw new Exception("open mode must block SEND");
+
+    // 4. entities
+    p.Feed("\x1b[1zscore &gt; 100 &amp; rising &#33;\n");
+    l = lines[^1];
+    Console.WriteLine($"entities: '{l.PlainText}'");
+    if (l.PlainText != "score > 100 & rising !") throw new Exception("entities wrong");
+
+    // 5. formatting + colour tags (open-category: work in open mode too)
+    p.Feed("<B>bold</B> and <COLOR red>red</COLOR> text\n");
+    l = lines[^1];
+    var boldRun = l.Runs.First(r => r.Text == "bold");
+    var redRun = l.Runs.First(r => r.Text == "red");
+    Console.WriteLine($"format: bold={boldRun.Flags} red=({redRun.Fore.R},{redRun.Fore.G},{redRun.Fore.B})");
+    if ((boldRun.Flags & RunFlags.Bold) == 0) throw new Exception("<B> wrong");
+    if (redRun.Fore.R != 0xCD || redRun.Fore.G != 0) throw new Exception("<COLOR red> wrong");
+    var after = l.Runs.Last();
+    if ((after.Flags & RunFlags.Bold) != 0 || after.Fore.R == 0xCD) throw new Exception("close tags must restore");
+
+    // 6. a '<' that is not a tag is preserved, not eaten
+    p.Feed("\x1b[1zHP <-- getting low\n");
+    l = lines[^1];
+    Console.WriteLine($"literal <: '{l.PlainText}'");
+    if (l.PlainText != "HP <-- getting low") throw new Exception("literal '<' must be preserved");
+
+    // 7. VERSION / SUPPORT replies (secure only)
+    p.Feed("\x1b[1z<VERSION>\n\x1b[1z<SUPPORT>\n");
+    Console.WriteLine($"replies: {replies.Count} — {(replies.Count > 0 ? replies[0].Trim() : "")}");
+    if (replies.Count != 2 || !replies[0].Contains("CLIENT=Scrye") || !replies[1].Contains("+send"))
+        throw new Exception("VERSION/SUPPORT replies wrong");
+
+    // 8. lock-secure persists across lines
+    p.Feed("\x1b[6zline one <SEND>n</SEND>\nline two <SEND>s</SEND>\n");
+    if (lines[^1].Links.Count != 1 || lines[^2].Links.Count != 1) throw new Exception("ESC[6z lock secure wrong");
+    Console.WriteLine("lock-secure: links live on both lines");
+
+    // 9. MXP off => tags are plain text (zero behaviour change)
+    var plainParser = new AnsiParser();
+    var plainLines = new List<Scrye.Core.Text.Line>();
+    plainParser.LineCompleted += plainLines.Add;
+    plainParser.Feed("<B>not a tag</B>\n");
+    if (plainLines[0].PlainText != "<B>not a tag</B>") throw new Exception("MXP off must not parse tags");
+    Console.WriteLine($"mxp off: '{plainLines[0].PlainText}'");
+
+    // 10. plain-URL auto-detection (independent of MXP)
+    var url = Scrye.Core.Text.Line.FromText("docs at https://3scapes.org/help, then rest");
+    Console.WriteLine($"url: links={url.Links.Count} action='{url.Links[0].Link.Action}' isUrl={url.Links[0].Link.IsUrl}");
+    if (url.Links.Count != 1 || url.Links[0].Link.Action != "https://3scapes.org/help" || !url.Links[0].Link.IsUrl)
+        throw new Exception("URL detection wrong");
+
+    Console.WriteLine("\nMXP self-test complete.");
 }
 
 static void EventsTest()

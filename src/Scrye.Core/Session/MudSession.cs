@@ -143,6 +143,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
         _telnet.GoAhead += () => _ansi.FlushAsPrompt();
 
+        // MXP: negotiated via telnet option 91 → the ANSI parser starts interpreting tags.
+        _telnet.MxpSupported = profile.EnableMxp;
+        _telnet.MxpEnabled += () =>
+        {
+            if (_ansi.MxpEnabled) return;
+            _ansi.MxpEnabled = true;
+            _events.Emit(SessionEventKind.Notice, "MXP enabled");
+            RaiseLine(Line.FromText("[MXP] enabled", SysColour));
+        };
+        _ansi.MxpResponse += reply =>
+            _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(_encoding.GetBytes(reply)));
+
         _automation.Hit += OnAutomationHit;
 
         // sequences: emitted commands go to the MUD via the mailbox; progress surfaces to the UI.

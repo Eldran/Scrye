@@ -33,6 +33,10 @@ public sealed class WorldProfile
     /// via the layer's PasswordRef. NEVER serialized — this type is runtime data.</summary>
     public string Password { get; set; } = "";
 
+    /// <summary>Accept MXP (telnet option 91: clickable links + inline markup) when the
+    /// server offers it. Harmless when the server doesn't — negotiation-gated.</summary>
+    public bool EnableMxp { get; set; } = true;
+
     /// <summary>Enable the 3Kingdoms/3Scapes in-band MIP protocol (handshake + frame parsing).</summary>
     public bool EnableMip { get; set; } = false;
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>

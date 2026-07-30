@@ -11,6 +11,15 @@ using Scrye.Core.Text;
 
 namespace Scrye.App.Controls;
 
+/// <summary>A clicked MXP command link: the command, and whether to put it in the
+/// input box (SEND PROMPT) instead of sending immediately.</summary>
+public sealed class CommandLinkClickedEventArgs : EventArgs
+{
+    public string Command { get; }
+    public bool Prompt { get; }
+    public CommandLinkClickedEventArgs(string command, bool prompt) { Command = command; Prompt = prompt; }
+}
+
 /// <summary>
 /// Virtualized, colour-aware scrollback renderer. Lives inside a ScrollViewer:
 /// it reports its full content height via <see cref="MeasureOverride"/> (so the
@@ -51,11 +60,21 @@ public class OutputView : Control
     private (int line, int col)? _selCaret;
     private bool _selecting;
 
+    // clickable links (MXP SEND/A + auto-detected URLs)
+    private (int line, LinkSpan span)? _pressedLink;   // link under the pointer at press time
+    private bool _hoveringLink;
+
     private readonly Dictionary<uint, IImmutableBrush> _brushCache = new();
     private static readonly IImmutableBrush Background = new ImmutableSolidColorBrush(Color.FromRgb(0x10, 0x14, 0x1A));
     private static readonly IImmutableBrush SelectionBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x35, 0xC4, 0xD6));
     private static readonly IImmutableBrush MatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0xF0, 0xC0, 0x40));
     private static readonly IImmutableBrush ActiveMatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0xAA, 0xF0, 0xC0, 0x40));
+    private static readonly IImmutableBrush LinkBrush = new ImmutableSolidColorBrush(Color.FromArgb(0xB0, 0x35, 0xC4, 0xD6));
+    private static readonly Pen LinkPen = new(LinkBrush);
+
+    /// <summary>A command link (MXP SEND) was clicked. URL links open in the browser
+    /// directly and do not raise this.</summary>
+    public event EventHandler<CommandLinkClickedEventArgs>? CommandLinkClicked;
 
     public OutputView()
     {
@@ -165,6 +184,18 @@ public class OutputView : Control
         base.OnPointerPressed(e);
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
         var cell = HitTest(e.GetPosition(this));
+
+        // pressing on a link starts a click, not a selection
+        LinkSpan? link = LinkAt(cell);
+        if (link is not null)
+        {
+            _pressedLink = (cell.line, link.Value);
+            e.Pointer.Capture(this);
+            Focus();
+            return;
+        }
+
+        _pressedLink = null;
         _selAnchor = _selCaret = cell;
         _selecting = true;
         e.Pointer.Capture(this);
@@ -175,15 +206,58 @@ public class OutputView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (!_selecting) return;
-        _selCaret = HitTest(e.GetPosition(this));
-        InvalidateVisual();
+        if (_selecting)
+        {
+            _selCaret = HitTest(e.GetPosition(this));
+            InvalidateVisual();
+            return;
+        }
+        // hand cursor over links
+        bool over = LinkAt(HitTest(e.GetPosition(this))) is not null;
+        if (over != _hoveringLink)
+        {
+            _hoveringLink = over;
+            Cursor = over ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+        }
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_selecting) { _selecting = false; e.Pointer.Capture(null); }
+        if (_selecting) { _selecting = false; e.Pointer.Capture(null); return; }
+        if (_pressedLink is not (int line, LinkSpan span)) return;
+        _pressedLink = null;
+        e.Pointer.Capture(null);
+
+        // activate only when released over the same link
+        var cell = HitTest(e.GetPosition(this));
+        if (cell.line != line || !span.Contains(cell.col)) return;
+        ActivateLink(span.Link);
+    }
+
+    private void ActivateLink(LinkInfo link)
+    {
+        if (link.IsUrl)
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(
+                    new System.Diagnostics.ProcessStartInfo(link.Action) { UseShellExecute = true });
+            }
+            catch { /* no browser / malformed url — ignore */ }
+            return;
+        }
+        // multi-command SEND ("cmd1|cmd2"): first command is the default action
+        string command = link.Action.Split('|')[0];
+        CommandLinkClicked?.Invoke(this, new CommandLinkClickedEventArgs(command, link.Prompt));
+    }
+
+    private LinkSpan? LinkAt((int line, int col) cell)
+    {
+        if (_source is null || cell.line < 0 || cell.line >= _source.Count) return null;
+        foreach (LinkSpan span in _source[cell.line].Links)
+            if (span.Contains(cell.col)) return span;
+        return null;
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -279,6 +353,20 @@ public class OutputView : Control
             if (selA is not null) DrawSelection(context, i, y, plain.Length, selA.Value, selB!.Value);
             if (!string.IsNullOrEmpty(term)) DrawMatches(context, plain, term!, y, i == ActiveMatchLine);
             DrawLine(context, src[i], y);
+            DrawLinks(context, src[i], y);
+        }
+    }
+
+    /// <summary>Cyan underline beneath every clickable region (MXP links + detected URLs).</summary>
+    private void DrawLinks(DrawingContext ctx, Line line, double y)
+    {
+        IReadOnlyList<LinkSpan> links = line.Links;
+        if (links.Count == 0) return;
+        double uy = y + _lineHeight - 1;
+        foreach (LinkSpan span in links)
+        {
+            double x = 2 + span.Start * _charWidth;
+            ctx.DrawLine(LinkPen, new Point(x, uy), new Point(x + span.Length * _charWidth, uy));
         }
     }
 

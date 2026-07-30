@@ -20,7 +20,7 @@ public sealed class TelnetLayer
     // options
     private const byte GA = 249, EOR = 239;   // prompt markers (Go-Ahead / End-Of-Record)
     private const byte OPT_ECHO = 1, OPT_SGA = 3, OPT_TTYPE = 24, OPT_NAWS = 31,
-                       OPT_CHARSET = 42, OPT_MSSP = 70, OPT_MCCP2 = 86, OPT_GMCP = 201;
+                       OPT_CHARSET = 42, OPT_MSSP = 70, OPT_MCCP2 = 86, OPT_MXP = 91, OPT_GMCP = 201;
     // sub-negotiation markers
     private const byte TTYPE_IS = 0, TTYPE_SEND = 1;
     private const byte CHARSET_REQUEST = 1, CHARSET_ACCEPTED = 2, CHARSET_REJECTED = 3;
@@ -43,6 +43,11 @@ public sealed class TelnetLayer
     public event Action<bool>? ServerEchoChanged;
     /// <summary>A prompt marker (IAC GA / IAC EOR) — flush any buffered prompt line.</summary>
     public event Action? GoAhead;
+    /// <summary>MXP (option 91) negotiated on — the text stream may now carry MXP tags.</summary>
+    public event Action? MxpEnabled;
+
+    /// <summary>Whether to accept MXP when the server offers it (per-world setting).</summary>
+    public bool MxpSupported { get; set; } = true;
 
     /// <summary>Supplies the current terminal size for NAWS.</summary>
     public Func<(int cols, int rows)>? WindowSize { get; set; }
@@ -123,6 +128,10 @@ public sealed class TelnetLayer
             case OPT_GMCP: SendCmd(DO, option); break;
             case OPT_CHARSET: SendCmd(DO, option); break;
             case OPT_MCCP2: SendCmd(DONT, option); break;               // deferred: refuse compression
+            case OPT_MXP:
+                if (MxpSupported) { SendCmd(DO, option); MxpEnabled?.Invoke(); }
+                else SendCmd(DONT, option);
+                break;
             default: SendCmd(DONT, option); break;
         }
     }
@@ -142,6 +151,10 @@ public sealed class TelnetLayer
             case OPT_SGA: SendCmd(WILL, option); break;
             case OPT_CHARSET: SendCmd(WILL, option); break;
             case OPT_NAWS: SendCmd(WILL, option); SendNaws(); break;
+            case OPT_MXP:                                               // server-initiated variant
+                if (MxpSupported) { SendCmd(WILL, option); MxpEnabled?.Invoke(); }
+                else SendCmd(WONT, option);
+                break;
             default: SendCmd(WONT, option); break;
         }
     }

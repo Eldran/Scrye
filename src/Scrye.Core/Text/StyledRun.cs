@@ -11,6 +11,12 @@ public enum RunFlags
     Inverse   = 1 << 4,
 }
 
+/// <summary>A clickable action attached to a run of text (MXP &lt;SEND&gt;/&lt;A&gt;, or an
+/// auto-detected URL). <see cref="IsUrl"/>: open in browser; otherwise <see cref="Action"/>
+/// is a command to send to the MUD (<see cref="Prompt"/> = put it in the input box instead).</summary>
+public sealed record LinkInfo(string Action, bool IsUrl, bool Prompt = false, string? Hint = null);
+
 /// <summary>A contiguous run of text sharing one style. Immutable — the value type
-/// the renderer consumes. A <see cref="Line"/> is a sequence of these.</summary>
-public readonly record struct StyledRun(string Text, Rgb Fore, Rgb Back, RunFlags Flags);
+/// the renderer consumes. A <see cref="Line"/> is a sequence of these.
+/// <see cref="Link"/> is non-null when the run is part of a clickable MXP link.</summary>
+public readonly record struct StyledRun(string Text, Rgb Fore, Rgb Back, RunFlags Flags, LinkInfo? Link = null);

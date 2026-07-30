@@ -127,7 +127,8 @@
                                                              FontFamily="{Binding OutputFontFamily}"
                                                              FontSize="{Binding OutputFontSize}"
                                                              SearchTerm="{Binding Find.Term}"
-                                                             ActiveMatchLine="{Binding Find.ActiveLine}" />
+                                                             ActiveMatchLine="{Binding Find.ActiveLine}"
+                                                             CommandLinkClicked="OnCommandLinkClicked" />
                                     </ScrollViewer>
                                 </DockPanel>
 
@@ -426,6 +427,8 @@
                                 <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
                                     <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
                                     <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
+                                    <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
+                                              ToolTip.Tip="Clickable links + inline markup when the server supports it" />
                                 </StackPanel>
                             </StackPanel>
                         </TabItem>

@@ -223,6 +223,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Open the find bar (Ctrl+F).</summary>
     public void OpenFind() => Find.Open();
 
+    /// <summary>An MXP command link was clicked: send it (with local echo), or put it
+    /// in the input box when the link asked for a prompt.</summary>
+    public void HandleCommandLink(string command, bool prompt)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return;
+        if (prompt) { Input = command; return; }
+        _pending.Enqueue(Line.FromText("> " + command, EchoColour));
+        _session.Submit(command);
+    }
+
     private void Submit()
     {
         string text = Input ?? "";
