@@ -12,6 +12,7 @@ public sealed class EffectiveProfile
     public IReadOnlyList<TriggerDef> Triggers { get; init; } = Array.Empty<TriggerDef>();
     public IReadOnlyList<AliasDef> Aliases { get; init; } = Array.Empty<AliasDef>();
     public IReadOnlyList<TimerDef> Timers { get; init; } = Array.Empty<TimerDef>();
+    public IReadOnlyList<SequenceSpec> Sequences { get; init; } = Array.Empty<SequenceSpec>();
     public IReadOnlyDictionary<string, string> Variables { get; init; } = new Dictionary<string, string>();
 
     public string? FontFamily { get; init; }

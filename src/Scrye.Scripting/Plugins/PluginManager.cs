@@ -47,6 +47,16 @@ public sealed class PluginManager : IDisposable
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchGmcp(package, json);
     }
 
+    /// <summary>Advance every plugin's timers (fed from the session's per-second tick).</summary>
+    public void Tick(double dtSeconds)
+    {
+        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].Tick(dtSeconds);
+    }
+
+    public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchConnect(); }
+    public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); }
+    public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); }
+
     public void Dispose()
     {
         foreach (LuaPluginRuntime r in _runtimes) r.Dispose();

@@ -21,7 +21,11 @@ public sealed class LuaPluginRuntime : IDisposable
     // how LuaScriptHost calls trigger callbacks (_script.Call(fn, args)).
     private readonly List<DynValue> _lineHooks = new();
     private readonly List<(string pkg, DynValue fn)> _gmcpHooks = new();
+    private readonly List<DynValue> _connectHooks = new();
+    private readonly List<DynValue> _disconnectHooks = new();
+    private readonly List<DynValue> _promptHooks = new();
     private readonly List<IDisposable> _subscriptions = new();
+    private readonly TimerWheel _timers = new();
 
     public string Id => _descriptor.Manifest.Id;
 
@@ -59,12 +63,32 @@ public sealed class LuaPluginRuntime : IDisposable
         }
     }
 
+    /// <summary>Advance this plugin's timers (called on the session loop each tick).</summary>
+    public void Tick(double dtSeconds) => _timers.Tick(dtSeconds);
+
+    public void DispatchConnect() => FireAll(_connectHooks, "onConnect");
+    public void DispatchDisconnect() => FireAll(_disconnectHooks, "onDisconnect");
+    public void DispatchPrompt() => FireAll(_promptHooks, "onPrompt");
+
+    private void FireAll(List<DynValue> hooks, string what)
+    {
+        for (int i = 0; i < hooks.Count; i++)
+        {
+            DynValue fn = hooks[i];
+            Safe(what, () => _script.Call(fn));
+        }
+    }
+
     public void Dispose()
     {
         foreach (IDisposable sub in _subscriptions) sub.Dispose();
         _subscriptions.Clear();
+        _timers.Clear();
         _lineHooks.Clear();
         _gmcpHooks.Clear();
+        _connectHooks.Clear();
+        _disconnectHooks.Clear();
+        _promptHooks.Clear();
     }
 
     // ---- the scrye.* table ---------------------------------------------------
@@ -93,6 +117,17 @@ public sealed class LuaPluginRuntime : IDisposable
             }
             return DynValue.Nil;
         });
+
+        // scrye.after(seconds, fn) -> id  (one-shot);  scrye.every(seconds, fn) -> id  (repeating)
+        t["after"] = Fn(a => AddTimer(a, repeat: false));
+        t["every"] = Fn(a => AddTimer(a, repeat: true));
+        // scrye.cancel(id) — stop a timer started by after/every
+        t["cancel"] = Fn(a => { _timers.Cancel((int)Num(a, 0)); return DynValue.Nil; });
+
+        // lifecycle hooks: scrye.onConnect(fn) / scrye.onDisconnect(fn) / scrye.onPrompt(fn)
+        t["onConnect"]    = Fn(a => AddHook(a, _connectHooks));
+        t["onDisconnect"] = Fn(a => AddHook(a, _disconnectHooks));
+        t["onPrompt"]     = Fn(a => AddHook(a, _promptHooks));
 
         // scrye.onLine(function(line) ... end)
         t["onLine"] = Fn(a =>
@@ -154,11 +189,35 @@ public sealed class LuaPluginRuntime : IDisposable
         return v.IsNil() ? null : v.CastToString();
     }
 
+    private DynValue AddTimer(CallbackArguments a, bool repeat)
+    {
+        if (a.Count >= 2 && a[1].Type == DataType.Function)
+        {
+            DynValue fn = a[1];
+            int id = _timers.Add(Num(a, 0), repeat, () => Safe(repeat ? "every" : "after", () => _script.Call(fn)));
+            return DynValue.NewNumber(id);
+        }
+        return DynValue.Nil;
+    }
+
+    private static DynValue AddHook(CallbackArguments a, List<DynValue> hooks)
+    {
+        if (a.Count >= 1 && a[0].Type == DataType.Function) hooks.Add(a[0]);
+        return DynValue.Nil;
+    }
+
     private static DynValue Fn(Func<CallbackArguments, DynValue> f) =>
         DynValue.NewCallback((_, args) => f(args));
 
     private static string Arg(CallbackArguments a, int i) =>
         i < a.Count && !a[i].IsNil() ? a[i].CastToString() : "";
+
+    private static double Num(CallbackArguments a, int i)
+    {
+        if (i >= a.Count || a[i].IsNil()) return 0;
+        if (a[i].Type == DataType.Number) return a[i].Number;
+        return double.TryParse(a[i].CastToString(), out double d) ? d : 0;
+    }
 
     private void Safe(string what, Action action)
     {

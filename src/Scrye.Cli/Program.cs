@@ -32,9 +32,10 @@ if (args.Length >= 1 && args[0] == "--history") { HistoryTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--logging") { LoggingTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--reconnect") { ReconnectTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -427,6 +428,41 @@ static void CompleteTest()
     Console.WriteLine("\nTab-completion self-test complete.");
 }
 
+static void PluginTimersTest()
+{
+    Console.WriteLine("== Scrye plugin-timer self-test ==\n");
+    var wheel = new Scrye.Core.Plugins.TimerWheel();
+    int oneShot = 0, repeats = 0;
+
+    int idA = wheel.Add(2, repeat: false, () => oneShot++);
+    int idB = wheel.Add(1, repeat: true, () => repeats++);
+    Console.WriteLine($"registered: one-shot #{idA} @2s, repeating #{idB} @1s; live count = {wheel.Count}");
+
+    Console.WriteLine("\n-- tick 1s at a time --");
+    for (int s = 1; s <= 5; s++)
+    {
+        wheel.Tick(1.0);
+        Console.WriteLine($"   t={s}s: oneShot fired={oneShot}, repeats fired={repeats}, live={wheel.Count}");
+    }
+    Console.WriteLine("   expect: one-shot fires once at t=2 then gone; repeating fires each second.");
+
+    Console.WriteLine("\n-- cancel the repeating timer --");
+    Console.WriteLine($"   cancel(#{idB}) = {wheel.Cancel(idB)} (true);  cancel(#{idB}) again = {wheel.Cancel(idB)} (false)");
+    int before = repeats;
+    wheel.Tick(1.0); wheel.Tick(1.0);
+    Console.WriteLine($"   after cancel, 2 more ticks: repeats still = {repeats} (was {before}); live = {wheel.Count}");
+
+    Console.WriteLine("\n-- re-entrant add + self-cancel --");
+    var w2 = new Scrye.Core.Plugins.TimerWheel();
+    int hits = 0, selfId = 0;
+    selfId = w2.Add(1, repeat: true, () => { hits++; if (hits >= 2) w2.Cancel(selfId); });
+    w2.Add(1, repeat: false, () => w2.Add(1, repeat: false, () => hits += 100));  // adds a timer mid-tick
+    for (int s = 1; s <= 4; s++) w2.Tick(1.0);
+    Console.WriteLine($"   self-cancelling timer fired {hits % 100} times (expect 2); nested one-shot ran = {(hits >= 100 ? "yes" : "no")}");
+
+    Console.WriteLine("\nPlugin-timer self-test complete.");
+}
+
 static void SequenceTest()
 {
     Console.WriteLine("== Scrye command-sequence self-test ==\n");
@@ -467,6 +503,17 @@ static void SequenceTest()
     e3.Resume();
     e3.OnPrompt();                        // b
     e3.Stop();                            // stop before c
+
+    Console.WriteLine("\n-- persisted SequenceSpec (profile form) round-trip --");
+    var spec = new SequenceSpec { Name = "toBank", Source = "out; north x2; wait 1; east", PromptGated = true, StepTimeoutSeconds = 3 };
+    SequenceDef fromSpec = spec.ToDef();
+    Console.WriteLine($"   spec '{spec.Name}' source=\"{spec.Source}\" -> {fromSpec.Steps.Count} steps, gated={fromSpec.PromptGated}, timeout={fromSpec.StepTimeoutSeconds}s");
+    var reg = new SequenceEngine();
+    reg.Register(fromSpec);
+    Console.WriteLine($"   registered names: [{string.Join(", ", reg.Names)}]");
+    Console.WriteLine($"   Run(\"toBank\") = {reg.Run("toBank")} (true), Run(\"nope\") = {reg.Run("nope")} (false)");
+    reg.ClearRegistry();
+    Console.WriteLine($"   after ClearRegistry: {reg.Names.Count} names");
 
     Console.WriteLine("\nCommand-sequence self-test complete.");
 }

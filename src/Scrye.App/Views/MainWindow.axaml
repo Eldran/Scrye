@@ -527,6 +527,53 @@
                                 </Border>
                             </Grid>
                         </TabItem>
+
+                        <!-- SEQUENCES -->
+                        <TabItem Header="Sequences">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Editor.AddSequenceCommand}" />
+                                        <Button Content="Remove" Command="{Binding Editor.RemoveSequenceCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Editor.Sequences}" SelectedItem="{Binding Editor.SelectedSequence}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:SequenceRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Source}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedSequence}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:SequenceRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name — run in-game with  .seq &lt;name&gt;" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Steps" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Source}" AcceptsReturn="True" TextWrapping="Wrap" Height="130"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace" />
+                                            <CheckBox Content="Wait for the room prompt between steps" IsChecked="{Binding PromptGated}" Margin="0,2" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Prompt timeout (s)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding TimeoutText}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Step delay when ungated (s)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding DelayText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock Text="Separate steps with ; or new lines. Repeat with  x3  or  *3. Delay with  wait 2 / pause 1.5."
+                                                       Foreground="{DynamicResource ScryeTextDim}" FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
                     </TabControl>
                 </DockPanel>
             </Border>
@@ -765,6 +812,53 @@
                                             </Grid>
                                             <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Group}" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- GLOBAL SEQUENCES -->
+                        <TabItem Header="Sequences">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Settings.AddSequenceCommand}" />
+                                        <Button Content="Remove" Command="{Binding Settings.RemoveSequenceCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Settings.Sequences}" SelectedItem="{Binding Settings.SelectedSequence}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:SequenceRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Source}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedSequence}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:SequenceRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name — run in-game with  .seq &lt;name&gt;" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Steps" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Source}" AcceptsReturn="True" TextWrapping="Wrap" Height="130"
+                                                     FontFamily="Cascadia Mono, Consolas, monospace" />
+                                            <CheckBox Content="Wait for the room prompt between steps" IsChecked="{Binding PromptGated}" Margin="0,2" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Prompt timeout (s)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding TimeoutText}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Step delay when ungated (s)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding DelayText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock Text="Separate steps with ; or new lines. Repeat with  x3  or  *3. Delay with  wait 2 / pause 1.5."
+                                                       Foreground="{DynamicResource ScryeTextDim}" FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>

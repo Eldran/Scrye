@@ -98,6 +98,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public event Action? MipVitalsUpdated;
     /// <summary>Raised as a running command sequence progresses (drive the status strip).</summary>
     public event Action<SequenceStatus>? SequenceStatusChanged;
+    /// <summary>Fires once per scheduler tick (1s), on the loop thread, with the delta seconds.
+    /// Drives plugin timers.</summary>
+    public event Action<double>? Ticked;
 
     public MudSession(WorldProfile profile)
     {
@@ -298,6 +301,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         foreach (var t in eff.Triggers) _automation.AddTrigger(t);
         foreach (var a in eff.Aliases) _automation.AddAlias(a);
         foreach (var tm in eff.Timers) _automation.AddTimer(tm);
+        foreach (var s in eff.Sequences) _sequences.Register(s.ToDef());
         foreach (var kv in eff.Variables) _variables.Set(kv.Key, kv.Value);
     }
 
@@ -380,6 +384,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         _automation.Tick(1.0, this);
                         _sequences.Tick(1.0);
                         MipTick();
+                        Ticked?.Invoke(1.0);
                         break;
                     case SessionMessage.SequenceControl sc:
                         HandleSequenceControl(sc.Kind, sc.Arg);
@@ -397,9 +402,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         foreach (var t in ra.Profile.Triggers) _automation.AddTrigger(t);
                         foreach (var a in ra.Profile.Aliases) _automation.AddAlias(a);
                         foreach (var tm in ra.Profile.Timers) _automation.AddTimer(tm);
+                        _sequences.ClearRegistry();
+                        foreach (var s in ra.Profile.Sequences) _sequences.Register(s.ToDef());
                         _events.Emit(SessionEventKind.Notice, "automation reloaded");
                         RaiseLine(Line.FromText(
-                            $"* automation reloaded: {ra.Profile.Triggers.Count} triggers, {ra.Profile.Aliases.Count} aliases, {ra.Profile.Timers.Count} timers",
+                            $"* automation reloaded: {ra.Profile.Triggers.Count} triggers, {ra.Profile.Aliases.Count} aliases, {ra.Profile.Timers.Count} timers, {ra.Profile.Sequences.Count} sequences",
                             SysColour));
                         break;
                     case SessionMessage.RunScript r:

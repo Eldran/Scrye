@@ -37,6 +37,26 @@ public sealed record SequenceDef
     public double StepDelaySeconds { get; init; } = 0.5;
 }
 
+/// <summary>The persisted, editable form of a named sequence: the raw source text
+/// (parsed with <see cref="SequenceParser"/>) plus pacing options. Stored in a
+/// profile layer and merged through the cascade like triggers/aliases, then
+/// <see cref="ToDef"/>'d into a runnable <see cref="SequenceDef"/> at load time.</summary>
+public sealed record SequenceSpec
+{
+    public string Name { get; init; } = "";
+    /// <summary>Compact source, e.g. <c>enter; north x3; wait 2; west</c> (see <see cref="SequenceParser"/>).</summary>
+    public string Source { get; init; } = "";
+    public bool PromptGated { get; init; } = true;
+    public double StepTimeoutSeconds { get; init; } = 2.0;
+    public double StepDelaySeconds { get; init; } = 0.5;
+
+    public SequenceDef ToDef() => SequenceParser.Parse(Name, Source, PromptGated) with
+    {
+        StepTimeoutSeconds = StepTimeoutSeconds <= 0 ? 2.0 : StepTimeoutSeconds,
+        StepDelaySeconds = StepDelaySeconds < 0 ? 0.5 : StepDelaySeconds,
+    };
+}
+
 public enum SequenceState { Idle, Waiting, WaitingForPrompt, Paused, Finished, Stopped }
 
 /// <summary>A snapshot of a running sequence for the status strip.</summary>
@@ -77,6 +97,10 @@ public sealed class SequenceEngine
     public IReadOnlyCollection<string> Names => _defs.Keys;
 
     public void Register(SequenceDef def) => _defs[def.Name] = def;
+
+    /// <summary>Drop all registered named sequences (for a live profile reload).
+    /// Does not stop a sequence that is currently running.</summary>
+    public void ClearRegistry() => _defs.Clear();
 
     /// <summary>Run a registered sequence by name. Returns false if unknown.</summary>
     public bool Run(string name)

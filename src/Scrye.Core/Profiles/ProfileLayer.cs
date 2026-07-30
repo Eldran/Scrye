@@ -43,6 +43,7 @@ public sealed class ProfileLayer
     public List<TriggerDef> Triggers { get; set; } = new();
     public List<AliasDef> Aliases { get; set; } = new();
     public List<TimerDef> Timers { get; set; } = new();
+    public List<SequenceSpec> Sequences { get; set; } = new();
     public Dictionary<string, string> Variables { get; set; } = new();
 
     /// <summary>Names of inherited rules/variables to drop at this layer (tombstones).</summary>

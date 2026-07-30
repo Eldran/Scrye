@@ -128,8 +128,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
             (id, spec) => Hud.AddPanel(id, spec));
         _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem);
-        _session.LineReady += line => _plugins.DispatchLine(line.PlainText);
+        _session.LineReady += line =>
+        {
+            _plugins.DispatchLine(line.PlainText);
+            if (line.IsPrompt) _plugins.DispatchPrompt();
+        };
         _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
+        _session.Ticked += _plugins.Tick;                     // plugin timers (scrye.after/every)
+        _session.StateChanged += s =>                          // plugin lifecycle hooks
+        {
+            if (s == ConnectionState.Connected) _plugins.DispatchConnect();
+            else if (s == ConnectionState.Disconnected) _plugins.DispatchDisconnect();
+        };
 
         SubmitCommand = new RelayCommand(Submit);
 

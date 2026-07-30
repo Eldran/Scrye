@@ -22,6 +22,7 @@ public static class ProfileResolver
         var triggers = new Dictionary<string, TriggerDef>(StringComparer.Ordinal);
         var aliases = new Dictionary<string, AliasDef>(StringComparer.Ordinal);
         var timers = new Dictionary<string, TimerDef>(StringComparer.Ordinal);
+        var sequences = new Dictionary<string, SequenceSpec>(StringComparer.Ordinal);
         var variables = new Dictionary<string, string>(StringComparer.Ordinal);
         int anon = 0;
 
@@ -48,11 +49,13 @@ public static class ProfileResolver
 
             foreach (string name in layer.Suppress)
             {
-                triggers.Remove(name); aliases.Remove(name); timers.Remove(name); variables.Remove(name);
+                triggers.Remove(name); aliases.Remove(name); timers.Remove(name);
+                sequences.Remove(name); variables.Remove(name);
             }
             foreach (TriggerDef t in layer.Triggers) triggers[Key(t.Name, ref anon)] = t;
             foreach (AliasDef a in layer.Aliases) aliases[Key(a.Name, ref anon)] = a;
             foreach (TimerDef tm in layer.Timers) timers[Key(tm.Name, ref anon)] = tm;
+            foreach (SequenceSpec s in layer.Sequences) sequences[Key(s.Name, ref anon)] = s;
             foreach (KeyValuePair<string, string> kv in layer.Variables) variables[kv.Key] = kv.Value;
         }
 
@@ -64,6 +67,7 @@ public static class ProfileResolver
             Triggers = triggers.Values.ToArray(),
             Aliases = aliases.Values.ToArray(),
             Timers = timers.Values.ToArray(),
+            Sequences = sequences.Values.ToArray(),
             Variables = variables,
             FontFamily = font,
             FontSize = fontSize,

@@ -135,6 +135,48 @@ public sealed class AliasRowViewModel : RuleRowViewModel
     };
 }
 
+/// <summary>An editable named-sequence row (a speedwalk/action macro). The compact
+/// <see cref="Source"/> is parsed by the engine at load; runnable via <c>.seq &lt;name&gt;</c>.</summary>
+public sealed class SequenceRowViewModel : ViewModelBase
+{
+    private string _name = "";
+    public string Name { get => _name; set => SetField(ref _name, value); }
+
+    private string _source = "";
+    public string Source { get => _source; set => SetField(ref _source, value); }
+
+    private bool _promptGated = true;
+    public bool PromptGated { get => _promptGated; set => SetField(ref _promptGated, value); }
+
+    private string _timeoutText = "2";
+    public string TimeoutText { get => _timeoutText; set => SetField(ref _timeoutText, value); }
+
+    private string _delayText = "0.5";
+    public string DelayText { get => _delayText; set => SetField(ref _delayText, value); }
+
+    public SequenceRowViewModel() { }
+
+    public SequenceRowViewModel(SequenceSpec s)
+    {
+        Name = s.Name; Source = s.Source; PromptGated = s.PromptGated;
+        TimeoutText = s.StepTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        DelayText = s.StepDelaySeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    public SequenceSpec ToSpec()
+    {
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        var ns = System.Globalization.NumberStyles.Any;
+        double to = double.TryParse(TimeoutText, ns, ci, out double t) && t > 0 ? t : 2.0;
+        double dl = double.TryParse(DelayText, ns, ci, out double d) && d >= 0 ? d : 0.5;
+        return new SequenceSpec
+        {
+            Name = Name.Trim(), Source = Source ?? "", PromptGated = PromptGated,
+            StepTimeoutSeconds = to, StepDelaySeconds = dl,
+        };
+    }
+}
+
 /// <summary>A timer row (fires on an interval).</summary>
 public sealed class TimerRowViewModel : ViewModelBase
 {

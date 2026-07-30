@@ -34,6 +34,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
     public ObservableCollection<TimerRowViewModel> Timers { get; } = new();
+    public ObservableCollection<SequenceRowViewModel> Sequences { get; } = new();
 
     private TriggerRowViewModel? _selectedTrigger;
     public TriggerRowViewModel? SelectedTrigger { get => _selectedTrigger; set => SetField(ref _selectedTrigger, value); }
@@ -41,6 +42,8 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public AliasRowViewModel? SelectedAlias { get => _selectedAlias; set => SetField(ref _selectedAlias, value); }
     private TimerRowViewModel? _selectedTimer;
     public TimerRowViewModel? SelectedTimer { get => _selectedTimer; set => SetField(ref _selectedTimer, value); }
+    private SequenceRowViewModel? _selectedSequence;
+    public SequenceRowViewModel? SelectedSequence { get => _selectedSequence; set => SetField(ref _selectedSequence, value); }
 
     public RelayCommand AddTriggerCommand { get; }
     public RelayCommand RemoveTriggerCommand { get; }
@@ -48,6 +51,8 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public RelayCommand RemoveAliasCommand { get; }
     public RelayCommand AddTimerCommand { get; }
     public RelayCommand RemoveTimerCommand { get; }
+    public RelayCommand AddSequenceCommand { get; }
+    public RelayCommand RemoveSequenceCommand { get; }
 
     public WorldEditorViewModel(string name, ProfileLayer? layer, bool isNew)
     {
@@ -65,6 +70,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
         foreach (TimerDef tm in _layer.Timers) Timers.Add(new TimerRowViewModel(tm));
+        foreach (SequenceSpec s in _layer.Sequences) Sequences.Add(new SequenceRowViewModel(s));
 
         AddTriggerCommand = new RelayCommand(() =>
         {
@@ -86,6 +92,13 @@ public sealed class WorldEditorViewModel : ViewModelBase
             Timers.Add(row); SelectedTimer = row;
         });
         RemoveTimerCommand = new RelayCommand(() => { if (SelectedTimer is not null) Timers.Remove(SelectedTimer); });
+
+        AddSequenceCommand = new RelayCommand(() =>
+        {
+            var row = new SequenceRowViewModel { Name = UniqueName("walk", Sequences, r => r.Name), Source = "north; north; east" };
+            Sequences.Add(row); SelectedSequence = row;
+        });
+        RemoveSequenceCommand = new RelayCommand(() => { if (SelectedSequence is not null) Sequences.Remove(SelectedSequence); });
     }
 
     private static string UniqueName<T>(string stem, ObservableCollection<T> rows, System.Func<T, string> nameOf)
@@ -116,7 +129,16 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.Triggers = BuildTriggers();
         _layer.Aliases = BuildAliases();
         _layer.Timers = BuildTimers();
+        _layer.Sequences = BuildSequences();
         return _layer;
+    }
+
+    private System.Collections.Generic.List<SequenceSpec> BuildSequences()
+    {
+        var list = new System.Collections.Generic.List<SequenceSpec>();
+        foreach (SequenceRowViewModel r in Sequences)
+            if (!string.IsNullOrWhiteSpace(r.Name)) list.Add(r.ToSpec());
+        return list;
     }
 
     private System.Collections.Generic.List<TriggerDef> BuildTriggers()
