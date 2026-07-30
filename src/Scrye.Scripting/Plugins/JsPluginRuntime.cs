@@ -161,6 +161,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         getVariable = (Func<string, string>)(name => _host.GetVariable(name) ?? ""),
         setVariable = (Action<string, string>)((name, value) => _host.SetVariable(name, value ?? "")),
         getState    = (Func<string, string>)(path => _host.GetState(path)),
+        setState    = (Action<string, string>)((path, value) => _host.SetState(path, value ?? "")),
 
         // scrye.watch(path, function(value, path) { ... })
         watch = (Action<string, JsValue>)((path, fn) =>
@@ -238,8 +239,38 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private PanelSpec ToPanelSpec(JsValue tbl)
     {
+        var widgets = ToWidgetList(Get(tbl, "widgets"));
+
+        // tabbed panel: tabs: [ { title, widgets: [...] }, ... ]
+        var tabs = new List<PanelTabSpec>();
+        JsValue tv = Get(tbl, "tabs");
+        if (tv.IsObject())
+        {
+            int len = (int)ToNum(Get(tv, "length"));
+            for (int i = 0; i < len; i++)
+            {
+                JsValue item = tv.AsObject().Get(i.ToString());
+                if (item.IsObject())
+                    tabs.Add(new PanelTabSpec
+                    {
+                        Title = Str(item, "title") ?? $"Tab {i + 1}",
+                        Widgets = ToWidgetList(Get(item, "widgets")),
+                    });
+            }
+        }
+
+        return new PanelSpec
+        {
+            Title = Str(tbl, "title") ?? "",
+            Widgets = widgets,
+            Tabs = tabs,
+            Width = ToNum(Get(tbl, "width")),
+        };
+    }
+
+    private List<WidgetSpec> ToWidgetList(JsValue w)
+    {
         var widgets = new List<WidgetSpec>();
-        JsValue w = Get(tbl, "widgets");
         if (w.IsObject())
         {
             int len = (int)ToNum(Get(w, "length"));
@@ -249,7 +280,22 @@ public sealed class JsPluginRuntime : IPluginRuntime
                 if (item.IsObject()) widgets.Add(ToWidgetSpec(item));
             }
         }
-        return new PanelSpec { Title = Str(tbl, "title") ?? "", Widgets = widgets };
+        return widgets;
+    }
+
+    /// <summary>Read a JS palette object as char→"#RRGGBB". Round-trips through the
+    /// engine's own JSON.stringify — the one enumeration API guaranteed public.</summary>
+    private Dictionary<string, string>? ToPalette(JsValue pal)
+    {
+        if (!pal.IsObject()) return null;
+        try
+        {
+            JsValue stringify = _engine.Evaluate("JSON.stringify");
+            JsValue json = _engine.Invoke(stringify, pal);
+            if (!json.IsString()) return null;
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json.AsString());
+        }
+        catch { return null; }
     }
 
     private WidgetSpec ToWidgetSpec(JsValue w)
@@ -271,6 +317,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Value = Str(w, "value"),
             Max = Str(w, "max"),
             Color = Str(w, "color"),
+            Palette = ToPalette(Get(w, "palette")),
             Action = actionId,
         };
     }

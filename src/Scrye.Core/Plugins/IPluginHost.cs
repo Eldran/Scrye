@@ -23,6 +23,11 @@ public interface IPluginHost
     /// <summary>Current value of a state path (e.g. "character.health.current"), or "" if unset.</summary>
     string GetState(string path);
 
+    /// <summary>Publish a value into the state tree (plugins compose derived state —
+    /// e.g. a rendered map grid — under <c>plugin.&lt;id&gt;.*</c> and bind widgets to it).
+    /// Runs on the session loop like everything else, so it never races the store.</summary>
+    void SetState(string path, string value);
+
     /// <summary>Watch a state path/subtree; callback gets (changedPath, valueText).
     /// Returns an <see cref="IDisposable"/> the runtime disposes when the plugin unloads.</summary>
     IDisposable WatchState(string path, Action<string, string> onChange);

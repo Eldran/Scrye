@@ -172,6 +172,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             }
         };
         _mipProc.VitalsUpdated += () => { MapMipVitals(); MipVitalsUpdated?.Invoke(); };
+        // the raw viking (BBE) feed becomes watchable state: vik.<key>
+        _mipProc.VikingData += (k, v) => _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
         _mipProc.Notice += text => Echo(text);
         _mipProc.Tell += text => RaiseLine(Line.FromText(text, MipColour));
         _mipProc.Channel += (ch, msg) => RaiseLine(Line.FromText($"[{ch}] {msg}", MipColour));
@@ -225,6 +227,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         Num("gp2", "character.gold.b");           Num("gp2max", "character.gold.bmax");
         Str("enemy_name", "enemy.name");          Num("enemy_hp", "enemy.health");
         Num("round", "combat.round");
+        Str("gline1", "character.gline1");        Str("gline2", "character.gline2");
+        Str("uptime", "server.uptime");           Str("lag", "server.lag");
     }
 
     public async Task ConnectAsync(CancellationToken ct = default)

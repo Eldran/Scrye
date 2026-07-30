@@ -33,6 +33,9 @@ public sealed class SessionPluginHost : IPluginHost
 
     public string GetState(string path) => _session.GameState.Get(path).Text;
 
+    public void SetState(string path, string value) =>
+        _session.GameState.Set(path, Scrye.Core.State.StateValue.Str(value));
+
     public IDisposable WatchState(string path, Action<string, string> onChange) =>
         _session.GameState.Watch(path, (p, v) => onChange(p, v.Text));
 

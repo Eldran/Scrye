@@ -155,6 +155,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         t["getVariable"] = Fn(a => DynValue.NewString(_host.GetVariable(Arg(a, 0)) ?? ""));
         t["setVariable"] = Fn(a => { _host.SetVariable(Arg(a, 0), Arg(a, 1)); return DynValue.Nil; });
         t["getState"]    = Fn(a => DynValue.NewString(_host.GetState(Arg(a, 0))));
+        t["setState"]    = Fn(a => { _host.SetState(Arg(a, 0), Arg(a, 1)); return DynValue.Nil; });
 
         // scrye.watch(path, function(value, path) ... end)
         t["watch"] = Fn(a =>
@@ -257,8 +258,39 @@ public sealed class LuaPluginRuntime : IPluginRuntime
 
     private PanelSpec ToPanelSpec(Table tbl)
     {
+        var widgets = ToWidgetList(tbl.Get("widgets"));
+
+        // tabbed panel: tabs = { { title=..., widgets={...} }, ... }
+        var tabs = new List<PanelTabSpec>();
+        DynValue tv = tbl.Get("tabs");
+        if (tv.Type == DataType.Table)
+        {
+            Table arr = tv.Table;
+            for (int i = 1; i <= arr.Length; i++)
+            {
+                DynValue item = arr.Get(i);
+                if (item.Type == DataType.Table)
+                    tabs.Add(new PanelTabSpec
+                    {
+                        Title = Field(item.Table, "title") ?? $"Tab {i}",
+                        Widgets = ToWidgetList(item.Table.Get("widgets")),
+                    });
+            }
+        }
+
+        DynValue width = tbl.Get("width");
+        return new PanelSpec
+        {
+            Title = Field(tbl, "title") ?? "",
+            Widgets = widgets,
+            Tabs = tabs,
+            Width = width.Type == DataType.Number ? width.Number : 0,
+        };
+    }
+
+    private List<WidgetSpec> ToWidgetList(DynValue w)
+    {
         var widgets = new List<WidgetSpec>();
-        DynValue w = tbl.Get("widgets");
         if (w.Type == DataType.Table)
         {
             Table arr = w.Table;
@@ -268,7 +300,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
                 if (item.Type == DataType.Table) widgets.Add(ToWidgetSpec(item.Table));
             }
         }
-        return new PanelSpec { Title = Field(tbl, "title") ?? "", Widgets = widgets };
+        return widgets;
     }
 
     private WidgetSpec ToWidgetSpec(Table w)
@@ -282,6 +314,20 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             actionId = "a" + _nextActionId++;
             _actions[actionId] = action;
         }
+        // colorgrid palette: { ["char"] = "#RRGGBB", ... }
+        Dictionary<string, string>? palette = null;
+        DynValue pal = w.Get("palette");
+        if (pal.Type == DataType.Table)
+        {
+            palette = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (TablePair pair in pal.Table.Pairs)
+            {
+                string? key = pair.Key.CastToString();
+                string? val = pair.Value.CastToString();
+                if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(val)) palette[key] = val;
+            }
+        }
+
         return new WidgetSpec
         {
             Type = Field(w, "type") ?? "label",
@@ -290,6 +336,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Value = Field(w, "value"),
             Max = Field(w, "max"),
             Color = Field(w, "color"),
+            Palette = palette,
             Action = actionId,
         };
     }

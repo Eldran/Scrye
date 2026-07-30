@@ -37,9 +37,24 @@ public sealed class HudViewModel : IDisposable
     /// edit is marshalled to the UI.</summary>
     public void AddPanel(string pluginId, PanelSpec spec)
     {
-        var panel = new HudPanelViewModel(string.IsNullOrWhiteSpace(spec.Title) ? pluginId : spec.Title, pluginId);
+        var panel = new HudPanelViewModel(string.IsNullOrWhiteSpace(spec.Title) ? pluginId : spec.Title, pluginId)
+        {
+            Width = spec.Width > 0 ? spec.Width : 220,
+        };
         var subs = new List<IDisposable>();
-        foreach (WidgetSpec w in spec.Widgets) panel.Widgets.Add(BuildWidget(pluginId, w, subs));
+        if (spec.Tabs.Count > 0)
+        {
+            foreach (PanelTabSpec tab in spec.Tabs)
+            {
+                var tabVm = new HudTabViewModel(tab.Title);
+                foreach (WidgetSpec w in tab.Widgets) tabVm.Widgets.Add(BuildWidget(pluginId, w, subs));
+                panel.Tabs.Add(tabVm);
+            }
+        }
+        else
+        {
+            foreach (WidgetSpec w in spec.Widgets) panel.Widgets.Add(BuildWidget(pluginId, w, subs));
+        }
         if (subs.Count > 0)
         {
             if (!_pluginSubs.TryGetValue(pluginId, out List<IDisposable>? list)) _pluginSubs[pluginId] = list = new();
@@ -85,6 +100,25 @@ public sealed class HudViewModel : IDisposable
             {
                 var vm = new LabelWidgetViewModel { Prefix = w.Text ?? "" };
                 BindText(w.Bind, vm.SetValue, subs);
+                return vm;
+            }
+            case "gauge":
+            {
+                var vm = new GaugeWidgetViewModel(w.Text ?? "");
+                BindNumber(w.Value, v => vm.Value = v, subs);
+                BindNumber(w.Max, v => vm.Maximum = v, subs);
+                return vm;
+            }
+            case "text":
+            {
+                var vm = new TextWidgetViewModel(w.Color);
+                BindText(w.Bind, s => vm.Text = s, subs);
+                return vm;
+            }
+            case "colorgrid":
+            {
+                var vm = new ColorGridWidgetViewModel(w.Palette);
+                BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
             }
             default: // "label"
@@ -136,14 +170,26 @@ public sealed class HudViewModel : IDisposable
 }
 
 /// <summary>One HUD panel: a title and a heterogeneous list of widget view-models
-/// (rendered by type via DataTemplates). <see cref="PluginId"/> lets the host drop a
-/// plugin's panels on reload/disable.</summary>
+/// (rendered by type via DataTemplates) — or a set of <see cref="Tabs"/> when the
+/// spec is tabbed. <see cref="PluginId"/> lets the host drop a plugin's panels on
+/// reload/disable.</summary>
 public sealed class HudPanelViewModel
 {
     public string Title { get; }
     public string PluginId { get; }
     public ObservableCollection<object> Widgets { get; } = new();
+    public ObservableCollection<HudTabViewModel> Tabs { get; } = new();
+    public bool HasTabs => Tabs.Count > 0;
+    public double Width { get; init; } = 220;
     public HudPanelViewModel(string title, string pluginId) { Title = title; PluginId = pluginId; }
+}
+
+/// <summary>One tab in a tabbed HUD panel.</summary>
+public sealed class HudTabViewModel
+{
+    public string Title { get; }
+    public ObservableCollection<object> Widgets { get; } = new();
+    public HudTabViewModel(string title) => Title = title;
 }
 
 /// <summary>A clickable button widget: its <see cref="Command"/> invokes the plugin's callback.</summary>
@@ -168,6 +214,84 @@ public sealed class LabelWidgetViewModel : ViewModelBase
 
     /// <summary>Set the bound portion; the displayed text is <see cref="Prefix"/> + value.</summary>
     public void SetValue(string value) => Text = Prefix + value;
+}
+
+/// <summary>A labelled gauge: current/max readout inside the bar, fill colour shifting
+/// with the percentage (cyan healthy → amber warning → red critical).</summary>
+public sealed class GaugeWidgetViewModel : ViewModelBase
+{
+    private static readonly Avalonia.Media.IBrush Healthy =
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0x35, 0xC4, 0xD6));
+    private static readonly Avalonia.Media.IBrush Warning =
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0xA8, 0x30));
+    private static readonly Avalonia.Media.IBrush Critical =
+        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0x50, 0x50));
+
+    public string Label { get; }
+    public GaugeWidgetViewModel(string label) => Label = label;
+
+    private double _value;
+    public double Value
+    {
+        get => _value;
+        set { if (SetField(ref _value, value)) Changed(); }
+    }
+
+    private double _maximum = 100;
+    public double Maximum
+    {
+        get => _maximum;
+        set { if (SetField(ref _maximum, value <= 0 ? 1 : value)) Changed(); }
+    }
+
+    public string Caption => $"{_value:0}/{_maximum:0}";
+    public Avalonia.Media.IBrush BarBrush =>
+        _value / _maximum >= 0.5 ? Healthy : _value / _maximum >= 0.25 ? Warning : Critical;
+
+    private void Changed()
+    {
+        OnPropertyChanged(nameof(Caption));
+        OnPropertyChanged(nameof(BarBrush));
+    }
+}
+
+/// <summary>A multi-line monospace text block bound to a state path (plugins compose
+/// whole report sections into one path). Optional "#RRGGBB" foreground override.</summary>
+public sealed class TextWidgetViewModel : ViewModelBase
+{
+    public Avalonia.Media.IBrush Foreground { get; }
+
+    public TextWidgetViewModel(string? colorHex)
+    {
+        Avalonia.Media.Color c = Avalonia.Media.Color.FromRgb(0xD6, 0xDE, 0xE8);
+        if (colorHex is { Length: 7 } && colorHex[0] == '#' &&
+            uint.TryParse(colorHex[1..], System.Globalization.NumberStyles.HexNumber, null, out uint hex))
+            c = Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
+        Foreground = new Avalonia.Media.SolidColorBrush(c);
+    }
+
+    private string _text = "";
+    public string Text { get => _text; set => SetField(ref _text, value); }
+}
+
+/// <summary>A grid of coloured cells: newline-separated rows of characters, coloured
+/// via the palette (char → colour). Rendered by <c>Controls.ColorGridView</c>.</summary>
+public sealed class ColorGridWidgetViewModel : ViewModelBase
+{
+    public Dictionary<char, Avalonia.Media.Color> Palette { get; }
+
+    public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette)
+    {
+        Palette = new Dictionary<char, Avalonia.Media.Color>();
+        if (palette is not null)
+            foreach ((string key, string val) in palette)
+                if (key.Length >= 1 && val is { Length: 7 } && val[0] == '#' &&
+                    uint.TryParse(val[1..], System.Globalization.NumberStyles.HexNumber, null, out uint hex))
+                    Palette[key[0]] = Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
+    }
+
+    private string _gridText = "";
+    public string GridText { get => _gridText; set => SetField(ref _gridText, value); }
 }
 
 /// <summary>A progress bar widget bound to a current value and a maximum.</summary>

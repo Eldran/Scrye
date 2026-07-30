@@ -1,0 +1,10 @@
+{
+  "id": "viking-status",
+  "name": "Viking Status",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Tabbed Viking status panel fed by the 3Scapes MIP viking (BBE) feed: Stats gauges, City report, and the live territory map. Port of the MUSHclient ThreeS_VikingStatus plugin onto Scrye's declarative HUD. Type 'vmapon' in-game to request the feed.",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua"
+}

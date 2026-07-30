@@ -158,6 +158,16 @@ static void MipTest()
     Console.WriteLine("  visible: " + parser.Process(chunk2).Replace("\r\n", "\\n"));
 
     Console.WriteLine($"\nvitals: hp={vars.Get("hp")}/{vars.Get("hpmax")} sp={vars.Get("sp")}/{vars.Get("spmax")} enemy={vars.Get("enemy_name")}({vars.Get("enemy_hp")})");
+
+    // BBE viking feed: per-key VikingData events (the session maps these to vik.* state)
+    var viking = new List<(string k, string v)>();
+    proc.VikingData += (k, v) => viking.Add((k, v));
+    parser.Process("#K%" + id + "045BBESEID^^12^^MSEID^^20^^VMAPH^^60|24|35|17\r\n");
+    Console.WriteLine("viking keys: " + string.Join(", ", viking.Select(p => $"{p.k}={p.v}")));
+    if (viking.Count != 3 || viking[0] != ("SEID", "12") || viking[2].k != "VMAPH")
+        throw new Exception("BBE VikingData events wrong");
+    if (vars.Get("vmip_SEID") != "12") throw new Exception("vmip_ vars must still be set");
+
     Console.WriteLine("\nMIP self-test complete.");
 }
 

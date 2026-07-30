@@ -17,6 +17,9 @@ public sealed class MipProcessor
 
     /// <summary>Raised after vitals/map variables change.</summary>
     public event Action? VitalsUpdated;
+    /// <summary>A BBE viking-feed key/value pair arrived (raised per key, before
+    /// <see cref="VitalsUpdated"/>). The session maps these into the state tree.</summary>
+    public event Action<string, string>? VikingData;
     /// <summary>A MIP special notice (BAA) to display.</summary>
     public event Action<string>? Notice;
     /// <summary>A tell (BAB), pre-formatted for display.</summary>
@@ -76,7 +79,10 @@ public sealed class MipProcessor
         string[] t = data.Split("^^");
         for (int i = 0; i + 1 < t.Length; i += 2)
             if (t[i].Length > 0)
+            {
                 _vars.Set("vmip_" + t[i], t[i + 1]);
+                VikingData?.Invoke(t[i], t[i + 1]);
+            }
         VitalsUpdated?.Invoke();
     }
 
