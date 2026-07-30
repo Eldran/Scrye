@@ -1,6 +1,7 @@
 using System.Text;
 using Scrye.Core.Automation;
 using Scrye.Core.Events;
+using Scrye.Core.Logging;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
 using Scrye.Core.Mip;
@@ -26,9 +27,14 @@ if (args.Length >= 1 && args[0] == "--events") { EventsTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--replay") { ReplayTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--state") { StateTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--plugins") { PluginsTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--sequence") { SequenceTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--history") { HistoryTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--logging") { LoggingTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--reconnect") { ReconnectTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -305,6 +311,164 @@ static void EventsTest()
     Console.WriteLine($"    after simulate: hp still={vars.Get("hp") ?? "(unset)"} (was {hpBefore}), triggers still={engine.TriggerCount} (was {trigBefore})");
 
     Console.WriteLine("\nEvent-pipeline self-test complete.");
+}
+
+static void HistoryTest()
+{
+    Console.WriteLine("== Scrye command-history self-test ==\n");
+    var h = new CommandHistory();
+    h.Add("look"); h.Add("north"); h.Add("north"); h.Add("kill orc");   // dup 'north' collapsed
+    Console.WriteLine($"items: [{string.Join(", ", h.Items)}]  (consecutive dup 'north' collapsed)");
+
+    Console.WriteLine("\n-- arrow up from a half-typed 'sc' --");
+    Console.WriteLine($"    up   -> {h.Previous("sc")}");   // kill orc
+    Console.WriteLine($"    up   -> {h.Previous("sc")}");   // north
+    Console.WriteLine($"    up   -> {h.Previous("sc")}");   // look
+    Console.WriteLine($"    up   -> {h.Previous("sc")}");   // look (clamped)
+    Console.WriteLine("-- back down --");
+    Console.WriteLine($"    down -> {h.Next()}");           // north
+    Console.WriteLine($"    down -> {h.Next()}");           // kill orc
+    Console.WriteLine($"    down -> \"{h.Next()}\"");       // draft "sc" restored
+    Console.WriteLine($"    down -> {(h.Next() is null ? "(nothing)" : h.Next())}");  // null past the end
+
+    Console.WriteLine("\nCommand-history self-test complete.");
+}
+
+static void LoggingTest()
+{
+    Console.WriteLine("== Scrye session-logging self-test ==\n");
+    var t0 = new DateTimeOffset(2026, 1, 1, 20, 15, 0, TimeSpan.Zero);
+    int tick = 0;
+    Func<DateTimeOffset> clock = () => t0.AddSeconds(tick++);
+
+    // A couple of representative lines: a plain server line, a coloured multi-run line,
+    // an echoed command, and one with HTML-hostile characters.
+    Line plain = Line.FromText("You enter the Plaza.");
+    Line coloured = new(new[]
+    {
+        new StyledRun("HP:", new Rgb(0xF0, 0xC0, 0x40), Rgb.DefaultBack, RunFlags.Bold),
+        new StyledRun(" 42/100", new Rgb(0x55, 0xFF, 0x55), Rgb.DefaultBack, RunFlags.None),
+    }, false, t0);
+    Line risky = Line.FromText("<script> & \"tags\" should be escaped");
+
+    Console.WriteLine("-- TEXT format --");
+    var sw = new StringWriter();
+    var text = new SessionLogger("3Scapes", sw, LogFormat.Text, timestamps: true, clock: clock);
+    text.Log(plain); text.Log(coloured); text.Log("> north", new Rgb(0x60, 0xC0, 0xF0)); text.Log(risky);
+    text.Close();
+    Console.WriteLine(sw.ToString());
+    Console.WriteLine($"   lines logged: {text.LineCount} (expect 4)");
+
+    Console.WriteLine("\n-- HTML format --");
+    var sh = new StringWriter();
+    var html = new SessionLogger("3Scapes", sh, LogFormat.Html, timestamps: false, clock: clock);
+    html.Log(coloured); html.Log(risky);
+    html.Close();
+    string h = sh.ToString();
+    Console.WriteLine(h);
+    Console.WriteLine($"   contains <span colour run: {h.Contains("<span style=\"color:#55FF55")}");
+    Console.WriteLine($"   escaped '<script>' as &lt;script&gt;: {h.Contains("&lt;script&gt;")}");
+    Console.WriteLine($"   wrapped in <pre>: {h.Contains("<pre>") && h.Contains("</pre>")}");
+
+    Console.WriteLine("\n-- round-trip through a real file --");
+    string dir = Path.Combine(Path.GetTempPath(), "scrye_log_" + Guid.NewGuid().ToString("N"));
+    var file = SessionLogger.CreateFile(dir, "3Scapes", LogFormat.Text, timestamps: false, clock: clock);
+    file.Log(plain);
+    string path = file.Path!;
+    file.Close();
+    string onDisk = File.ReadAllText(path);
+    Console.WriteLine($"   wrote {Path.GetFileName(path)}, contains the line: {onDisk.Contains("You enter the Plaza.")}");
+    Directory.Delete(dir, true);
+
+    Console.WriteLine("\nSession-logging self-test complete.");
+}
+
+static void ReconnectTest()
+{
+    Console.WriteLine("== Scrye auto-reconnect self-test ==\n");
+    var p = new ReconnectPolicy
+    {
+        BaseDelay = TimeSpan.FromSeconds(2),
+        Factor = 2.0,
+        MaxDelay = TimeSpan.FromSeconds(60),
+        MaxAttempts = 8,
+    };
+    Console.WriteLine($"policy: base={p.BaseDelay.TotalSeconds}s factor={p.Factor} cap={p.MaxDelay.TotalSeconds}s maxAttempts={p.MaxAttempts}\n");
+    Console.WriteLine("attempt  delay");
+    for (int a = 1; a <= p.MaxAttempts + 1; a++)
+    {
+        if (!p.ShouldRetry(a - 1)) { Console.WriteLine($"   (would give up before attempt {a})"); break; }
+        Console.WriteLine($"   {a,2}    {p.Delay(a).TotalSeconds,5:0}s");
+    }
+    Console.WriteLine("\nexpected: 2, 4, 8, 16, 32, 60, 60, 60 (exponential, capped at 60)");
+
+    var inf = new ReconnectPolicy { MaxAttempts = 0 };
+    Console.WriteLine($"\nunlimited policy ShouldRetry(1000) = {inf.ShouldRetry(1000)} (expect True)");
+
+    Console.WriteLine("\nAuto-reconnect self-test complete.");
+}
+
+static void CompleteTest()
+{
+    Console.WriteLine("== Scrye tab-completion self-test ==\n");
+    var e = new CompletionEngine(minLength: 3);
+    e.Observe("You see a goblin guarding the gate.");
+    e.Observe("The gatekeeper greets you.");
+    e.Add("gossip");   // a recently-typed command
+    Console.WriteLine($"words harvested: {e.Count}");
+
+    foreach (string stub in new[] { "go", "gat", "gr", "zz" })
+        Console.WriteLine($"   '{stub}' -> [{string.Join(", ", e.Complete(stub))}]");
+
+    Console.WriteLine("\n-- recency: retype 'gate' then complete 'ga' (gate should lead) --");
+    e.Add("gate");
+    Console.WriteLine($"   'ga' -> [{string.Join(", ", e.Complete("ga"))}]");
+
+    Console.WriteLine("\nTab-completion self-test complete.");
+}
+
+static void SequenceTest()
+{
+    Console.WriteLine("== Scrye command-sequence self-test ==\n");
+
+    Console.WriteLine("-- parse: \"enter; north x3; wait 2; west*2\" --");
+    SequenceDef def = SequenceParser.Parse("demo", "enter; north x3; wait 2; west*2");
+    foreach (var s in def.Steps)
+        Console.WriteLine($"    {(s.Kind == "wait" ? $"wait {s.Seconds}s" : $"send '{s.Text}' x{s.Count}")}");
+
+    var engine = new SequenceEngine();
+    engine.Send += cmd => Console.WriteLine($"    -> SEND: {cmd}");
+    engine.StatusChanged += st => Console.WriteLine($"       [{st.State}] {st.Sent}/{st.Total} {st.Command}");
+
+    Console.WriteLine("\n-- run prompt-gated; feed a prompt after each send --");
+    engine.RunAdHoc(def);                 // sends 'enter' immediately, then waits for prompt
+    for (int i = 0; i < 5 && engine.State == SequenceState.WaitingForPrompt; i++)
+        engine.OnPrompt();                // advance enter->north->north->north (then hits the wait step)
+    Console.WriteLine("    (now at the 'wait 2' step — advance with ticks)");
+    engine.Tick(1.0);
+    engine.Tick(1.0);                     // wait satisfied -> sends west
+    engine.OnPrompt();                    // west #1 -> west #2 (last send finishes)
+
+    Console.WriteLine("\n-- prompt-timeout safety: gated, but no prompt arrives --");
+    var e2 = new SequenceEngine();
+    e2.Send += cmd => Console.WriteLine($"    -> SEND: {cmd}");
+    e2.RunAdHoc(SequenceParser.Parse("t", "kick; punch"));   // StepTimeout default 2s
+    Console.WriteLine("    ticking 2s with no prompt (should advance to 'punch'):");
+    e2.Tick(1.0); e2.Tick(1.0);
+
+    Console.WriteLine("\n-- pause / resume / stop --");
+    var e3 = new SequenceEngine();
+    e3.Send += cmd => Console.WriteLine($"    -> SEND: {cmd}");
+    e3.StatusChanged += st => Console.WriteLine($"       [{st.State}] {st.Command}");
+    e3.RunAdHoc(SequenceParser.Parse("t", "a; b; c"));
+    e3.Pause();
+    Console.WriteLine("    (paused — a tick should do nothing)");
+    e3.Tick(5.0);
+    e3.Resume();
+    e3.OnPrompt();                        // b
+    e3.Stop();                            // stop before c
+
+    Console.WriteLine("\nCommand-sequence self-test complete.");
 }
 
 static void PluginsTest()

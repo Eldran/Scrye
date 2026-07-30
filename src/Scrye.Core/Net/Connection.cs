@@ -25,6 +25,7 @@ public sealed class Connection : IAsyncDisposable
 
     public async Task ConnectAsync(string host, int port, bool useTls, bool acceptInvalidCerts, CancellationToken ct = default)
     {
+        CloseSocket();   // tear down any prior socket so this instance can reconnect cleanly
         SetState(ConnectionState.Connecting);
         try
         {
@@ -88,6 +89,20 @@ public sealed class Connection : IAsyncDisposable
     {
         State = s;
         StateChanged?.Invoke(s);
+    }
+
+    /// <summary>Cancel and dispose the current socket/read-loop without changing
+    /// state — used to reset before a reconnect.</summary>
+    private void CloseSocket()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+        _readLoop = null;   // the old loop observes cancellation and exits on its own
+        _stream?.Dispose();
+        _stream = null;
+        _tcp?.Dispose();
+        _tcp = null;
     }
 
     public async ValueTask DisposeAsync()

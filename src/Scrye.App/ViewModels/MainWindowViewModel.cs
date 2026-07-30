@@ -18,6 +18,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     public RelayCommand ConnectWorldCommand { get; }
     public RelayCommand SaveEditorCommand { get; }
     public RelayCommand CancelEditorCommand { get; }
+    public RelayCommand OpenSettingsCommand { get; }
+    public RelayCommand SaveSettingsCommand { get; }
+    public RelayCommand CancelSettingsCommand { get; }
 
     // quick-connect fields
     private string _host = "";
@@ -38,6 +41,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     private WorldEditorViewModel? _editor;
     public WorldEditorViewModel? Editor { get => _editor; set => SetField(ref _editor, value); }
 
+    private GlobalSettingsViewModel? _settings;
+    public GlobalSettingsViewModel? Settings { get => _settings; set => SetField(ref _settings, value); }
+
     public MainWindowViewModel()
     {
         string dir = System.IO.Path.Combine(
@@ -52,6 +58,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         ConnectWorldCommand = new RelayCommand(ConnectWorld);
         SaveEditorCommand = new RelayCommand(SaveEditor);
         CancelEditorCommand = new RelayCommand(() => Editor = null);
+        OpenSettingsCommand = new RelayCommand(() => Settings = new GlobalSettingsViewModel(_store.LoadGlobal()));
+        SaveSettingsCommand = new RelayCommand(SaveSettings);
+        CancelSettingsCommand = new RelayCommand(() => Settings = null);
 
         RefreshWorlds();
     }
@@ -86,6 +95,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         Editor = null;
         RefreshWorlds();
         SelectedWorld = name;
+    }
+
+    private void SaveSettings()
+    {
+        if (Settings is null) return;
+        _store.SaveGlobal(Settings.ToLayer());
+        Settings = null;
     }
 
     private async void ConnectWorld()

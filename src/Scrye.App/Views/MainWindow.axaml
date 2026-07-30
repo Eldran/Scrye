@@ -7,7 +7,7 @@
         x:Class="Scrye.App.Views.MainWindow"
         x:DataType="vm:MainWindowViewModel"
         Title="Scrye" Width="1040" Height="680"
-        FontFamily="Cascadia Mono, Consolas, monospace">
+        FontFamily="Segoe UI, sans-serif">
 
     <Grid>
         <DockPanel>
@@ -18,12 +18,15 @@
                 <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
                 <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
                 <Button Content="Quick Connect" Command="{Binding ConnectCommand}" />
+                <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Right" />
             </StackPanel>
 
             <!-- world manager sidebar -->
-            <Border DockPanel.Dock="Left" Width="220" Background="#252526" Padding="8" BorderBrush="#333" BorderThickness="0,0,1,0">
+            <Border DockPanel.Dock="Left" Width="220" Background="{DynamicResource ScryePanel}" Padding="8"
+                    BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Worlds" FontWeight="Bold" Margin="2,0,0,6" />
+                    <TextBlock DockPanel.Dock="Top" Text="WORLDS" FontWeight="SemiBold" FontSize="11"
+                               Foreground="{DynamicResource ScryeAccent}" Margin="2,0,0,8" />
                     <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
                         <Button Content="Connect" Command="{Binding ConnectWorldCommand}" HorizontalAlignment="Stretch" />
                         <StackPanel Orientation="Horizontal" Spacing="4">
@@ -32,12 +35,13 @@
                             <Button Content="Delete" Command="{Binding DeleteWorldCommand}" />
                         </StackPanel>
                     </StackPanel>
-                    <ListBox ItemsSource="{Binding SavedWorlds}" SelectedItem="{Binding SelectedWorld}" />
+                    <ListBox ItemsSource="{Binding SavedWorlds}" SelectedItem="{Binding SelectedWorld}"
+                             Background="Transparent" />
                 </DockPanel>
             </Border>
 
             <!-- connected worlds -->
-            <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}">
+            <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}" Padding="0">
                 <TabControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:WorldViewModel">
                         <TextBlock Text="{Binding Title}" />
@@ -60,10 +64,45 @@
                                         <TextBox Text="{Binding Input}" Watermark="type a command and press Enter…"
                                                  KeyDown="OnInputKeyDown" />
                                     </DockPanel>
-                                    <ScrollViewer Margin="4" Background="#1E1E1E"
+
+                                    <!-- running-sequence status strip (visible while a sequence runs) -->
+                                    <Border DockPanel.Dock="Bottom" IsVisible="{Binding Sequence.IsActive}"
+                                            Margin="4,0,4,0" Padding="8,4" Background="{DynamicResource ScryePanelAlt}"
+                                            BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1" CornerRadius="5">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Stop" Command="{Binding Sequence.StopCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                            <Button DockPanel.Dock="Right" Content="Resume" Command="{Binding Sequence.ResumeCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                            <Button DockPanel.Dock="Right" Content="Pause" Command="{Binding Sequence.PauseCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                            <TextBlock Text="{Binding Sequence.StatusText}" VerticalAlignment="Center" Foreground="{DynamicResource ScryeText}" />
+                                        </DockPanel>
+                                    </Border>
+
+                                    <!-- find-in-scrollback bar (Ctrl+F) -->
+                                    <Border DockPanel.Dock="Top" IsVisible="{Binding Find.IsOpen}"
+                                            Margin="4,4,4,0" Padding="6,3" Background="{DynamicResource ScryePanelAlt}"
+                                            BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1" CornerRadius="5">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="✕" Command="{Binding Find.CloseCommand}"
+                                                    Padding="8,2" Margin="4,0,0,0" />
+                                            <Button DockPanel.Dock="Right" Content="▼" Command="{Binding Find.NextCommand}"
+                                                    Padding="8,2" Margin="4,0,0,0" />
+                                            <Button DockPanel.Dock="Right" Content="▲" Command="{Binding Find.PrevCommand}"
+                                                    Padding="8,2" Margin="4,0,0,0" />
+                                            <TextBlock DockPanel.Dock="Right" Text="{Binding Find.Status}" VerticalAlignment="Center"
+                                                       Margin="8,0" Foreground="{DynamicResource ScryeTextDim}" />
+                                            <TextBox Name="FindBox" Text="{Binding Find.Query}" Watermark="find in output…"
+                                                     KeyDown="OnFindKeyDown" />
+                                        </DockPanel>
+                                    </Border>
+
+                                    <ScrollViewer Margin="4" Background="{DynamicResource ScryeOutputBg}"
                                                   HorizontalScrollBarVisibility="Disabled"
                                                   VerticalScrollBarVisibility="Auto">
-                                        <controls:OutputView Source="{Binding Scrollback}" />
+                                        <controls:OutputView Source="{Binding Scrollback}"
+                                                             FontFamily="{Binding OutputFontFamily}"
+                                                             FontSize="{Binding OutputFontSize}"
+                                                             SearchTerm="{Binding Find.Term}"
+                                                             ActiveMatchLine="{Binding Find.ActiveLine}" />
                                     </ScrollViewer>
                                 </DockPanel>
 
@@ -72,22 +111,23 @@
                                               HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,20,0">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:HudPanelViewModel">
-                                            <Border Background="#DD1E1E1E" BorderBrush="#555" BorderThickness="1"
-                                                    CornerRadius="4" Padding="8" Margin="0,0,0,8">
-                                                <StackPanel Spacing="3">
-                                                    <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="11" Foreground="#DDD" />
+                                            <Border Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
+                                                    BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,8">
+                                                <StackPanel Spacing="4">
+                                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"
+                                                               Foreground="{DynamicResource ScryeAccent}" />
                                                     <ItemsControl ItemsSource="{Binding Widgets}">
                                                         <ItemsControl.DataTemplates>
                                                             <DataTemplate DataType="vm:LabelWidgetViewModel">
-                                                                <TextBlock Text="{Binding Text}" FontSize="11" Foreground="#CFCFCF" />
+                                                                <TextBlock Text="{Binding Text}" FontSize="11" Foreground="{DynamicResource ScryeText}" />
                                                             </DataTemplate>
                                                             <DataTemplate DataType="vm:ProgressWidgetViewModel">
                                                                 <StackPanel Spacing="1" Margin="0,1">
-                                                                    <TextBlock Text="{Binding Label}" FontSize="10" Foreground="#AAA" />
+                                                                    <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
                                                                     <Grid>
                                                                         <ProgressBar Minimum="0" Maximum="{Binding Maximum}"
-                                                                                     Value="{Binding Value}" Height="14" />
-                                                                        <TextBlock Text="{Binding Caption}" FontSize="10" Foreground="#FFF"
+                                                                                     Value="{Binding Value}" Height="15" />
+                                                                        <TextBlock Text="{Binding Caption}" FontSize="10" Foreground="#FFFFFF"
                                                                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                                     </Grid>
                                                                 </StackPanel>
@@ -103,11 +143,12 @@
 
                             <!-- drag handle to resize the debugger panel -->
                             <GridSplitter Grid.Column="1" Width="5" ResizeDirection="Columns"
-                                          Background="#333" IsVisible="{Binding ShowDebugger}" />
+                                          Background="{DynamicResource ScryeLine}" IsVisible="{Binding ShowDebugger}" />
 
                             <!-- debugger (toggle-able, resizable): Live timeline + Replay transport -->
                             <Border Grid.Column="2" MinWidth="280" IsVisible="{Binding ShowDebugger}"
-                                    Background="#181818" BorderBrush="#333" BorderThickness="1,0,0,0" Padding="6">
+                                    Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
+                                    BorderThickness="1,0,0,0" Padding="6">
                                 <TabControl>
                                     <!-- LIVE: the running event timeline -->
                                     <TabItem Header="Live">
@@ -139,18 +180,18 @@
 
                                             <!-- drill-down: full text of the selected row (fixes truncation) -->
                                             <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6"
-                                                    Background="#101010" BorderBrush="#333" BorderThickness="1"
+                                                    Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
                                                     IsVisible="{Binding Debugger.SelectedRow, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                                 <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
                                                     <SelectableTextBlock Text="{Binding Debugger.SelectedRow.Full}" TextWrapping="Wrap"
-                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="#DDD" />
+                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="{DynamicResource ScryeText}" />
                                                 </ScrollViewer>
                                             </Border>
 
                                             <!-- the event stream -->
                                             <ListBox ItemsSource="{Binding Debugger.Rows}" SelectedItem="{Binding Debugger.SelectedRow}"
                                                      behaviors:AutoScroll.Enabled="True"
-                                                     Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                                     Background="{DynamicResource ScryeOutputBg}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">
                                                         <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
@@ -181,7 +222,7 @@
                                                 <Button Content="Restart" Command="{Binding Replay.RestartCommand}" />
                                                 <ComboBox ItemsSource="{Binding Replay.SpeedOptions}" SelectedItem="{Binding Replay.Speed}"
                                                           Width="64" VerticalAlignment="Center" />
-                                                <TextBlock Text="{Binding Replay.PositionLabel}" VerticalAlignment="Center" Foreground="#AAA" />
+                                                <TextBlock Text="{Binding Replay.PositionLabel}" VerticalAlignment="Center" Foreground="{DynamicResource ScryeTextDim}" />
                                             </StackPanel>
 
                                             <!-- scrub the timeline -->
@@ -189,7 +230,7 @@
                                                     Value="{Binding Replay.Position, Mode=TwoWay}" Margin="0,0,0,4" />
 
                                             <TextBlock DockPanel.Dock="Top" Text="{Binding Replay.Status}"
-                                                       TextWrapping="Wrap" Foreground="#AAA" Margin="0,0,0,4" />
+                                                       TextWrapping="Wrap" Foreground="{DynamicResource ScryeTextDim}" Margin="0,0,0,4" />
 
                                             <!-- the killer feature -->
                                             <Button DockPanel.Dock="Bottom" Margin="0,4,0,0" HorizontalAlignment="Stretch"
@@ -197,7 +238,7 @@
 
                                             <!-- diff results from the re-run -->
                                             <Border DockPanel.Dock="Bottom" IsVisible="{Binding Replay.HasDiffs}" Margin="0,4,0,0" Padding="6"
-                                                    Background="#101010" BorderBrush="#333" BorderThickness="1">
+                                                    Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1">
                                                 <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto">
                                                     <ItemsControl ItemsSource="{Binding Replay.DiffLines}" x:CompileBindings="False">
                                                         <ItemsControl.ItemTemplate>
@@ -212,18 +253,18 @@
 
                                             <!-- drill-down: full text of the selected recorded row -->
                                             <Border DockPanel.Dock="Bottom" Margin="0,4,0,0" Padding="6"
-                                                    Background="#101010" BorderBrush="#333" BorderThickness="1"
+                                                    Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
                                                     IsVisible="{Binding Replay.SelectedRow, Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                                 <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto">
                                                     <SelectableTextBlock Text="{Binding Replay.SelectedRow.Full}" TextWrapping="Wrap"
-                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="#DDD" />
+                                                                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" Foreground="{DynamicResource ScryeText}" />
                                                 </ScrollViewer>
                                             </Border>
 
                                             <!-- recorded events, revealed up to the current position -->
                                             <ListBox ItemsSource="{Binding Replay.Rows}" SelectedItem="{Binding Replay.SelectedRow}"
                                                      behaviors:AutoScroll.Enabled="True"
-                                                     Background="#181818" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                                     Background="{DynamicResource ScryeOutputBg}" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
                                                 <ListBox.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:EventRowViewModel">
                                                         <TextBlock Text="{Binding Display}" Foreground="{Binding Brush}" />
@@ -242,30 +283,472 @@
 
         <!-- settings form overlay -->
         <Border IsVisible="{Binding Editor, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                Background="#99000000">
-            <Border Width="380" HorizontalAlignment="Center" VerticalAlignment="Center"
-                    Background="#2D2D30" BorderBrush="#555" BorderThickness="1" CornerRadius="6" Padding="16">
-                <StackPanel Spacing="6">
-                    <TextBlock Text="{Binding Editor.Title}" FontWeight="Bold" FontSize="16" Margin="0,0,0,6" />
-                    <TextBlock Text="Name" />
-                    <TextBox Text="{Binding Editor.Name}" />
-                    <TextBlock Text="Host" />
-                    <TextBox Text="{Binding Editor.Host}" />
-                    <TextBlock Text="Port" />
-                    <TextBox Text="{Binding Editor.Port}" />
-                    <TextBlock Text="Username (optional)" />
-                    <TextBox Text="{Binding Editor.Username}" />
-                    <TextBlock Text="Encoding" />
-                    <TextBox Text="{Binding Editor.Encoding}" />
-                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
-                        <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
-                        <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,10,0,0">
+                Background="#B0000000">
+            <Border Width="700" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
+                    BorderThickness="1" CornerRadius="8" Padding="18">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Editor.Title}" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,8" />
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
+                                HorizontalAlignment="Right" Margin="0,12,0,0">
                         <Button Content="Cancel" Command="{Binding CancelEditorCommand}" />
                         <Button Content="Save" Command="{Binding SaveEditorCommand}" />
                     </StackPanel>
-                </StackPanel>
+
+                    <TabControl>
+                        <!-- CONNECTION -->
+                        <TabItem Header="Connection">
+                            <StackPanel Spacing="6" Margin="0,8,0,0">
+                                <TextBlock Text="Name" />
+                                <TextBox Text="{Binding Editor.Name}" />
+                                <TextBlock Text="Host" />
+                                <TextBox Text="{Binding Editor.Host}" />
+                                <TextBlock Text="Port" />
+                                <TextBox Text="{Binding Editor.Port}" />
+                                <TextBlock Text="Username (optional)" />
+                                <TextBox Text="{Binding Editor.Username}" />
+                                <TextBlock Text="Encoding" />
+                                <TextBox Text="{Binding Editor.Encoding}" />
+                                <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
+                                    <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
+                                    <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </TabItem>
+
+                        <!-- TRIGGERS -->
+                        <TabItem Header="Triggers">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Editor.AddTriggerCommand}" />
+                                        <Button Content="Remove" Command="{Binding Editor.RemoveTriggerCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Editor.Triggers}" SelectedItem="{Binding Editor.SelectedTrigger}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:TriggerRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedTrigger}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Pattern (line to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
+                                                <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Group}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Sequence (lower first)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding SequenceText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- ALIASES -->
+                        <TabItem Header="Aliases">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Editor.AddAliasCommand}" />
+                                        <Button Content="Remove" Command="{Binding Editor.RemoveAliasCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Editor.Aliases}" SelectedItem="{Binding Editor.SelectedAlias}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AliasRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedAlias}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:AliasRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Pattern (typed command to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
+                                                <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Group}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Sequence (lower first)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding SequenceText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- TIMERS -->
+                        <TabItem Header="Timers">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Editor.AddTimerCommand}" />
+                                        <Button Content="Remove" Command="{Binding Editor.RemoveTimerCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Editor.Timers}" SelectedItem="{Binding Editor.SelectedTimer}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:TimerRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding IntervalText}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedTimer}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:TimerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Interval (seconds)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding IntervalText}" HorizontalAlignment="Left" Width="120" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:TimerRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Group}" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
+            </Border>
+        </Border>
+
+        <!-- global settings overlay -->
+        <Border IsVisible="{Binding Settings, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
+                Background="#B0000000">
+            <Border Width="700" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
+                    BorderThickness="1" CornerRadius="8" Padding="18">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Settings.Title}" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,8" />
+
+                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
+                                HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <Button Content="Cancel" Command="{Binding CancelSettingsCommand}" />
+                        <Button Content="Save" Command="{Binding SaveSettingsCommand}" />
+                    </StackPanel>
+
+                    <TabControl>
+                        <!-- APPEARANCE -->
+                        <TabItem Header="Appearance">
+                            <StackPanel Spacing="6" Margin="0,8,0,0">
+                                <TextBlock Text="Output font family (comma-separated fallbacks)" />
+                                <TextBox Text="{Binding Settings.FontFamily}" Watermark="Cascadia Mono, Consolas, monospace" />
+                                <TextBlock Text="Output font size" />
+                                <TextBox Text="{Binding Settings.FontSize}" Watermark="14" HorizontalAlignment="Left" Width="120" />
+                                <TextBlock Text="Applies to connected worlds. Chrome font and the slate+cyan theme are fixed."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
+                            </StackPanel>
+                        </TabItem>
+
+                        <!-- GLOBAL TRIGGERS -->
+                        <TabItem Header="Triggers">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Settings.AddTriggerCommand}" />
+                                        <Button Content="Remove" Command="{Binding Settings.RemoveTriggerCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Settings.Triggers}" SelectedItem="{Binding Settings.SelectedTrigger}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:TriggerRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedTrigger}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Pattern (line to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
+                                                <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Group}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Sequence (lower first)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding SequenceText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- GLOBAL ALIASES -->
+                        <TabItem Header="Aliases">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Settings.AddAliasCommand}" />
+                                        <Button Content="Remove" Command="{Binding Settings.RemoveAliasCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Settings.Aliases}" SelectedItem="{Binding Settings.SelectedAlias}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:AliasRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedAlias}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:AliasRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Pattern (typed command to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
+                                                <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Group}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Sequence (lower first)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding SequenceText}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- GLOBAL TIMERS -->
+                        <TabItem Header="Timers">
+                            <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
+                                <DockPanel Grid.Column="0" Margin="0,0,10,0">
+                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                        <Button Content="Add" Command="{Binding Settings.AddTimerCommand}" />
+                                        <Button Content="Remove" Command="{Binding Settings.RemoveTimerCommand}" />
+                                    </StackPanel>
+                                    <ListBox ItemsSource="{Binding Settings.Timers}" SelectedItem="{Binding Settings.SelectedTimer}"
+                                             Height="420" Background="{DynamicResource ScryeOutputBg}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate x:DataType="vm:TimerRowViewModel">
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
+                                                    <TextBlock Text="{Binding IntervalText}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </DockPanel>
+                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedTimer}">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Spacing="4" x:DataType="vm:TimerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Name}" />
+                                            <TextBlock Text="Interval (seconds)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding IntervalText}" HorizontalAlignment="Left" Width="120" />
+                                            <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
+                                                <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                                <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                            </StackPanel>
+                                            <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <ComboBox ItemsSource="{x:Static vm:TimerRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
+                                                      HorizontalAlignment="Left" Width="180" />
+                                            <TextBlock Text="Send (text / template)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Send}" />
+                                            <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Variable (for Variable)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Variable}" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="1" Margin="6,0,0,0">
+                                                    <TextBlock Text="Script fn (for Script)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Script}" />
+                                                </StackPanel>
+                                            </Grid>
+                                            <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Group}" />
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <!-- GLOBAL VARIABLES -->
+                        <TabItem Header="Variables">
+                            <DockPanel Margin="0,8,0,0">
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
+                                    <Button Content="Add" Command="{Binding Settings.AddVariableCommand}" />
+                                    <Button Content="Remove" Command="{Binding Settings.RemoveVariableCommand}" />
+                                </StackPanel>
+                                <ListBox ItemsSource="{Binding Settings.Variables}" SelectedItem="{Binding Settings.SelectedVariable}"
+                                         Height="440" Background="{DynamicResource ScryeOutputBg}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:VariableRowViewModel">
+                                            <Grid ColumnDefinitions="*,*" Margin="0,1">
+                                                <TextBox Grid.Column="0" Text="{Binding Key}" Watermark="name" Margin="0,0,4,0" />
+                                                <TextBox Grid.Column="1" Text="{Binding Value}" Watermark="value" Margin="4,0,0,0" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
             </Border>
         </Border>
     </Grid>

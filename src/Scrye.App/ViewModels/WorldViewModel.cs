@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.IO;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Scrye.Core.Automation;
+using Scrye.Core.Logging;
 using Scrye.Core.Model;
 using Scrye.Core.Plugins;
 using Scrye.Core.Profiles;
@@ -29,6 +31,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private readonly MudSession _session;
     private readonly LuaScriptHost _scriptHost;
     private readonly PluginManager _plugins;
+    private readonly CommandHistory _history = new();
+    private readonly CompletionEngine _completion = new();
+    private bool _logging;
     private readonly ConcurrentQueue<Line> _pending = new();
     private readonly DispatcherTimer _flushTimer;
     private readonly List<Line> _drainBuffer = new(256);
@@ -36,6 +41,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public string Title { get; }
     public ScrollbackBuffer Scrollback { get; } = new();
     public RelayCommand SubmitCommand { get; }
+
+    /// <summary>Output-pane font, resolved from the profile cascade (global default,
+    /// per-world override). Falls back to the terminal monospace stack.</summary>
+    public Avalonia.Media.FontFamily OutputFontFamily { get; private set; } =
+        new("Cascadia Mono, Consolas, Menlo, monospace");
+    public double OutputFontSize { get; private set; } = 14d;
 
     /// <summary>The trigger debugger / event timeline for this world's session.</summary>
     public DebuggerViewModel Debugger { get; }
@@ -45,6 +56,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>Declarative HUD panels contributed by plugins (Foundation D).</summary>
     public HudViewModel Hud { get; }
+
+    /// <summary>Running-sequence status strip (Foundation E command sequences).</summary>
+    public SequenceViewModel Sequence { get; }
+
+    /// <summary>Find-in-scrollback bar (Ctrl+F): searches this world's output.</summary>
+    public FindViewModel Find { get; }
 
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
@@ -90,8 +107,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // replay: analysis re-runs recordings against this session's current rule set.
         Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
 
+        // command sequences: status strip driven by the session; controls route back to it.
+        Sequence = new SequenceViewModel(_session.PauseSequence, _session.ResumeSequence, _session.StopSequence);
+        _session.SequenceStatusChanged += Sequence.Update;
+
         // HUD: plugins add declarative panels during load (below); this owns them.
         Hud = new HudViewModel(_session.GameState);
+
+        // find-in-scrollback: searches the rendered output buffer.
+        Find = new FindViewModel(Scrollback);
 
         // plugins: discover the ones for this world, load them, and fan session events to them.
         var pluginRoots = new[]
@@ -118,6 +142,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public WorldViewModel(EffectiveProfile eff) : this(eff.World)
     {
         _session.LoadProfileData(eff);
+        if (!string.IsNullOrWhiteSpace(eff.FontFamily)) OutputFontFamily = new Avalonia.Media.FontFamily(eff.FontFamily);
+        if (eff.FontSize is > 0) OutputFontSize = eff.FontSize.Value;
     }
 
     public Task ConnectAsync() => _session.ConnectAsync();
@@ -132,16 +158,34 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             while (_pending.TryDequeue(out Line? line))
                 _drainBuffer.Add(line);
             Scrollback.AddRange(_drainBuffer);
+            // harvest words for tab-completion on the UI thread (engine isn't thread-safe)
+            foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
         }
         Debugger.Drain();   // always drain events, even on a frame with no output lines
     }
+
+    /// <summary>Up-arrow recall. <paramref name="current"/> is the box text (saved as draft).</summary>
+    public string? HistoryPrevious(string current) => _history.Previous(current);
+    /// <summary>Down-arrow recall / draft restore.</summary>
+    public string? HistoryNext() => _history.Next();
+
+    /// <summary>Tab-completion candidates for <paramref name="prefix"/> (most-recent first).</summary>
+    public IReadOnlyList<string> Complete(string prefix) => _completion.Complete(prefix);
+
+    /// <summary>Open the find bar (Ctrl+F).</summary>
+    public void OpenFind() => Find.Open();
 
     private void Submit()
     {
         string text = Input ?? "";
         Input = "";
+        _history.Add(text);        // record for up/down recall
+        _completion.Observe(text); // typed words feed completion too
 
         if (text == "mipstart") { _pending.Enqueue(Line.FromText("> " + text, EchoColour)); _session.StartMip(); return; }
+
+        // client "." commands (sequences); unknown dot-input falls through to the MUD.
+        if (TryClientCommand(text)) { _pending.Enqueue(Line.FromText(text, EchoColour)); return; }
 
         // "/..." is a local Lua console — runs on the session loop, not sent to the MUD.
         // e.g.  /world.AddAlias("greet", "hi *", "say hello %1")
@@ -154,6 +198,51 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
         _session.Submit(text);
+    }
+
+    /// <summary>Handle client "." commands. Returns false for unrecognized ones so they
+    /// pass through to the MUD (some MUDs use "." commands too).</summary>
+    private bool TryClientCommand(string text)
+    {
+        if (!text.StartsWith('.')) return false;
+        string[] parts = text.Split(' ', 2);
+        string arg = parts.Length > 1 ? parts[1].Trim() : "";
+        switch (parts[0].ToLowerInvariant())
+        {
+            case ".walk":
+                if (arg.Length > 0) _session.RunWalk(arg);
+                else AppendSystem("usage: .walk north;north;east x3;wait 2");
+                return true;
+            case ".seq":
+                if (arg.Length > 0) _session.RunSequence(arg);
+                else AppendSystem("usage: .seq <name>");
+                return true;
+            case ".stop": _session.StopSequence(); return true;
+            case ".pause": _session.PauseSequence(); return true;
+            case ".resume": _session.ResumeSequence(); return true;
+            case ".log": HandleLogCommand(arg); return true;
+            default: return false;
+        }
+    }
+
+    /// <summary>Handle <c>.log</c> / <c>.log html</c> / <c>.log off</c>. Bare <c>.log</c> toggles.</summary>
+    private void HandleLogCommand(string arg)
+    {
+        string a = arg.Trim().ToLowerInvariant();
+        if (a is "off" or "stop")
+        {
+            if (_logging) { _session.StopLogging(); _logging = false; AppendSystem("logging stopped"); }
+            else AppendSystem("not currently logging");
+            return;
+        }
+        if (_logging && a.Length == 0)   // bare .log while logging → toggle off
+        {
+            _session.StopLogging(); _logging = false; AppendSystem("logging stopped"); return;
+        }
+        LogFormat fmt = a.Contains("htm") ? LogFormat.Html : LogFormat.Text;
+        string path = _session.StartLogging(fmt);
+        _logging = true;
+        AppendSystem($"logging ({fmt.ToString().ToLowerInvariant()}) to {path}");
     }
 
     public async ValueTask DisposeAsync()

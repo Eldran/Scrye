@@ -28,4 +28,15 @@ public abstract record SessionMessage
     /// <summary>Connection state changed (raised on a socket thread, routed through
     /// the mailbox so state notifications and event emission stay on the loop thread).</summary>
     public sealed record ConnectionStateChanged(Scrye.Core.Model.ConnectionState State) : SessionMessage;
+
+    /// <summary>Control the sequence engine from off-loop (UI). Kind: run/walk/stop/pause/resume.</summary>
+    public sealed record SequenceControl(string Kind, string Arg) : SessionMessage;
+
+    /// <summary>Install a transcript logger (or null to stop). Routed through the
+    /// mailbox so the <c>_logger</c> field is only mutated on the loop thread.</summary>
+    public sealed record LoggingControl(Scrye.Core.Logging.SessionLogger? Logger) : SessionMessage;
+
+    /// <summary>A client-side notice to display + log (e.g. reconnect countdown),
+    /// raised on the loop so ordering and logging stay consistent.</summary>
+    public sealed record SystemNotice(string Text) : SessionMessage;
 }

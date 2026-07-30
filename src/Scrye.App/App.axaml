@@ -2,7 +2,32 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Scrye.App.App"
              RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <!-- Cyan accent drives the whole Fluent theme: selection, toggles, checkboxes,
+             progress bars, focus rings, the selected-tab underline. -->
+        <Color x:Key="SystemAccentColor">#35C4D6</Color>
+        <Color x:Key="SystemAccentColorDark1">#2BA9BA</Color>
+        <Color x:Key="SystemAccentColorDark2">#238C9B</Color>
+        <Color x:Key="SystemAccentColorDark3">#1B6F7C</Color>
+        <Color x:Key="SystemAccentColorLight1">#54D0E0</Color>
+        <Color x:Key="SystemAccentColorLight2">#79DBE8</Color>
+        <Color x:Key="SystemAccentColorLight3">#9FE6F0</Color>
+
+        <!-- Scrye "slate" palette — referenced by Theme.axaml and MainWindow.axaml. -->
+        <SolidColorBrush x:Key="ScryeBg" Color="#14181F" />
+        <SolidColorBrush x:Key="ScryeOutputBg" Color="#10141A" />
+        <SolidColorBrush x:Key="ScryePanel" Color="#1B212B" />
+        <SolidColorBrush x:Key="ScryePanelAlt" Color="#222A36" />
+        <SolidColorBrush x:Key="ScryePanelGlass" Color="#E61B212B" />
+        <SolidColorBrush x:Key="ScryeLine" Color="#2C3542" />
+        <SolidColorBrush x:Key="ScryeText" Color="#D6DEE8" />
+        <SolidColorBrush x:Key="ScryeTextDim" Color="#8A97A8" />
+        <SolidColorBrush x:Key="ScryeAccent" Color="#35C4D6" />
+    </Application.Resources>
+
     <Application.Styles>
         <FluentTheme />
+        <StyleInclude Source="avares://Scrye.App/Styles/Theme.axaml" />
     </Application.Styles>
 </Application>

@@ -1,7 +1,9 @@
+using System.IO;
 using System.Text;
 using System.Threading.Channels;
 using Scrye.Core.Automation;
 using Scrye.Core.Events;
+using Scrye.Core.Logging;
 using Scrye.Core.Mip;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
@@ -22,6 +24,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 {
     private static readonly Rgb MipColour = new(0x80, 0xC0, 0xF0);
     private static readonly Rgb SysColour = new(0xF0, 0xC0, 0x40);
+    private static readonly Rgb InputColour = new(0x60, 0xC0, 0xF0);
 
     private readonly Channel<SessionMessage> _mailbox =
         Channel.CreateUnbounded<SessionMessage>(new UnboundedChannelOptions { SingleReader = true });
@@ -34,12 +37,21 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private readonly VariableStore _variables = new();
     private readonly AutomationEngine _automation;
+    private readonly SequenceEngine _sequences = new();
 
     private readonly EventBus _events = new();
     private readonly EventLog _log = new();
     private SessionRecorder? _recorder;
 
     private readonly StateStore _state = new();
+
+    private SessionLogger? _logger;   // active transcript logger, mutated only on the loop
+
+    private readonly ReconnectPolicy _reconnect = new();
+    private bool _userClosing;        // set on Dispose so a deliberate close doesn't trigger reconnect
+    private bool _everConnected;      // reconnect only after a live connection has dropped
+    private Task? _reconnectTask;
+    private CancellationTokenSource? _reconnectCts;
 
     private readonly MipParser _mip = new();
     private readonly MipProcessor _mipProc;
@@ -54,6 +66,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public WorldProfile Profile { get; }
     public ConnectionState State => _connection.State;
     public AutomationEngine Automation => _automation;
+    public SequenceEngine Sequences => _sequences;
     public VariableStore Variables => _variables;
 
     /// <summary>The instrumented event spine: every line, send, rule fire, protocol
@@ -68,6 +81,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public SessionRecorder? Recorder => _recorder;
     public bool IsRecording => _recorder is not null;
 
+    /// <summary>Backoff schedule used when a live connection drops. Tune before connecting.</summary>
+    public ReconnectPolicy ReconnectPolicy => _reconnect;
+    /// <summary>When true (default), a dropped connection triggers automatic reconnect with backoff.</summary>
+    public bool ReconnectEnabled { get; set; } = true;
+
     public Action<string, IReadOnlyList<string>>? ScriptDispatcher { get; set; }
     public Action<string>? ScriptExecutor { get; set; }
 
@@ -78,6 +96,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public event Action<bool>? EchoModeChanged;
     /// <summary>Raised after MIP vitals/map variables change (drive a HUD from this).</summary>
     public event Action? MipVitalsUpdated;
+    /// <summary>Raised as a running command sequence progresses (drive the status strip).</summary>
+    public event Action<SequenceStatus>? SequenceStatusChanged;
 
     public MudSession(WorldProfile profile)
     {
@@ -110,6 +130,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
         _automation.Hit += OnAutomationHit;
 
+        // sequences: emitted commands go to the MUD via the mailbox; progress surfaces to the UI.
+        _sequences.Send += text => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
+        _sequences.StatusChanged += s => SequenceStatusChanged?.Invoke(s);
+
         _mip.MessageReceived += m =>
         {
             if (m.Id == _mipId)
@@ -121,8 +145,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         };
         _mipProc.VitalsUpdated += () => { MapMipVitals(); MipVitalsUpdated?.Invoke(); };
         _mipProc.Notice += text => Echo(text);
-        _mipProc.Tell += text => LineReady?.Invoke(Line.FromText(text, MipColour));
-        _mipProc.Channel += (ch, msg) => LineReady?.Invoke(Line.FromText($"[{ch}] {msg}", MipColour));
+        _mipProc.Tell += text => RaiseLine(Line.FromText(text, MipColour));
+        _mipProc.Channel += (ch, msg) => RaiseLine(Line.FromText($"[{ch}] {msg}", MipColour));
     }
 
     private void OnAutomationHit(AutomationHit hit)
@@ -136,10 +160,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _events.Emit(kind, hit.Input, hit.Name, hit.Action);
     }
 
+    /// <summary>Single chokepoint for every displayed line: feeds the transcript
+    /// logger (when active) then notifies the UI. Keeps logging and display in lockstep.</summary>
+    private void RaiseLine(Line line)
+    {
+        _logger?.Log(line);
+        LineReady?.Invoke(line);
+    }
+
     private void Echo(string text)
     {
         _events.Emit(SessionEventKind.Notice, text);
-        LineReady?.Invoke(Line.FromText(text));
+        RaiseLine(Line.FromText(text));
     }
 
     /// <summary>Mirror the MIP flat vitals variables into structured state paths, so a HUD
@@ -169,11 +201,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     public async Task ConnectAsync(CancellationToken ct = default)
     {
-        if (Profile.EnableMip)
-        {
-            _mipId = EnsureMipId();
-            _mipPending = true; _mipGotData = false; _mipSent = false; _mipRetries = 0; _mipSecondsSinceHandshake = 0;
-        }
+        if (Profile.EnableMip) ResetMipForConnect();
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
@@ -181,9 +209,87 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             Profile.AcceptInvalidCertificates, _cts.Token).ConfigureAwait(false);
     }
 
+    private void ResetMipForConnect()
+    {
+        _mipId = EnsureMipId();
+        _mipPending = true; _mipGotData = false; _mipSent = false; _mipRetries = 0; _mipSecondsSinceHandshake = 0;
+    }
+
+    // ---- transcript logging --------------------------------------------------
+
+    /// <summary>Default per-user log directory: <c>%APPDATA%/Scrye/logs</c> (or the
+    /// XDG equivalent on non-Windows).</summary>
+    public static string DefaultLogDirectory() =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "logs");
+
+    /// <summary>Start writing this world's transcript to a timestamped file. Any
+    /// existing log is closed first. Returns the file path.</summary>
+    public string StartLogging(LogFormat format = LogFormat.Text, string? directory = null)
+    {
+        var logger = SessionLogger.CreateFile(directory ?? DefaultLogDirectory(), Profile.Name, format);
+        _mailbox.Writer.TryWrite(new SessionMessage.LoggingControl(logger));
+        return logger.Path ?? "";
+    }
+
+    /// <summary>Stop and finalize the current transcript (no-op if not logging).</summary>
+    public void StopLogging() => _mailbox.Writer.TryWrite(new SessionMessage.LoggingControl(null));
+
+    // ---- auto-reconnect ------------------------------------------------------
+
+    private void MaybeReconnect()
+    {
+        if (!ReconnectEnabled || _userClosing || !_everConnected) return;
+        if (_reconnectTask is { IsCompleted: false }) return;   // a retry loop is already running
+        _reconnectCts = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
+        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCts.Token));
+    }
+
+    private void CancelReconnect() => _reconnectCts?.Cancel();
+
+    private async Task ReconnectLoopAsync(CancellationToken ct)
+    {
+        int attempt = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            if (!_reconnect.ShouldRetry(attempt))
+            {
+                _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice(
+                    $"[reconnect] gave up after {attempt} attempt(s)"));
+                return;
+            }
+            attempt++;
+            TimeSpan delay = _reconnect.Delay(attempt);
+            string cap = _reconnect.MaxAttempts > 0 ? $"/{_reconnect.MaxAttempts}" : "";
+            _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice(
+                $"[reconnect] attempt {attempt}{cap} in {delay.TotalSeconds:0}s…"));
+            try { await Task.Delay(delay, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+            if (ct.IsCancellationRequested) return;
+
+            try
+            {
+                // Bind the socket to the SESSION lifetime (_cts), not the reconnect
+                // token — CancelReconnect() fires on success and must not kill the
+                // freshly-established connection.
+                await _connection.ConnectAsync(Profile.Host, Profile.Port, Profile.UseTls,
+                    Profile.AcceptInvalidCertificates, _cts?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                return;   // Connected state will fire and CancelReconnect() this loop
+            }
+            catch (OperationCanceledException) { return; }
+            catch { /* Failed state fired; loop for the next attempt */ }
+        }
+    }
+
     public void Submit(string text) => _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text));
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
+
+    // Sequence control (posted to the loop so the engine stays single-threaded).
+    public void RunSequence(string name) => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("run", name));
+    public void RunWalk(string steps) => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("walk", steps));
+    public void StopSequence() => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("stop", ""));
+    public void PauseSequence() => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("pause", ""));
+    public void ResumeSequence() => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("resume", ""));
 
     /// <summary>Load a resolved profile's triggers/aliases/timers/variables into the
     /// engine. Call before ConnectAsync.</summary>
@@ -223,7 +329,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>Force the MIP handshake now (manual `mipstart`).</summary>
     public void StartMip()
     {
-        if (!Profile.EnableMip) { LineReady?.Invoke(Line.FromText("[MIP] not enabled for this world", SysColour)); return; }
+        if (!Profile.EnableMip) { RaiseLine(Line.FromText("[MIP] not enabled for this world", SysColour)); return; }
         _mipId = EnsureMipId();
         _mipPending = false; _mipGotData = false; _mipRetries = 0;
         SendMipHandshake();
@@ -266,7 +372,19 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         break;
                     case SessionMessage.Tick:
                         _automation.Tick(1.0, this);
+                        _sequences.Tick(1.0);
                         MipTick();
+                        break;
+                    case SessionMessage.SequenceControl sc:
+                        HandleSequenceControl(sc.Kind, sc.Arg);
+                        break;
+                    case SessionMessage.LoggingControl lc:
+                        _logger?.Close();
+                        _logger = lc.Logger;
+                        break;
+                    case SessionMessage.SystemNotice n:
+                        _events.Emit(SessionEventKind.Notice, n.Text);
+                        RaiseLine(Line.FromText(n.Text, SysColour));
                         break;
                     case SessionMessage.RunScript r:
                         _events.Emit(SessionEventKind.ScriptRun, r.Code);
@@ -274,7 +392,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         catch (Exception ex)
                         {
                             _events.Emit(SessionEventKind.ScriptError, ex.Message);
-                            LineReady?.Invoke(Line.FromText("lua: " + ex.Message));
+                            RaiseLine(Line.FromText("lua: " + ex.Message));
                         }
                         break;
                 }
@@ -314,13 +432,33 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             SendMipHandshake();
         }
         _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
-        LineReady?.Invoke(line);
+        RaiseLine(line);
         _automation.ProcessLine(line.PlainText, this);
+
+        // a prompt (GA/EOR flush, or a lone ">") lets a prompt-gated sequence advance
+        if (line.IsPrompt || line.PlainText.Trim() == ">") _sequences.OnPrompt();
+    }
+
+    private void HandleSequenceControl(string kind, string arg)
+    {
+        switch (kind)
+        {
+            case "run":
+                if (!_sequences.Run(arg)) Echo($"[seq] no sequence named '{arg}'");
+                break;
+            case "walk":
+                _sequences.RunAdHoc(SequenceParser.Parse("walk", arg));
+                break;
+            case "stop": _sequences.Stop(); break;
+            case "pause": _sequences.Pause(); break;
+            case "resume": _sequences.Resume(); break;
+        }
     }
 
     private void HandleInput(string text)
     {
         _events.Emit(SessionEventKind.InputSubmitted, text);
+        _logger?.Log("> " + text, InputColour);   // transcript records what the user typed
         if (!_automation.ProcessInput(text, this))
             _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     }
@@ -333,13 +471,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 _events.Emit(SessionEventKind.Connecting, $"{Profile.Host}:{Profile.Port}");
                 break;
             case ConnectionState.Connected:
+                _everConnected = true;
+                CancelReconnect();               // a successful connect ends any retry loop
+                if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 _events.Emit(SessionEventKind.Connected, $"{Profile.Host}:{Profile.Port}");
                 break;
             case ConnectionState.Failed:
                 _events.Emit(SessionEventKind.Disconnected, "connection failed");
+                MaybeReconnect();
                 break;
             case ConnectionState.Disconnected:
                 _events.Emit(SessionEventKind.Disconnected);
+                MaybeReconnect();
                 break;
             // Disconnecting is transient — no event.
         }
@@ -365,7 +508,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mipSent = true;
         _mipRetries++;
         _mipSecondsSinceHandshake = 0;
-        LineReady?.Invoke(Line.FromText($"[MIP] handshake sent (id {_mipId})", SysColour));
+        RaiseLine(Line.FromText($"[MIP] handshake sent (id {_mipId})", SysColour));
     }
 
     private void MipTick()
@@ -374,7 +517,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mipSecondsSinceHandshake++;
         if (_mipSecondsSinceHandshake >= 10 && _mipRetries < 3)
         {
-            LineReady?.Invoke(Line.FromText("[MIP] no data yet - retrying handshake", SysColour));
+            RaiseLine(Line.FromText("[MIP] no data yet - retrying handshake", SysColour));
             SendMipHandshake();
         }
     }
@@ -392,11 +535,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     public async ValueTask DisposeAsync()
     {
+        _userClosing = true;      // deliberate close — suppress auto-reconnect
+        _reconnectCts?.Cancel();
         _cts?.Cancel();
         _mailbox.Writer.TryComplete();
-        foreach (Task? t in new[] { _loop, _ticker })
+        foreach (Task? t in new[] { _loop, _ticker, _reconnectTask })
             if (t is not null) { try { await t.ConfigureAwait(false); } catch { /* ignore */ } }
+        _logger?.Close();         // finalize the transcript (loop has stopped, no more Log calls)
         await _connection.DisposeAsync().ConfigureAwait(false);
+        _reconnectCts?.Dispose();
         _cts?.Dispose();
     }
 }
