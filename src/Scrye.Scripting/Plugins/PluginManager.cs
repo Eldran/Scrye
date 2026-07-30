@@ -6,7 +6,7 @@ namespace Scrye.Scripting.Plugins;
 /// <summary>
 /// Loads a set of plugins for a session and fans session events out to all of them.
 /// Discovery is the caller's job (<see cref="PluginCatalog"/>); this owns the loaded
-/// <see cref="LuaPluginRuntime"/>s and their lifecycle. A plugin that throws on load is
+/// <see cref="IPluginRuntime"/>s (Lua or JS, chosen per-manifest) and their lifecycle. A plugin that throws on load is
 /// reported and skipped — one bad plugin never blocks the others.
 /// </summary>
 public sealed class PluginManager : IDisposable
@@ -17,7 +17,7 @@ public sealed class PluginManager : IDisposable
     private readonly Action<string>? _dropPanels;           // (pluginId) → host removes its HUD panels
     private readonly Func<IReadOnlyList<PluginDescriptor>>? _rediscover;   // re-scan disk (for add/remove)
     private readonly string? _userRoot;                     // plugins under here are removable (deletable)
-    private readonly List<LuaPluginRuntime> _runtimes = new();
+    private readonly List<IPluginRuntime> _runtimes = new();
     private readonly HashSet<string> _disabled = new(StringComparer.Ordinal);   // ids the user turned off this session
 
     // Immutable snapshots republished on every set-change (always on the loop / pre-loop) so the
@@ -52,7 +52,9 @@ public sealed class PluginManager : IDisposable
     {
         try
         {
-            var runtime = new LuaPluginRuntime(d, _host);
+            IPluginRuntime runtime = d.Manifest.Lang.Equals("js", StringComparison.OrdinalIgnoreCase)
+                ? new JsPluginRuntime(d, _host)
+                : new LuaPluginRuntime(d, _host);
             runtime.Load();
             _runtimes.Add(runtime);
             _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
@@ -66,7 +68,7 @@ public sealed class PluginManager : IDisposable
 
     private void UnloadRuntime(string id)
     {
-        LuaPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == id);
+        IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == id);
         if (rt is null) return;
         _runtimes.Remove(rt);
         rt.Dispose();                 // disposes its watches/timers/rules/hooks (on the loop)
@@ -121,10 +123,12 @@ public sealed class PluginManager : IDisposable
     public void Rescan()
     {
         if (_rediscover is null) return;
+        // first install any *.scryeplugin packages dropped into the user folder
+        if (_userRoot is not null) PluginPackage.InstallAllIn(_userRoot, _report);
         List<PluginDescriptor> found = _rediscover().ToList();
         var foundIds = new HashSet<string>(found.Select(d => d.Manifest.Id), StringComparer.Ordinal);
 
-        foreach (LuaPluginRuntime rt in _runtimes.Where(r => !foundIds.Contains(r.Id)).ToList())
+        foreach (IPluginRuntime rt in _runtimes.Where(r => !foundIds.Contains(r.Id)).ToList())
             UnloadRuntime(rt.Id);   // vanished from disk
 
         _descriptors.Clear();
@@ -221,7 +225,7 @@ public sealed class PluginManager : IDisposable
 
     public void Dispose()
     {
-        foreach (LuaPluginRuntime r in _runtimes) r.Dispose();
+        foreach (IPluginRuntime r in _runtimes) r.Dispose();
         _runtimes.Clear();
         Republish();
     }

@@ -1,9 +1,0 @@
-{
-  "id": "hello",
-  "name": "Hello Scrye",
-  "version": "1.0.0",
-  "author": "Scrye",
-  "description": "Sample plugin demonstrating the scrye.* API: greets on load, reacts to lines, watches HP.",
-  "mudIds": ["*"],
-  "entry": "main.lua"
-}

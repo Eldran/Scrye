@@ -25,6 +25,14 @@ public sealed class WorldProfile
     public int TerminalColumns { get; set; } = 120;
     public int TerminalRows { get; set; } = 40;
 
+    /// <summary>Auto-login: sent in reply to a name/login prompt after connect.
+    /// Resolved from the profile cascade (typically the Account layer). Empty = off.</summary>
+    public string Username { get; set; } = "";
+
+    /// <summary>Auto-login password, injected at runtime from the OS credential store
+    /// via the layer's PasswordRef. NEVER serialized — this type is runtime data.</summary>
+    public string Password { get; set; } = "";
+
     /// <summary>Enable the 3Kingdoms/3Scapes in-band MIP protocol (handshake + frame parsing).</summary>
     public bool EnableMip { get; set; } = false;
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>

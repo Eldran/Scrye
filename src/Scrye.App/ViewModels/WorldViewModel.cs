@@ -39,6 +39,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private readonly List<Line> _drainBuffer = new(256);
 
     public string Title { get; }
+
+    /// <summary>Which profile chain (mud/account/character) this tab was resolved from,
+    /// so layer edits can be re-resolved and live-applied. Null for quick-connect tabs.</summary>
+    public ProfileRef? Ref { get; init; }
+
     public ScrollbackBuffer Scrollback { get; } = new();
     public RelayCommand SubmitCommand { get; }
 
@@ -65,6 +70,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>Plugins-manager panel: list / reload / enable-disable this world's plugins.</summary>
     public PluginsViewModel Plugins { get; }
+
+    /// <summary>Game-state inspector: live filterable view of the StateStore (idea #9).</summary>
+    public StateViewModel StateInspector { get; }
 
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
@@ -122,6 +130,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         // find-in-scrollback: searches the rendered output buffer.
         Find = new FindViewModel(Scrollback);
+
+        // game-state inspector: subscribes to StateStore.Changed here (pre-loop),
+        // queues on the loop, drains on the UI flush timer below.
+        StateInspector = new StateViewModel(_session.GameState);
 
         // plugins: discover the ones for this world, load them, and fan session events to them.
         var pluginRoots = new[]
@@ -197,6 +209,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
         }
         Debugger.Drain();   // always drain events, even on a frame with no output lines
+        StateInspector.Drain();
     }
 
     /// <summary>Up-arrow recall. <paramref name="current"/> is the box text (saved as draft).</summary>

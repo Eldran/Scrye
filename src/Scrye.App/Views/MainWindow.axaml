@@ -21,22 +21,42 @@
                 <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Right" />
             </StackPanel>
 
-            <!-- world manager sidebar -->
-            <Border DockPanel.Dock="Left" Width="220" Background="{DynamicResource ScryePanel}" Padding="8"
+            <!-- profile tree sidebar: MUD -> account -> character -->
+            <Border DockPanel.Dock="Left" Width="230" Background="{DynamicResource ScryePanel}" Padding="8"
                     BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="WORLDS" FontWeight="SemiBold" FontSize="11"
+                    <TextBlock DockPanel.Dock="Top" Text="MUDS" FontWeight="SemiBold" FontSize="11"
                                Foreground="{DynamicResource ScryeAccent}" Margin="2,0,0,8" />
                     <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
-                        <Button Content="Connect" Command="{Binding ConnectWorldCommand}" HorizontalAlignment="Stretch" />
+                        <Button Content="Connect" Command="{Binding ConnectNodeCommand}" HorizontalAlignment="Stretch" />
                         <StackPanel Orientation="Horizontal" Spacing="4">
-                            <Button Content="New" Command="{Binding NewWorldCommand}" />
-                            <Button Content="Edit" Command="{Binding EditWorldCommand}" />
-                            <Button Content="Delete" Command="{Binding DeleteWorldCommand}" />
+                            <Button Content="New MUD" Command="{Binding NewMudCommand}" />
+                            <Button Content="Edit" Command="{Binding EditNodeCommand}" />
+                            <Button Content="Delete" Command="{Binding DeleteNodeCommand}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Button Content="+ Account" Command="{Binding AddAccountCommand}"
+                                    ToolTip.Tip="Add an account under the selected MUD — its settings are shared by every character in it" />
+                            <Button Content="+ Character" Command="{Binding AddCharacterCommand}"
+                                    ToolTip.Tip="Add a character under the selected MUD or account" />
                         </StackPanel>
                     </StackPanel>
-                    <ListBox ItemsSource="{Binding SavedWorlds}" SelectedItem="{Binding SelectedWorld}"
-                             Background="Transparent" />
+                    <TreeView ItemsSource="{Binding Muds}" SelectedItem="{Binding SelectedNode}"
+                              Background="Transparent">
+                        <TreeView.Styles>
+                            <Style Selector="TreeViewItem">
+                                <Setter Property="IsExpanded" Value="True" />
+                            </Style>
+                        </TreeView.Styles>
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate x:DataType="vm:ProfileNodeViewModel" ItemsSource="{Binding Children}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Text="{Binding Glyph}" FontSize="11" VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
                 </DockPanel>
             </Border>
 
@@ -63,6 +83,9 @@
                                                       IsChecked="{Binding ShowDebugger}" Margin="4,0,0,0" />
                                         <ToggleButton DockPanel.Dock="Right" Content="Plugins"
                                                       IsChecked="{Binding Plugins.IsOpen}" Margin="4,0,0,0" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="State"
+                                                      IsChecked="{Binding StateInspector.IsOpen}" Margin="4,0,0,0"
+                                                      ToolTip.Tip="Game-state inspector: live GMCP/MIP data as watchable paths" />
                                         <TextBox Text="{Binding Input}" Watermark="type a command and press Enter…"
                                                  KeyDown="OnInputKeyDown" />
                                     </DockPanel>
@@ -155,7 +178,7 @@
                                         <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                                             <Button DockPanel.Dock="Right" Content="✕" Command="{Binding Plugins.CloseCommand}" Padding="6,1" />
                                             <Button DockPanel.Dock="Right" Content="↻" Command="{Binding Plugins.RescanCommand}" Padding="6,1" Margin="0,0,4,0"
-                                                    ToolTip.Tip="Rescan the plugins folders" />
+                                                    ToolTip.Tip="Rescan folders + install any .scryeplugin packages dropped in" />
                                             <TextBlock Text="PLUGINS" FontWeight="SemiBold" FontSize="11"
                                                        Foreground="{DynamicResource ScryeAccent}" VerticalAlignment="Center" />
                                         </DockPanel>
@@ -186,6 +209,41 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
                                         </ScrollViewer>
+                                    </DockPanel>
+                                </Border>
+
+                                <!-- game-state inspector overlay (idea #9): live GMCP/MIP paths -->
+                                <Border IsVisible="{Binding StateInspector.IsOpen}" HorizontalAlignment="Left" VerticalAlignment="Stretch"
+                                        Width="380" Margin="12,10,0,44" Padding="10"
+                                        Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
+                                        BorderThickness="1" CornerRadius="6">
+                                    <DockPanel>
+                                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="✕" Command="{Binding StateInspector.CloseCommand}" Padding="6,1" />
+                                            <TextBlock Text="GAME STATE" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource ScryeAccent}" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                        <TextBox DockPanel.Dock="Top" Text="{Binding StateInspector.Filter}" Watermark="filter paths and values…"
+                                                 FontSize="11" Margin="0,0,0,6" />
+                                        <StackPanel DockPanel.Dock="Bottom" Margin="0,6,0,0" Spacing="2">
+                                            <SelectableTextBlock Text="{Binding StateInspector.Detail}" FontFamily="Cascadia Mono, Consolas, monospace"
+                                                                 FontSize="11" Foreground="{DynamicResource ScryeText}" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding StateInspector.Status}" FontSize="10"
+                                                       Foreground="{DynamicResource ScryeTextDim}" />
+                                        </StackPanel>
+                                        <ListBox ItemsSource="{Binding StateInspector.Rows}" SelectedItem="{Binding StateInspector.SelectedRow}"
+                                                 Background="Transparent" FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:StateRowViewModel">
+                                                    <DockPanel>
+                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding Value}" Foreground="{DynamicResource ScryeText}"
+                                                                   Margin="8,0,0,0" TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding Path}" Foreground="{DynamicResource ScryeTextDim}"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </DockPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
                                     </DockPanel>
                                 </Border>
                             </Grid>
@@ -338,7 +396,9 @@
                     BorderThickness="1" CornerRadius="8" Padding="18">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding Editor.Title}" FontWeight="SemiBold" FontSize="16"
-                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,8" />
+                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,2" />
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Editor.Subtitle}" FontSize="11" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ScryeTextDim}" Margin="0,0,0,8" />
 
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
                                 HorizontalAlignment="Right" Margin="0,12,0,0">
@@ -356,8 +416,11 @@
                                 <TextBox Text="{Binding Editor.Host}" />
                                 <TextBlock Text="Port" />
                                 <TextBox Text="{Binding Editor.Port}" />
-                                <TextBlock Text="Username (optional)" />
+                                <TextBlock Text="Username (auto-login, optional)" />
                                 <TextBox Text="{Binding Editor.Username}" />
+                                <TextBlock Text="Password (auto-login, optional)" />
+                                <TextBox Text="{Binding Editor.Password}" PasswordChar="●"
+                                         Watermark="{Binding Editor.PasswordHint}" />
                                 <TextBlock Text="Encoding" />
                                 <TextBox Text="{Binding Editor.Encoding}" />
                                 <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">

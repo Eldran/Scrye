@@ -21,6 +21,10 @@ public sealed record PluginManifest
     /// <summary>Entry script, relative to the plugin folder.</summary>
     public string Entry { get; init; } = "main.lua";
 
+    /// <summary>Scripting language of the entry script: <c>"lua"</c> (default, MoonSharp) or
+    /// <c>"js"</c> (Jint). The host picks the matching runtime.</summary>
+    public string Lang { get; init; } = "lua";
+
     /// <summary>Whether the plugin loads. A disabled plugin stays on disk but is skipped.</summary>
     public bool Enabled { get; init; } = true;
 }

@@ -41,7 +41,7 @@ public static class ProfileResolver
             if (layer.FontFamily is not null) font = layer.FontFamily;
             if (layer.FontSize is not null) fontSize = layer.FontSize;
             if (layer.Theme is not null) theme = layer.Theme;
-            if (layer.Username is not null) user = layer.Username;
+            if (layer.Username is not null) { user = layer.Username; world.Username = layer.Username; }
             if (layer.PasswordRef is not null) passwordRef = layer.PasswordRef;
 
             if (layer.Kind != LayerKind.Global && !string.IsNullOrEmpty(layer.Name))

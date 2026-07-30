@@ -4,16 +4,42 @@ using Scrye.Core.Profiles;
 
 namespace Scrye.App.ViewModels;
 
-/// <summary>Backs the world settings form: the scalar connection fields plus the
-/// per-world triggers, aliases, and timers (edited as master/detail lists). All
-/// of it folds back into the world's <see cref="ProfileLayer"/> on save.</summary>
+/// <summary>Backs the layer settings form: the scalar connection fields plus the
+/// layer's triggers, aliases, and timers (edited as master/detail lists). Edits ONE
+/// <see cref="ProfileLayer"/> — a MUD, an account, or a character — identified by
+/// <see cref="TargetKind"/> + <see cref="ParentMud"/>/<see cref="ParentAccount"/>;
+/// empty scalar fields stay null and inherit from the parent layers.</summary>
 public sealed class WorldEditorViewModel : ViewModelBase
 {
     private readonly ProfileLayer _layer;
 
     public bool IsNew { get; }
     public string OriginalName { get; }
-    public string Title => IsNew ? "New World" : "Edit World";
+
+    public LayerKind TargetKind { get; }
+    /// <summary>The MUD this account/character belongs to (null when editing a MUD).</summary>
+    public string? ParentMud { get; }
+    /// <summary>The account this character belongs to (null = directly on the MUD).</summary>
+    public string? ParentAccount { get; }
+
+    private string KindLabel => TargetKind switch
+    {
+        LayerKind.Account => "Account",
+        LayerKind.Character => "Character",
+        _ => "MUD",
+    };
+
+    public string Title => (IsNew ? "New " : "Edit ") + KindLabel;
+
+    public string Subtitle => TargetKind switch
+    {
+        LayerKind.Account =>
+            $"Account on {ParentMud} — settings and rules here are shared by every character in this account. Empty fields inherit from the MUD.",
+        LayerKind.Character => ParentAccount is null
+            ? $"Character on {ParentMud} — empty fields inherit from the MUD."
+            : $"Character in {ParentAccount} on {ParentMud} — empty fields inherit from the account and MUD.",
+        _ => "Connection, shared triggers and rules for everyone on this MUD.",
+    };
 
     private string _name;
     public string Name { get => _name; set => SetField(ref _name, value); }
@@ -23,6 +49,18 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public string Port { get => _port; set => SetField(ref _port, value); }
     private string _username;
     public string Username { get => _username; set => SetField(ref _username, value); }
+
+    /// <summary>New password to store for auto-login. Never pre-filled; blank = keep the
+    /// existing stored secret. Saved to the OS credential store, not the profile json.</summary>
+    private string _password = "";
+    public string Password { get => _password; set => SetField(ref _password, value); }
+
+    /// <summary>The layer's existing credential-store key (null = none stored yet).</summary>
+    public string? ExistingPasswordRef { get; }
+
+    public string PasswordHint => ExistingPasswordRef is not null
+        ? "a password is stored — leave blank to keep it"
+        : "stored in Windows Credential Manager, not in the profile file";
     private string _encoding;
     public string Encoding { get => _encoding; set => SetField(ref _encoding, value); }
     private bool _useTls;
@@ -54,16 +92,23 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public RelayCommand AddSequenceCommand { get; }
     public RelayCommand RemoveSequenceCommand { get; }
 
-    public WorldEditorViewModel(string name, ProfileLayer? layer, bool isNew)
+    public WorldEditorViewModel(string name, ProfileLayer? layer, bool isNew,
+                                LayerKind kind = LayerKind.Mud,
+                                string? parentMud = null, string? parentAccount = null)
     {
         IsNew = isNew;
         OriginalName = name;
-        _layer = layer ?? new ProfileLayer { Kind = LayerKind.Mud };
+        TargetKind = kind;
+        ParentMud = parentMud;
+        ParentAccount = parentAccount;
+        _layer = layer ?? new ProfileLayer { Kind = kind };
+        ExistingPasswordRef = _layer.PasswordRef;
         _name = name;
         _host = _layer.Host ?? "";
-        _port = (_layer.Port ?? 23).ToString();
+        // MUD layers get a concrete default port; deeper layers stay blank = inherit.
+        _port = _layer.Port?.ToString() ?? (kind == LayerKind.Mud ? "23" : "");
         _username = _layer.Username ?? "";
-        _encoding = _layer.EncodingName ?? "utf-8";
+        _encoding = _layer.EncodingName ?? (kind == LayerKind.Mud ? "utf-8" : "");
         _useTls = _layer.UseTls ?? false;
         _enableMip = _layer.EnableMip ?? false;
 
@@ -116,10 +161,11 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public ProfileLayer ToLayer()
     {
         int.TryParse(Port, out int port);
-        _layer.Kind = LayerKind.Mud;
+        _layer.Kind = TargetKind;
         _layer.Name = Name;
         _layer.Host = string.IsNullOrWhiteSpace(Host) ? null : Host.Trim();
-        _layer.Port = port > 0 ? port : 23;
+        // Blank port on an account/character layer stays null and inherits.
+        _layer.Port = port > 0 ? port : (TargetKind == LayerKind.Mud ? 23 : null);
         _layer.Username = string.IsNullOrWhiteSpace(Username) ? null : Username.Trim();
         _layer.EncodingName = string.IsNullOrWhiteSpace(Encoding) ? null : Encoding.Trim();
         _layer.UseTls = UseTls ? true : null;

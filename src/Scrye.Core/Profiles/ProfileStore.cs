@@ -85,6 +85,108 @@ public sealed class ProfileStore
         return ProfileResolver.Resolve(chain);
     }
 
+    // ---- hierarchical model (mud -> [account] -> character) ------------------
+    //
+    // profiles/
+    //   global.json
+    //   <mud>/mud.json
+    //   <mud>/<character>/character.json             (character directly on the MUD)
+    //   <mud>/<account>/account.json
+    //   <mud>/<account>/<character>/character.json   (character under an account)
+    //
+    // A subfolder's identity is the json file inside it, so accounts and
+    // account-less characters coexist under the same MUD folder.
+
+    private string MudDir(string mud) => Path.Combine(_root, mud);
+    private string MudFile(string mud) => Path.Combine(MudDir(mud), "mud.json");
+    private string AccountDir(string mud, string account) => Path.Combine(_root, mud, account);
+    private string AccountFile(string mud, string account) => Path.Combine(AccountDir(mud, account), "account.json");
+    private string CharacterDir(string mud, string? account, string character) =>
+        string.IsNullOrEmpty(account) ? Path.Combine(_root, mud, character) : Path.Combine(_root, mud, account, character);
+    private string CharacterFile(string mud, string? account, string character) =>
+        Path.Combine(CharacterDir(mud, account, character), "character.json");
+
+    public IReadOnlyList<string> ListMuds() => ListDirsWith(_root, "mud.json");
+    public IReadOnlyList<string> ListAccounts(string mud) => ListDirsWith(MudDir(mud), "account.json");
+    public IReadOnlyList<string> ListCharacters(string mud, string? account = null) =>
+        ListDirsWith(string.IsNullOrEmpty(account) ? MudDir(mud) : AccountDir(mud, account), "character.json");
+
+    private static IReadOnlyList<string> ListDirsWith(string parent, string marker) =>
+        Directory.Exists(parent)
+            ? Directory.GetDirectories(parent)
+                .Where(d => File.Exists(Path.Combine(d, marker)))
+                .Select(d => Path.GetFileName(d)!)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
+            : Array.Empty<string>();
+
+    public ProfileLayer? LoadMud(string mud) => LoadIfExists(MudFile(mud));
+    public ProfileLayer? LoadAccount(string mud, string account) => LoadIfExists(AccountFile(mud, account));
+    public ProfileLayer? LoadCharacter(string mud, string? account, string character) =>
+        LoadIfExists(CharacterFile(mud, account, character));
+
+    private ProfileLayer? LoadIfExists(string path) => File.Exists(path) ? LoadFile(path) : null;
+
+    public void SaveMud(string mud, ProfileLayer layer)
+    {
+        layer.Kind = LayerKind.Mud; layer.Name = mud;
+        SaveFile(MudFile(mud), layer);
+    }
+
+    public void SaveAccount(string mud, string account, ProfileLayer layer)
+    {
+        layer.Kind = LayerKind.Account; layer.Name = account;
+        SaveFile(AccountFile(mud, account), layer);
+    }
+
+    public void SaveCharacter(string mud, string? account, string character, ProfileLayer layer)
+    {
+        layer.Kind = LayerKind.Character; layer.Name = character;
+        SaveFile(CharacterFile(mud, account, character), layer);
+    }
+
+    /// <summary>Delete a MUD and everything under it (accounts + characters).</summary>
+    public void DeleteMud(string mud) => DeleteDir(MudDir(mud));
+    /// <summary>Delete an account and its characters.</summary>
+    public void DeleteAccount(string mud, string account) => DeleteDir(AccountDir(mud, account));
+    public void DeleteCharacter(string mud, string? account, string character) =>
+        DeleteDir(CharacterDir(mud, account, character));
+
+    private static void DeleteDir(string dir)
+    {
+        if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+    }
+
+    /// <summary>Rename a MUD folder in place — accounts and characters move with it.</summary>
+    public void RenameMud(string from, string to) => MoveDir(MudDir(from), MudDir(to));
+    public void RenameAccount(string mud, string from, string to) => MoveDir(AccountDir(mud, from), AccountDir(mud, to));
+    public void RenameCharacter(string mud, string? account, string from, string to) =>
+        MoveDir(CharacterDir(mud, account, from), CharacterDir(mud, account, to));
+
+    private static void MoveDir(string from, string to)
+    {
+        if (Directory.Exists(from) && !Directory.Exists(to)) Directory.Move(from, to);
+    }
+
+    /// <summary>Resolve a bare MUD (no account/character): [global, mud].</summary>
+    public EffectiveProfile ResolveMud(string mud)
+    {
+        var chain = new List<ProfileLayer>();
+        AddIfExists(chain, GlobalPath);
+        AddIfExists(chain, MudFile(mud));
+        return ProfileResolver.Resolve(chain);
+    }
+
+    /// <summary>Resolve an account (no character): [global, mud, account].</summary>
+    public EffectiveProfile ResolveAccount(string mud, string account)
+    {
+        var chain = new List<ProfileLayer>();
+        AddIfExists(chain, GlobalPath);
+        AddIfExists(chain, MudFile(mud));
+        AddIfExists(chain, AccountFile(mud, account));
+        return ProfileResolver.Resolve(chain);
+    }
+
     // ---- full folder cascade (global -> mud -> account -> character) ---------
 
     public EffectiveProfile ResolveCharacter(string mud, string? account, string character)

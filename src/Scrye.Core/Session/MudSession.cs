@@ -59,6 +59,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private bool _mipPending, _mipGotData, _mipSent;
     private int _mipRetries, _mipSecondsSinceHandshake;
 
+    private AutoLogin? _autoLogin;    // armed on connect when the profile has a username; loop-only
+
     private Task? _loop;
     private Task? _ticker;
     private CancellationTokenSource? _cts;
@@ -472,6 +474,19 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             _mipPending = false;
             SendMipHandshake();
         }
+        if (_autoLogin is not null)
+        {
+            // Reply to name/password prompts. SendBytes (not SendText) keeps the
+            // password out of the event log; the system note never contains it.
+            string? reply = _autoLogin.Feed(line.PlainText, out bool isPassword);
+            if (reply is not null)
+            {
+                _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(_encoding.GetBytes(reply + "\r\n")));
+                RaiseLine(Line.FromText(
+                    isPassword ? "* auto-login: sent password" : $"* auto-login: sent '{reply}'", SysColour));
+            }
+            if (_autoLogin.Done) _autoLogin = null;
+        }
         _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
         // Plugins may gag (null) or rewrite the DISPLAYED line; automation still sees the original.
         Line? shown = LineDisplayFilter is null ? line : LineDisplayFilter(line);
@@ -523,6 +538,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 _everConnected = true;
                 CancelReconnect();               // a successful connect ends any retry loop
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
+                // arm auto-login for this (re)connect when the profile carries a username
+                _autoLogin = Profile.Username.Length > 0
+                    ? new AutoLogin(Profile.Username, Profile.Password)
+                    : null;
                 _events.Emit(SessionEventKind.Connected, $"{Profile.Host}:{Profile.Port}");
                 break;
             case ConnectionState.Failed:

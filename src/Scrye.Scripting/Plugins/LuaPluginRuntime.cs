@@ -13,7 +13,7 @@ namespace Scrye.Scripting.Plugins;
 /// shared automation engine), so a live rule-reload can't wipe them. All execution is on
 /// the session loop thread, so the per-plugin Script is never re-entered concurrently.
 /// </summary>
-public sealed class LuaPluginRuntime : IDisposable
+public sealed class LuaPluginRuntime : IPluginRuntime
 {
     private sealed class PluginRule
     {

@@ -33,9 +33,11 @@ if (args.Length >= 1 && args[0] == "--logging") { LoggingTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--reconnect") { ReconnectTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -226,8 +228,92 @@ static void WorldsTest()
     store.DeleteWorld("Aardwolf");
     Console.WriteLine("after delete Aardwolf: " + string.Join(", ", store.ListWorlds()));
 
+    // ---- hierarchical model: mud -> [account] -> character -------------------
+    Console.WriteLine("\n-- profile tree (mud -> account -> character) --");
+    store.SaveMud("3Scapes", new ProfileLayer { Host = "3k.org", Port = 3200, EnableMip = true,
+        Triggers = { new TriggerDef { Name = "shared", Pattern = "The sun rises*" } } });
+    store.SaveAccount("3Scapes", "eldran", new ProfileLayer { Username = "eldran",
+        Aliases = { new AliasDef { Name = "gd", Send = "get all from corpse" } } });
+    store.SaveCharacter("3Scapes", "eldran", "warrior", new ProfileLayer {
+        Variables = { ["class"] = "warrior" },
+        Aliases = { new AliasDef { Name = "bash", Send = "bash %1" } } });
+    store.SaveCharacter("3Scapes", "eldran", "mage", new ProfileLayer { Variables = { ["class"] = "mage" } });
+    store.SaveCharacter("3Scapes", null, "loner", new ProfileLayer { Variables = { ["class"] = "thief" } });
+
+    Console.WriteLine("muds: " + string.Join(", ", store.ListMuds()));
+    Console.WriteLine("accounts(3Scapes): " + string.Join(", ", store.ListAccounts("3Scapes")));
+    Console.WriteLine("chars(3Scapes/eldran): " + string.Join(", ", store.ListCharacters("3Scapes", "eldran")));
+    Console.WriteLine("chars(3Scapes, no account): " + string.Join(", ", store.ListCharacters("3Scapes")));
+
+    var w = store.ResolveCharacter("3Scapes", "eldran", "warrior");
+    Console.WriteLine($"warrior: name={w.World.Name} host={w.World.Host}:{w.World.Port} mip={w.World.EnableMip} " +
+                      $"user={w.Username} triggers={w.Triggers.Count} aliases={w.Aliases.Count} class={w.Variables["class"]}");
+    if (w.World.Host != "3k.org" || w.Username != "eldran" || w.Aliases.Count != 2 || w.Triggers.Count != 1)
+        throw new Exception("warrior cascade resolved wrong");
+
+    var lone = store.ResolveCharacter("3Scapes", null, "loner");
+    Console.WriteLine($"loner (no account): host={lone.World.Host} user={lone.Username ?? "(none)"} " +
+                      $"aliases={lone.Aliases.Count} class={lone.Variables["class"]}");
+    if (lone.Username is not null || lone.Aliases.Count != 0) throw new Exception("loner should not inherit account");
+
+    var acct = store.ResolveAccount("3Scapes", "eldran");
+    var bare = store.ResolveMud("3Scapes");
+    Console.WriteLine($"account resolve: user={acct.Username} aliases={acct.Aliases.Count}; bare mud: host={bare.World.Host} aliases={bare.Aliases.Count}");
+
+    store.DeleteCharacter("3Scapes", "eldran", "mage");
+    Console.WriteLine("after delete mage: " + string.Join(", ", store.ListCharacters("3Scapes", "eldran")));
+    store.DeleteAccount("3Scapes", "eldran");
+    Console.WriteLine("after delete account: accounts=" + string.Join(", ", store.ListAccounts("3Scapes")) +
+                      " | direct chars=" + string.Join(", ", store.ListCharacters("3Scapes")));
+    store.DeleteMud("3Scapes");
+    Console.WriteLine("after delete mud: muds=" + string.Join(", ", store.ListMuds()));
+
     Directory.Delete(root, true);
     Console.WriteLine("\nWorld-store self-test complete.");
+}
+
+static void LoginTest()
+{
+    Console.WriteLine("== Scrye auto-login self-test ==\n");
+
+    // full flow: banner noise, then name prompt, then password prompt
+    var login = new AutoLogin("eldran", "hunter2");
+    if (login.Feed("Welcome to 3Scapes!", out _) is not null) throw new Exception("replied to banner");
+    if (login.Feed("  ***  The Realm Awaits  ***", out _) is not null) throw new Exception("replied to banner art");
+    string? r1 = login.Feed("By what name do you wish to be known?", out bool p1);
+    Console.WriteLine($"name prompt -> '{r1}' (password={p1})");
+    if (r1 != "eldran" || p1) throw new Exception("username not sent on name prompt");
+    if (login.Feed("Welcome back, Eldran.", out _) is not null) throw new Exception("replied to greeting");
+    string? r2 = login.Feed("Password:", out bool p2);
+    Console.WriteLine($"password prompt -> {(r2 is null ? "null" : "(secret)")} (password={p2})");
+    if (r2 != "hunter2" || !p2) throw new Exception("password not sent on password prompt");
+    if (!login.Done) throw new Exception("should be done after both");
+    if (login.Feed("Password:", out _) is not null) throw new Exception("replied after done");
+
+    // variant prompt styles
+    var alt = new AutoLogin("eldran", "x");
+    if (alt.Feed("What is your name:", out _) != "eldran") throw new Exception("'What is your name:' not matched");
+    var alt2 = new AutoLogin("eldran", "x");
+    if (alt2.Feed("login:", out _) != "eldran") throw new Exception("'login:' not matched");
+
+    // username only (no stored password): done after the name reply
+    var noPass = new AutoLogin("eldran", null);
+    noPass.Feed("What is your name:", out _);
+    Console.WriteLine($"no-password variant done={noPass.Done}");
+    if (!noPass.Done) throw new Exception("username-only should finish after name");
+
+    // unrecognised flow: gives up quietly after MaxLines
+    var giveUp = new AutoLogin("eldran", "x");
+    for (int i = 0; i < AutoLogin.MaxLines; i++)
+        if (giveUp.Feed($"scrolling combat spam {i}", out _) is not null) throw new Exception("replied to spam");
+    Console.WriteLine($"gave up after {AutoLogin.MaxLines} lines: done={giveUp.Done}");
+    if (!giveUp.Done) throw new Exception("should give up after MaxLines");
+
+    // a password prompt must not fire before the username was requested
+    var early = new AutoLogin("eldran", "x");
+    if (early.Feed("Password:", out _) is not null) throw new Exception("password sent before username");
+
+    Console.WriteLine("\nAuto-login self-test complete.");
 }
 
 static void EventsTest()
@@ -461,6 +547,35 @@ static void PluginTimersTest()
     Console.WriteLine($"   self-cancelling timer fired {hits % 100} times (expect 2); nested one-shot ran = {(hits >= 100 ? "yes" : "no")}");
 
     Console.WriteLine("\nPlugin-timer self-test complete.");
+}
+
+static void PluginPackTest()
+{
+    Console.WriteLine("== Scrye plugin-package self-test ==\n");
+    string tmp = Path.Combine(Path.GetTempPath(), "scrye_pkg_" + Guid.NewGuid().ToString("N"));
+    string content = Path.Combine(tmp, "content");        // becomes the archive root
+    Directory.CreateDirectory(content);
+    File.WriteAllText(Path.Combine(content, "plugin.json"),
+        "{\"id\":\"cool-plugin\",\"name\":\"Cool Plugin\",\"version\":\"1.2.3\",\"mudIds\":[\"*\"]}");
+    File.WriteAllText(Path.Combine(content, "main.lua"), "scrye.print('hi from cool-plugin')");
+
+    string userRoot = Path.Combine(tmp, "userplugins");
+    Directory.CreateDirectory(userRoot);
+    string pkg = Path.Combine(userRoot, "cool.scryeplugin");   // dropped into the user folder
+    System.IO.Compression.ZipFile.CreateFromDirectory(content, pkg);   // plugin.json at archive root
+
+    Console.WriteLine("-- install every *.scryeplugin dropped in the user folder --");
+    var installed = PluginPackage.InstallAllIn(userRoot, s => Console.WriteLine("    " + s));
+    Console.WriteLine($"   installed ids : [{string.Join(", ", installed)}]");
+    Console.WriteLine($"   folder created: {Directory.Exists(Path.Combine(userRoot, "cool-plugin"))}");
+    Console.WriteLine($"   main.lua there: {File.Exists(Path.Combine(userRoot, "cool-plugin", "main.lua"))}");
+    Console.WriteLine($"   archive removed: {!File.Exists(pkg)}");
+
+    var found = PluginCatalog.ForMud("AnyMud", userRoot).Select(d => $"{d.Manifest.Id} v{d.Manifest.Version}");
+    Console.WriteLine($"   discovered now : [{string.Join(", ", found)}]");
+
+    Directory.Delete(tmp, true);
+    Console.WriteLine("\nPlugin-package self-test complete.");
 }
 
 static void SequenceTest()
