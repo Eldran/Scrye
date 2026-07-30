@@ -89,6 +89,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public Action<string, IReadOnlyList<string>>? ScriptDispatcher { get; set; }
     public Action<string>? ScriptExecutor { get; set; }
 
+    /// <summary>Optional display filter for server output lines (plugins): return the line
+    /// to show — possibly rewritten — or null to gag it. Automation, events, and the
+    /// sequence engine still see the ORIGINAL line; only what's shown/logged is affected.</summary>
+    public Func<Line, Line?>? LineDisplayFilter { get; set; }
+
+    /// <summary>Optional filter for user input (plugin aliases): return the command to
+    /// process — possibly rewritten — or null to consume it (nothing sent). Runs before
+    /// the automation engine's own aliases.</summary>
+    public Func<string, string?>? InputFilter { get; set; }
+
     public event Action<Line>? LineReady;
     public event Action<ConnectionState>? StateChanged;
     public event Action<string, string>? GmcpReceived;
@@ -455,7 +465,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             SendMipHandshake();
         }
         _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
-        RaiseLine(line);
+        // Plugins may gag (null) or rewrite the DISPLAYED line; automation still sees the original.
+        Line? shown = LineDisplayFilter is null ? line : LineDisplayFilter(line);
+        if (shown is not null) RaiseLine(shown);
         _automation.ProcessLine(line.PlainText, this);
 
         // a prompt (GA/EOR flush, or a lone ">") lets a prompt-gated sequence advance
@@ -482,6 +494,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     {
         _events.Emit(SessionEventKind.InputSubmitted, text);
         _logger?.Log("> " + text, InputColour);   // transcript records what the user typed
+        if (InputFilter is not null)
+        {
+            string? filtered = InputFilter(text);
+            if (filtered is null) return;   // a plugin alias consumed the input
+            text = filtered;
+        }
         if (!_automation.ProcessInput(text, this))
             _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     }

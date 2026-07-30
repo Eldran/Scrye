@@ -1,4 +1,5 @@
 using MoonSharp.Interpreter;
+using Scrye.Core.Automation;
 using Scrye.Core.Plugins;
 
 namespace Scrye.Scripting.Plugins;
@@ -6,26 +7,35 @@ namespace Scrye.Scripting.Plugins;
 /// <summary>
 /// Runs one plugin: its own sandboxed MoonSharp <see cref="Script"/> with a bound
 /// <c>scrye.*</c> API table backed by an <see cref="IPluginHost"/>. The plugin's entry
-/// script registers hooks (<c>scrye.onLine</c>, <c>scrye.onGmcp</c>, <c>scrye.watch</c>);
-/// the <see cref="PluginManager"/> feeds it session events via <see cref="DispatchLine"/>
-/// / <see cref="DispatchGmcp"/>. All execution is on the session loop thread, so the
-/// per-plugin Script is never re-entered concurrently.
+/// script registers hooks (<c>onLine</c>/<c>onGmcp</c>/<c>watch</c>/<c>onConnect</c>…),
+/// timers (<c>after</c>/<c>every</c>), and rules (<c>addTrigger</c>/<c>addAlias</c>). The
+/// <see cref="PluginManager"/> feeds it session events. Plugin rules live HERE (not in the
+/// shared automation engine), so a live rule-reload can't wipe them. All execution is on
+/// the session loop thread, so the per-plugin Script is never re-entered concurrently.
 /// </summary>
 public sealed class LuaPluginRuntime : IDisposable
 {
+    private sealed class PluginRule
+    {
+        public CompiledPattern Pattern = null!;
+        public string? Send;
+        public DynValue? Run;
+    }
+
     private readonly PluginDescriptor _descriptor;
     private readonly IPluginHost _host;
     private readonly Script _script;
 
-    // Hook functions are stored as DynValues and invoked with plain-string args, matching
-    // how LuaScriptHost calls trigger callbacks (_script.Call(fn, args)).
     private readonly List<DynValue> _lineHooks = new();
     private readonly List<(string pkg, DynValue fn)> _gmcpHooks = new();
     private readonly List<DynValue> _connectHooks = new();
     private readonly List<DynValue> _disconnectHooks = new();
     private readonly List<DynValue> _promptHooks = new();
+    private readonly List<PluginRule> _triggers = new();   // match output lines
+    private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly List<IDisposable> _subscriptions = new();
     private readonly TimerWheel _timers = new();
+    private readonly VariableStore _vars = new();          // for %-expansion in rule 'send'
 
     public string Id => _descriptor.Manifest.Id;
 
@@ -44,13 +54,46 @@ public sealed class LuaPluginRuntime : IDisposable
         _script.DoString(code, codeFriendlyName: Id);
     }
 
-    public void DispatchLine(string line)
+    /// <summary>Run a line through this plugin: fire <c>onLine</c> hooks (which may gag or
+    /// rewrite it) and evaluate plugin triggers. Returns whether to gag, and a rewritten
+    /// string if one was produced. Triggers match the ORIGINAL text.</summary>
+    public (bool Gag, string? Rewrite) ProcessLine(string text)
     {
+        bool gag = false;
+        string current = text;
         for (int i = 0; i < _lineHooks.Count; i++)
         {
-            DynValue fn = _lineHooks[i];
-            Safe("onLine", () => _script.Call(fn, line));
+            DynValue? r = SafeCall("onLine", _lineHooks[i], current);
+            if (r is null) continue;
+            if (r.Type == DataType.Boolean && !r.Boolean) gag = true;     // return false -> gag
+            else if (r.Type == DataType.String) current = r.String;       // return "text" -> rewrite
         }
+        for (int i = 0; i < _triggers.Count; i++)
+        {
+            MatchResult? m = _triggers[i].Pattern.Match(text);
+            if (m is not null) Apply(_triggers[i], m);
+        }
+        return (gag, current != text ? current : null);
+    }
+
+    /// <summary>Run user input through this plugin's aliases. Returns (consumed, rewrite):
+    /// the first matching alias consumes the input.</summary>
+    public (bool Consumed, string? Rewrite) ProcessInput(string text)
+    {
+        for (int i = 0; i < _aliases.Count; i++)
+        {
+            MatchResult? m = _aliases[i].Pattern.Match(text);
+            if (m is null) continue;
+            Apply(_aliases[i], m);
+            return (true, null);
+        }
+        return (false, null);
+    }
+
+    private void Apply(PluginRule rule, MatchResult m)
+    {
+        if (rule.Send is not null) _host.Send(Template.Expand(rule.Send, m, _vars));
+        if (rule.Run is not null) Safe("rule", () => _script.Call(rule.Run!, m.Wildcards.ToArray()));
     }
 
     public void DispatchGmcp(string package, string json)
@@ -73,10 +116,7 @@ public sealed class LuaPluginRuntime : IDisposable
     private void FireAll(List<DynValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
-        {
-            DynValue fn = hooks[i];
-            Safe(what, () => _script.Call(fn));
-        }
+            Safe(what, () => _script.Call(hooks[i]));
     }
 
     public void Dispose()
@@ -89,6 +129,8 @@ public sealed class LuaPluginRuntime : IDisposable
         _connectHooks.Clear();
         _disconnectHooks.Clear();
         _promptHooks.Clear();
+        _triggers.Clear();
+        _aliases.Clear();
     }
 
     // ---- the scrye.* table ---------------------------------------------------
@@ -118,18 +160,17 @@ public sealed class LuaPluginRuntime : IDisposable
             return DynValue.Nil;
         });
 
-        // scrye.after(seconds, fn) -> id  (one-shot);  scrye.every(seconds, fn) -> id  (repeating)
+        // timers: scrye.after(seconds, fn) -> id (one-shot);  scrye.every(seconds, fn) -> id (repeating)
         t["after"] = Fn(a => AddTimer(a, repeat: false));
         t["every"] = Fn(a => AddTimer(a, repeat: true));
-        // scrye.cancel(id) — stop a timer started by after/every
         t["cancel"] = Fn(a => { _timers.Cancel((int)Num(a, 0)); return DynValue.Nil; });
 
-        // lifecycle hooks: scrye.onConnect(fn) / scrye.onDisconnect(fn) / scrye.onPrompt(fn)
+        // lifecycle hooks
         t["onConnect"]    = Fn(a => AddHook(a, _connectHooks));
         t["onDisconnect"] = Fn(a => AddHook(a, _disconnectHooks));
         t["onPrompt"]     = Fn(a => AddHook(a, _promptHooks));
 
-        // scrye.onLine(function(line) ... end)
+        // scrye.onLine(function(line) ... end)  — return false to gag, a string to rewrite
         t["onLine"] = Fn(a =>
         {
             if (a.Count >= 1 && a[0].Type == DataType.Function) _lineHooks.Add(a[0]);
@@ -146,6 +187,11 @@ public sealed class LuaPluginRuntime : IDisposable
             return DynValue.Nil;
         });
 
+        // rules: scrye.addTrigger{ pattern=, regex=, ignoreCase=, send=, run=fn }
+        //        scrye.addAlias{ ... }  (matches typed input; a match consumes it)
+        t["addTrigger"] = Fn(a => AddRule(a, _triggers));
+        t["addAlias"]   = Fn(a => AddRule(a, _aliases));
+
         // scrye.addPanel({ title=..., widgets={ {type=...,...}, ... } })
         t["addPanel"] = Fn(a =>
         {
@@ -155,6 +201,49 @@ public sealed class LuaPluginRuntime : IDisposable
         });
 
         return t;
+    }
+
+    private DynValue AddRule(CallbackArguments a, List<PluginRule> into)
+    {
+        if (a.Count < 1 || a[0].Type != DataType.Table) return DynValue.Nil;
+        Table def = a[0].Table;
+        string pattern = Field(def, "pattern") ?? "";
+        if (pattern.Length == 0) { _host.Print(Id, "addRule: missing 'pattern'"); return DynValue.Nil; }
+
+        DynValue regex = def.Get("regex");
+        bool isRegex = regex.Type == DataType.Boolean && regex.Boolean;
+        DynValue ic = def.Get("ignoreCase");
+        bool ignoreCase = ic.Type != DataType.Boolean || ic.Boolean;   // default true
+        DynValue run = def.Get("run");
+
+        try
+        {
+            into.Add(new PluginRule
+            {
+                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase),
+                Send = Field(def, "send"),
+                Run = run.Type == DataType.Function ? run : null,
+            });
+        }
+        catch (Exception ex) { _host.Print(Id, "addRule: bad pattern — " + ex.Message); }
+        return DynValue.Nil;
+    }
+
+    private DynValue AddTimer(CallbackArguments a, bool repeat)
+    {
+        if (a.Count >= 2 && a[1].Type == DataType.Function)
+        {
+            DynValue fn = a[1];
+            int id = _timers.Add(Num(a, 0), repeat, () => Safe(repeat ? "every" : "after", () => _script.Call(fn)));
+            return DynValue.NewNumber(id);
+        }
+        return DynValue.Nil;
+    }
+
+    private static DynValue AddHook(CallbackArguments a, List<DynValue> hooks)
+    {
+        if (a.Count >= 1 && a[0].Type == DataType.Function) hooks.Add(a[0]);
+        return DynValue.Nil;
     }
 
     private static PanelSpec ToPanelSpec(Table tbl)
@@ -189,23 +278,6 @@ public sealed class LuaPluginRuntime : IDisposable
         return v.IsNil() ? null : v.CastToString();
     }
 
-    private DynValue AddTimer(CallbackArguments a, bool repeat)
-    {
-        if (a.Count >= 2 && a[1].Type == DataType.Function)
-        {
-            DynValue fn = a[1];
-            int id = _timers.Add(Num(a, 0), repeat, () => Safe(repeat ? "every" : "after", () => _script.Call(fn)));
-            return DynValue.NewNumber(id);
-        }
-        return DynValue.Nil;
-    }
-
-    private static DynValue AddHook(CallbackArguments a, List<DynValue> hooks)
-    {
-        if (a.Count >= 1 && a[0].Type == DataType.Function) hooks.Add(a[0]);
-        return DynValue.Nil;
-    }
-
     private static DynValue Fn(Func<CallbackArguments, DynValue> f) =>
         DynValue.NewCallback((_, args) => f(args));
 
@@ -223,5 +295,11 @@ public sealed class LuaPluginRuntime : IDisposable
     {
         try { action(); }
         catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); }
+    }
+
+    private DynValue? SafeCall(string what, DynValue fn, params object[] args)
+    {
+        try { return _script.Call(fn, args); }
+        catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); return null; }
     }
 }

@@ -28,6 +28,23 @@ scrye.onDisconnect(function() scrye.print("disconnected") end)
 -- Timers (Phase 1). after() fires once; every() repeats until cancelled.
 scrye.after(3, function() scrye.print("3s after load — timers work") end)
 
+-- Plugin rules (Phase 2). A trigger reacts to output; an alias reacts to input.
+-- Captures (%1, %2, …) are passed to run() as arguments.
+scrye.addTrigger{ pattern = "*Welcome*", run = function() scrye.print("addTrigger fired on a welcome line") end }
+
+-- Typing 'ptest' runs this and is NOT sent to the MUD (a matching alias consumes input).
+scrye.addAlias{ pattern = "ptest", run = function()
+    scrye.print("alias ptest → HP is " .. scrye.getState("character.health.current"))
+end }
+
+-- onLine can gag or rewrite the DISPLAYED line (automation still sees the original):
+--   return false          -> gag (hide the line)
+--   return "new text"     -> rewrite what's shown
+-- Example (off by default):
+-- scrye.onLine(function(line)
+--     if line:find("the sun rises") then return "[dawn] " .. line end
+-- end)
+
 -- Example of a repeating timer + cancel (kept off by default so it doesn't spam):
 -- local n, id = 0
 -- id = scrye.every(10, function()

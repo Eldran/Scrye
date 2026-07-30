@@ -1,4 +1,5 @@
 using Scrye.Core.Plugins;
+using Scrye.Core.Text;
 
 namespace Scrye.Scripting.Plugins;
 
@@ -37,9 +38,40 @@ public sealed class PluginManager : IDisposable
         }
     }
 
-    public void DispatchLine(string line)
+    /// <summary>Run a server output line through every plugin (onLine hooks + triggers) and
+    /// fold their gag/rewrite decisions: returns the line to display (possibly rewritten),
+    /// or null to gag it. Also dispatches the prompt hook for prompt lines. Set this as the
+    /// session's <c>LineDisplayFilter</c>.</summary>
+    public Line? ProcessLine(Line line)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchLine(line);
+        if (line.IsPrompt) DispatchPrompt();
+
+        string text = line.PlainText;
+        bool gag = false;
+        string? rewrite = null;
+        for (int i = 0; i < _runtimes.Count; i++)
+        {
+            (bool g, string? rw) = _runtimes[i].ProcessLine(text);
+            if (g) gag = true;
+            if (rw is not null) rewrite = rw;
+        }
+        if (gag) return null;
+        return rewrite is not null ? Line.FromText(rewrite) : line;
+    }
+
+    /// <summary>Run user input through every plugin's aliases: returns the command to
+    /// process (possibly rewritten), or null if a plugin consumed it. Set this as the
+    /// session's <c>InputFilter</c>.</summary>
+    public string? ProcessInput(string text)
+    {
+        string current = text;
+        for (int i = 0; i < _runtimes.Count; i++)
+        {
+            (bool consumed, string? rewrite) = _runtimes[i].ProcessInput(current);
+            if (consumed) return null;
+            if (rewrite is not null) current = rewrite;
+        }
+        return current;
     }
 
     public void DispatchGmcp(string package, string json)

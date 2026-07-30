@@ -128,11 +128,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
             (id, spec) => Hud.AddPanel(id, spec));
         _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem);
-        _session.LineReady += line =>
-        {
-            _plugins.DispatchLine(line.PlainText);
-            if (line.IsPrompt) _plugins.DispatchPrompt();
-        };
+        // Plugins process each server line (onLine gag/rewrite + triggers) and user input
+        // (aliases) via the session's filter hooks — so gagging actually suppresses display.
+        _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook
+        _session.InputFilter = _plugins.ProcessInput;         // plugin aliases (a match consumes input)
         _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
         _session.Ticked += _plugins.Tick;                     // plugin timers (scrye.after/every)
         _session.StateChanged += s =>                          // plugin lifecycle hooks
