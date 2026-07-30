@@ -61,6 +61,8 @@
                                     <DockPanel DockPanel.Dock="Bottom" Margin="4">
                                         <ToggleButton DockPanel.Dock="Right" Content="Debugger"
                                                       IsChecked="{Binding ShowDebugger}" Margin="4,0,0,0" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="Plugins"
+                                                      IsChecked="{Binding Plugins.IsOpen}" Margin="4,0,0,0" />
                                         <TextBox Text="{Binding Input}" Watermark="type a command and press Enter…"
                                                  KeyDown="OnInputKeyDown" />
                                     </DockPanel>
@@ -132,6 +134,10 @@
                                                                     </Grid>
                                                                 </StackPanel>
                                                             </DataTemplate>
+                                                            <DataTemplate DataType="vm:ButtonWidgetViewModel">
+                                                                <Button Content="{Binding Text}" Command="{Binding Command}"
+                                                                        HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
+                                                            </DataTemplate>
                                                         </ItemsControl.DataTemplates>
                                                     </ItemsControl>
                                                 </StackPanel>
@@ -139,6 +145,42 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
+
+                                <!-- plugins manager: list / reload / enable-disable (Ctrl-free; toggle button) -->
+                                <Border IsVisible="{Binding Plugins.IsOpen}" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                        Width="300" MaxHeight="380" Margin="12,10,0,0" Padding="10"
+                                        Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
+                                        BorderThickness="1" CornerRadius="6">
+                                    <DockPanel>
+                                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="✕" Command="{Binding Plugins.CloseCommand}" Padding="6,1" />
+                                            <Button DockPanel.Dock="Right" Content="↻" Command="{Binding Plugins.RefreshCommand}" Padding="6,1" Margin="0,0,4,0" />
+                                            <TextBlock Text="PLUGINS" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource ScryeAccent}" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <ItemsControl ItemsSource="{Binding Plugins.Plugins}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:PluginRowViewModel">
+                                                        <Border Margin="0,0,0,4" Padding="6" CornerRadius="4"
+                                                                Background="{DynamicResource ScryePanelAlt}">
+                                                            <DockPanel>
+                                                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
+                                                                    <Button Content="Reload" Command="{Binding ReloadCommand}" Padding="6,1" FontSize="10" />
+                                                                    <Button Content="{Binding ToggleLabel}" Command="{Binding ToggleCommand}" Padding="6,1" FontSize="10" />
+                                                                </StackPanel>
+                                                                <StackPanel>
+                                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" FontSize="11" />
+                                                                    <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource ScryeTextDim}" FontSize="10" />
+                                                                </StackPanel>
+                                                            </DockPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                    </DockPanel>
+                                </Border>
                             </Grid>
 
                             <!-- drag handle to resize the debugger panel -->

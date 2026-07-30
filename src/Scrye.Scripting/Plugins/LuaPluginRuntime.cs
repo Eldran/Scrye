@@ -33,9 +33,11 @@ public sealed class LuaPluginRuntime : IDisposable
     private readonly List<DynValue> _promptHooks = new();
     private readonly List<PluginRule> _triggers = new();   // match output lines
     private readonly List<PluginRule> _aliases = new();    // match user input
+    private readonly Dictionary<string, DynValue> _actions = new();   // panel-button callbacks by id
     private readonly List<IDisposable> _subscriptions = new();
     private readonly TimerWheel _timers = new();
     private readonly VariableStore _vars = new();          // for %-expansion in rule 'send'
+    private int _nextActionId = 1;
 
     public string Id => _descriptor.Manifest.Id;
 
@@ -113,6 +115,12 @@ public sealed class LuaPluginRuntime : IDisposable
     public void DispatchDisconnect() => FireAll(_disconnectHooks, "onDisconnect");
     public void DispatchPrompt() => FireAll(_promptHooks, "onPrompt");
 
+    /// <summary>Invoke a panel-button callback by its action id (called on the loop thread).</summary>
+    public void InvokeAction(string actionId)
+    {
+        if (_actions.TryGetValue(actionId, out DynValue? fn)) Safe("action", () => _script.Call(fn!));
+    }
+
     private void FireAll(List<DynValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -131,6 +139,7 @@ public sealed class LuaPluginRuntime : IDisposable
         _promptHooks.Clear();
         _triggers.Clear();
         _aliases.Clear();
+        _actions.Clear();
     }
 
     // ---- the scrye.* table ---------------------------------------------------
@@ -246,7 +255,7 @@ public sealed class LuaPluginRuntime : IDisposable
         return DynValue.Nil;
     }
 
-    private static PanelSpec ToPanelSpec(Table tbl)
+    private PanelSpec ToPanelSpec(Table tbl)
     {
         var widgets = new List<WidgetSpec>();
         DynValue w = tbl.Get("widgets");
@@ -262,15 +271,28 @@ public sealed class LuaPluginRuntime : IDisposable
         return new PanelSpec { Title = Field(tbl, "title") ?? "", Widgets = widgets };
     }
 
-    private static WidgetSpec ToWidgetSpec(Table w) => new()
+    private WidgetSpec ToWidgetSpec(Table w)
     {
-        Type = Field(w, "type") ?? "label",
-        Text = Field(w, "text"),
-        Bind = Field(w, "bind"),
-        Value = Field(w, "value"),
-        Max = Field(w, "max"),
-        Color = Field(w, "color"),
-    };
+        // A 'button' widget with an action=function is registered as a callback and
+        // referenced by an opaque id the host calls back with on click.
+        string? actionId = null;
+        DynValue action = w.Get("action");
+        if (action.Type == DataType.Function)
+        {
+            actionId = "a" + _nextActionId++;
+            _actions[actionId] = action;
+        }
+        return new WidgetSpec
+        {
+            Type = Field(w, "type") ?? "label",
+            Text = Field(w, "text"),
+            Bind = Field(w, "bind"),
+            Value = Field(w, "value"),
+            Max = Field(w, "max"),
+            Color = Field(w, "color"),
+            Action = actionId,
+        };
+    }
 
     private static string? Field(Table t, string key)
     {

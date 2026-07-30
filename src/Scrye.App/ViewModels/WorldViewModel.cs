@@ -63,6 +63,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Find-in-scrollback bar (Ctrl+F): searches this world's output.</summary>
     public FindViewModel Find { get; }
 
+    /// <summary>Plugins-manager panel: list / reload / enable-disable this world's plugins.</summary>
+    public PluginsViewModel Plugins { get; }
+
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
 
@@ -112,7 +115,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.SequenceStatusChanged += Sequence.Update;
 
         // HUD: plugins add declarative panels during load (below); this owns them.
-        Hud = new HudViewModel(_session.GameState);
+        // Panel-button clicks are marshalled onto the session loop before hitting plugin Lua.
+        // _plugins is assigned just below; the lambda only runs on a click, well after that.
+        Hud = new HudViewModel(_session.GameState,
+            (pluginId, actionId) => _session.Post(() => _plugins!.InvokeAction(pluginId, actionId)));
 
         // find-in-scrollback: searches the rendered output buffer.
         Find = new FindViewModel(Scrollback);
@@ -127,7 +133,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         var host = new SessionPluginHost(_session,
             (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
             (id, spec) => Hud.AddPanel(id, spec));
-        _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem);
+        _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem,
+            id => Hud.RemovePanels(id));   // drop a plugin's HUD panels on reload/disable
+        Plugins = new PluginsViewModel(
+            () => _plugins.ListPlugins(),
+            (id, done) => _session.Post(() => { _plugins.Reload(id); Dispatcher.UIThread.Post(done); }),
+            (id, enable, done) => _session.Post(() =>
+            {
+                if (enable) _plugins.Enable(id); else _plugins.Disable(id);
+                Dispatcher.UIThread.Post(done);
+            }));
         // Plugins process each server line (onLine gag/rewrite + triggers) and user input
         // (aliases) via the session's filter hooks — so gagging actually suppresses display.
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook

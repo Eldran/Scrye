@@ -44,4 +44,8 @@ public abstract record SessionMessage
     /// freshly-resolved profile's — applied on the loop so it can't race the engine.
     /// Runtime variables are left untouched.</summary>
     public sealed record ReloadAutomation(Scrye.Core.Profiles.EffectiveProfile Profile) : SessionMessage;
+
+    /// <summary>Run an arbitrary action on the loop thread (e.g. a plugin panel-button
+    /// callback fired from the UI), so it stays single-threaded with the rest of the session.</summary>
+    public sealed record Invoke(Action Action) : SessionMessage;
 }

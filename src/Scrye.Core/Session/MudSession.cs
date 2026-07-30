@@ -293,6 +293,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         }
     }
 
+    /// <summary>Queue an action to run on the session loop thread (keeps off-loop callers —
+    /// e.g. UI button handlers invoking plugin callbacks — single-threaded with the session).</summary>
+    public void Post(Action action) => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(action));
+
     public void Submit(string text) => _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text));
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
@@ -406,6 +410,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                     case SessionMessage.SystemNotice n:
                         _events.Emit(SessionEventKind.Notice, n.Text);
                         RaiseLine(Line.FromText(n.Text, SysColour));
+                        break;
+                    case SessionMessage.Invoke inv:
+                        try { inv.Action(); }
+                        catch (Exception ex) { RaiseLine(Line.FromText("plugin action error: " + ex.Message, SysColour)); }
                         break;
                     case SessionMessage.ReloadAutomation ra:
                         _automation.ClearTriggers(); _automation.ClearAliases(); _automation.ClearTimers();

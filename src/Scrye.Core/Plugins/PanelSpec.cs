@@ -19,6 +19,10 @@ public sealed record WidgetSpec
     public string? Value { get; init; }
     public string? Max { get; init; }
     public string? Color { get; init; }
+
+    /// <summary>For <c>button</c> widgets: an opaque action id the host calls back with when
+    /// clicked (the plugin runtime maps it to a Lua callback). Set by the runtime, not authors.</summary>
+    public string? Action { get; init; }
 }
 
 /// <summary>

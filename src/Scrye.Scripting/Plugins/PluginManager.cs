@@ -11,31 +11,95 @@ namespace Scrye.Scripting.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
+    private readonly List<PluginDescriptor> _descriptors;   // all discovered (fixed after ctor)
+    private readonly IPluginHost _host;
+    private readonly Action<string> _report;
+    private readonly Action<string>? _dropPanels;           // (pluginId) → host removes its HUD panels
     private readonly List<LuaPluginRuntime> _runtimes = new();
 
-    /// <summary>Ids of the plugins that loaded successfully.</summary>
-    public IReadOnlyList<string> LoadedIds => _runtimes.Select(r => r.Id).ToList();
+    // Ids of currently-loaded plugins, republished as an immutable snapshot whenever the set
+    // changes (always on the loop thread) so the UI can read it without touching _runtimes.
+    private volatile string[] _loadedIds = Array.Empty<string>();
+
+    public IReadOnlyList<string> LoadedIds => _loadedIds;
     public int Count => _runtimes.Count;
 
     /// <param name="plugins">Descriptors to load (already filtered by MUD/enabled).</param>
     /// <param name="host">Session bridge the plugins act through.</param>
     /// <param name="report">Status sink (loaded / failed), shown in the world output.</param>
-    public PluginManager(IReadOnlyList<PluginDescriptor> plugins, IPluginHost host, Action<string> report)
+    /// <param name="dropPanels">Called (pluginId) when a plugin is unloaded, so the host can
+    /// remove that plugin's HUD panels. Invoked on the same thread as the unload.</param>
+    public PluginManager(IReadOnlyList<PluginDescriptor> plugins, IPluginHost host, Action<string> report,
+                         Action<string>? dropPanels = null)
     {
-        foreach (PluginDescriptor d in plugins)
+        _descriptors = plugins.ToList();
+        _host = host;
+        _report = report;
+        _dropPanels = dropPanels;
+        foreach (PluginDescriptor d in _descriptors) LoadOne(d);
+    }
+
+    private void LoadOne(PluginDescriptor d)
+    {
+        try
         {
-            try
-            {
-                var runtime = new LuaPluginRuntime(d, host);
-                runtime.Load();
-                _runtimes.Add(runtime);
-                report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
-            }
-            catch (Exception ex)
-            {
-                report($"plugin '{d.Manifest.Id}' failed to load: {ex.Message}");
-            }
+            var runtime = new LuaPluginRuntime(d, _host);
+            runtime.Load();
+            _runtimes.Add(runtime);
+            _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
         }
+        catch (Exception ex)
+        {
+            _report($"plugin '{d.Manifest.Id}' failed to load: {ex.Message}");
+        }
+        RepublishLoaded();
+    }
+
+    private void UnloadRuntime(string id)
+    {
+        LuaPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == id);
+        if (rt is null) return;
+        _runtimes.Remove(rt);
+        rt.Dispose();                 // disposes its watches/timers/rules/hooks (on the loop)
+        _dropPanels?.Invoke(id);      // host removes the plugin's HUD panels
+        RepublishLoaded();
+    }
+
+    private void RepublishLoaded() => _loadedIds = _runtimes.Select(r => r.Id).ToArray();
+
+    // ---- lifecycle (call on the loop thread) ---------------------------------
+
+    /// <summary>Dispose + re-run a plugin's entry script (edit-then-reload). Loop-thread only.</summary>
+    public void Reload(string id)
+    {
+        PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
+        if (d is null) return;
+        UnloadRuntime(id);
+        LoadOne(d);
+    }
+
+    /// <summary>Unload a plugin without reloading. Loop-thread only.</summary>
+    public void Disable(string id)
+    {
+        if (_runtimes.Any(r => r.Id == id)) { UnloadRuntime(id); _report($"disabled plugin '{id}'"); }
+    }
+
+    /// <summary>Load a plugin that isn't currently loaded. Loop-thread only.</summary>
+    public void Enable(string id)
+    {
+        if (_runtimes.Any(r => r.Id == id)) return;
+        PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
+        if (d is not null) LoadOne(d);
+    }
+
+    /// <summary>Snapshot of discovered plugins + their loaded state, for the manager UI.
+    /// Reads only fixed descriptors + the volatile loaded-ids snapshot (UI-thread safe).</summary>
+    public IReadOnlyList<PluginInfo> ListPlugins()
+    {
+        var loaded = new HashSet<string>(_loadedIds, StringComparer.Ordinal);
+        return _descriptors
+            .Select(d => new PluginInfo(d.Manifest.Id, d.Manifest.Name, d.Manifest.Version, loaded.Contains(d.Manifest.Id)))
+            .ToList();
     }
 
     /// <summary>Run a server output line through every plugin (onLine hooks + triggers) and
@@ -89,9 +153,20 @@ public sealed class PluginManager : IDisposable
     public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); }
     public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); }
 
+    /// <summary>Fire a panel-button callback owned by <paramref name="pluginId"/>. Runs on the loop thread.</summary>
+    public void InvokeAction(string pluginId, string actionId)
+    {
+        for (int i = 0; i < _runtimes.Count; i++)
+            if (_runtimes[i].Id == pluginId) { _runtimes[i].InvokeAction(actionId); return; }
+    }
+
     public void Dispose()
     {
         foreach (LuaPluginRuntime r in _runtimes) r.Dispose();
         _runtimes.Clear();
+        RepublishLoaded();
     }
 }
+
+/// <summary>A discovered plugin's identity + loaded state, for the plugins-manager UI.</summary>
+public readonly record struct PluginInfo(string Id, string Name, string Version, bool Loaded);

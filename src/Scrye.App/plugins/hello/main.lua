@@ -52,3 +52,13 @@ end }
 --     scrye.print("heartbeat " .. n)
 --     if n >= 3 then scrye.cancel(id) end
 -- end)
+
+-- Interactive HUD panel (Phase 3): buttons that run plugin code when clicked.
+scrye.addPanel{
+    title = "Quick Actions",
+    widgets = {
+        { type = "label",  text = "hello plugin" },
+        { type = "button", text = "Look",   action = function() scrye.send("look") end },
+        { type = "button", text = "Say hi", action = function() scrye.send("say hello") end },
+    },
+}
