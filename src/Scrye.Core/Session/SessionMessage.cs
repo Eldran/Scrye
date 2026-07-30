@@ -9,6 +9,10 @@ public abstract record SessionMessage
     /// <summary>Raw bytes arrived from the server.</summary>
     public sealed record DataArrived(byte[] Bytes) : SessionMessage;
 
+    /// <summary>Bytes inflated by the MCCP2 decompressor pump — the decompressed
+    /// continuation of the telnet stream, processed exactly like plain arrivals.</summary>
+    public sealed record DataInflated(byte[] Bytes) : SessionMessage;
+
     /// <summary>The user submitted a line of input (runs through aliases).</summary>
     public sealed record UserInput(string Text) : SessionMessage;
 

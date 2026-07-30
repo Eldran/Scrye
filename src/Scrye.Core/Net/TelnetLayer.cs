@@ -10,8 +10,10 @@ namespace Scrye.Core.Net;
 /// options are politely refused (WILL->DONT, DO->WONT).
 ///
 /// Supported: ECHO (input masking), SGA, TTYPE/MTTS (terminal type), NAWS
-/// (window size), CHARSET (UTF-8), MSSP (server status), GMCP (out-of-band JSON).
-/// MCCP (compression) is intentionally refused for now — see the worklog.
+/// (window size), CHARSET (UTF-8), MSSP (server status), GMCP (out-of-band JSON),
+/// MXP (option 91), and MCCP2 (option 86 — this layer only detects the compression
+/// switch-over; the session routes subsequent bytes through <see cref="MccpDecompressor"/>
+/// and feeds the inflated stream back through <see cref="Process"/>).
 /// </summary>
 public sealed class TelnetLayer
 {
@@ -32,6 +34,8 @@ public sealed class TelnetLayer
     private byte _sbOption;
     private readonly List<byte> _sb = new();
     private int _ttypeIndex;
+    private bool _compressionJustActivated;
+    private byte[]? _pendingCompressed;
 
     /// <summary>Bytes to send to the server (negotiation replies, subnegotiations). Raw — no newline.</summary>
     public event Action<byte[]>? SendData;
@@ -49,6 +53,32 @@ public sealed class TelnetLayer
     /// <summary>Whether to accept MXP when the server offers it (per-world setting).</summary>
     public bool MxpSupported { get; set; } = true;
 
+    /// <summary>Whether to accept MCCP2 compression when the server offers it.</summary>
+    public bool MccpSupported { get; set; } = true;
+
+    /// <summary>True from the moment the server's <c>IAC SB COMPRESS2 IAC SE</c> marker was
+    /// seen: every byte AFTER that marker is zlib-compressed. The caller must stop feeding
+    /// this layer raw socket bytes and route them through a decompressor instead; the
+    /// unconsumed compressed tail of the activating chunk is in <see cref="TakePendingCompressed"/>.</summary>
+    public bool CompressionActive { get; private set; }
+
+    /// <summary>The compressed remainder of the chunk that activated compression (or null).</summary>
+    public byte[]? TakePendingCompressed()
+    {
+        byte[]? tail = _pendingCompressed;
+        _pendingCompressed = null;
+        return tail;
+    }
+
+    /// <summary>Clear compression state (call on connect/reconnect — the option renegotiates).</summary>
+    public void ResetCompression()
+    {
+        CompressionActive = false;
+        _compressionJustActivated = false;
+        _pendingCompressed = null;
+        _state = P.Data;
+    }
+
     /// <summary>Supplies the current terminal size for NAWS.</summary>
     public Func<(int cols, int rows)>? WindowSize { get; set; }
 
@@ -62,8 +92,18 @@ public sealed class TelnetLayer
     public byte[] Process(ReadOnlySpan<byte> input)
     {
         var data = new List<byte>(input.Length);
-        foreach (byte b in input)
-            Step(b, data);
+        for (int i = 0; i < input.Length; i++)
+        {
+            Step(input[i], data);
+            if (_compressionJustActivated)
+            {
+                // everything after the SB COMPRESS2 SE marker is zlib — hand it back raw
+                _compressionJustActivated = false;
+                CompressionActive = true;
+                _pendingCompressed = input[(i + 1)..].ToArray();
+                break;
+            }
+        }
         return data.ToArray();
     }
 
@@ -127,7 +167,10 @@ public sealed class TelnetLayer
             case OPT_MSSP: SendCmd(DO, option); break;
             case OPT_GMCP: SendCmd(DO, option); break;
             case OPT_CHARSET: SendCmd(DO, option); break;
-            case OPT_MCCP2: SendCmd(DONT, option); break;               // deferred: refuse compression
+            case OPT_MCCP2:
+                if (MccpSupported) SendCmd(DO, option);                 // compression starts at SB 86 SE
+                else SendCmd(DONT, option);
+                break;
             case OPT_MXP:
                 if (MxpSupported) { SendCmd(DO, option); MxpEnabled?.Invoke(); }
                 else SendCmd(DONT, option);
@@ -174,6 +217,10 @@ public sealed class TelnetLayer
                 break;
             case OPT_GMCP:
                 HandleGmcp(payload);
+                break;
+            case OPT_MCCP2:
+                // IAC SB COMPRESS2 IAC SE (empty payload): the zlib stream starts NOW
+                if (MccpSupported) _compressionJustActivated = true;
                 break;
         }
     }

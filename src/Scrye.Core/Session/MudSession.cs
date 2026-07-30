@@ -60,6 +60,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private int _mipRetries, _mipSecondsSinceHandshake;
 
     private AutoLogin? _autoLogin;    // armed on connect when the profile has a username; loop-only
+    private MccpDecompressor? _mccp;  // active MCCP2 inflater (loop-managed; pump emits via mailbox)
 
     private Task? _loop;
     private Task? _ticker;
@@ -395,6 +396,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                     case SessionMessage.DataArrived d:
                         await HandleDataAsync(d.Bytes, ct).ConfigureAwait(false);
                         break;
+                    case SessionMessage.DataInflated di:
+                        ProcessTelnetChunk(di.Bytes);
+                        break;
                     case SessionMessage.UserInput u:
                         HandleInput(u.Text);
                         break;
@@ -469,6 +473,29 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private async Task HandleDataAsync(byte[] bytes, CancellationToken ct)
     {
+        // Once MCCP2 is live, raw socket bytes are zlib: queue them for the inflater;
+        // the pump posts DataInflated messages that re-enter via ProcessTelnetChunk.
+        if (_mccp is not null) { _mccp.Feed(bytes); return; }
+
+        ProcessTelnetChunk(bytes);
+
+        if (_telnet.CompressionActive && _mccp is null)
+        {
+            _mccp = new MccpDecompressor(
+                inflated => _mailbox.Writer.TryWrite(new SessionMessage.DataInflated(inflated)),
+                onEnded: () => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(EndCompression)));
+            _events.Emit(SessionEventKind.Notice, "MCCP2 compression enabled");
+            RaiseLine(Line.FromText("[MCCP2] compression enabled", SysColour));
+            byte[]? tail = _telnet.TakePendingCompressed();
+            if (tail is { Length: > 0 }) _mccp.Feed(tail);
+        }
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Run an in-band telnet chunk (raw or inflated) through telnet → decode →
+    /// MIP → ANSI. The single downstream path for both plain and MCCP2 data.</summary>
+    private void ProcessTelnetChunk(byte[] bytes)
+    {
         byte[] data = _telnet.Process(bytes);
         if (data.Length == 0) return;
         string text = Decode(data);
@@ -476,7 +503,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             text = _mip.Process(text);   // strip MIP frames; raises MessageReceived
         if (text.Length > 0)
             _ansi.Feed(text);
-        await Task.CompletedTask;
+    }
+
+    /// <summary>The server ended the zlib stream (or it broke): drop back to plain bytes.
+    /// Runs on the loop via an Invoke message from the pump.</summary>
+    private void EndCompression()
+    {
+        if (_mccp is null) return;
+        _mccp.Dispose();
+        _mccp = null;
+        _telnet.ResetCompression();
+        _events.Emit(SessionEventKind.Notice, "MCCP2 compression ended");
+        RaiseLine(Line.FromText("[MCCP2] compression ended", SysColour));
     }
 
     private void OnLineCompleted(Line line)
@@ -549,6 +587,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             case ConnectionState.Connected:
                 _everConnected = true;
                 CancelReconnect();               // a successful connect ends any retry loop
+                _mccp?.Dispose(); _mccp = null;  // compression renegotiates per connection
+                _telnet.ResetCompression();
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 // arm auto-login for this (re)connect when the profile carries a username
                 _autoLogin = Profile.Username.Length > 0
@@ -561,6 +601,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 MaybeReconnect();
                 break;
             case ConnectionState.Disconnected:
+                _mccp?.Dispose(); _mccp = null;
+                _telnet.ResetCompression();
                 _events.Emit(SessionEventKind.Disconnected);
                 MaybeReconnect();
                 break;

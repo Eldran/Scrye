@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text;
 using Scrye.Core.Automation;
 using Scrye.Core.Events;
@@ -36,9 +37,10 @@ if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); retur
 if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -117,7 +119,7 @@ static void ProtocolTest()
     FeedT(t, "server: SB TTYPE SEND (x3)", new byte[] { 255, 250, 24, 1, 255, 240, 255, 250, 24, 1, 255, 240, 255, 250, 24, 1, 255, 240 });
     FeedT(t, "server: WILL ECHO", new byte[] { 255, 251, 1 });
     FeedT(t, "server: WONT ECHO", new byte[] { 255, 252, 1 });
-    FeedT(t, "server: WILL MCCP2 (should refuse)", new byte[] { 255, 251, 86 });
+    FeedT(t, "server: WILL MCCP2 (accepted since M33)", new byte[] { 255, 251, 86 });
 
     var gmcp = new List<byte> { 255, 250, 201 };
     gmcp.AddRange(Encoding.UTF8.GetBytes("Char.Vitals {\"hp\":42,\"maxhp\":100}"));
@@ -397,6 +399,101 @@ static void MxpTest()
         throw new Exception("URL detection wrong");
 
     Console.WriteLine("\nMXP self-test complete.");
+}
+
+static void MccpTest()
+{
+    Console.WriteLine("== Scrye MCCP2 self-test ==\n");
+
+    static byte[] Zlib(byte[] raw)
+    {
+        using var ms = new MemoryStream();
+        using (var z = new ZLibStream(ms, CompressionMode.Compress)) z.Write(raw, 0, raw.Length);
+        return ms.ToArray();
+    }
+
+    // 1. negotiation: WILL COMPRESS2 -> DO
+    var t = new TelnetLayer();
+    var sent = new List<byte[]>();
+    t.SendData += sent.Add;
+    t.Process(new byte[] { 255, 251, 86 });
+    if (!sent.Any(r => r.Length == 3 && r[1] == 253 && r[2] == 86)) throw new Exception("must reply DO COMPRESS2");
+    Console.WriteLine("negotiation: WILL 86 -> DO 86");
+
+    // 2. mid-chunk switch-over: plain text + IAC SB 86 IAC SE + zlib data in ONE chunk
+    string bigText = string.Concat(Enumerable.Repeat("The quick brown fox jumps over the lazy dog. ", 200));
+    byte[] payload = Encoding.ASCII.GetBytes(bigText + "\r\nfinal line after 8KB\r\n");
+    byte[] compressed = Zlib(payload);
+    var chunk = new List<byte>(Encoding.ASCII.GetBytes("plain before "));
+    chunk.AddRange(new byte[] { 255, 250, 86, 255, 240 });
+    chunk.AddRange(compressed);
+    byte[] inband = t.Process(chunk.ToArray());
+    Console.WriteLine($"switch-over: inband='{Encoding.ASCII.GetString(inband)}' active={t.CompressionActive}");
+    if (Encoding.ASCII.GetString(inband) != "plain before " || !t.CompressionActive)
+        throw new Exception("switch-over wrong");
+    byte[] tail = t.TakePendingCompressed() ?? throw new Exception("no compressed tail");
+    if (!tail.SequenceEqual(compressed)) throw new Exception("compressed tail mangled");
+    if (t.TakePendingCompressed() is not null) throw new Exception("tail must be taken once");
+
+    // 3. streaming inflate: feed the tail in awkward 7-byte chunks; expect the exact payload
+    var collected = new List<byte>();
+    bool ended = false;
+    using (var mccp = new MccpDecompressor(b => { lock (collected) collected.AddRange(b); }, () => ended = true))
+    {
+        for (int i = 0; i < tail.Length; i += 7)
+            mccp.Feed(tail.Skip(i).Take(7).ToArray());
+
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline)
+        {
+            lock (collected) if (collected.Count >= payload.Length && ended) break;
+            Thread.Sleep(10);
+        }
+        lock (collected)
+        {
+            Console.WriteLine($"inflate: {tail.Length} compressed bytes -> {collected.Count} (expected {payload.Length}), ended={ended}");
+            if (!collected.SequenceEqual(payload)) throw new Exception("inflated payload mismatch");
+        }
+        if (!ended) throw new Exception("zlib end-of-stream must fire onEnded");
+    }
+
+    // 4. end-to-end: the INFLATED stream is itself telnet (GMCP inside the compressed data)
+    var inner = new List<byte>(Encoding.ASCII.GetBytes("room description\r\n"));
+    inner.AddRange(new byte[] { 255, 250, 201 });
+    inner.AddRange(Encoding.ASCII.GetBytes("Char.Vitals {\"hp\":42}"));
+    inner.AddRange(new byte[] { 255, 240 });
+    inner.AddRange(Encoding.ASCII.GetBytes("after gmcp\r\n"));
+    byte[] innerCompressed = Zlib(inner.ToArray());
+
+    var t2 = new TelnetLayer();
+    t2.SendData += _ => { };
+    string? gmcpPkg = null;
+    t2.GmcpReceived += (pkg, _) => gmcpPkg = pkg;
+    t2.Process(new byte[] { 255, 251, 86 });                       // negotiate
+    t2.Process(new byte[] { 255, 250, 86, 255, 240 });             // switch-over marker alone
+    if (!t2.CompressionActive) throw new Exception("marker alone must activate");
+    var text2 = new StringBuilder();
+    var done2 = new ManualResetEventSlim();
+    using (var mccp2 = new MccpDecompressor(
+        b => { lock (text2) text2.Append(Encoding.ASCII.GetString(t2.Process(b))); },
+        () => done2.Set()))
+    {
+        mccp2.Feed(innerCompressed);
+        if (!done2.Wait(3000)) throw new Exception("pipeline did not finish");
+    }
+    lock (text2)
+    {
+        Console.WriteLine($"pipeline: text='{text2.ToString().Replace("\r\n", "/")}' gmcp={gmcpPkg}");
+        if (!text2.ToString().Contains("room description") || !text2.ToString().Contains("after gmcp") || gmcpPkg != "Char.Vitals")
+            throw new Exception("end-to-end pipeline wrong");
+    }
+
+    // 5. reset for reconnect
+    t2.ResetCompression();
+    if (t2.CompressionActive) throw new Exception("reset must clear compression");
+    Console.WriteLine("reset: compression cleared for reconnect");
+
+    Console.WriteLine("\nMCCP2 self-test complete.");
 }
 
 static void EventsTest()
