@@ -56,6 +56,11 @@ public sealed class AutomationEngine
     public bool RemoveAlias(string name) => !string.IsNullOrEmpty(name) && _aliases.RemoveAll(a => a.Def.Name == name) > 0;
     public bool RemoveTimer(string name) => !string.IsNullOrEmpty(name) && _timers.RemoveAll(t => t.Def.Name == name) > 0;
 
+    /// <summary>Drop all triggers/aliases/timers (used when live-reloading a profile's rule set).</summary>
+    public void ClearTriggers() => _triggers.Clear();
+    public void ClearAliases() => _aliases.Clear();
+    public void ClearTimers() => _timers.Clear();
+
     public bool EnableTrigger(string name, bool enabled) => SetEnabled(_triggers.Find(t => t.Def.Name == name), enabled, x => x.Enabled = enabled);
     public bool EnableAlias(string name, bool enabled) => SetEnabled(_aliases.Find(a => a.Def.Name == name), enabled, x => x.Enabled = enabled);
     public bool EnableTimer(string name, bool enabled) => SetEnabled(_timers.Find(t => t.Def.Name == name), enabled, x => x.Enabled = enabled);

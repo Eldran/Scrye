@@ -301,6 +301,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         foreach (var kv in eff.Variables) _variables.Set(kv.Key, kv.Value);
     }
 
+    /// <summary>Replace the live rule set (triggers/aliases/timers) with a re-resolved
+    /// profile's, without reconnecting. Posted to the loop so it can't race processing.
+    /// Runtime variables are preserved.</summary>
+    public void ReloadAutomation(EffectiveProfile eff) =>
+        _mailbox.Writer.TryWrite(new SessionMessage.ReloadAutomation(eff));
+
     /// <summary>Begin capturing the full event stream. Idempotent — returns the
     /// active recorder. Records everything from this point until <see cref="StopRecording"/>.</summary>
     public SessionRecorder StartRecording()
@@ -385,6 +391,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                     case SessionMessage.SystemNotice n:
                         _events.Emit(SessionEventKind.Notice, n.Text);
                         RaiseLine(Line.FromText(n.Text, SysColour));
+                        break;
+                    case SessionMessage.ReloadAutomation ra:
+                        _automation.ClearTriggers(); _automation.ClearAliases(); _automation.ClearTimers();
+                        foreach (var t in ra.Profile.Triggers) _automation.AddTrigger(t);
+                        foreach (var a in ra.Profile.Aliases) _automation.AddAlias(a);
+                        foreach (var tm in ra.Profile.Timers) _automation.AddTimer(tm);
+                        _events.Emit(SessionEventKind.Notice, "automation reloaded");
+                        RaiseLine(Line.FromText(
+                            $"* automation reloaded: {ra.Profile.Triggers.Count} triggers, {ra.Profile.Aliases.Count} aliases, {ra.Profile.Timers.Count} timers",
+                            SysColour));
                         break;
                     case SessionMessage.RunScript r:
                         _events.Emit(SessionEventKind.ScriptRun, r.Code);

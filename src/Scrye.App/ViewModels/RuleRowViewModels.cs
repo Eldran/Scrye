@@ -12,6 +12,8 @@ public abstract class RuleRowViewModel : ViewModelBase
     /// <summary>Enum choices for the send-to combo (bind via x:Static).</summary>
     public static SendTo[] SendToValues { get; } = (SendTo[])Enum.GetValues(typeof(SendTo));
 
+    protected RuleRowViewModel() => TestCommand = new RelayCommand(RunTest);
+
     private string _name = "";
     public string Name { get => _name; set => SetField(ref _name, value); }
 
@@ -53,6 +55,40 @@ public abstract class RuleRowViewModel : ViewModelBase
 
     protected int SequenceValue => int.TryParse(SequenceText, out int v) ? v : 100;
     protected string? OrNull(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
+
+    // ---- "test this pattern" box ----
+    private string _testInput = "";
+    public string TestInput { get => _testInput; set => SetField(ref _testInput, value); }
+
+    private string _testResult = "";
+    public string TestResult { get => _testResult; private set => SetField(ref _testResult, value); }
+
+    public RelayCommand TestCommand { get; }
+
+    /// <summary>Match the sample line against this rule's (unsaved) pattern and show the
+    /// result — no engine registration, no side effects. Reuses the real matcher/template.</summary>
+    private void RunTest()
+    {
+        if (string.IsNullOrEmpty(Pattern)) { TestResult = "(enter a pattern first)"; return; }
+        try
+        {
+            MatchResult? m = new CompiledPattern(Pattern, IsRegex, IgnoreCase).Match(TestInput ?? "");
+            if (m is null) { TestResult = "✗ no match"; return; }
+            string expanded = Template.Expand(Send, m, new VariableStore());
+            string wilds = m.Wildcards.Count > 0 ? "   wildcards: [" + string.Join(", ", m.Wildcards) + "]" : "";
+            TestResult = SendTo switch
+            {
+                SendTo.Variable => $"✓ match → set {Variable}={expanded}{wilds}",
+                SendTo.Script => $"✓ match → script {Script}{wilds}",
+                SendTo.Output or SendTo.Command => $"✓ match → echo: {expanded}{wilds}",
+                _ => $"✓ match → send: {expanded}{wilds}",
+            };
+        }
+        catch (Exception ex)
+        {
+            TestResult = "pattern error: " + ex.Message;
+        }
+    }
 }
 
 /// <summary>A trigger row (matches incoming MUD lines).</summary>

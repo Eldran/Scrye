@@ -95,6 +95,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Editor = null;
         RefreshWorlds();
         SelectedWorld = name;
+        ApplyRulesToConnected(name);   // live-apply to a connected tab of this world
     }
 
     private void SaveSettings()
@@ -102,6 +103,20 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (Settings is null) return;
         _store.SaveGlobal(Settings.ToLayer());
         Settings = null;
+        // global rules merge into every saved world: refresh each connected one
+        foreach (WorldViewModel vm in Worlds)
+            if (_store.LoadWorld(vm.Title) is not null)
+                vm.ReloadRules(_store.ResolveWorld(vm.Title));
+    }
+
+    /// <summary>Push a saved world's freshly-resolved rules to any connected tab of it.</summary>
+    private void ApplyRulesToConnected(string worldName)
+    {
+        if (_store.LoadWorld(worldName) is null) return;
+        EffectiveProfile eff = _store.ResolveWorld(worldName);
+        foreach (WorldViewModel vm in Worlds)
+            if (string.Equals(vm.Title, worldName, System.StringComparison.Ordinal))
+                vm.ReloadRules(eff);
     }
 
     private async void ConnectWorld()

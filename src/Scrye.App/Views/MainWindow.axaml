@@ -379,6 +379,17 @@
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
                                             </StackPanel>
+                                            <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}"
+                                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">
+                                                <StackPanel Spacing="4">
+                                                    <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <DockPanel>
+                                                        <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
+                                                        <TextBox Text="{Binding TestInput}" Watermark="sample line to match…" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>
@@ -446,6 +457,17 @@
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
                                             </StackPanel>
+                                            <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}"
+                                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">
+                                                <StackPanel Spacing="4">
+                                                    <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <DockPanel>
+                                                        <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
+                                                        <TextBox Text="{Binding TestInput}" Watermark="sample line to match…" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>
@@ -600,6 +622,17 @@
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
                                             </StackPanel>
+                                            <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}"
+                                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">
+                                                <StackPanel Spacing="4">
+                                                    <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <DockPanel>
+                                                        <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
+                                                        <TextBox Text="{Binding TestInput}" Watermark="sample line to match…" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>
@@ -667,6 +700,17 @@
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
                                             </StackPanel>
+                                            <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}"
+                                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">
+                                                <StackPanel Spacing="4">
+                                                    <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <DockPanel>
+                                                        <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
+                                                        <TextBox Text="{Binding TestInput}" Watermark="sample line to match…" />
+                                                    </DockPanel>
+                                                    <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>

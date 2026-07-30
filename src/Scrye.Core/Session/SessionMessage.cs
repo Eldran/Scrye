@@ -39,4 +39,9 @@ public abstract record SessionMessage
     /// <summary>A client-side notice to display + log (e.g. reconnect countdown),
     /// raised on the loop so ordering and logging stay consistent.</summary>
     public sealed record SystemNotice(string Text) : SessionMessage;
+
+    /// <summary>Replace the live automation rule set (triggers/aliases/timers) with a
+    /// freshly-resolved profile's — applied on the loop so it can't race the engine.
+    /// Runtime variables are left untouched.</summary>
+    public sealed record ReloadAutomation(Scrye.Core.Profiles.EffectiveProfile Profile) : SessionMessage;
 }

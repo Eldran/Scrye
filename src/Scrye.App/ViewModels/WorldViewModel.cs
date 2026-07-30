@@ -148,6 +148,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     public Task ConnectAsync() => _session.ConnectAsync();
 
+    /// <summary>Live-apply a re-resolved profile's rules to this connected session
+    /// (triggers/aliases/timers replaced; runtime state untouched).</summary>
+    public void ReloadRules(EffectiveProfile eff) => _session.ReloadAutomation(eff);
+
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
 
     private void Flush()
