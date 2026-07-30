@@ -547,6 +547,12 @@ static void PluginsTest()
     foreach (var d in PluginCatalog.ForMud("Aardwolf", root)) Console.WriteLine($"    {d.Manifest.Id}");
     Console.WriteLine("    (aard is disabled → should NOT appear; hello applies via '*')");
 
+    Console.WriteLine("\n-- rescan reflects disk changes (what add/remove relies on) --");
+    Directory.Delete(Path.Combine(root, "threes"), true);                               // remove a plugin folder
+    Make("newbie", "{\"id\":\"newbie\",\"name\":\"Newbie\",\"version\":\"0.1.0\"}");    // add a new one (mudIds "*")
+    var now = PluginCatalog.ForMud("3Scapes", root).Select(d => d.Manifest.Id).OrderBy(x => x, StringComparer.Ordinal);
+    Console.WriteLine("    for '3Scapes' now: [" + string.Join(", ", now) + "]   (threes-pack gone, newbie added, hello stays)");
+
     Directory.Delete(root, true);
     Console.WriteLine("\nPlugin-catalog self-test complete.");
 }

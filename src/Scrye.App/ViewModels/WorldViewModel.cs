@@ -133,8 +133,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         var host = new SessionPluginHost(_session,
             (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
             (id, spec) => Hud.AddPanel(id, spec));
+        string userPluginRoot = pluginRoots[1];   // %APPDATA%/Scrye/plugins — writable, removable
         _plugins = new PluginManager(PluginCatalog.ForMud(profile.Name, pluginRoots), host, AppendSystem,
-            id => Hud.RemovePanels(id));   // drop a plugin's HUD panels on reload/disable
+            id => Hud.RemovePanels(id),                                  // drop a plugin's HUD panels on unload
+            () => PluginCatalog.ForMud(profile.Name, pluginRoots),       // rescan disk for add/remove
+            userPluginRoot);
         Plugins = new PluginsViewModel(
             () => _plugins.ListPlugins(),
             (id, done) => _session.Post(() => { _plugins.Reload(id); Dispatcher.UIThread.Post(done); }),
@@ -142,7 +145,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             {
                 if (enable) _plugins.Enable(id); else _plugins.Disable(id);
                 Dispatcher.UIThread.Post(done);
-            }));
+            }),
+            (id, done) => _session.Post(() => { _plugins.Remove(id); Dispatcher.UIThread.Post(done); }),
+            done => _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }),
+            done => { ScaffoldNewPlugin(userPluginRoot); _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }); },
+            () => OpenPluginsFolder(userPluginRoot));
         // Plugins process each server line (onLine gag/rewrite + triggers) and user input
         // (aliases) via the session's filter hooks — so gagging actually suppresses display.
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook
@@ -251,6 +258,41 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".log": HandleLogCommand(arg); return true;
             default: return false;
         }
+    }
+
+    /// <summary>Scaffold a new, editable plugin (plugin.json + starter main.lua) under the user
+    /// plugins folder, so the user can edit it and Reload. Rescan (by the caller) picks it up.</summary>
+    private void ScaffoldNewPlugin(string userRoot)
+    {
+        try
+        {
+            Directory.CreateDirectory(userRoot);
+            string id = "my-plugin";
+            for (int n = 2; Directory.Exists(Path.Combine(userRoot, id)); n++) id = "my-plugin-" + n;
+            string dir = Path.Combine(userRoot, id);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "plugin.json"),
+                "{\n  \"id\": \"" + id + "\",\n  \"name\": \"" + id + "\",\n  \"version\": \"0.1.0\",\n  \"mudIds\": [\"*\"]\n}\n");
+            File.WriteAllText(Path.Combine(dir, "main.lua"),
+                "-- New Scrye plugin. Edit this file, then click Reload in the Plugins panel.\n" +
+                "scrye.print(\"" + id + " loaded\")\n\n" +
+                "scrye.onLine(function(line)\n" +
+                "    -- react to output here; return false to gag a line, a string to rewrite it\n" +
+                "end)\n");
+            AppendSystem($"created plugin '{id}' — edit {Path.Combine(dir, "main.lua")}, then Reload");
+        }
+        catch (Exception ex) { AppendSystem("could not create plugin: " + ex.Message); }
+    }
+
+    /// <summary>Open the user plugins folder in the OS file manager (to drop in downloaded plugins).</summary>
+    private void OpenPluginsFolder(string userRoot)
+    {
+        try
+        {
+            Directory.CreateDirectory(userRoot);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo { FileName = userRoot, UseShellExecute = true });
+        }
+        catch (Exception ex) { AppendSystem("could not open plugins folder: " + ex.Message); }
     }
 
     /// <summary>Handle <c>.log</c> / <c>.log html</c> / <c>.log off</c>. Bare <c>.log</c> toggles.</summary>
