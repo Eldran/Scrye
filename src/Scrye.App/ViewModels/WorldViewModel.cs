@@ -35,6 +35,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private readonly CompletionEngine _completion = new();
     private bool _logging;
     private readonly ConcurrentQueue<Line> _pending = new();
+    private readonly ConcurrentQueue<(string Pane, Line Line)> _pendingRouted = new();
     private readonly DispatcherTimer _flushTimer;
     private readonly List<Line> _drainBuffer = new(256);
 
@@ -67,6 +68,37 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>Find-in-scrollback bar (Ctrl+F): searches this world's output.</summary>
     public FindViewModel Find { get; }
+
+    /// <summary>Named capture panes (trigger "capture to pane" routing). Auto-created
+    /// on first routed line; render as tabs under the main output.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<CapturePaneViewModel> Panes { get; } = new();
+
+    private CapturePaneViewModel? _selectedPane;
+    public CapturePaneViewModel? SelectedPane
+    {
+        get => _selectedPane;
+        set
+        {
+            if (SetField(ref _selectedPane, value) && value is not null)
+                value.Unread = 0;   // viewing the tab clears its badge
+        }
+    }
+
+    private bool _showPanes;
+    /// <summary>Capture-pane area visibility ("Panes" toggle). Auto-opens when the
+    /// first pane appears; the row height collapses when hidden.</summary>
+    public bool ShowPanes
+    {
+        get => _showPanes;
+        set
+        {
+            if (SetField(ref _showPanes, value))
+                PanesRowHeight = value ? new GridLength(190) : new GridLength(0);
+        }
+    }
+
+    private GridLength _panesRowHeight = new(0);
+    public GridLength PanesRowHeight { get => _panesRowHeight; set => SetField(ref _panesRowHeight, value); }
 
     /// <summary>Plugins-manager panel: list / reload / enable-disable this world's plugins.</summary>
     public PluginsViewModel Plugins { get; }
@@ -130,6 +162,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         // find-in-scrollback: searches the rendered output buffer.
         Find = new FindViewModel(Scrollback);
+
+        // capture panes: trigger-routed lines arrive on the session loop; enqueue,
+        // drain on the UI flush timer alongside the main scrollback.
+        _session.LineRouted += (pane, line) => _pendingRouted.Enqueue((pane, line));
 
         // game-state inspector: subscribes to StateStore.Changed here (pre-loop),
         // queues on the loop, drains on the UI flush timer below.
@@ -208,8 +244,31 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             // harvest words for tab-completion on the UI thread (engine isn't thread-safe)
             foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
         }
+        DrainRouted();
         Debugger.Drain();   // always drain events, even on a frame with no output lines
         StateInspector.Drain();
+    }
+
+    /// <summary>Deliver trigger-routed lines to their capture panes (UI thread).
+    /// Panes are created on first use; unselected panes accumulate unread counts.</summary>
+    private void DrainRouted()
+    {
+        if (_pendingRouted.IsEmpty) return;
+        while (_pendingRouted.TryDequeue(out (string Pane, Line Line) item))
+        {
+            CapturePaneViewModel? pane = null;
+            foreach (CapturePaneViewModel p in Panes)
+                if (string.Equals(p.Name, item.Pane, StringComparison.OrdinalIgnoreCase)) { pane = p; break; }
+            if (pane is null)
+            {
+                pane = new CapturePaneViewModel(item.Pane, OutputFontFamily, OutputFontSize);
+                Panes.Add(pane);
+                SelectedPane ??= pane;
+                if (!ShowPanes) ShowPanes = true;   // first pane opens the area
+            }
+            pane.Buffer.Add(item.Line);
+            if (!ReferenceEquals(pane, SelectedPane)) pane.Unread++;
+        }
     }
 
     /// <summary>Up-arrow recall. <paramref name="current"/> is the box text (saved as draft).</summary>

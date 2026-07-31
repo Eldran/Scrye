@@ -89,7 +89,8 @@ public sealed class AutomationEngine
             MatchResult? m = t.Pattern.Match(line);
             if (m is null) continue;
 
-            string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx);
+            string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx,
+                                 t.Def.CapturePane, t.Def.Gag);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
             if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
@@ -114,7 +115,8 @@ public sealed class AutomationEngine
             if (m is null) continue;
 
             hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
-                Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m)));
+                Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m,
+                         t.Def.CapturePane, t.Def.Gag)));
 
             if (!t.Def.KeepEvaluating) break;
         }
@@ -165,10 +167,16 @@ public sealed class AutomationEngine
 
     // ---- firing ----------------------------------------------------------
 
-    /// <summary>Execute a rule's action and return a human-readable summary of what it did.</summary>
-    private string Fire(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m, IWorldActions ctx)
+    /// <summary>Execute a rule's action and return a human-readable summary of what it did.
+    /// <paramref name="capturePane"/>/<paramref name="gag"/> only apply to triggers
+    /// (they act on the line being processed).</summary>
+    private string Fire(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m,
+                        IWorldActions ctx, string? capturePane = null, bool gag = false)
     {
         string text = Template.Expand(send, m, _vars);
+
+        if (!string.IsNullOrWhiteSpace(capturePane)) ctx.Capture(capturePane!.Trim());
+        if (gag) ctx.GagLine();
 
         switch (sendTo)
         {
@@ -182,12 +190,13 @@ public sealed class AutomationEngine
         if (!string.IsNullOrEmpty(script))
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
-        return Describe(sendTo, send, variable, script, m);
+        return Describe(sendTo, send, variable, script, m, capturePane, gag);
     }
 
     /// <summary>Build the same summary <see cref="Fire"/> returns, but WITHOUT
     /// performing the action or mutating anything. Used by <see cref="Simulate"/>.</summary>
-    private string Describe(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m)
+    private string Describe(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m,
+                            string? capturePane = null, bool gag = false)
     {
         string text = Template.Expand(send, m, _vars);
         string primary = sendTo switch
@@ -202,12 +211,12 @@ public sealed class AutomationEngine
             _ => "",
         };
 
-        if (!string.IsNullOrEmpty(script))
-        {
-            string call = $"script: {script}";
-            return primary.Length == 0 ? call : $"{primary}; {call}";
-        }
-        return primary;
+        var parts = new List<string>(3);
+        if (primary.Length > 0) parts.Add(primary);
+        if (!string.IsNullOrWhiteSpace(capturePane)) parts.Add($"capture: {capturePane!.Trim()}");
+        if (gag) parts.Add("gag");
+        if (!string.IsNullOrEmpty(script)) parts.Add($"script: {script}");
+        return string.Join("; ", parts);
     }
 
     private static CompiledPattern Compile(string pattern, bool isRegex, bool ignoreCase) =>

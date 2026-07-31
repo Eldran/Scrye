@@ -30,6 +30,13 @@ public sealed record TriggerDef
     /// <summary>Script function to call on match.</summary>
     public string? Script { get; init; }
 
+    /// <summary>Route the matched line to this named capture pane (e.g. "Chats").
+    /// The pane is created on first use; null = no routing.</summary>
+    public string? CapturePane { get; init; }
+    /// <summary>Hide the matched line from the main output (display/transcript only —
+    /// events, other triggers, and sequences still see it).</summary>
+    public bool Gag { get; init; }
+
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }
 }

@@ -102,7 +102,16 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Enabled = d.Enabled; KeepEvaluating = d.KeepEvaluating; OneShot = d.OneShot;
         SendTo = d.SendTo; Send = d.Send ?? ""; Variable = d.Variable ?? ""; Script = d.Script ?? "";
         Group = d.Group ?? ""; SequenceText = d.Sequence.ToString();
+        CapturePane = d.CapturePane ?? ""; Gag = d.Gag;
     }
+
+    private string _capturePane = "";
+    /// <summary>Named output pane the matched line routes to (empty = none).</summary>
+    public string CapturePane { get => _capturePane; set => SetField(ref _capturePane, value); }
+
+    private bool _gag;
+    /// <summary>Hide the matched line from the main output.</summary>
+    public bool Gag { get => _gag; set => SetField(ref _gag, value); }
 
     public TriggerDef ToDef() => new()
     {
@@ -110,6 +119,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Enabled = Enabled, KeepEvaluating = KeepEvaluating, OneShot = OneShot,
         Sequence = SequenceValue, Group = OrNull(Group),
         SendTo = SendTo, Send = OrNull(Send), Variable = OrNull(Variable), Script = OrNull(Script),
+        CapturePane = OrNull(CapturePane), Gag = Gag,
     };
 }
 

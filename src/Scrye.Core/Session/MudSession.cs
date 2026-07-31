@@ -62,6 +62,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private AutoLogin? _autoLogin;    // armed on connect when the profile has a username; loop-only
     private MccpDecompressor? _mccp;  // active MCCP2 inflater (loop-managed; pump emits via mailbox)
 
+    // per-line routing state, valid only while triggers process the current line (loop-only)
+    private readonly List<string> _lineCaptures = new();
+    private bool _lineGagged;
+    private bool _processingLine;
+
     private Task? _loop;
     private Task? _ticker;
     private CancellationTokenSource? _cts;
@@ -103,6 +108,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public Func<string, string?>? InputFilter { get; set; }
 
     public event Action<Line>? LineReady;
+    /// <summary>A trigger routed a line to a named capture pane (pane, line).
+    /// Raised on the loop thread, before the line is (possibly) displayed.</summary>
+    public event Action<string, Line>? LineRouted;
     public event Action<ConnectionState>? StateChanged;
     public event Action<string, string>? GmcpReceived;
     public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
@@ -388,6 +396,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _events.Emit(SessionEventKind.VariableChanged, value, name, old);
     }
     void IWorldActions.CallScript(string function, IReadOnlyList<string> wildcards) => ScriptDispatcher?.Invoke(function, wildcards);
+    void IWorldActions.Capture(string pane)
+    {
+        if (!_processingLine || string.IsNullOrWhiteSpace(pane)) return;   // only meaningful mid-line
+        if (!_lineCaptures.Contains(pane)) _lineCaptures.Add(pane);
+    }
+    void IWorldActions.GagLine() { if (_processingLine) _lineGagged = true; }
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
@@ -542,10 +556,19 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             if (_autoLogin.Done) _autoLogin = null;
         }
         _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
+
+        // Triggers run BEFORE display so capture/gag can route the line. (Ordering
+        // note: engine triggers now fire before plugin onLine filters.)
+        _lineCaptures.Clear();
+        _lineGagged = false;
+        _processingLine = true;
+        _automation.ProcessLine(line.PlainText, this);
+        _processingLine = false;
+        foreach (string pane in _lineCaptures) LineRouted?.Invoke(pane, line);
+
         // Plugins may gag (null) or rewrite the DISPLAYED line; automation still sees the original.
         Line? shown = LineDisplayFilter is null ? line : LineDisplayFilter(line);
-        if (shown is not null) RaiseLine(shown);
-        _automation.ProcessLine(line.PlainText, this);
+        if (shown is not null && !_lineGagged) RaiseLine(shown);
 
         // a prompt (GA/EOR flush, or a lone ">") lets a prompt-gated sequence advance
         if (line.IsPrompt || line.PlainText.Trim() == ">") _sequences.OnPrompt();

@@ -39,9 +39,10 @@ if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--export") { ExportTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--routing") { RoutingTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | --routing | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -556,6 +557,67 @@ static void ExportTest()
     Console.WriteLine("\ntext-export self-test complete.");
 }
 
+static void RoutingTest()
+{
+    Console.WriteLine("== Scrye capture-routing self-test ==\n");
+
+    var vars = new VariableStore();
+    var engine = new AutomationEngine(vars);
+    var actions = new RoutingActions(vars);
+
+    engine.AddTrigger(new TriggerDef
+    {
+        Name = "chat-capture", Pattern = "* tells you *", CapturePane = "Chats",
+        Gag = true, SendTo = SendTo.Script, KeepEvaluating = true,
+    });
+    engine.AddTrigger(new TriggerDef
+    {
+        Name = "combat-capture", Pattern = "You hit *", CapturePane = "Combat", SendTo = SendTo.Script,
+    });
+    engine.AddTrigger(new TriggerDef
+    {
+        Name = "plain", Pattern = "The sun rises*", SendTo = SendTo.Output, Send = "morning!",
+    });
+
+    // 1. capture + gag
+    string? action1 = null;
+    engine.Hit = h => action1 = h.Action;
+    engine.ProcessLine("Bob tells you 'hi there'", actions);
+    Console.WriteLine($"tell line: captures=[{string.Join(",", actions.Captures)}] gagged={actions.Gagged}  action='{action1}'");
+    if (actions.Captures.Count != 1 || actions.Captures[0] != "Chats") throw new Exception("must capture to Chats");
+    if (!actions.Gagged) throw new Exception("must gag");
+    if (action1 is null || !action1.Contains("capture: Chats") || !action1.Contains("gag"))
+        throw new Exception("hit description must mention capture+gag");
+
+    // 2. capture without gag
+    actions.Reset();
+    engine.ProcessLine("You hit the orc hard!", actions);
+    Console.WriteLine($"combat line: captures=[{string.Join(",", actions.Captures)}] gagged={actions.Gagged}");
+    if (actions.Captures.Count != 1 || actions.Captures[0] != "Combat") throw new Exception("must capture to Combat");
+    if (actions.Gagged) throw new Exception("must NOT gag");
+
+    // 3. non-capturing trigger touches nothing
+    actions.Reset();
+    engine.ProcessLine("The sun rises over 3Scapes.", actions);
+    Console.WriteLine($"plain line: captures=[{string.Join(",", actions.Captures)}] gagged={actions.Gagged} echoed='{actions.LastEcho}'");
+    if (actions.Captures.Count != 0 || actions.Gagged) throw new Exception("plain trigger must not route");
+    if (actions.LastEcho != "morning!") throw new Exception("echo action must still fire");
+
+    // 4. Simulate: same description, zero side effects
+    actions.Reset();
+    var hits = engine.Simulate("Bob tells you 'again'");
+    Console.WriteLine($"simulate: {hits.Count} hit(s), action='{(hits.Count > 0 ? hits[0].Action : "")}'");
+    if (hits.Count == 0 || !hits[0].Action.Contains("capture: Chats") || !hits[0].Action.Contains("gag"))
+        throw new Exception("simulate must describe capture+gag");
+    if (actions.Captures.Count != 0 || actions.Gagged) throw new Exception("simulate must have no side effects");
+
+    // 5. old-style IWorldActions implementations (no Capture/GagLine override) still work
+    engine.ProcessLine("Bob tells you 'legacy'", new RecordingActions(vars));
+    Console.WriteLine("legacy actions: default no-op Capture/GagLine — ok");
+
+    Console.WriteLine("\ncapture-routing self-test complete.");
+}
+
 static void EventsTest()
 {
     Console.WriteLine("== Scrye event-pipeline self-test ==\n");
@@ -1059,6 +1121,27 @@ sealed class RecordingActions : IWorldActions
     public void SetVariable(string name, string value) { _vars.Set(name, value); Console.WriteLine($"    -> SET {name} = \"{value}\""); }
     public void CallScript(string function, IReadOnlyList<string> wildcards) =>
         Console.WriteLine($"    -> SCRIPT {function}({string.Join(", ", wildcards.Select(w => $"\"{w}\""))})");
+}
+
+// Captures routing side effects for the --routing self-test.
+sealed class RoutingActions : IWorldActions
+{
+    private readonly VariableStore _vars;
+    public RoutingActions(VariableStore vars) => _vars = vars;
+
+    public List<string> Captures { get; } = new();
+    public bool Gagged { get; private set; }
+    public string? LastEcho { get; private set; }
+
+    public void Reset() { Captures.Clear(); Gagged = false; LastEcho = null; }
+
+    public void Send(string text) { }
+    public void Echo(string text) => LastEcho = text;
+    public string? GetVariable(string name) => _vars.Get(name);
+    public void SetVariable(string name, string value) => _vars.Set(name, value);
+    public void CallScript(string function, IReadOnlyList<string> wildcards) { }
+    public void Capture(string pane) => Captures.Add(pane);
+    public void GagLine() => Gagged = true;
 }
 
 // Mirrors how MudSession implements IWorldActions: rule effects flow back out as

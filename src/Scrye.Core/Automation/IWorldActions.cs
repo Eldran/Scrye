@@ -18,4 +18,12 @@ public interface IWorldActions
 
     /// <summary>Invoke a named script function with the match's wildcards.</summary>
     void CallScript(string function, IReadOnlyList<string> wildcards);
+
+    /// <summary>Route the line currently being processed to a named capture pane.
+    /// Default no-op so headless/test implementations need not care.</summary>
+    void Capture(string pane) { }
+
+    /// <summary>Hide the line currently being processed from the main output.
+    /// Default no-op so headless/test implementations need not care.</summary>
+    void GagLine() { }
 }
