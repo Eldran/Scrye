@@ -109,6 +109,85 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
 
+    // ---- multi-session tab state ----------------------------------------------
+
+    /// <summary>Set by the main window when this becomes the visible tab; clears the badge.</summary>
+    private bool _isActive;
+    public bool IsActive
+    {
+        get => _isActive;
+        set
+        {
+            if (SetField(ref _isActive, value) && value) Unread = 0;
+        }
+    }
+
+    private int _unread;
+    /// <summary>Lines that arrived while another tab was active (the tab-header badge).</summary>
+    public int Unread
+    {
+        get => _unread;
+        private set
+        {
+            if (SetField(ref _unread, value))
+            {
+                OnPropertyChanged(nameof(HasUnread));
+                OnPropertyChanged(nameof(UnreadText));
+            }
+        }
+    }
+    public bool HasUnread => _unread > 0;
+    public string UnreadText => _unread > 99 ? "99+" : _unread.ToString();
+
+    private ConnectionState _connState = ConnectionState.Disconnected;
+    /// <summary>Connection state mirrored onto the UI thread (drives the tab's status dot).</summary>
+    public ConnectionState ConnState
+    {
+        get => _connState;
+        private set
+        {
+            if (SetField(ref _connState, value))
+            {
+                OnPropertyChanged(nameof(StatusBrush));
+                OnPropertyChanged(nameof(StatusTip));
+            }
+        }
+    }
+
+    private static readonly Avalonia.Media.IBrush ConnectedBrush =
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0x4C, 0xC3, 0x8A));
+    private static readonly Avalonia.Media.IBrush BusyBrush =
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0xF0, 0xC0, 0x40));
+    private static readonly Avalonia.Media.IBrush DownBrush =
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0xE5, 0x48, 0x4D));
+    private static readonly Avalonia.Media.IBrush IdleBrush =
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0x6E, 0x76, 0x81));
+
+    public Avalonia.Media.IBrush StatusBrush => _connState switch
+    {
+        ConnectionState.Connected => ConnectedBrush,
+        ConnectionState.Connecting or ConnectionState.Disconnecting => BusyBrush,
+        ConnectionState.Failed => DownBrush,
+        _ => IdleBrush,
+    };
+    public string StatusTip => $"{Title}: {_connState}";
+
+    /// <summary>Set by the main window: sends a command to every connected world
+    /// (input-broadcast). Null when this tab stands alone.</summary>
+    public Action<string>? Broadcast { get; set; }
+
+    private bool _isBroadcast;
+    /// <summary>When on, plain input from this tab goes to ALL worlds ("All" toggle).
+    /// Client "." and "/" commands stay local.</summary>
+    public bool IsBroadcast { get => _isBroadcast; set => SetField(ref _isBroadcast, value); }
+
+    /// <summary>A broadcast command arriving at this world: echo it distinctly and send.</summary>
+    public void ReceiveBroadcast(string text)
+    {
+        _pending.Enqueue(Line.FromText("» " + text, EchoColour));
+        _session.Submit(text);
+    }
+
     private bool _showDebugger;
     public bool ShowDebugger
     {
@@ -130,7 +209,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Title = profile.Name;
         _session = new MudSession(profile);
         _session.LineReady += line => _pending.Enqueue(line);
-        _session.StateChanged += s => _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
+        _session.StateChanged += s =>
+        {
+            _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
+            Dispatcher.UIThread.Post(() => ConnState = s);   // status dot on the UI thread
+        };
         _session.MsspReceived += mssp =>
         {
             string name = mssp.TryGetValue("NAME", out var n) ? n : Title;
@@ -243,6 +326,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             Scrollback.AddRange(_drainBuffer);
             // harvest words for tab-completion on the UI thread (engine isn't thread-safe)
             foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
+            if (!IsActive) Unread += _drainBuffer.Count;   // badge while another tab is up
         }
         DrainRouted();
         Debugger.Drain();   // always drain events, even on a frame with no output lines
@@ -313,6 +397,13 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
+        // "All" toggle: plain commands fan out to every connected world (each echoes "» cmd").
+        if (IsBroadcast && Broadcast is not null && text.Length > 0)
+        {
+            Broadcast(text);
+            return;
+        }
+
         _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
         _session.Submit(text);
     }
@@ -338,6 +429,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".pause": _session.PauseSequence(); return true;
             case ".resume": _session.ResumeSequence(); return true;
             case ".log": HandleLogCommand(arg); return true;
+            case ".all":
+                if (arg.Length == 0) { AppendSystem("usage: .all <command> — send to every connected world"); return true; }
+                if (Broadcast is null) { AppendSystem("broadcast unavailable"); return true; }
+                Broadcast(arg);
+                return true;
             default: return false;
         }
     }

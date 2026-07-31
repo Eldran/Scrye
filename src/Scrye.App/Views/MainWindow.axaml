@@ -64,7 +64,14 @@
             <TabControl ItemsSource="{Binding Worlds}" SelectedItem="{Binding Active}" Padding="0">
                 <TabControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:WorldViewModel">
-                        <TextBlock Text="{Binding Title}" />
+                        <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="{Binding StatusTip}">
+                            <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                            <Border Background="#D03A86C8" CornerRadius="8" Padding="6,0"
+                                    IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding UnreadText}" FontSize="11" Foreground="White" />
+                            </Border>
+                        </StackPanel>
                     </DataTemplate>
                 </TabControl.ItemTemplate>
                 <TabControl.ContentTemplate>
@@ -89,6 +96,9 @@
                                         <ToggleButton DockPanel.Dock="Right" Content="State"
                                                       IsChecked="{Binding StateInspector.IsOpen}" Margin="4,0,0,0"
                                                       ToolTip.Tip="Game-state inspector: live GMCP/MIP data as watchable paths" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="⇉ All"
+                                                      IsChecked="{Binding IsBroadcast}" Margin="4,0,0,0"
+                                                      ToolTip.Tip="Broadcast: send typed commands to every connected world (. and / commands stay local). One-off: .all &lt;command&gt;" />
                                         <TextBox Text="{Binding Input}" Watermark="type a command and press Enter…"
                                                  KeyDown="OnInputKeyDown" />
                                     </DockPanel>

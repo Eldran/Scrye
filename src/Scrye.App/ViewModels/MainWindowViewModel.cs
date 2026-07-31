@@ -35,7 +35,22 @@ public sealed class MainWindowViewModel : ViewModelBase
     public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
 
     private WorldViewModel? _active;
-    public WorldViewModel? Active { get => _active; set => SetField(ref _active, value); }
+    public WorldViewModel? Active
+    {
+        get => _active;
+        set
+        {
+            if (!SetField(ref _active, value)) return;
+            foreach (WorldViewModel w in Worlds)          // tab badges track the visible tab
+                w.IsActive = ReferenceEquals(w, value);
+        }
+    }
+
+    /// <summary>Input-broadcast: deliver a command to every connected world tab.</summary>
+    private void SendBroadcast(string text)
+    {
+        foreach (WorldViewModel w in Worlds) w.ReceiveBroadcast(text);
+    }
 
     private ProfileNodeViewModel? _selectedNode;
     public ProfileNodeViewModel? SelectedNode { get => _selectedNode; set => SetField(ref _selectedNode, value); }
@@ -221,7 +236,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         EffectiveProfile eff = Resolve(r);
         if (eff.PasswordRef is not null)   // inject the auto-login secret at runtime only
             eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
-        var vm = new WorldViewModel(eff) { Ref = r };
+        var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast };
         Worlds.Add(vm);
         Active = vm;
         if (string.IsNullOrEmpty(eff.World.Host))
@@ -240,7 +255,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             Name = Host, Host = Host, Port = port,
             UseTls = UseTls, AcceptInvalidCertificates = UseTls, EnableMip = EnableMip,
-        });
+        })
+        { Broadcast = SendBroadcast };
         Worlds.Add(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }
