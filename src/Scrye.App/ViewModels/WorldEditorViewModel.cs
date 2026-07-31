@@ -69,6 +69,8 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
     private bool _enableMxp;
     public bool EnableMxp { get => _enableMxp; set => SetField(ref _enableMxp, value); }
+    private bool _enableMsp;
+    public bool EnableMsp { get => _enableMsp; set => SetField(ref _enableMsp, value); }
 
     // ---- rule collections (master/detail) ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
@@ -114,6 +116,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _useTls = _layer.UseTls ?? false;
         _enableMip = _layer.EnableMip ?? false;
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
+        _enableMsp = _layer.EnableMsp ?? true;   // on by default; !!SOUND lines are unambiguous
 
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
@@ -175,6 +178,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.AcceptInvalidCertificates = UseTls ? true : null;   // accept self-signed when TLS on
         _layer.EnableMip = EnableMip ? true : null;
         _layer.EnableMxp = EnableMxp ? null : false;   // default-on: only an explicit OFF is stored
+        _layer.EnableMsp = EnableMsp ? null : false;   // same default-on rule
 
         _layer.Triggers = BuildTriggers();
         _layer.Aliases = BuildAliases();

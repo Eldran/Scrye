@@ -52,6 +52,32 @@ public sealed class MainWindowViewModel : ViewModelBase
         foreach (WorldViewModel w in Worlds) w.ReceiveBroadcast(text);
     }
 
+    // ---- toast stack (trigger notifications + connection changes) -------------
+
+    public ObservableCollection<ToastViewModel> Toasts { get; } = new();
+
+    /// <summary>Raised after a toast is added — the window flashes the taskbar
+    /// when it isn't focused.</summary>
+    public event System.Action? ToastRaised;
+
+    /// <summary>Add a toast (UI thread) and auto-expire it after ~6 seconds.</summary>
+    public void RaiseToast(string title, string body)
+    {
+        var toast = new ToastViewModel(title, body);
+        Toasts.Add(toast);
+        while (Toasts.Count > 5) Toasts.RemoveAt(0);   // keep the stack short
+        ToastRaised?.Invoke();
+
+        var timer = new Avalonia.Threading.DispatcherTimer { Interval = System.TimeSpan.FromSeconds(6) };
+        timer.Tick += (_, _) => { timer.Stop(); Toasts.Remove(toast); };
+        timer.Start();
+    }
+
+    public void DismissToast(ToastViewModel? toast)
+    {
+        if (toast is not null) Toasts.Remove(toast);
+    }
+
     private ProfileNodeViewModel? _selectedNode;
     public ProfileNodeViewModel? SelectedNode { get => _selectedNode; set => SetField(ref _selectedNode, value); }
 
@@ -236,7 +262,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         EffectiveProfile eff = Resolve(r);
         if (eff.PasswordRef is not null)   // inject the auto-login secret at runtime only
             eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
-        var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast };
+        var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
         Worlds.Add(vm);
         Active = vm;
         if (string.IsNullOrEmpty(eff.World.Host))
@@ -256,7 +282,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Name = Host, Host = Host, Port = port,
             UseTls = UseTls, AcceptInvalidCertificates = UseTls, EnableMip = EnableMip,
         })
-        { Broadcast = SendBroadcast };
+        { Broadcast = SendBroadcast, Toast = RaiseToast };
         Worlds.Add(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }

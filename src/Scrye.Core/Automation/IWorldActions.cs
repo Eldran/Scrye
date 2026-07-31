@@ -26,4 +26,11 @@ public interface IWorldActions
     /// <summary>Hide the line currently being processed from the main output.
     /// Default no-op so headless/test implementations need not care.</summary>
     void GagLine() { }
+
+    /// <summary>Raise a notification for the line currently being processed
+    /// (toast/flash — presentation decided by the UI). Default no-op.</summary>
+    void Notify() { }
+
+    /// <summary>Play a sound ("beep", absolute path, or sounds-folder file name). Default no-op.</summary>
+    void PlaySound(string sound) { }
 }

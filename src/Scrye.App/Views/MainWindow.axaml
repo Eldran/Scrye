@@ -13,8 +13,8 @@
         <DockPanel>
             <!-- quick-connect bar (full width) -->
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
-                <TextBox Width="220" Watermark="host" Text="{Binding Host}" />
-                <TextBox Width="64" Watermark="port" Text="{Binding Port}" />
+                <TextBox Width="220" Watermark="host" Text="{Binding Host}" AutomationProperties.Name="Host" />
+                <TextBox Width="64" Watermark="port" Text="{Binding Port}" AutomationProperties.Name="Port" />
                 <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
                 <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
                 <Button Content="Quick Connect" Command="{Binding ConnectCommand}" />
@@ -99,7 +99,12 @@
                                         <ToggleButton DockPanel.Dock="Right" Content="⇉ All"
                                                       IsChecked="{Binding IsBroadcast}" Margin="4,0,0,0"
                                                       ToolTip.Tip="Broadcast: send typed commands to every connected world (. and / commands stay local). One-off: .all &lt;command&gt;" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="🔊 TTS"
+                                                      IsChecked="{Binding TtsEnabled}" Margin="4,0,0,0"
+                                                      AutomationProperties.Name="Text to speech"
+                                                      ToolTip.Tip="Speak incoming lines aloud (Windows). Commands: .tts on/off/stop/rate N" />
                                         <TextBox Text="{Binding Input}" Watermark="type a command and press Enter…"
+                                                 AutomationProperties.Name="Command input"
                                                  KeyDown="OnInputKeyDown" />
                                     </DockPanel>
 
@@ -131,6 +136,7 @@
                                             <ToggleButton DockPanel.Dock="Right" Content="Aa" IsChecked="{Binding Find.MatchCase}"
                                                           Padding="8,2" Margin="4,0,0,0" ToolTip.Tip="Match case" />
                                             <TextBox Name="FindBox" Text="{Binding Find.Query}" Watermark="find in output…"
+                                                     AutomationProperties.Name="Find in output"
                                                      KeyDown="OnFindKeyDown" />
                                         </DockPanel>
                                     </Border>
@@ -511,6 +517,8 @@
                                     <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
                                     <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
                                               ToolTip.Tip="Clickable links + inline markup when the server supports it" />
+                                    <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
+                                              ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
                                 </StackPanel>
                             </StackPanel>
                         </TabItem>
@@ -578,6 +586,14 @@
                                                     <TextBox Text="{Binding CapturePane}" Watermark="e.g. Chats" />
                                                 </StackPanel>
                                                 <CheckBox Grid.Column="1" Content="Gag from main output" IsChecked="{Binding Gag}"
+                                                          VerticalAlignment="Bottom" Margin="6,0,0,4" />
+                                            </Grid>
+                                            <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Sound on match (beep, path, or sounds-folder file)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Sound}" Watermark="e.g. beep or alert.wav" />
+                                                </StackPanel>
+                                                <CheckBox Grid.Column="1" Content="Notify (toast + flash)" IsChecked="{Binding Notify}"
                                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
                                             </Grid>
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
@@ -878,6 +894,14 @@
                                                 <CheckBox Grid.Column="1" Content="Gag from main output" IsChecked="{Binding Gag}"
                                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
                                             </Grid>
+                                            <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                                                <StackPanel Grid.Column="0" Margin="0,0,6,0">
+                                                    <TextBlock Text="Sound on match (beep, path, or sounds-folder file)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding Sound}" Watermark="e.g. beep or alert.wav" />
+                                                </StackPanel>
+                                                <CheckBox Grid.Column="1" Content="Notify (toast + flash)" IsChecked="{Binding Notify}"
+                                                          VerticalAlignment="Bottom" Margin="6,0,0,4" />
+                                            </Grid>
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
@@ -1102,5 +1126,24 @@
                 </DockPanel>
             </Border>
         </Border>
+
+        <!-- toast stack: trigger notifications + connection changes (click to dismiss) -->
+        <ItemsControl ItemsSource="{Binding Toasts}" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                      Margin="0,0,18,54" IsHitTestVisible="True">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ToastViewModel">
+                    <Border Background="{DynamicResource ScryePanelAlt}" BorderBrush="{DynamicResource ScryeAccent}"
+                            BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,6,0,0"
+                            MaxWidth="380" Cursor="Hand" PointerPressed="OnToastPressed">
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="12"
+                                       Foreground="{DynamicResource ScryeAccent}" />
+                            <TextBlock Text="{Binding Body}" TextWrapping="Wrap" FontSize="12"
+                                       Foreground="{DynamicResource ScryeText}" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
     </Grid>
 </Window>

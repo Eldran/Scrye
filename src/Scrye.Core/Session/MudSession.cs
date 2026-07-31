@@ -65,6 +65,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     // per-line routing state, valid only while triggers process the current line (loop-only)
     private readonly List<string> _lineCaptures = new();
     private bool _lineGagged;
+    private bool _lineNotify;
     private bool _processingLine;
 
     private Task? _loop;
@@ -111,6 +112,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>A trigger routed a line to a named capture pane (pane, line).
     /// Raised on the loop thread, before the line is (possibly) displayed.</summary>
     public event Action<string, Line>? LineRouted;
+    /// <summary>A trigger flagged Notify matched this line (loop thread; UI shows toast/flash).</summary>
+    public event Action<Line>? NotifyRequested;
+    /// <summary>A sound should play: trigger Sound field or an MSP directive
+    /// ("beep", absolute path, or sounds-folder file name). Loop thread.</summary>
+    public event Action<string>? SoundRequested;
     public event Action<ConnectionState>? StateChanged;
     public event Action<string, string>? GmcpReceived;
     public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
@@ -402,6 +408,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         if (!_lineCaptures.Contains(pane)) _lineCaptures.Add(pane);
     }
     void IWorldActions.GagLine() { if (_processingLine) _lineGagged = true; }
+    void IWorldActions.Notify() { if (_processingLine) _lineNotify = true; }
+    void IWorldActions.PlaySound(string sound)
+    {
+        if (!string.IsNullOrWhiteSpace(sound)) SoundRequested?.Invoke(sound);
+    }
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
@@ -555,16 +566,29 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             }
             if (_autoLogin.Done) _autoLogin = null;
         }
+        // In-band MSP: !!SOUND(…)/!!MUSIC(…) lines are directives, not text —
+        // consume them entirely (no display, no triggers, no events beyond a notice).
+        if (Profile.EnableMsp && line.PlainText.TrimStart().StartsWith("!!", StringComparison.Ordinal)
+            && MspParser.TryParse(line.PlainText, out MspDirective? msp) && msp is not null)
+        {
+            _events.Emit(SessionEventKind.Notice, $"MSP {(msp.IsMusic ? "music" : "sound")}: {msp.FileName} V={msp.Volume}");
+            if (!msp.FileName.Equals("Off", StringComparison.OrdinalIgnoreCase))
+                SoundRequested?.Invoke(msp.FileName);
+            return;
+        }
+
         _events.Emit(line.IsPrompt ? SessionEventKind.Prompt : SessionEventKind.LineReceived, line.PlainText);
 
         // Triggers run BEFORE display so capture/gag can route the line. (Ordering
         // note: engine triggers now fire before plugin onLine filters.)
         _lineCaptures.Clear();
         _lineGagged = false;
+        _lineNotify = false;
         _processingLine = true;
         _automation.ProcessLine(line.PlainText, this);
         _processingLine = false;
         foreach (string pane in _lineCaptures) LineRouted?.Invoke(pane, line);
+        if (_lineNotify) NotifyRequested?.Invoke(line);
 
         // Plugins may gag (null) or rewrite the DISPLAYED line; automation still sees the original.
         Line? shown = LineDisplayFilter is null ? line : LineDisplayFilter(line);

@@ -28,6 +28,7 @@ public sealed class ProfileLayer
     public bool? EnableMip { get; set; }
     public string? MipClientId { get; set; }
     public bool? EnableMxp { get; set; }
+    public bool? EnableMsp { get; set; }
 
     // ---- account / character scalars ----
     public string? Username { get; set; }

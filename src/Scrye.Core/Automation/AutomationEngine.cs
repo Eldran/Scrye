@@ -90,7 +90,7 @@ public sealed class AutomationEngine
             if (m is null) continue;
 
             string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx,
-                                 t.Def.CapturePane, t.Def.Gag);
+                                 t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
             if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
@@ -116,7 +116,7 @@ public sealed class AutomationEngine
 
             hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
                 Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m,
-                         t.Def.CapturePane, t.Def.Gag)));
+                         t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound)));
 
             if (!t.Def.KeepEvaluating) break;
         }
@@ -171,12 +171,15 @@ public sealed class AutomationEngine
     /// <paramref name="capturePane"/>/<paramref name="gag"/> only apply to triggers
     /// (they act on the line being processed).</summary>
     private string Fire(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m,
-                        IWorldActions ctx, string? capturePane = null, bool gag = false)
+                        IWorldActions ctx, string? capturePane = null, bool gag = false,
+                        bool notify = false, string? sound = null)
     {
         string text = Template.Expand(send, m, _vars);
 
         if (!string.IsNullOrWhiteSpace(capturePane)) ctx.Capture(capturePane!.Trim());
         if (gag) ctx.GagLine();
+        if (notify) ctx.Notify();
+        if (!string.IsNullOrWhiteSpace(sound)) ctx.PlaySound(sound!.Trim());
 
         switch (sendTo)
         {
@@ -190,13 +193,14 @@ public sealed class AutomationEngine
         if (!string.IsNullOrEmpty(script))
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
-        return Describe(sendTo, send, variable, script, m, capturePane, gag);
+        return Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
     }
 
     /// <summary>Build the same summary <see cref="Fire"/> returns, but WITHOUT
     /// performing the action or mutating anything. Used by <see cref="Simulate"/>.</summary>
     private string Describe(SendTo sendTo, string? send, string? variable, string? script, MatchResult? m,
-                            string? capturePane = null, bool gag = false)
+                            string? capturePane = null, bool gag = false,
+                            bool notify = false, string? sound = null)
     {
         string text = Template.Expand(send, m, _vars);
         string primary = sendTo switch
@@ -211,10 +215,12 @@ public sealed class AutomationEngine
             _ => "",
         };
 
-        var parts = new List<string>(3);
+        var parts = new List<string>(4);
         if (primary.Length > 0) parts.Add(primary);
         if (!string.IsNullOrWhiteSpace(capturePane)) parts.Add($"capture: {capturePane!.Trim()}");
         if (gag) parts.Add("gag");
+        if (notify) parts.Add("notify");
+        if (!string.IsNullOrWhiteSpace(sound)) parts.Add($"sound: {sound!.Trim()}");
         if (!string.IsNullOrEmpty(script)) parts.Add($"script: {script}");
         return string.Join("; ", parts);
     }

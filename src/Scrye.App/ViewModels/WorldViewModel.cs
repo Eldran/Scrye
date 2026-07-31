@@ -176,10 +176,28 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// (input-broadcast). Null when this tab stands alone.</summary>
     public Action<string>? Broadcast { get; set; }
 
+    /// <summary>Set by the main window: raise an app-level toast (title, body).</summary>
+    public Action<string, string>? Toast { get; set; }
+
     private bool _isBroadcast;
     /// <summary>When on, plain input from this tab goes to ALL worlds ("All" toggle).
     /// Client "." and "/" commands stay local.</summary>
     public bool IsBroadcast { get => _isBroadcast; set => SetField(ref _isBroadcast, value); }
+
+    // ---- text-to-speech (accessibility) ----------------------------------------
+
+    private readonly Services.SpeechService _speech = new();
+
+    private bool _ttsEnabled;
+    /// <summary>Speak incoming lines aloud while this tab is active (".tts" / TTS toggle).</summary>
+    public bool TtsEnabled
+    {
+        get => _ttsEnabled;
+        set
+        {
+            if (SetField(ref _ttsEnabled, value) && !value) _speech.Stop();
+        }
+    }
 
     /// <summary>A broadcast command arriving at this world: echo it distinctly and send.</summary>
     public void ReceiveBroadcast(string text)
@@ -212,8 +230,23 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.StateChanged += s =>
         {
             _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
-            Dispatcher.UIThread.Post(() => ConnState = s);   // status dot on the UI thread
+            Dispatcher.UIThread.Post(() =>
+            {
+                ConnState = s;   // status dot on the UI thread
+                if (s is ConnectionState.Connected or ConnectionState.Disconnected or ConnectionState.Failed)
+                    Toast?.Invoke(Title, s switch
+                    {
+                        ConnectionState.Connected => "connected",
+                        ConnectionState.Failed => "connection failed",
+                        _ => "disconnected",
+                    });
+            });
         };
+
+        // trigger notifications + sounds (session loop → UI/audio)
+        _session.NotifyRequested += line =>
+            Dispatcher.UIThread.Post(() => Toast?.Invoke(Title, line.PlainText));
+        _session.SoundRequested += sound => Services.SoundService.Play(sound, Title);
         _session.MsspReceived += mssp =>
         {
             string name = mssp.TryGetValue("NAME", out var n) ? n : Title;
@@ -327,6 +360,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             // harvest words for tab-completion on the UI thread (engine isn't thread-safe)
             foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
             if (!IsActive) Unread += _drainBuffer.Count;   // badge while another tab is up
+            if (TtsEnabled && IsActive)
+                foreach (Line l in _drainBuffer)
+                    if (!l.IsPrompt && l.PlainText.Trim().Length > 0)
+                        _speech.Speak(l.PlainText);
         }
         DrainRouted();
         Debugger.Drain();   // always drain events, even on a frame with no output lines
@@ -434,6 +471,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 if (Broadcast is null) { AppendSystem("broadcast unavailable"); return true; }
                 Broadcast(arg);
                 return true;
+            case ".tts": HandleTtsCommand(arg); return true;
             default: return false;
         }
     }
@@ -473,6 +511,32 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         catch (Exception ex) { AppendSystem("could not open plugins folder: " + ex.Message); }
     }
 
+    /// <summary>Handle <c>.tts</c> (toggle) / <c>.tts off</c> / <c>.tts stop</c> / <c>.tts rate N</c>.</summary>
+    private void HandleTtsCommand(string arg)
+    {
+        if (!Services.SpeechService.Supported) { AppendSystem("TTS is not available on this platform yet"); return; }
+        string[] parts = arg.Trim().ToLowerInvariant().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        switch (parts.Length == 0 ? "" : parts[0])
+        {
+            case "":
+                TtsEnabled = !TtsEnabled;
+                AppendSystem(TtsEnabled ? "TTS on — speaking incoming lines" : "TTS off");
+                break;
+            case "on": TtsEnabled = true; AppendSystem("TTS on — speaking incoming lines"); break;
+            case "off": TtsEnabled = false; AppendSystem("TTS off"); break;
+            case "stop": _speech.Stop(); AppendSystem("TTS: stopped speaking"); break;
+            case "rate":
+                if (parts.Length > 1 && int.TryParse(parts[1], out int r))
+                {
+                    _speech.Rate = r;
+                    AppendSystem($"TTS rate = {_speech.Rate} (-10 slow … +10 fast)");
+                }
+                else AppendSystem("usage: .tts rate <-10..10>");
+                break;
+            default: AppendSystem("usage: .tts [on|off|stop|rate N]"); break;
+        }
+    }
+
     /// <summary>Handle <c>.log</c> / <c>.log html</c> / <c>.log off</c>. Bare <c>.log</c> toggles.</summary>
     private void HandleLogCommand(string arg)
     {
@@ -496,6 +560,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         _flushTimer.Stop();
+        _speech.Dispose();
         Replay.Stop();
         _plugins.Dispose();
         Hud.Dispose();

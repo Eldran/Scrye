@@ -13,6 +13,8 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.0" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.0" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.0.0" Condition="'$(Configuration)' == 'Debug'" />
+    <!-- TTS: Windows-only at runtime (SpeechSynthesizer); guarded by OperatingSystem.IsWindows(). -->
+    <PackageReference Include="System.Speech" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

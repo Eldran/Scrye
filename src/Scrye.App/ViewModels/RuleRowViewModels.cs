@@ -103,6 +103,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         SendTo = d.SendTo; Send = d.Send ?? ""; Variable = d.Variable ?? ""; Script = d.Script ?? "";
         Group = d.Group ?? ""; SequenceText = d.Sequence.ToString();
         CapturePane = d.CapturePane ?? ""; Gag = d.Gag;
+        Notify = d.Notify; Sound = d.Sound ?? "";
     }
 
     private string _capturePane = "";
@@ -113,6 +114,14 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
     /// <summary>Hide the matched line from the main output.</summary>
     public bool Gag { get => _gag; set => SetField(ref _gag, value); }
 
+    private bool _notify;
+    /// <summary>Toast + taskbar flash (when unfocused) on match.</summary>
+    public bool Notify { get => _notify; set => SetField(ref _notify, value); }
+
+    private string _sound = "";
+    /// <summary>Sound on match: "beep", a path, or a sounds-folder file name.</summary>
+    public string Sound { get => _sound; set => SetField(ref _sound, value); }
+
     public TriggerDef ToDef() => new()
     {
         Name = Name.Trim(), Pattern = Pattern, IsRegex = IsRegex, IgnoreCase = IgnoreCase,
@@ -120,6 +129,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Sequence = SequenceValue, Group = OrNull(Group),
         SendTo = SendTo, Send = OrNull(Send), Variable = OrNull(Variable), Script = OrNull(Script),
         CapturePane = OrNull(CapturePane), Gag = Gag,
+        Notify = Notify, Sound = OrNull(Sound),
     };
 }
 

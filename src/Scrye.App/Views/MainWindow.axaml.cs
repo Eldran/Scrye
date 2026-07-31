@@ -11,7 +11,58 @@ namespace Scrye.App.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContextChanged += (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm)
+                vm.ToastRaised += () => { if (!IsActive) FlashTaskbar(); };
+        };
+    }
+
+    /// <summary>Dismiss a toast on click.</summary>
+    private void OnToastPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        if (sender is Control { DataContext: ToastViewModel toast } &&
+            DataContext is MainWindowViewModel vm)
+            vm.DismissToast(toast);
+    }
+
+    // ---- Windows taskbar flash (no-op elsewhere) ------------------------------
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+    private void FlashTaskbar()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try
+        {
+            IntPtr? handle = TryGetPlatformHandle()?.Handle;
+            if (handle is not IntPtr h || h == IntPtr.Zero) return;
+            var info = new FLASHWINFO
+            {
+                cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<FLASHWINFO>(),
+                hwnd = h,
+                dwFlags = 3,      // FLASHW_ALL (caption + taskbar)
+                uCount = 3,
+                dwTimeout = 0,
+            };
+            FlashWindowEx(ref info);
+        }
+        catch { /* cosmetic only */ }
+    }
 
     // tab-completion cycling state (single active input at a time)
     private TextBox? _tabBox;

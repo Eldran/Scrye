@@ -36,6 +36,11 @@ public sealed record TriggerDef
     /// <summary>Hide the matched line from the main output (display/transcript only —
     /// events, other triggers, and sequences still see it).</summary>
     public bool Gag { get; init; }
+    /// <summary>Raise a notification (toast + taskbar flash when unfocused) with the matched line.</summary>
+    public bool Notify { get; init; }
+    /// <summary>Sound to play on match: "beep", an absolute path, or a file name
+    /// resolved under the Scrye sounds folder. Null = silent.</summary>
+    public string? Sound { get; init; }
 
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }

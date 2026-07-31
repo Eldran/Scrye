@@ -40,9 +40,10 @@ if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--export") { ExportTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--routing") { RoutingTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--notify") { NotifyTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | --routing | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | --routing | --notify | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -618,6 +619,71 @@ static void RoutingTest()
     Console.WriteLine("\ncapture-routing self-test complete.");
 }
 
+static void NotifyTest()
+{
+    Console.WriteLine("== Scrye notify/sound + MSP self-test ==\n");
+
+    var vars = new VariableStore();
+    var engine = new AutomationEngine(vars);
+    var actions = new RoutingActions(vars);
+
+    engine.AddTrigger(new TriggerDef
+    {
+        Name = "page-alert", Pattern = "* pages you*", Notify = true, Sound = "beep", SendTo = SendTo.Script,
+    });
+    engine.AddTrigger(new TriggerDef
+    {
+        Name = "quiet", Pattern = "It is quiet here*", SendTo = SendTo.Script,
+    });
+
+    // 1. notify + sound fire together and appear in the hit description
+    string? action = null;
+    engine.Hit = h => action = h.Action;
+    engine.ProcessLine("Eldran pages you from afar.", actions);
+    Console.WriteLine($"page line: notified={actions.Notified} sounds=[{string.Join(",", actions.Sounds)}] action='{action}'");
+    if (actions.Notified != 1) throw new Exception("must notify once");
+    if (actions.Sounds.Count != 1 || actions.Sounds[0] != "beep") throw new Exception("must play beep");
+    if (action is null || !action.Contains("notify") || !action.Contains("sound: beep"))
+        throw new Exception("description must mention notify+sound");
+
+    // 2. plain trigger: no notify, no sound
+    actions.Reset();
+    engine.ProcessLine("It is quiet here.", actions);
+    if (actions.Notified != 0 || actions.Sounds.Count != 0) throw new Exception("quiet trigger must stay quiet");
+    Console.WriteLine("quiet line: no notify, no sound");
+
+    // 3. simulate has no side effects but describes them
+    actions.Reset();
+    var hits = engine.Simulate("Eldran pages you again.");
+    if (hits.Count == 0 || !hits[0].Action.Contains("notify")) throw new Exception("simulate must describe notify");
+    if (actions.Notified != 0 || actions.Sounds.Count != 0) throw new Exception("simulate must be side-effect free");
+    Console.WriteLine($"simulate: '{hits[0].Action}' with zero side effects");
+
+    // 4. MSP directive parsing
+    if (!MspParser.TryParse("!!SOUND(alert.wav V=60 L=2 T=combat)", out MspDirective? d1) || d1 is null)
+        throw new Exception("basic !!SOUND must parse");
+    Console.WriteLine($"msp: file={d1.FileName} vol={d1.Volume} loops={d1.Loops} type={d1.Type} music={d1.IsMusic}");
+    if (d1.FileName != "alert.wav" || d1.Volume != 60 || d1.Loops != 2 || d1.Type != "combat" || d1.IsMusic)
+        throw new Exception("!!SOUND fields wrong");
+
+    if (!MspParser.TryParse("  !!MUSIC(town.mid V=30 U=http://example.com/snd/) ", out MspDirective? d2) || d2 is null || !d2.IsMusic)
+        throw new Exception("!!MUSIC must parse");
+    if (d2.Url != "http://example.com/snd/") throw new Exception("U= must parse");
+    Console.WriteLine($"msp music: file={d2.FileName} vol={d2.Volume} url={d2.Url}");
+
+    if (!MspParser.TryParse("!!SOUND(Off)", out MspDirective? d3) || d3 is null || d3.FileName != "Off")
+        throw new Exception("!!SOUND(Off) must parse");
+    Console.WriteLine("msp off: parsed");
+
+    if (MspParser.TryParse("He shouted !!SOUND(fake.wav) mid-sentence", out _))
+        throw new Exception("mid-line mention must NOT parse");
+    if (MspParser.TryParse("!!SOUND()", out _)) throw new Exception("empty body must NOT parse");
+    if (MspParser.TryParse("ordinary text", out _)) throw new Exception("plain text must NOT parse");
+    Console.WriteLine("msp negatives: rejected");
+
+    Console.WriteLine("\nnotify/sound + MSP self-test complete.");
+}
+
 static void EventsTest()
 {
     Console.WriteLine("== Scrye event-pipeline self-test ==\n");
@@ -1133,7 +1199,10 @@ sealed class RoutingActions : IWorldActions
     public bool Gagged { get; private set; }
     public string? LastEcho { get; private set; }
 
-    public void Reset() { Captures.Clear(); Gagged = false; LastEcho = null; }
+    public void Reset() { Captures.Clear(); Gagged = false; LastEcho = null; Sounds.Clear(); Notified = 0; }
+
+    public List<string> Sounds { get; } = new();
+    public int Notified { get; private set; }
 
     public void Send(string text) { }
     public void Echo(string text) => LastEcho = text;
@@ -1142,6 +1211,8 @@ sealed class RoutingActions : IWorldActions
     public void CallScript(string function, IReadOnlyList<string> wildcards) { }
     public void Capture(string pane) => Captures.Add(pane);
     public void GagLine() => Gagged = true;
+    public void Notify() => Notified++;
+    public void PlaySound(string sound) => Sounds.Add(sound);
 }
 
 // Mirrors how MudSession implements IWorldActions: rule effects flow back out as

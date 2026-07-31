@@ -37,6 +37,10 @@ public sealed class WorldProfile
     /// server offers it. Harmless when the server doesn't — negotiation-gated.</summary>
     public bool EnableMxp { get; set; } = true;
 
+    /// <summary>Consume in-band MSP lines (<c>!!SOUND(…)</c>/<c>!!MUSIC(…)</c>) and play them.
+    /// Harmless when the server never sends them.</summary>
+    public bool EnableMsp { get; set; } = true;
+
     /// <summary>Enable the 3Kingdoms/3Scapes in-band MIP protocol (handshake + frame parsing).</summary>
     public bool EnableMip { get; set; } = false;
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>
