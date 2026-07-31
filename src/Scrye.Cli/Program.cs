@@ -38,9 +38,10 @@ if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0;
 if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--export") { ExportTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -504,6 +505,55 @@ static void MccpTest()
     Console.WriteLine("reset: compression cleared for reconnect");
 
     Console.WriteLine("\nMCCP2 self-test complete.");
+}
+
+static void ExportTest()
+{
+    Console.WriteLine("== Scrye text-export self-test ==\n");
+
+    // build two styled lines through the real ANSI parser
+    var ansi = new AnsiParser();
+    var lines = new List<Line>();
+    ansi.LineCompleted += lines.Add;
+    ansi.Feed("\x1b[1;32mHello\x1b[0m plain \x1b[4;38;2;10;20;250mblue<link>\x1b[0m\n");
+    ansi.Feed("\x1b[48;2;80;0;0mred bg\x1b[0m tail\n");
+    if (lines.Count != 2) throw new Exception($"expected 2 lines, got {lines.Count}");
+
+    var slices = lines.Select(l => TextExporter.Slice(l, 0, l.PlainText.Length)).ToList();
+
+    // plain round-trip
+    string plain = TextExporter.ToPlain(slices);
+    Console.WriteLine($"plain:\n{plain}\n");
+    if (plain != "Hello plain blue<link>\nred bg tail") throw new Exception("plain text wrong");
+
+    // ANSI: bold+green, underline+truecolour, bg colour, resets at line ends
+    string ansiOut = TextExporter.ToAnsi(slices);
+    Console.WriteLine($"ansi (escaped): {ansiOut.Replace("\x1b", "\\e")}\n");
+    if (!ansiOut.Contains(";1;")) throw new Exception("bold flag missing");
+    if (!ansiOut.Contains("38;2;")) throw new Exception("truecolour fg missing");
+    if (!ansiOut.Contains("48;2;80;0;0")) throw new Exception("bg colour missing");
+    if (!ansiOut.Contains(";4;")) throw new Exception("underline flag missing");
+    if (!ansiOut.EndsWith("\x1b[0m")) throw new Exception("must end with reset");
+
+    // HTML: pre wrapper, styled spans, escaped angle brackets
+    string html = TextExporter.ToHtml(slices);
+    Console.WriteLine($"html:\n{html}\n");
+    if (!html.StartsWith("<pre") || !html.EndsWith("</pre>")) throw new Exception("pre wrapper wrong");
+    if (!html.Contains("font-weight:bold")) throw new Exception("bold style missing");
+    if (!html.Contains("text-decoration:underline")) throw new Exception("underline style missing");
+    if (!html.Contains("blue&lt;link&gt;")) throw new Exception("html escaping wrong");
+    if (html.Contains("<link>")) throw new Exception("unescaped markup leaked");
+
+    // mid-line slice: cut "Hello plain" -> "lo pla"
+    string cut = TextExporter.ToPlain(new[] { TextExporter.Slice(lines[0], 3, 9) });
+    Console.WriteLine($"slice [3,9): \"{cut}\"");
+    if (cut != "lo pla") throw new Exception("slice wrong");
+
+    // slice clamps out-of-range requests
+    string clamped = TextExporter.ToPlain(new[] { TextExporter.Slice(lines[1], 0, 999) });
+    if (clamped != "red bg tail") throw new Exception("clamp wrong");
+
+    Console.WriteLine("\ntext-export self-test complete.");
 }
 
 static void EventsTest()

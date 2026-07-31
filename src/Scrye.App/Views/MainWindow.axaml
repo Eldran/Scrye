@@ -115,21 +115,21 @@
                                                     Padding="8,2" Margin="4,0,0,0" />
                                             <TextBlock DockPanel.Dock="Right" Text="{Binding Find.Status}" VerticalAlignment="Center"
                                                        Margin="8,0" Foreground="{DynamicResource ScryeTextDim}" />
+                                            <ToggleButton DockPanel.Dock="Right" Content="Aa" IsChecked="{Binding Find.MatchCase}"
+                                                          Padding="8,2" Margin="4,0,0,0" ToolTip.Tip="Match case" />
                                             <TextBox Name="FindBox" Text="{Binding Find.Query}" Watermark="find in output…"
                                                      KeyDown="OnFindKeyDown" />
                                         </DockPanel>
                                     </Border>
 
-                                    <ScrollViewer Margin="4" Background="{DynamicResource ScryeOutputBg}"
-                                                  HorizontalScrollBarVisibility="Disabled"
-                                                  VerticalScrollBarVisibility="Auto">
-                                        <controls:OutputView Source="{Binding Scrollback}"
-                                                             FontFamily="{Binding OutputFontFamily}"
-                                                             FontSize="{Binding OutputFontSize}"
-                                                             SearchTerm="{Binding Find.Term}"
-                                                             ActiveMatchLine="{Binding Find.ActiveLine}"
-                                                             CommandLinkClicked="OnCommandLinkClicked" />
-                                    </ScrollViewer>
+                                    <controls:TerminalPane Margin="4" Background="{DynamicResource ScryeOutputBg}"
+                                                           Source="{Binding Scrollback}"
+                                                           FontFamily="{Binding OutputFontFamily}"
+                                                           FontSize="{Binding OutputFontSize}"
+                                                           SearchTerm="{Binding Find.Term}"
+                                                           ActiveMatchLine="{Binding Find.ActiveLine}"
+                                                           MatchCase="{Binding Find.MatchCase}"
+                                                           CommandLinkClicked="OnCommandLinkClicked" />
                                 </DockPanel>
 
                                 <!-- HUD overlay: plugin panels, top-right, over the output -->

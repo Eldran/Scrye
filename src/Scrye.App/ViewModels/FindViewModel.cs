@@ -39,6 +39,14 @@ public sealed class FindViewModel : ViewModelBase
         set { if (SetField(ref _query, value)) Search(); }
     }
 
+    private bool _matchCase;
+    /// <summary>Case-sensitive matching ("Aa" toggle); re-runs the search on change.</summary>
+    public bool MatchCase
+    {
+        get => _matchCase;
+        set { if (SetField(ref _matchCase, value)) Search(); }
+    }
+
     /// <summary>The term the OutputView should highlight.</summary>
     public string Term => _query;
 
@@ -79,9 +87,10 @@ public sealed class FindViewModel : ViewModelBase
     {
         _matches.Clear();
         if (_query.Length == 0) return;
+        StringComparison cmp = _matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
         int count = _buffer.Count;
         for (int i = 0; i < count; i++)
-            if (_buffer[i].PlainText.IndexOf(_query, StringComparison.OrdinalIgnoreCase) >= 0)
+            if (_buffer[i].PlainText.IndexOf(_query, cmp) >= 0)
                 _matches.Add(i);
     }
 
