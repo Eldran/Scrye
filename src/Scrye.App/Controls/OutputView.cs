@@ -88,7 +88,10 @@ public class OutputView : Control
     private bool _hoveringLink;
 
     private readonly Dictionary<uint, IImmutableBrush> _brushCache = new();
+    private readonly Dictionary<(uint fore, uint back), Rgb> _readableCache = new();
     private static readonly IImmutableBrush Background = new ImmutableSolidColorBrush(Color.FromRgb(0x10, 0x14, 0x1A));
+    private static readonly Rgb SurfaceRgb = new(0x10, 0x14, 0x1A);   // the colour behind default-background text (matches Background)
+    private const double MinContrast = 3.0;                          // readability floor (WCAG contrast ratio) for glyph vs surface
     private static readonly IImmutableBrush SelectionBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x35, 0xC4, 0xD6));
     private static readonly IImmutableBrush MatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0xF0, 0xC0, 0x40));
     private static readonly IImmutableBrush ActiveMatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0xAA, 0xF0, 0xC0, 0x40));
@@ -537,21 +540,26 @@ public class OutputView : Control
 
             double w = run.Text.Length * _charWidth;
 
+            // the surface behind this run: its own background, or the panel background for default-back runs
+            Rgb surface = back.Equals(Rgb.DefaultBack) ? SurfaceRgb : back;
             if (!back.Equals(Rgb.DefaultBack))
                 context.FillRectangle(BrushFor(back), new Rect(x, y, w, _lineHeight));
+
+            // lift near-invisible text (e.g. MUD "black" body text) to a readable contrast
+            IImmutableBrush foreBrush = BrushFor(ReadableFore(fore, surface));
 
             var weight = (run.Flags & RunFlags.Bold) != 0 ? FontWeight.Bold : FontWeight.Normal;
             var slant = (run.Flags & RunFlags.Italic) != 0 ? FontStyle.Italic : FontStyle.Normal;
             var typeface = new Typeface(FontFamily, slant, weight);
 
             var ft = new FormattedText(run.Text, CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
-                typeface, FontSize, BrushFor(fore));
+                typeface, FontSize, foreBrush);
             context.DrawText(ft, new Point(x, y));
 
             if ((run.Flags & RunFlags.Underline) != 0)
             {
                 double uy = y + _lineHeight - 1;
-                context.DrawLine(new Pen(BrushFor(fore)), new Point(x, uy), new Point(x + w, uy));
+                context.DrawLine(new Pen(foreBrush), new Point(x, uy), new Point(x + w, uy));
             }
 
             x += w;
@@ -567,5 +575,57 @@ public class OutputView : Control
             _brushCache[key] = brush;
         }
         return brush;
+    }
+
+    // ---- readability floor -------------------------------------------------
+    // The MUD sometimes sends body text in a near-black colour that reads fine on a
+    // light terminal but disappears on Scrye's dark output surface. When a run's
+    // contrast against the surface falls below MinContrast we lift the foreground
+    // toward white by the smallest amount that clears the floor (hue preserved as
+    // far as possible). Colours that are already legible are returned untouched, so
+    // ordinary theming and bright MUD colours are unaffected.
+
+    private Rgb ReadableFore(Rgb fore, Rgb back)
+    {
+        var key = (Key(fore), Key(back));
+        if (_readableCache.TryGetValue(key, out Rgb cached)) return cached;
+        Rgb result = ComputeReadable(fore, back);
+        _readableCache[key] = result;
+        return result;
+
+        static uint Key(Rgb c) => (uint)((c.R << 16) | (c.G << 8) | c.B);
+    }
+
+    private static Rgb ComputeReadable(Rgb fore, Rgb back)
+    {
+        double lb = Luminance(back);
+        if (Contrast(Luminance(fore), lb) >= MinContrast) return fore;   // already legible
+        if (lb > 0.5) return fore;                                       // light surface: don't lift toward white
+        Rgb best = fore;
+        for (int i = 1; i <= 16; i++)
+        {
+            double t = i / 16.0;
+            best = new Rgb(
+                (byte)(fore.R + (255 - fore.R) * t),
+                (byte)(fore.G + (255 - fore.G) * t),
+                (byte)(fore.B + (255 - fore.B) * t));
+            if (Contrast(Luminance(best), lb) >= MinContrast) break;
+        }
+        return best;
+    }
+
+    private static double Contrast(double l1, double l2)
+    {
+        double hi = Math.Max(l1, l2), lo = Math.Min(l1, l2);
+        return (hi + 0.05) / (lo + 0.05);
+    }
+
+    private static double Luminance(Rgb c) =>
+        0.2126 * Channel(c.R) + 0.7152 * Channel(c.G) + 0.0722 * Channel(c.B);
+
+    private static double Channel(byte b)
+    {
+        double s = b / 255.0;
+        return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
     }
 }
