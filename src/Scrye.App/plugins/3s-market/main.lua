@@ -301,12 +301,26 @@ local function mk_refresh(is_quiet)
 end
 
 -- ====================== gag + parse (replaces the "market" trigger group) ======================
--- while a scan is in flight, vtrade-goods-shaped lines are parsed and gagged
+-- while a scan is in flight, the vtrade-goods block is parsed and gagged
 -- (return false), exactly like the original's omit_from_output trigger group,
 -- which was only enabled during a refresh.
+--
+-- The whole vtrade block is wrapped in a "-~*  ...  *~-" decoration frame, e.g.
+--   -~*   Timber - Market Overview                       *~-
+--   -~*  Lodbrok's Hol    22  413 avail export++ Vinur    *~-
+-- The MUSHclient regexes were unanchored, so they matched the town/price/qty
+-- substring inside the frame. We strip the frame first, then match on the
+-- clean text, and gag every framed line (the block is all ours during a scan).
 
--- match a market row: town, price, qty, then the keyword ("avail"/"wants") on a
--- word boundary, then the affinity remainder (mirrors the original .NET \b regex)
+-- remove the leading "-~*" and trailing "*~-" decoration (and the padding spaces)
+local function strip_frame(s)
+  s = s:gsub("^%s*%-~%*%s*", "")   -- leading  "-~*" + spaces
+  s = s:gsub("%s*%*~%-%s*$", "")   -- trailing "*~-" + spaces
+  return s
+end
+
+-- match a market row on frame-stripped text: town, price, qty, then the keyword
+-- ("avail"/"wants") on a word boundary, then the affinity remainder.
 local function rowmatch(line, word)
   local town, price, qty, rest =
     line:match("^%s*([%a][%a' ]-)%s+(%d+)%s+(%d+)%s+(" .. word .. ".*)$")
@@ -319,34 +333,32 @@ end
 
 scrye.onLine(function(line)
   if not scanning then return end
-  -- our own scan commands, if echoed (original used SendNoEcho)
-  if line:match("^vtrade goods %a") then return false end
+  -- our own scan commands, if echoed
+  if line:match("^%s*vtrade goods %a") then return false end
+  -- only touch the framed vtrade block; leave everything else (tells, etc.) alone
+  if not line:match("^%s*%-~%*") then return end
+  local clean = strip_frame(line)
   -- "<Good> - Market Overview" header
-  local res = line:match("([%a][%a ]-) %- Market Overview")
+  local res = clean:match("^([%a][%a ]-)%s*%-%s*Market Overview")
   if res then
-    local ok = pcall(mk_header, res)
-    if not ok then return end
+    pcall(mk_header, res)
     return false
   end
   -- buy row:  Town  <price>  <qty> avail [affinity]
-  local town, price, qty, aff = rowmatch(line, "avail")
+  local town, price, qty, aff = rowmatch(clean, "avail")
   if town then
     pcall(mk_row, "buy", town, price, qty, aff)
     return false
   end
   -- sell row: Town  <price>  <qty> wants [affinity]
-  town, price, qty, aff = rowmatch(line, "wants")
+  town, price, qty, aff = rowmatch(clean, "wants")
   if town then
     pcall(mk_row, "sell", town, price, qty, aff)
     return false
   end
-  -- decorative vtrade output gagged by the original
-  if line:find("price %d+ daler")
-     or line:find("Trading Post tier", 1, true)
-     or line:find("Best places to", 1, true)
-     or line:match("Settlement%s+Price") then
-    return false
-  end
+  -- separators, "price N daler", "Trading Post tier", column headers, etc:
+  -- still part of the vtrade block, so hide them too
+  return false
 end)
 
 -- market tick: the periodic price-update line carries percentages (e.g. "Mead +3%").
