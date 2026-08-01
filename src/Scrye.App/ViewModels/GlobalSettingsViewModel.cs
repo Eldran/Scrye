@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
 using Scrye.App.Services;
 using Scrye.Core.Automation;
 using Scrye.Core.Profiles;
@@ -31,8 +32,45 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     public string Title => "Global Settings";
 
     // ---- appearance ----
+    /// <summary>Shown for the empty/default font setting (the built-in fallback chain).</summary>
+    public const string DefaultFontLabel = "Default (Cascadia Mono)";
+    /// <summary>What the output pane actually falls back to when no font is set.</summary>
+    private const string DefaultFontChain = "Cascadia Mono, Consolas, Menlo, monospace";
+
+    /// <summary>The monospaced font families installed on this machine, with a
+    /// "Default" entry first. Bound to the font dropdown in Appearance.</summary>
+    public IReadOnlyList<string> FontChoices { get; }
+
     private string _fontFamily;
-    public string FontFamily { get => _fontFamily; set => SetField(ref _fontFamily, value); }
+    /// <summary>The raw font setting (a single family, or a comma-separated fallback
+    /// chain for power users). Empty means "use the default chain".</summary>
+    public string FontFamily
+    {
+        get => _fontFamily;
+        set
+        {
+            if (SetField(ref _fontFamily, value))
+            {
+                OnPropertyChanged(nameof(SelectedFont));
+                OnPropertyChanged(nameof(PreviewFontFamily));
+            }
+        }
+    }
+
+    /// <summary>Two-way bound to the font dropdown. Reflects <see cref="FontFamily"/> as
+    /// a single choice: the Default label when empty, otherwise the family name (which is
+    /// shown even if it isn't a detected monospaced font, so custom values still display).</summary>
+    public string SelectedFont
+    {
+        get => string.IsNullOrWhiteSpace(_fontFamily) ? DefaultFontLabel : _fontFamily.Trim();
+        set => FontFamily = (value is null || value == DefaultFontLabel) ? "" : value;
+    }
+
+    /// <summary>Live-preview font for the Appearance sample text: the chosen family, or the
+    /// default chain when nothing is set.</summary>
+    public Avalonia.Media.FontFamily PreviewFontFamily =>
+        new(string.IsNullOrWhiteSpace(_fontFamily) ? DefaultFontChain : _fontFamily.Trim());
+
     private string _fontSize;
     public string FontSize { get => _fontSize; set => SetField(ref _fontSize, value); }
 
@@ -81,6 +119,15 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _fontFamily = layer.FontFamily ?? "";
         _fontSize = layer.FontSize?.ToString(CultureInfo.InvariantCulture) ?? "";
         _theme = ThemeService.Find(layer.Theme);
+
+        // monospaced fonts on this machine, "Default" first; include any current custom
+        // value so it stays visible/selectable in the dropdown even if it isn't monospaced
+        var choices = new List<string> { DefaultFontLabel };
+        choices.AddRange(FontScanner.MonospacedFamilies());
+        string current = _fontFamily.Trim();
+        if (current.Length > 0 && !choices.Contains(current, StringComparer.OrdinalIgnoreCase))
+            choices.Insert(1, current);
+        FontChoices = choices;
 
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));

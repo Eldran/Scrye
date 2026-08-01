@@ -914,10 +914,32 @@
                                 <TextBlock Text="Theme" />
                                 <ComboBox ItemsSource="{Binding Settings.Themes}" SelectedItem="{Binding Settings.Theme}"
                                           HorizontalAlignment="Left" MinWidth="220" />
-                                <TextBlock Text="Output font family (comma-separated fallbacks)" Margin="0,6,0,0" />
-                                <TextBox Text="{Binding Settings.FontFamily}" PlaceholderText="Cascadia Mono, Consolas, monospace" />
-                                <TextBlock Text="Output font size" />
+                                <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
+                                <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
+                                          HorizontalAlignment="Left" MinWidth="260" />
+                                <Border Background="#10141A" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
+                                        CornerRadius="3" Padding="8,6" Margin="0,4,0,0">
+                                    <StackPanel Spacing="1">
+                                        <TextBlock Text="The quick brown fox jumps over the lazy dog" Foreground="#C0C0C0"
+                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                        <TextBlock Text="Timber     22  413 avail  |  46  295 wants" Foreground="#C0C0C0"
+                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                        <TextBlock Text="ilW1 O0 () {} []  #~*-=+  MMMMiiii" Foreground="#7E8894"
+                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Text="Output font size" Margin="0,6,0,0" />
                                 <TextBox Text="{Binding Settings.FontSize}" PlaceholderText="14" HorizontalAlignment="Left" Width="120" />
+                                <Expander Header="Advanced: custom font / fallback list" Margin="0,6,0,0">
+                                    <StackPanel Spacing="4" Margin="0,4,0,0">
+                                        <TextBlock Text="Comma-separated families; the first one installed is used. Overrides the dropdown above. Use a monospaced font to keep columns aligned."
+                                                   Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                        <TextBox Text="{Binding Settings.FontFamily}" PlaceholderText="Cascadia Mono, Consolas, monospace" />
+                                    </StackPanel>
+                                </Expander>
                                 <TextBlock Text="Font applies to connected worlds. The theme applies on Save. Game output panes stay dark in every theme so ANSI colors from the MUD remain readable."
                                            Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
                             </StackPanel>
