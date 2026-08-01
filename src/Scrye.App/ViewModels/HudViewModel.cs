@@ -253,11 +253,15 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
 /// <summary>Parses "#RRGGBB" into a brush; null for empty/invalid (so the theme colour shows).</summary>
 internal static class HudColor
 {
+    // IMMUTABLE brush: HUD widgets are built on the session-loop thread (scrye.addPanel
+    // runs there), but rendered on the UI thread. A mutable SolidColorBrush has thread
+    // affinity and Avalonia 12 throws a cross-thread error when the compositor touches it;
+    // immutable brushes are frozen and safe to use from any thread.
     public static Avalonia.Media.IBrush? Brush(string? hex)
     {
         if (hex is { Length: 7 } && hex[0] == '#' &&
             uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint v))
-            return new Avalonia.Media.SolidColorBrush(
+            return new Avalonia.Media.Immutable.ImmutableSolidColorBrush(
                 Avalonia.Media.Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v));
         return null;
     }
@@ -286,12 +290,13 @@ public sealed class LabelWidgetViewModel : ViewModelBase
 /// with the percentage (cyan healthy → amber warning → red critical).</summary>
 public sealed class GaugeWidgetViewModel : ViewModelBase
 {
+    // immutable (thread-safe) — built off the UI thread during plugin load
     private static readonly Avalonia.Media.IBrush Healthy =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0x35, 0xC4, 0xD6));
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0x35, 0xC4, 0xD6));
     private static readonly Avalonia.Media.IBrush Warning =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0xA8, 0x30));
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0xA8, 0x30));
     private static readonly Avalonia.Media.IBrush Critical =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0x50, 0x50));
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0x50, 0x50));
 
     public string Label { get; }
     private readonly Avalonia.Media.IBrush? _custom;   // plugin-chosen bar colour (overrides the gradient)
@@ -339,7 +344,7 @@ public sealed class TextWidgetViewModel : ViewModelBase
         if (colorHex is { Length: 7 } && colorHex[0] == '#' &&
             uint.TryParse(colorHex[1..], System.Globalization.NumberStyles.HexNumber, null, out uint hex))
             c = Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
-        Foreground = new Avalonia.Media.SolidColorBrush(c);
+        Foreground = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(c);   // immutable: built off the UI thread
     }
 
     private string _text = "";
