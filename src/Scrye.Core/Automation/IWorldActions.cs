@@ -1,3 +1,5 @@
+using Scrye.Core.Text;
+
 namespace Scrye.Core.Automation;
 
 /// <summary>
@@ -33,4 +35,10 @@ public interface IWorldActions
 
     /// <summary>Play a sound ("beep", absolute path, or sounds-folder file name). Default no-op.</summary>
     void PlaySound(string sound) { }
+
+    /// <summary>Recolour a plain-text range of the line currently being processed (highlight
+    /// triggers). <paramref name="start"/>/<paramref name="length"/> index the line's plain
+    /// text; a null colour leaves that channel unchanged. Default no-op so headless/test
+    /// implementations need not care.</summary>
+    void Highlight(Rgb? fore, Rgb? back, int start, int length) { }
 }

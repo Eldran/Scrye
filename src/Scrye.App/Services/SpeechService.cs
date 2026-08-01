@@ -24,13 +24,14 @@ public sealed class SpeechService : IDisposable
         set
         {
             _rate = Math.Clamp(value, -10, 10);
+            if (!OperatingSystem.IsWindows()) return;   // guard inline so CA1416 sees it
             if (_synth is not null) try { _synth.Rate = _rate; } catch { }
         }
     }
 
     private System.Speech.Synthesis.SpeechSynthesizer? Synth()
     {
-        if (!Supported) return null;
+        if (!OperatingSystem.IsWindows()) return null;
         if (_synth is null)
         {
             try
@@ -48,7 +49,7 @@ public sealed class SpeechService : IDisposable
     /// <summary>Queue a line of speech (no-op off-Windows or on empty text).</summary>
     public void Speak(string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (!OperatingSystem.IsWindows() || string.IsNullOrWhiteSpace(text)) return;
         var synth = Synth();
         if (synth is null) return;
         try
@@ -63,14 +64,16 @@ public sealed class SpeechService : IDisposable
     /// <summary>Stop talking and drop everything queued.</summary>
     public void Stop()
     {
-        try { _synth?.SpeakAsyncCancelAll(); } catch { }
+        if (OperatingSystem.IsWindows())
+            try { _synth?.SpeakAsyncCancelAll(); } catch { }
         _queued = 0;
     }
 
     public void Dispose()
     {
         Stop();
-        try { _synth?.Dispose(); } catch { }
+        if (OperatingSystem.IsWindows())
+            try { _synth?.Dispose(); } catch { }
         _synth = null;
     }
 }

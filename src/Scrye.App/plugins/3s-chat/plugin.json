@@ -1,0 +1,11 @@
+{
+  "id": "3s-chat",
+  "name": "3S Chat",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep).",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true
+}

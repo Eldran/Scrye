@@ -122,4 +122,83 @@ public class ProfileTests
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
     }
+
+    [Fact]
+    public void MacrosMergeAcrossLayersAndOverrideByGesture()
+    {
+        var g = new ProfileLayer { Kind = LayerKind.Global, Name = "global",
+            Macros = { new MacroDef { Key = "F1", Send = "look" }, new MacroDef { Key = "F2", Send = "score" } } };
+        var m = new ProfileLayer { Kind = LayerKind.Mud, Name = "3Scapes",
+            Macros = { new MacroDef { Key = "F1", Send = "glance" } } };   // rebinds F1
+
+        var eff = ProfileResolver.Resolve(new[] { g, m });
+
+        Assert.Equal(2, eff.Macros.Count);
+        Assert.Equal("glance", eff.Macros.Single(x => x.Key == "F1").Send);   // deeper layer wins
+        Assert.Equal("score", eff.Macros.Single(x => x.Key == "F2").Send);
+    }
+
+    [Fact]
+    public void PluginsAreOptInAndUnionAcrossLayers()
+    {
+        var g = new ProfileLayer { Kind = LayerKind.Global, Name = "global" };
+        var m = new ProfileLayer { Kind = LayerKind.Mud, Name = "3Scapes", Plugins = { "3s-chat" } };
+        var c = new ProfileLayer { Kind = LayerKind.Character, Name = "Goran", Plugins = { "3s-raid", "3s-build" } };
+
+        // nothing enabled anywhere → empty
+        Assert.Empty(ProfileResolver.Resolve(new[] { g }).EnabledPlugins);
+
+        var eff = ProfileResolver.Resolve(new[] { g, m, c });
+        Assert.Equal(new[] { "3s-chat", "3s-raid", "3s-build" }, eff.EnabledPlugins);
+    }
+
+    [Fact]
+    public void PluginEnabledAtCharacterDoesNotLeakToSibling()
+    {
+        var m = new ProfileLayer { Kind = LayerKind.Mud, Name = "3Scapes" };            // shared MUD, no plugins
+        var goran = new ProfileLayer { Kind = LayerKind.Character, Name = "Goran", Plugins = { "3s-viking-status" } };
+        var other = new ProfileLayer { Kind = LayerKind.Character, Name = "Other" };    // sibling char
+
+        Assert.Equal(new[] { "3s-viking-status" }, ProfileResolver.Resolve(new[] { m, goran }).EnabledPlugins);
+        Assert.Empty(ProfileResolver.Resolve(new[] { m, other }).EnabledPlugins);       // unaffected
+    }
+
+    [Fact]
+    public void SuppressDropsAnInheritedPlugin()
+    {
+        var m = new ProfileLayer { Kind = LayerKind.Mud, Name = "3Scapes", Plugins = { "3s-chat", "3s-raid" } };
+        var c = new ProfileLayer { Kind = LayerKind.Character, Name = "Goran", Suppress = { "3s-raid" } };
+
+        var eff = ProfileResolver.Resolve(new[] { m, c });
+        Assert.Equal(new[] { "3s-chat" }, eff.EnabledPlugins);
+    }
+
+    [Fact]
+    public void PluginListSurvivesSerialization()
+    {
+        var layer = new ProfileLayer { Kind = LayerKind.Character, Name = "Goran", Plugins = { "3s-chat", "3s-raid" } };
+        ProfileLayer back = ProfileStore.Deserialize(ProfileStore.Serialize(layer));
+        Assert.Equal(new[] { "3s-chat", "3s-raid" }, back.Plugins);
+    }
+
+    [Fact]
+    public void HighlightFieldsSurviveSerialization()
+    {
+        var layer = new ProfileLayer
+        {
+            Kind = LayerKind.Global, Name = "global",
+            Triggers = { new TriggerDef { Name = "bleed", Pattern = "*bleeding*",
+                HighlightFore = "#FF0000", HighlightBack = "#200000", HighlightWholeLine = false } },
+            Macros = { new MacroDef { Key = "Ctrl+K", Send = "kill %1" } },
+        };
+
+        string json = ProfileStore.Serialize(layer);
+        ProfileLayer back = ProfileStore.Deserialize(json);
+
+        TriggerDef t = back.Triggers.Single();
+        Assert.Equal("#FF0000", t.HighlightFore);
+        Assert.Equal("#200000", t.HighlightBack);
+        Assert.False(t.HighlightWholeLine);
+        Assert.Equal("Ctrl+K", back.Macros.Single().Key);
+    }
 }

@@ -27,6 +27,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     private readonly Script _script;
 
     private readonly List<DynValue> _lineHooks = new();
+    private readonly List<(string chan, DynValue fn)> _channelHooks = new();
     private readonly List<(string pkg, DynValue fn)> _gmcpHooks = new();
     private readonly List<DynValue> _connectHooks = new();
     private readonly List<DynValue> _disconnectHooks = new();
@@ -45,7 +46,10 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     {
         _descriptor = descriptor;
         _host = host;
-        _script = new Script(CoreModules.Preset_HardSandbox);   // no io/os/file from Lua
+        // Soft sandbox: adds pcall/xpcall/error handling, metatables, coroutines and
+        // os.time/os.date/os.clock over the hard sandbox — still NO io, no os.execute,
+        // no load/dofile. (Hard sandbox lacks pcall, which every real plugin wants.)
+        _script = new Script(CoreModules.Preset_SoftSandbox);
         _script.Globals["scrye"] = BuildApi();
     }
 
@@ -94,8 +98,20 @@ public sealed class LuaPluginRuntime : IPluginRuntime
 
     private void Apply(PluginRule rule, MatchResult m)
     {
-        if (rule.Send is not null) _host.Send(Template.Expand(rule.Send, m, _vars));
+        if (rule.Send is not null)
+            AutomationEngine.ForEachLine(Template.Expand(rule.Send, m, _vars), _host.Send);
         if (rule.Run is not null) Safe("rule", () => _script.Call(rule.Run!, m.Wildcards.ToArray()));
+    }
+
+    /// <summary>Fire <c>onChannel</c> hooks for a structured MIP chat message.</summary>
+    public void DispatchChannel(string channel, string message)
+    {
+        for (int i = 0; i < _channelHooks.Count; i++)
+        {
+            (string chan, DynValue fn) = _channelHooks[i];
+            if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
+                Safe("onChannel", () => _script.Call(fn, channel, message));
+        }
     }
 
     public void DispatchGmcp(string package, string json)
@@ -121,6 +137,13 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         if (_actions.TryGetValue(actionId, out DynValue? fn)) Safe("action", () => _script.Call(fn!));
     }
 
+    /// <summary>Invoke a colorgrid cell-click callback with (col, row, char).</summary>
+    public void InvokeCellAction(string actionId, int col, int row, string ch)
+    {
+        if (_actions.TryGetValue(actionId, out DynValue? fn))
+            Safe("cellAction", () => _script.Call(fn!, col, row, ch));
+    }
+
     private void FireAll(List<DynValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -133,6 +156,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         _subscriptions.Clear();
         _timers.Clear();
         _lineHooks.Clear();
+        _channelHooks.Clear();
         _gmcpHooks.Clear();
         _connectHooks.Clear();
         _disconnectHooks.Clear();
@@ -170,6 +194,14 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             return DynValue.Nil;
         });
 
+        // routing + alerts (parity with trigger CapturePane / Sound / Notify)
+        // scrye.capture(pane, text) — route a line into a named capture pane
+        t["capture"] = Fn(a => { _host.Capture(Id, Arg(a, 0), Arg(a, 1)); return DynValue.Nil; });
+        // scrye.sound("beep" | path | sounds-folder file name)
+        t["sound"] = Fn(a => { _host.PlaySound(Arg(a, 0)); return DynValue.Nil; });
+        // scrye.notify(text) — toast (+ taskbar flash when unfocused)
+        t["notify"] = Fn(a => { _host.Notify(Id, Arg(a, 0)); return DynValue.Nil; });
+
         // timers: scrye.after(seconds, fn) -> id (one-shot);  scrye.every(seconds, fn) -> id (repeating)
         t["after"] = Fn(a => AddTimer(a, repeat: false));
         t["every"] = Fn(a => AddTimer(a, repeat: true));
@@ -187,6 +219,17 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             return DynValue.Nil;
         });
 
+        // scrye.onChannel(fn)  OR  scrye.onChannel("Party", fn) — MIP chat messages as
+        // (channel, message); tells arrive with channel "Tell".
+        t["onChannel"] = Fn(a =>
+        {
+            if (a.Count == 1 && a[0].Type == DataType.Function)
+                _channelHooks.Add(("", a[0]));
+            else if (a.Count >= 2 && a[1].Type == DataType.Function)
+                _channelHooks.Add((Arg(a, 0), a[1]));
+            return DynValue.Nil;
+        });
+
         // scrye.onGmcp(fn)  OR  scrye.onGmcp("Char.Vitals", fn)
         t["onGmcp"] = Fn(a =>
         {
@@ -201,6 +244,26 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         //        scrye.addAlias{ ... }  (matches typed input; a match consumes it)
         t["addTrigger"] = Fn(a => AddRule(a, _triggers));
         t["addAlias"]   = Fn(a => AddRule(a, _aliases));
+
+        // persistent per-plugin storage (survives sessions and restarts):
+        //   scrye.store.get(key) -> string|nil     scrye.store.set(key, value)
+        //   scrye.store.delete(key)                scrye.store.keys() -> {k1, k2, ...}
+        var store = new Table(_script);
+        store["get"] = Fn(a =>
+        {
+            string? v = _host.StoreGet(Id, Arg(a, 0));
+            return v is null ? DynValue.Nil : DynValue.NewString(v);
+        });
+        store["set"]    = Fn(a => { _host.StoreSet(Id, Arg(a, 0), Arg(a, 1)); return DynValue.Nil; });
+        store["delete"] = Fn(a => { _host.StoreDelete(Id, Arg(a, 0)); return DynValue.Nil; });
+        store["keys"] = Fn(_ =>
+        {
+            var keys = new Table(_script);
+            string[] ks = _host.StoreKeys(Id);
+            for (int i = 0; i < ks.Length; i++) keys[i + 1] = ks[i];
+            return DynValue.NewTable(keys);
+        });
+        t["store"] = store;
 
         // scrye.addPanel({ title=..., widgets={ {type=...,...}, ... } })
         t["addPanel"] = Fn(a =>
@@ -285,6 +348,9 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Widgets = widgets,
             Tabs = tabs,
             Width = width.Type == DataType.Number ? width.Number : 0,
+            Background = Field(tbl, "background"),
+            Accent = Field(tbl, "accent"),
+            Foreground = Field(tbl, "color"),
         };
     }
 
@@ -307,8 +373,10 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     {
         // A 'button' widget with an action=function is registered as a callback and
         // referenced by an opaque id the host calls back with on click.
+        // 'action' (button) or 'onClick' (colorgrid cell) — either is a function stored under an id.
         string? actionId = null;
         DynValue action = w.Get("action");
+        if (action.Type != DataType.Function) action = w.Get("onClick");
         if (action.Type == DataType.Function)
         {
             actionId = "a" + _nextActionId++;

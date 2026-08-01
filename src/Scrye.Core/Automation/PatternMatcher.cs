@@ -11,6 +11,12 @@ public sealed class MatchResult
 
     public string Whole => _match.Value;
 
+    /// <summary>Character offset of the whole match within the input line.</summary>
+    public int Index => _match.Index;
+
+    /// <summary>Character length of the whole match.</summary>
+    public int Length => _match.Length;
+
     /// <summary>Group by index: 0 = whole match, 1..n = wildcards.</summary>
     public string Group(int index) =>
         index >= 0 && index < _match.Groups.Count && _match.Groups[index].Success

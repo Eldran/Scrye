@@ -19,6 +19,52 @@ public partial class MainWindow : Window
             if (DataContext is MainWindowViewModel vm)
                 vm.ToastRaised += () => { if (!IsActive) FlashTaskbar(); };
         };
+        // pane-tab right-click menu (see OnPanePointerPressed for why this is code, not XAML)
+        AddHandler(Avalonia.Input.InputElement.PointerPressedEvent, OnPanePointerPressed,
+                   Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // keyboard macros: window-level bubble handler — runs only for keys a focused
+        // control didn't already consume (so Enter/Ctrl+F/typing are untouched).
+        AddHandler(InputElement.KeyDownEvent, OnWindowKeyDown,
+                   Avalonia.Interactivity.RoutingStrategies.Bubble);
+    }
+
+    /// <summary>Fire a keyboard macro for the active world if the pressed key is bound.</summary>
+    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Handled) return;
+        if (DataContext is MainWindowViewModel vm && vm.Active is WorldViewModel world
+            && world.TryFireMacro(e.Key, e.KeyModifiers))
+            e.Handled = true;
+    }
+
+    /// <summary>Right-click on a capture-pane tab header: open the move/float/close menu.
+    /// Attached as a window-level tunnel handler (NOT a template event — the Avalonia
+    /// 11.0 XAML compiler crashes on event handlers in nested DataTemplates). Header
+    /// clicks resolve to a TabItem whose DataContext is a CapturePaneViewModel; pane
+    /// CONTENT lives in the TabControl's content presenter, not inside the TabItem,
+    /// so this fires for headers only.</summary>
+    private void OnPanePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(this).Properties.IsRightButtonPressed) return;
+        if (e.Source is not Avalonia.Visual v) return;
+        TabItem? tab = v.FindAncestorOfType<TabItem>(includeSelf: true);
+        if (tab?.DataContext is not CapturePaneViewModel pane) return;
+
+        MenuItem Item(string header, Action action)
+        {
+            var mi = new MenuItem { Header = header };
+            mi.Click += (_, _) => action();
+            return mi;
+        }
+
+        var menu = new ContextMenu();
+        menu.Items.Add(Item("Move to bottom", () => pane.MoveBottomCommand.Execute(null)));
+        menu.Items.Add(Item("Move to right side", () => pane.MoveRightCommand.Execute(null)));
+        menu.Items.Add(Item("Float as window", () => pane.FloatCommand.Execute(null)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Close pane", () => pane.CloseCommand.Execute(null)));
+        menu.Open(tab);
+        e.Handled = true;
     }
 
     /// <summary>Dismiss a toast on click.</summary>

@@ -1,0 +1,11 @@
+{
+  "id": "3s-raid",
+  "name": "3S Raid",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy)",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true
+}

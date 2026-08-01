@@ -17,6 +17,8 @@ namespace Scrye.Core.Plugins;
 /// <see cref="Bind"/> is newline-separated rows of characters, and
 /// <see cref="Palette"/> maps each character to a "#RRGGBB" colour (maps, charts).</item>
 /// <item><c>button</c> — a clickable button firing the plugin callback in <see cref="Action"/>.</item>
+/// <item><c>colorgrid</c> cells are clickable when the widget sets an <c>onClick</c> callback;
+/// the host invokes it with the clicked cell's (col, row, char).</item>
 /// </list>
 /// </summary>
 public sealed record WidgetSpec
@@ -26,6 +28,9 @@ public sealed record WidgetSpec
     public string? Bind { get; init; }
     public string? Value { get; init; }
     public string? Max { get; init; }
+    /// <summary>Custom "#RRGGBB" colour. Applies to <c>label</c>/<c>value</c>/<c>text</c>
+    /// (foreground) and <c>progress</c>/<c>gauge</c> (bar fill, overriding the theme accent /
+    /// the gauge's health gradient). Null = follow the theme / the panel's default foreground.</summary>
     public string? Color { get; init; }
 
     /// <summary>For <c>colorgrid</c>: character → "#RRGGBB" cell colour.</summary>
@@ -58,4 +63,15 @@ public sealed record PanelSpec
 
     /// <summary>Panel width in pixels; 0 = the HUD default (narrow).</summary>
     public double Width { get; init; }
+
+    /// <summary>Optional panel background "#RRGGBB" — overrides the theme's panel colour so a
+    /// plugin can give its pane a distinct look. Null = follow the active colour scheme.</summary>
+    public string? Background { get; init; }
+
+    /// <summary>Optional accent "#RRGGBB" for the panel's border and title. Null = theme accent.</summary>
+    public string? Accent { get; init; }
+
+    /// <summary>Optional default text colour "#RRGGBB" for label/value/text widgets in this panel
+    /// that don't set their own <see cref="WidgetSpec.Color"/>. Null = theme text colour.</summary>
+    public string? Foreground { get; init; }
 }

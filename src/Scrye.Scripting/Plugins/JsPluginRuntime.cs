@@ -28,6 +28,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private readonly Engine _engine;
 
     private readonly List<JsValue> _lineHooks = new();
+    private readonly List<(string chan, JsValue fn)> _channelHooks = new();
     private readonly List<(string pkg, JsValue fn)> _gmcpHooks = new();
     private readonly List<JsValue> _connectHooks = new();
     private readonly List<JsValue> _disconnectHooks = new();
@@ -97,9 +98,21 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private void Apply(PluginRule rule, MatchResult m)
     {
-        if (rule.Send is not null) _host.Send(Template.Expand(rule.Send, m, _vars));
+        if (rule.Send is not null)
+            AutomationEngine.ForEachLine(Template.Expand(rule.Send, m, _vars), _host.Send);
         if (rule.Run is not null)
             Safe("rule", () => _engine.Invoke(rule.Run!, m.Wildcards.Cast<object>().ToArray()));
+    }
+
+    /// <summary>Fire <c>onChannel</c> hooks for a structured MIP chat message.</summary>
+    public void DispatchChannel(string channel, string message)
+    {
+        for (int i = 0; i < _channelHooks.Count; i++)
+        {
+            (string chan, JsValue fn) = _channelHooks[i];
+            if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
+                Safe("onChannel", () => _engine.Invoke(fn, channel, message));
+        }
     }
 
     public void DispatchGmcp(string package, string json)
@@ -126,6 +139,13 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Safe("action", () => _engine.Invoke(fn!));
     }
 
+    /// <summary>Invoke a colorgrid cell-click callback with (col, row, char).</summary>
+    public void InvokeCellAction(string actionId, int col, int row, string ch)
+    {
+        if (_actions.TryGetValue(actionId, out JsValue? fn))
+            Safe("cellAction", () => _engine.Invoke(fn!, col, row, ch));
+    }
+
     private void FireAll(List<JsValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -138,6 +158,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         _subscriptions.Clear();
         _timers.Clear();
         _lineHooks.Clear();
+        _channelHooks.Clear();
         _gmcpHooks.Clear();
         _connectHooks.Clear();
         _disconnectHooks.Clear();
@@ -171,6 +192,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
                     Safe("watch", () => _engine.Invoke(fn, v, p))));
         }),
 
+        // routing + alerts (parity with trigger CapturePane / Sound / Notify)
+        capture = (Action<string, string>)((pane, text) => _host.Capture(Id, pane ?? "", text ?? "")),
+        sound   = (Action<string>)(s => _host.PlaySound(s ?? "")),
+        notify  = (Action<string>)(s => _host.Notify(Id, s ?? "")),
+
         // timers: scrye.after(seconds, fn) -> id (one-shot); scrye.every(seconds, fn) -> id (repeating)
         after  = (Func<double, JsValue, double>)((secs, fn) => AddTimer(secs, fn, repeat: false)),
         every  = (Func<double, JsValue, double>)((secs, fn) => AddTimer(secs, fn, repeat: true)),
@@ -183,6 +209,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
         // scrye.onLine(function(line) { ... })  — return false to gag, a string to rewrite
         onLine = (Action<JsValue>)(fn => AddHook(fn, _lineHooks)),
+
+        // scrye.onChannel(fn)  OR  scrye.onChannel("Party", fn) — MIP chat messages as
+        // (channel, message); tells arrive with channel "Tell".
+        onChannel = (Action<JsValue, JsValue>)((a, b) =>
+        {
+            if (a.IsString() && IsFn(b)) _channelHooks.Add((a.AsString(), b));
+            else if (IsFn(a)) _channelHooks.Add(("", a));
+        }),
 
         // scrye.onGmcp(fn)  OR  scrye.onGmcp("Char.Vitals", fn)
         onGmcp = (Action<JsValue, JsValue>)((a, b) =>
@@ -201,6 +235,17 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             if (def.IsObject()) _host.AddPanel(Id, ToPanelSpec(def));
         }),
+
+        // persistent per-plugin storage (survives sessions and restarts):
+        //   scrye.store.get(key) -> string|null    scrye.store.set(key, value)
+        //   scrye.store.delete(key)                scrye.store.keys() -> [k1, k2, ...]
+        store = (object)new
+        {
+            get = (Func<string, object?>)(key => _host.StoreGet(Id, key ?? "")),
+            set = (Action<string, string>)((key, value) => _host.StoreSet(Id, key ?? "", value ?? "")),
+            @delete = (Action<string>)(key => _host.StoreDelete(Id, key ?? "")),
+            keys = (Func<string[]>)(() => _host.StoreKeys(Id)),
+        },
     };
 
     private void AddRule(JsValue def, List<PluginRule> into)
@@ -265,6 +310,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Widgets = widgets,
             Tabs = tabs,
             Width = ToNum(Get(tbl, "width")),
+            Background = Str(tbl, "background"),
+            Accent = Str(tbl, "accent"),
+            Foreground = Str(tbl, "color"),
         };
     }
 
@@ -300,10 +348,10 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private WidgetSpec ToWidgetSpec(JsValue w)
     {
-        // A 'button' widget with an action=function is registered as a callback and
-        // referenced by an opaque id the host calls back with on click.
+        // 'action' (button) or 'onClick' (colorgrid cell) — either is a function stored under an id.
         string? actionId = null;
         JsValue action = Get(w, "action");
+        if (!IsFn(action)) action = Get(w, "onClick");
         if (IsFn(action))
         {
             actionId = "a" + _nextActionId++;

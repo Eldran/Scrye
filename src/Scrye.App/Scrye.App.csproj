@@ -7,14 +7,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Avalonia 11.x. Bump to the latest 11.x when you first restore. -->
-    <PackageReference Include="Avalonia" Version="11.0.0" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.0.0" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.0.0" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.0.0" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.0.0" Condition="'$(Configuration)' == 'Debug'" />
+    <!-- Avalonia 12.x (latest stable). -->
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.1" />
+    <!-- NOTE: Avalonia.Diagnostics was removed in Avalonia 12.
+         The built-in F12 DevTools no longer exist; the replacement is the
+         AvaloniaUI.DiagnosticsSupport package (Avalonia Plus Dev Tools). -->
     <!-- TTS: Windows-only at runtime (SpeechSynthesizer); guarded by OperatingSystem.IsWindows(). -->
-    <PackageReference Include="System.Speech" Version="8.0.0" />
+    <PackageReference Include="System.Speech" Version="10.0.9" />
   </ItemGroup>
 
   <ItemGroup>

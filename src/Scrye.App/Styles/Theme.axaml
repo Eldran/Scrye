@@ -26,6 +26,26 @@
         <Setter Property="CornerRadius" Value="5" />
     </Style>
 
+    <!-- Command input line: pinned to the fixed terminal colours so the interactive
+         output area reads the same in every colour scheme (an exception to theming).
+         The bar itself follows the theme; only this input keeps the terminal look. -->
+    <Style Selector="TextBox.terminalinput">
+        <Setter Property="Background" Value="{DynamicResource ScryeOutputBg}" />
+        <Setter Property="Foreground" Value="{DynamicResource ScryeOutputText}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource ScryeOutputText}" />
+    </Style>
+    <!-- Hold the background through pointer-over / focus (Fluent otherwise swaps it for a
+         themed brush on those states). PART_BorderElement is the Fluent TextBox surface. -->
+    <Style Selector="TextBox.terminalinput /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ScryeOutputBg}" />
+    </Style>
+    <Style Selector="TextBox.terminalinput:pointerover /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ScryeOutputBg}" />
+    </Style>
+    <Style Selector="TextBox.terminalinput:focus /template/ Border#PART_BorderElement">
+        <Setter Property="Background" Value="{DynamicResource ScryeOutputBg}" />
+    </Style>
+
     <Style Selector="ComboBox">
         <Setter Property="CornerRadius" Value="5" />
     </Style>

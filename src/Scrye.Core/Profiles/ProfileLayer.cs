@@ -46,6 +46,14 @@ public sealed class ProfileLayer
     public List<AliasDef> Aliases { get; set; } = new();
     public List<TimerDef> Timers { get; set; } = new();
     public List<SequenceSpec> Sequences { get; set; } = new();
+    /// <summary>Keyboard macros (key gesture → command). Merged by gesture across layers.</summary>
+    public List<MacroDef> Macros { get; set; } = new();
+
+    /// <summary>Ids of plugins enabled at this layer. Plugins are OPT-IN: a plugin loads
+    /// for a world only if its id appears in the resolved (unioned) set for that world's
+    /// layer chain. Empty everywhere = no plugins load. The plugin manager writes to the
+    /// connected node's layer, so a choice sticks to that character (or account/MUD).</summary>
+    public List<string> Plugins { get; set; } = new();
     public Dictionary<string, string> Variables { get; set; } = new();
 
     /// <summary>Names of inherited rules/variables to drop at this layer (tombstones).</summary>

@@ -24,6 +24,12 @@ public static class ProfileResolver
         var timers = new Dictionary<string, TimerDef>(StringComparer.Ordinal);
         var sequences = new Dictionary<string, SequenceSpec>(StringComparer.Ordinal);
         var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Macros key on their gesture (case-insensitive), not a name — a deeper layer
+        // rebinding the same key overrides the inherited macro.
+        var macros = new Dictionary<string, MacroDef>(StringComparer.OrdinalIgnoreCase);
+        // Opt-in plugins: union of the ids each layer enables (order-preserving), with
+        // Suppress able to drop an inherited one.
+        var plugins = new List<string>();
         int anon = 0;
 
         foreach (ProfileLayer layer in chain)
@@ -53,11 +59,15 @@ public static class ProfileResolver
             {
                 triggers.Remove(name); aliases.Remove(name); timers.Remove(name);
                 sequences.Remove(name); variables.Remove(name);
+                plugins.RemoveAll(p => string.Equals(p, name, StringComparison.Ordinal));
             }
             foreach (TriggerDef t in layer.Triggers) triggers[Key(t.Name, ref anon)] = t;
             foreach (AliasDef a in layer.Aliases) aliases[Key(a.Name, ref anon)] = a;
             foreach (TimerDef tm in layer.Timers) timers[Key(tm.Name, ref anon)] = tm;
             foreach (SequenceSpec s in layer.Sequences) sequences[Key(s.Name, ref anon)] = s;
+            foreach (MacroDef mc in layer.Macros) if (!string.IsNullOrWhiteSpace(mc.Key)) macros[mc.Key.Trim()] = mc;
+            foreach (string pid in layer.Plugins)
+                if (!string.IsNullOrWhiteSpace(pid) && !plugins.Contains(pid.Trim())) plugins.Add(pid.Trim());
             foreach (KeyValuePair<string, string> kv in layer.Variables) variables[kv.Key] = kv.Value;
         }
 
@@ -70,6 +80,8 @@ public static class ProfileResolver
             Aliases = aliases.Values.ToArray(),
             Timers = timers.Values.ToArray(),
             Sequences = sequences.Values.ToArray(),
+            Macros = macros.Values.ToArray(),
+            EnabledPlugins = plugins.ToArray(),
             Variables = variables,
             FontFamily = font,
             FontSize = fontSize,

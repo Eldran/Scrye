@@ -172,4 +172,41 @@ public class AutomationEngineTests
 
         Assert.Equal(new[] { "kill goblin" }, rec.Sends);
     }
+
+    [Fact]
+    public void MultiLineSendFiresOneCommandPerLine()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef
+        {
+            Name = "loot", Pattern = "* is dead*",
+            Send = "get all from corpse\nbury corpse\n\nsay victory",   // blank line skipped
+        });
+
+        engine.ProcessLine("The orc is dead!", rec);
+
+        Assert.Equal(new[] { "get all from corpse", "bury corpse", "say victory" }, rec.Sends);
+    }
+
+    [Fact]
+    public void MultiLineSendExpandsWildcardsOnEveryLine()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddAlias(new AliasDef { Name = "hunt", Pattern = "hunt *", Send = "track %1\r\nkill %1" });
+
+        engine.ProcessInput("hunt bear", rec);
+
+        Assert.Equal(new[] { "track bear", "kill bear" }, rec.Sends);
+    }
+
+    [Fact]
+    public void SingleLineSendIsUnchanged()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddAlias(new AliasDef { Name = "l", Pattern = "peek", Send = "look" });
+
+        engine.ProcessInput("peek", rec);
+
+        Assert.Equal(new[] { "look" }, rec.Sends);
+    }
 }

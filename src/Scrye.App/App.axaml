@@ -14,9 +14,13 @@
         <Color x:Key="SystemAccentColorLight2">#79DBE8</Color>
         <Color x:Key="SystemAccentColorLight3">#9FE6F0</Color>
 
-        <!-- Scrye "slate" palette — referenced by Theme.axaml and MainWindow.axaml. -->
+        <!-- Scrye "slate" palette — referenced by Theme.axaml and MainWindow.axaml.
+             These are the startup defaults; ThemeService.Apply swaps them (and the
+             accent family above) at runtime when a color scheme is selected. -->
         <SolidColorBrush x:Key="ScryeBg" Color="#14181F" />
         <SolidColorBrush x:Key="ScryeOutputBg" Color="#10141A" />
+        <SolidColorBrush x:Key="ScryeOutputText" Color="#D6DEE8" />
+        <SolidColorBrush x:Key="ScryeInsetBg" Color="#10141A" />
         <SolidColorBrush x:Key="ScryePanel" Color="#1B212B" />
         <SolidColorBrush x:Key="ScryePanelAlt" Color="#222A36" />
         <SolidColorBrush x:Key="ScryePanelGlass" Color="#E61B212B" />

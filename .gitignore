@@ -21,3 +21,6 @@ _stage_tmp/
 # delivery scratch (zips staged/committed by the cloud bridge)
 _incoming/
 _to_delete/
+
+# local build output (self-contained zips)
+dist/

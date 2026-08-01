@@ -1,0 +1,11 @@
+{
+  "id": "3s-build",
+  "name": "3S Build Planner",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "3Scapes build planner: affordability for every building upgrade, from the live viking feed",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true
+}

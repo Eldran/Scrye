@@ -35,4 +35,30 @@ public interface IPluginHost
     /// <summary>Contribute a declarative HUD panel. The host renders it and keeps its
     /// bound widgets in sync with state (Foundation D).</summary>
     void AddPanel(string pluginId, PanelSpec panel);
+
+    /// <summary>Route a text line into a named capture pane (parity with trigger
+    /// CapturePane). Default no-op so headless hosts need not care.</summary>
+    void Capture(string pluginId, string pane, string text) { }
+
+    /// <summary>Play a sound ("beep", path, or sounds-folder file). Default no-op.</summary>
+    void PlaySound(string sound) { }
+
+    /// <summary>Raise a notification toast tagged with the plugin id. Default no-op.</summary>
+    void Notify(string pluginId, string text) { }
+
+    // ---- persistent per-plugin storage (scrye.store) --------------------------
+    // Backed by PluginDataStore in real hosts; defaults are no-ops so headless
+    // hosts and tests need not care. Data survives sessions and app restarts.
+
+    /// <summary>Stored value for a key, or null if unset. Default: nothing stored.</summary>
+    string? StoreGet(string pluginId, string key) => null;
+
+    /// <summary>Persist a key/value pair for the plugin. Default no-op.</summary>
+    void StoreSet(string pluginId, string key, string value) { }
+
+    /// <summary>Remove a stored key. Default no-op.</summary>
+    void StoreDelete(string pluginId, string key) { }
+
+    /// <summary>All stored keys for the plugin. Default: empty.</summary>
+    string[] StoreKeys(string pluginId) => Array.Empty<string>();
 }

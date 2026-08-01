@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using Scrye.App.Services;
 using Scrye.Core.Automation;
 using Scrye.Core.Profiles;
 
@@ -35,12 +36,18 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     private string _fontSize;
     public string FontSize { get => _fontSize; set => SetField(ref _fontSize, value); }
 
+    /// <summary>All selectable color schemes (dark/light variants + accents).</summary>
+    public IReadOnlyList<ThemeScheme> Themes => ThemeService.Schemes;
+    private ThemeScheme _theme;
+    public ThemeScheme Theme { get => _theme; set => SetField(ref _theme, value); }
+
     // ---- global rule sets + variables ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
     public ObservableCollection<TimerRowViewModel> Timers { get; } = new();
     public ObservableCollection<SequenceRowViewModel> Sequences { get; } = new();
     public ObservableCollection<VariableRowViewModel> Variables { get; } = new();
+    public ObservableCollection<MacroRowViewModel> Macros { get; } = new();
 
     private TriggerRowViewModel? _selectedTrigger;
     public TriggerRowViewModel? SelectedTrigger { get => _selectedTrigger; set => SetField(ref _selectedTrigger, value); }
@@ -52,6 +59,8 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     public SequenceRowViewModel? SelectedSequence { get => _selectedSequence; set => SetField(ref _selectedSequence, value); }
     private VariableRowViewModel? _selectedVariable;
     public VariableRowViewModel? SelectedVariable { get => _selectedVariable; set => SetField(ref _selectedVariable, value); }
+    private MacroRowViewModel? _selectedMacro;
+    public MacroRowViewModel? SelectedMacro { get => _selectedMacro; set => SetField(ref _selectedMacro, value); }
 
     public RelayCommand AddTriggerCommand { get; }
     public RelayCommand RemoveTriggerCommand { get; }
@@ -63,18 +72,22 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     public RelayCommand RemoveSequenceCommand { get; }
     public RelayCommand AddVariableCommand { get; }
     public RelayCommand RemoveVariableCommand { get; }
+    public RelayCommand AddMacroCommand { get; }
+    public RelayCommand RemoveMacroCommand { get; }
 
     public GlobalSettingsViewModel(ProfileLayer layer)
     {
         _layer = layer;
         _fontFamily = layer.FontFamily ?? "";
         _fontSize = layer.FontSize?.ToString(CultureInfo.InvariantCulture) ?? "";
+        _theme = ThemeService.Find(layer.Theme);
 
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
         foreach (TimerDef tm in _layer.Timers) Timers.Add(new TimerRowViewModel(tm));
         foreach (SequenceSpec s in _layer.Sequences) Sequences.Add(new SequenceRowViewModel(s));
         foreach (KeyValuePair<string, string> kv in _layer.Variables) Variables.Add(new VariableRowViewModel(kv.Key, kv.Value));
+        foreach (MacroDef mc in _layer.Macros) Macros.Add(new MacroRowViewModel(mc));
 
         AddTriggerCommand = new RelayCommand(() =>
         {
@@ -110,6 +123,13 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
             Variables.Add(row); SelectedVariable = row;
         });
         RemoveVariableCommand = new RelayCommand(() => { if (SelectedVariable is not null) Variables.Remove(SelectedVariable); });
+
+        AddMacroCommand = new RelayCommand(() =>
+        {
+            var row = new MacroRowViewModel { Key = "F1", Send = "" };
+            Macros.Add(row); SelectedMacro = row;
+        });
+        RemoveMacroCommand = new RelayCommand(() => { if (SelectedMacro is not null) Macros.Remove(SelectedMacro); });
     }
 
     private static string Unique<T>(string stem, ObservableCollection<T> rows, Func<T, string> nameOf)
@@ -128,6 +148,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _layer.FontFamily = string.IsNullOrWhiteSpace(FontFamily) ? null : FontFamily.Trim();
         _layer.FontSize = double.TryParse(FontSize, NumberStyles.Any, CultureInfo.InvariantCulture, out double sz) && sz > 0
             ? sz : null;
+        _layer.Theme = Theme.Key;
 
         var triggers = new List<TriggerDef>();
         foreach (TriggerRowViewModel r in Triggers) if (!string.IsNullOrWhiteSpace(r.Name)) triggers.Add(r.ToDef());
@@ -149,6 +170,11 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         foreach (VariableRowViewModel r in Variables)
             if (!string.IsNullOrWhiteSpace(r.Key)) vars[r.Key.Trim()] = r.Value ?? "";
         _layer.Variables = vars;
+
+        var macros = new List<MacroDef>();
+        foreach (MacroRowViewModel r in Macros)
+            if (!string.IsNullOrWhiteSpace(r.Key)) macros.Add(r.ToDef());
+        _layer.Macros = macros;
 
         return _layer;
     }

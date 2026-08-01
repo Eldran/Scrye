@@ -7,6 +7,27 @@ public readonly record struct Rgb(byte R, byte G, byte B)
     public static readonly Rgb DefaultFore = new(0xC0, 0xC0, 0xC0);
     public static readonly Rgb DefaultBack = new(0x00, 0x00, 0x00);
 
+    /// <summary>"#RRGGBB" form (used by highlights, colorgrid palettes, config JSON).</summary>
+    public string ToHex() => $"#{R:X2}{G:X2}{B:X2}";
+
+    /// <summary>Parse "#RRGGBB" or "RRGGBB" (case-insensitive). Returns false on null/blank/malformed.</summary>
+    public static bool TryParseHex(string? s, out Rgb rgb)
+    {
+        rgb = default;
+        if (string.IsNullOrWhiteSpace(s)) return false;
+        ReadOnlySpan<char> h = s.AsSpan().Trim();
+        if (h.Length > 0 && h[0] == '#') h = h[1..];
+        if (h.Length != 6) return false;
+        if (byte.TryParse(h[..2], System.Globalization.NumberStyles.HexNumber, null, out byte r)
+            && byte.TryParse(h[2..4], System.Globalization.NumberStyles.HexNumber, null, out byte g)
+            && byte.TryParse(h[4..6], System.Globalization.NumberStyles.HexNumber, null, out byte b))
+        {
+            rgb = new Rgb(r, g, b);
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>The 16 standard ANSI colours (0-7 normal, bright = high-intensity).</summary>
     public static Rgb Ansi16(int index, bool bright)
     {

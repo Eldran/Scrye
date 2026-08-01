@@ -42,6 +42,41 @@ public sealed class Line
     /// <summary>The line's text with styling stripped (for logging, triggers, search).</summary>
     public string PlainText => string.Concat(Runs.Select(r => r.Text));
 
+    /// <summary>Return a copy of this line with the plain-text range
+    /// [<paramref name="start"/>, start+<paramref name="length"/>) recoloured — used by
+    /// highlight triggers. Runs straddling the range boundary are split; <see cref="RunFlags"/>
+    /// and any <see cref="LinkInfo"/> are preserved. A null colour leaves that channel as-is.
+    /// Out-of-range or empty selections, or two null colours, return this line unchanged.</summary>
+    public Line RecolorRange(int start, int length, Rgb? fore, Rgb? back)
+    {
+        if (length <= 0 || (fore is null && back is null)) return this;
+        int total = PlainText.Length;
+        if (start < 0) { length += start; start = 0; }
+        if (start >= total || length <= 0) return this;
+        int end = Math.Min(total, start + length);
+
+        var outRuns = new List<StyledRun>(Runs.Count + 2);
+        int pos = 0;
+        foreach (StyledRun run in Runs)
+        {
+            int rStart = pos, rEnd = pos + run.Text.Length;
+            pos = rEnd;
+            if (rEnd <= start || rStart >= end) { outRuns.Add(run); continue; }  // no overlap
+
+            // [rStart,rEnd) overlaps [start,end): emit up to three pieces
+            int a = Math.Max(rStart, start), b = Math.Min(rEnd, end);
+            if (a > rStart) outRuns.Add(run with { Text = run.Text[..(a - rStart)] });
+            outRuns.Add(run with
+            {
+                Text = run.Text[(a - rStart)..(b - rStart)],
+                Fore = fore ?? run.Fore,
+                Back = back ?? run.Back,
+            });
+            if (b < rEnd) outRuns.Add(run with { Text = run.Text[(b - rStart)..] });
+        }
+        return new Line(outRuns, IsPrompt, ReceivedUtc);
+    }
+
     /// <summary>Clickable regions: MXP link runs plus auto-detected http(s) URLs in
     /// ordinary text. Character positions index into <see cref="PlainText"/>.</summary>
     public IReadOnlyList<LinkSpan> Links => _links ??= ComputeLinks();

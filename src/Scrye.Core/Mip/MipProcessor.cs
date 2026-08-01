@@ -74,16 +74,61 @@ public sealed class MipProcessor
     }
 
     // BBE: KEY^^VALUE^^KEY^^VALUE... (Viking map / vmip feed).
+    //
+    // Over-long values arrive split as KEY_<n>of<m> chunks (e.g. SHIPS_1of4). We buffer
+    // the pieces and, once all m are in, stitch them back into the base KEY — the chunk
+    // keys themselves are never stored, so the base key always holds the CURRENT whole
+    // value and no stale chunks accumulate. (An older KEY_<n> format also exists in the
+    // wild; those are ignored.) Faithful port of the reference ThreeS_MIP plugin.
+    private static readonly Regex ChunkKey = new(@"^(.+)_(\d+)of(\d+)$", RegexOptions.CultureInvariant);
+    private static readonly Regex OldChunkKey = new(@"_\d+$", RegexOptions.CultureInvariant);
+    private readonly Dictionary<string, (int Total, string?[] Parts)> _chunks = new(StringComparer.Ordinal);
+
     private void HandleBBE(string data)
     {
         string[] t = data.Split("^^");
         for (int i = 0; i + 1 < t.Length; i += 2)
-            if (t[i].Length > 0)
+        {
+            string key = t[i], val = t[i + 1];
+            if (key.Length == 0) continue;
+
+            Match cm = ChunkKey.Match(key);
+            if (cm.Success && int.TryParse(cm.Groups[2].Value, out int n)
+                           && int.TryParse(cm.Groups[3].Value, out int m) && m > 0 && n >= 1 && n <= m)
             {
-                _vars.Set("vmip_" + t[i], t[i + 1]);
-                VikingData?.Invoke(t[i], t[i + 1]);
+                string baseKey = cm.Groups[1].Value;
+                // a new transmission (different chunk count, or part 1) restarts the buffer
+                if (!_chunks.TryGetValue(baseKey, out (int Total, string?[] Parts) buf) || buf.Total != m || n == 1)
+                    _chunks[baseKey] = buf = (m, new string?[m]);
+                buf.Parts[n - 1] = val;
+
+                bool complete = true;
+                for (int j = 0; j < m; j++) if (buf.Parts[j] is null) { complete = false; break; }
+                if (complete)
+                {
+                    _chunks.Remove(baseKey);
+                    SetVikingKey(baseKey, string.Concat(buf.Parts));
+                }
             }
+            else if (OldChunkKey.IsMatch(key))
+            {
+                // stale old-format (KEY_n) chunk: ignore
+            }
+            else
+            {
+                SetVikingKey(key, val);
+            }
+        }
         VitalsUpdated?.Invoke();
+    }
+
+    private void SetVikingKey(string key, string val)
+    {
+        // freshness stamp for the live map: consumers compare vmaph_time to now
+        if (key == "VMAPH" && _vars.Get("vmip_VMAPH") != val)
+            _vars.Set("vmaph_time", DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString());
+        _vars.Set("vmip_" + key, val);
+        VikingData?.Invoke(key, val);
     }
 
     // BAB: marker~source~message

@@ -19,16 +19,26 @@ public sealed class HudViewModel : IDisposable
 {
     private readonly StateStore _state;
     private readonly Action<string, string>? _invokeAction;   // (pluginId, actionId) → run on loop
+    private readonly Action<string, string, int, int, string>? _invokeCellAction;  // (pluginId, actionId, col, row, char)
     // State-watch subscriptions per plugin, so a reload/disable can dispose exactly its watches.
     // Only mutated on the construction thread (pre-loop) or the loop thread — never concurrently.
     private readonly Dictionary<string, List<IDisposable>> _pluginSubs = new();
 
     public ObservableCollection<HudPanelViewModel> Panels { get; } = new();
 
-    public HudViewModel(StateStore state, Action<string, string>? invokeAction = null)
+    /// <summary>Saved canvas position for a panel key (pluginId|title), or null. Set by the
+    /// world before plugins load so restored panels come back where the user dragged them.</summary>
+    public Func<string, (double X, double Y)?>? LoadPosition { get; set; }
+
+    /// <summary>Raised after the user drags a panel (persist the layout).</summary>
+    public Action? PanelMoved { get; set; }
+
+    public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
+                        Action<string, string, int, int, string>? invokeCellAction = null)
     {
         _state = state;
         _invokeAction = invokeAction;
+        _invokeCellAction = invokeCellAction;
     }
 
     /// <summary>Add a panel from a spec. Called during plugin load — on the UI thread at
@@ -40,20 +50,25 @@ public sealed class HudViewModel : IDisposable
         var panel = new HudPanelViewModel(string.IsNullOrWhiteSpace(spec.Title) ? pluginId : spec.Title, pluginId)
         {
             Width = spec.Width > 0 ? spec.Width : 220,
+            BackgroundBrush = HudColor.Brush(spec.Background),
+            AccentBrush = HudColor.Brush(spec.Accent),
         };
+        if (LoadPosition?.Invoke(panel.Key) is (double px, double py)) { panel.X = px; panel.Y = py; }
+        panel.Moved = _ => PanelMoved?.Invoke();
+        string? panelFg = spec.Foreground;   // default text colour for widgets that don't set their own
         var subs = new List<IDisposable>();
         if (spec.Tabs.Count > 0)
         {
             foreach (PanelTabSpec tab in spec.Tabs)
             {
                 var tabVm = new HudTabViewModel(tab.Title);
-                foreach (WidgetSpec w in tab.Widgets) tabVm.Widgets.Add(BuildWidget(pluginId, w, subs));
+                foreach (WidgetSpec w in tab.Widgets) tabVm.Widgets.Add(BuildWidget(pluginId, w, subs, panelFg));
                 panel.Tabs.Add(tabVm);
             }
         }
         else
         {
-            foreach (WidgetSpec w in spec.Widgets) panel.Widgets.Add(BuildWidget(pluginId, w, subs));
+            foreach (WidgetSpec w in spec.Widgets) panel.Widgets.Add(BuildWidget(pluginId, w, subs, panelFg));
         }
         if (subs.Count > 0)
         {
@@ -79,8 +94,10 @@ public sealed class HudViewModel : IDisposable
         });
     }
 
-    private object BuildWidget(string pluginId, WidgetSpec w, List<IDisposable> subs)
+    private object BuildWidget(string pluginId, WidgetSpec w, List<IDisposable> subs, string? panelFg = null)
     {
+        // text-bearing widgets fall back to the panel's default foreground when they set no colour
+        string? textColor = w.Color ?? panelFg;
         switch ((w.Type ?? "label").ToLowerInvariant())
         {
             case "button":
@@ -91,39 +108,45 @@ public sealed class HudViewModel : IDisposable
             }
             case "progress":
             {
-                var vm = new ProgressWidgetViewModel(w.Text ?? "");
+                var vm = new ProgressWidgetViewModel(w.Text ?? "", w.Color);   // bar honours explicit colour only
                 BindNumber(w.Value, v => vm.Value = v, subs);
                 BindNumber(w.Max, v => vm.Maximum = v, subs);
                 return vm;
             }
             case "value":
             {
-                var vm = new LabelWidgetViewModel { Prefix = w.Text ?? "" };
+                var vm = new LabelWidgetViewModel(textColor) { Prefix = w.Text ?? "" };
                 BindText(w.Bind, vm.SetValue, subs);
                 return vm;
             }
             case "gauge":
             {
-                var vm = new GaugeWidgetViewModel(w.Text ?? "");
+                var vm = new GaugeWidgetViewModel(w.Text ?? "", w.Color);   // bar honours explicit colour only
                 BindNumber(w.Value, v => vm.Value = v, subs);
                 BindNumber(w.Max, v => vm.Maximum = v, subs);
                 return vm;
             }
             case "text":
             {
-                var vm = new TextWidgetViewModel(w.Color);
+                var vm = new TextWidgetViewModel(textColor);
                 BindText(w.Bind, s => vm.Text = s, subs);
                 return vm;
             }
             case "colorgrid":
             {
                 var vm = new ColorGridWidgetViewModel(w.Palette);
+                if (!string.IsNullOrEmpty(w.Action))
+                {
+                    string actionId = w.Action;
+                    vm.CellCommand = new RelayCommand<Controls.GridCell>(cell =>
+                        _invokeCellAction?.Invoke(pluginId, actionId, cell.Col, cell.Row, cell.Ch.ToString()));
+                }
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
             }
             default: // "label"
             {
-                var vm = new LabelWidgetViewModel { Text = w.Text ?? "" };
+                var vm = new LabelWidgetViewModel(textColor) { Text = w.Text ?? "" };
                 if (!string.IsNullOrEmpty(w.Bind)) BindText(w.Bind, s => vm.Text = s, subs);
                 return vm;
             }
@@ -156,8 +179,11 @@ public sealed class HudViewModel : IDisposable
 
     private static void Post(Action action)
     {
-        if (Dispatcher.UIThread.CheckAccess()) action();
-        else Dispatcher.UIThread.Post(action);
+        // Guarded: a plugin feeding bad widget data must never crash the whole client —
+        // log it and carry on. (Posted actions run on the UI thread where a throw is fatal.)
+        void Safe() => Services.CrashLog.Guard("Hud widget update", action);
+        if (Dispatcher.UIThread.CheckAccess()) Safe();
+        else Dispatcher.UIThread.Post(Safe);
     }
 
     public void Dispose()
@@ -181,6 +207,26 @@ public sealed class HudPanelViewModel
     public ObservableCollection<HudTabViewModel> Tabs { get; } = new();
     public bool HasTabs => Tabs.Count > 0;
     public double Width { get; init; } = 220;
+
+    /// <summary>Plugin-chosen panel background / accent (border + title). Null = follow the theme.
+    /// Set from PanelSpec.Background / .Accent; the XAML overrides the themed defaults when present.</summary>
+    public Avalonia.Media.IBrush? BackgroundBrush { get; init; }
+    public bool HasBackground => BackgroundBrush is not null;
+    public Avalonia.Media.IBrush? AccentBrush { get; init; }
+    public bool HasAccent => AccentBrush is not null;
+
+    /// <summary>Stable key for saved-position lookup across reloads/restarts.</summary>
+    public string Key => PluginId + "|" + Title;
+
+    /// <summary>Canvas position. NaN = not yet placed — the HUD surface assigns a default
+    /// (stacked down the right edge) on first layout; a drag overwrites it.</summary>
+    public double X { get; set; } = double.NaN;
+    public double Y { get; set; } = double.NaN;
+
+    /// <summary>Set by <see cref="HudViewModel"/>; the drag behavior calls <see cref="ReportMoved"/>.</summary>
+    internal Action<HudPanelViewModel>? Moved;
+    public void ReportMoved() => Moved?.Invoke(this);
+
     public HudPanelViewModel(string title, string pluginId) { Title = title; PluginId = pluginId; }
 }
 
@@ -204,10 +250,30 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
     }
 }
 
-/// <summary>A text widget: static text, or a prefix + a live bound value.</summary>
+/// <summary>Parses "#RRGGBB" into a brush; null for empty/invalid (so the theme colour shows).</summary>
+internal static class HudColor
+{
+    public static Avalonia.Media.IBrush? Brush(string? hex)
+    {
+        if (hex is { Length: 7 } && hex[0] == '#' &&
+            uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint v))
+            return new Avalonia.Media.SolidColorBrush(
+                Avalonia.Media.Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v));
+        return null;
+    }
+}
+
+/// <summary>A text widget: static text, or a prefix + a live bound value. An optional
+/// "#RRGGBB" colour overrides the theme foreground (see <see cref="HasColor"/>).</summary>
 public sealed class LabelWidgetViewModel : ViewModelBase
 {
     public string Prefix { get; set; } = "";
+
+    /// <summary>Custom foreground brush, or null to follow the theme.</summary>
+    public Avalonia.Media.IBrush? ColorBrush { get; }
+    public bool HasColor => ColorBrush is not null;
+
+    public LabelWidgetViewModel(string? colorHex = null) => ColorBrush = HudColor.Brush(colorHex);
 
     private string _text = "";
     public string Text { get => _text; set => SetField(ref _text, value); }
@@ -228,7 +294,13 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
         new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0x50, 0x50));
 
     public string Label { get; }
-    public GaugeWidgetViewModel(string label) => Label = label;
+    private readonly Avalonia.Media.IBrush? _custom;   // plugin-chosen bar colour (overrides the gradient)
+
+    public GaugeWidgetViewModel(string label, string? colorHex = null)
+    {
+        Label = label;
+        _custom = HudColor.Brush(colorHex);
+    }
 
     private double _value;
     public double Value
@@ -246,7 +318,7 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
 
     public string Caption => $"{_value:0}/{_maximum:0}";
     public Avalonia.Media.IBrush BarBrush =>
-        _value / _maximum >= 0.5 ? Healthy : _value / _maximum >= 0.25 ? Warning : Critical;
+        _custom ?? (_value / _maximum >= 0.5 ? Healthy : _value / _maximum >= 0.25 ? Warning : Critical);
 
     private void Changed()
     {
@@ -280,6 +352,9 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
 {
     public Dictionary<char, Avalonia.Media.Color> Palette { get; }
 
+    /// <summary>Set when the colorgrid is clickable — bound to ColorGridView.CellCommand.</summary>
+    public System.Windows.Input.ICommand? CellCommand { get; set; }
+
     public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette)
     {
         Palette = new Dictionary<char, Avalonia.Media.Color>();
@@ -294,11 +369,19 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
     public string GridText { get => _gridText; set => SetField(ref _gridText, value); }
 }
 
-/// <summary>A progress bar widget bound to a current value and a maximum.</summary>
+/// <summary>A progress bar widget bound to a current value and a maximum. An optional
+/// "#RRGGBB" colour overrides the theme accent for the bar fill.</summary>
 public sealed class ProgressWidgetViewModel : ViewModelBase
 {
     public string Label { get; }
-    public ProgressWidgetViewModel(string label) => Label = label;
+    public Avalonia.Media.IBrush? ColorBrush { get; }
+    public bool HasColor => ColorBrush is not null;
+
+    public ProgressWidgetViewModel(string label, string? colorHex = null)
+    {
+        Label = label;
+        ColorBrush = HudColor.Brush(colorHex);
+    }
 
     private double _value;
     public double Value

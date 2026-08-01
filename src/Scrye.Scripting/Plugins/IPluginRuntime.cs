@@ -21,6 +21,9 @@ public interface IPluginRuntime : IDisposable
     (bool Consumed, string? Rewrite) ProcessInput(string text);
 
     void DispatchGmcp(string package, string json);
+
+    /// <summary>A structured MIP chat message: (channel, message); tells use channel "Tell".</summary>
+    void DispatchChannel(string channel, string message);
     void Tick(double dtSeconds);
     void DispatchConnect();
     void DispatchDisconnect();
@@ -28,4 +31,7 @@ public interface IPluginRuntime : IDisposable
 
     /// <summary>Invoke a panel-button callback by its action id.</summary>
     void InvokeAction(string actionId);
+
+    /// <summary>Invoke a colorgrid cell-click callback with the clicked cell (col, row, char).</summary>
+    void InvokeCellAction(string actionId, int col, int row, string ch) { }
 }

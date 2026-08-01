@@ -1,0 +1,11 @@
+{
+  "id": "3s-viking-status",
+  "name": "3S Viking Status",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Tabbed Viking status HUD panel fed by the BBE viking feed: Stats / City / Builds / Production / People / Settlers / Holds / Sea / Voyage / Map / Plan / Mission / Feeds",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true
+}

@@ -9,11 +9,13 @@ public class CompletionEngineTests
     public void CompletesByPrefixCaseInsensitive()
     {
         var e = new CompletionEngine(minLength: 3);
-        e.Observe("You see a goblin guarding the gate.");
+        // mixed casing + several "ga*" words so a lowercase prefix must match case-insensitively
+        e.Observe("The Gate guard is Gathering by the gateway.");
         var hits = e.Complete("ga");
-        Assert.Contains("gate", hits);
-        Assert.Contains("guarding", hits);
-        Assert.DoesNotContain("goblin", hits);   // does not start with "ga"
+        Assert.Contains("Gate", hits);        // matches despite capital G
+        Assert.Contains("Gathering", hits);
+        Assert.Contains("gateway", hits);
+        Assert.DoesNotContain("guard", hits);   // starts with "gu", not "ga"
     }
 
     [Fact]

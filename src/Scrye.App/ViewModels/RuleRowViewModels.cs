@@ -104,6 +104,8 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Group = d.Group ?? ""; SequenceText = d.Sequence.ToString();
         CapturePane = d.CapturePane ?? ""; Gag = d.Gag;
         Notify = d.Notify; Sound = d.Sound ?? "";
+        HighlightColor = d.HighlightFore ?? ""; HighlightBack = d.HighlightBack ?? "";
+        HighlightWholeLine = d.HighlightWholeLine;
     }
 
     private string _capturePane = "";
@@ -122,6 +124,18 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
     /// <summary>Sound on match: "beep", a path, or a sounds-folder file name.</summary>
     public string Sound { get => _sound; set => SetField(ref _sound, value); }
 
+    private string _highlightColor = "";
+    /// <summary>Highlight foreground "#RRGGBB" (empty = no highlight).</summary>
+    public string HighlightColor { get => _highlightColor; set => SetField(ref _highlightColor, value); }
+
+    private string _highlightBack = "";
+    /// <summary>Optional highlight background "#RRGGBB" (empty = leave background).</summary>
+    public string HighlightBack { get => _highlightBack; set => SetField(ref _highlightBack, value); }
+
+    private bool _highlightWholeLine = true;
+    /// <summary>Recolour the whole line (true) or just the matched text (false).</summary>
+    public bool HighlightWholeLine { get => _highlightWholeLine; set => SetField(ref _highlightWholeLine, value); }
+
     public TriggerDef ToDef() => new()
     {
         Name = Name.Trim(), Pattern = Pattern, IsRegex = IsRegex, IgnoreCase = IgnoreCase,
@@ -130,6 +144,8 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         SendTo = SendTo, Send = OrNull(Send), Variable = OrNull(Variable), Script = OrNull(Script),
         CapturePane = OrNull(CapturePane), Gag = Gag,
         Notify = Notify, Sound = OrNull(Sound),
+        HighlightFore = OrNull(HighlightColor), HighlightBack = OrNull(HighlightBack),
+        HighlightWholeLine = HighlightWholeLine,
     };
 }
 
@@ -252,4 +268,28 @@ public sealed class TimerRowViewModel : ViewModelBase
             Group = string.IsNullOrWhiteSpace(Group) ? null : Group,
         };
     }
+}
+
+/// <summary>An editable keyboard-macro row: a key gesture bound to a command.</summary>
+public sealed class MacroRowViewModel : ViewModelBase
+{
+    public MacroRowViewModel() { }
+
+    public MacroRowViewModel(MacroDef d)
+    {
+        Key = d.Key; Send = d.Send; Enabled = d.Enabled;
+    }
+
+    private string _key = "";
+    /// <summary>Key gesture, e.g. "F1", "Ctrl+K", "NumPad1".</summary>
+    public string Key { get => _key; set => SetField(ref _key, value); }
+
+    private string _send = "";
+    /// <summary>Command to send (multi-line = one command per line; supports ${var}).</summary>
+    public string Send { get => _send; set => SetField(ref _send, value); }
+
+    private bool _enabled = true;
+    public bool Enabled { get => _enabled; set => SetField(ref _enabled, value); }
+
+    public MacroDef ToDef() => new() { Key = Key.Trim(), Send = Send, Enabled = Enabled };
 }

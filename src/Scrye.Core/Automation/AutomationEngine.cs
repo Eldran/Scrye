@@ -1,3 +1,5 @@
+using Scrye.Core.Text;
+
 namespace Scrye.Core.Automation;
 
 /// <summary>
@@ -91,6 +93,7 @@ public sealed class AutomationEngine
 
             string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx,
                                  t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound);
+            ApplyHighlight(t.Def, m, line, ctx);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
             if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
@@ -183,9 +186,10 @@ public sealed class AutomationEngine
 
         switch (sendTo)
         {
-            case SendTo.World when text.Length > 0: ctx.Send(text); break;
-            case SendTo.Output: ctx.Echo(text); break;
-            case SendTo.Command: ctx.Echo(text); break;
+            // Multi-line send: each non-empty line is its own command (MUSHclient-style).
+            case SendTo.World when text.Length > 0: ForEachLine(text, ctx.Send); break;
+            case SendTo.Output: ForEachLine(text, ctx.Echo); break;
+            case SendTo.Command: ForEachLine(text, ctx.Echo); break;
             case SendTo.Variable when !string.IsNullOrEmpty(variable): ctx.SetVariable(variable!, text); break;
             case SendTo.Script: break; // handled below
         }
@@ -194,6 +198,44 @@ public sealed class AutomationEngine
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
         return Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
+    }
+
+    /// <summary>Apply a trigger's highlight (if any) to the line being processed, via
+    /// <see cref="IWorldActions.Highlight"/>. Whole-line highlights span the full text;
+    /// otherwise only the matched range is recoloured.</summary>
+    private static void ApplyHighlight(TriggerDef def, MatchResult m, string line, IWorldActions ctx)
+    {
+        bool hasFore = Rgb.TryParseHex(def.HighlightFore, out Rgb fore);
+        bool hasBack = Rgb.TryParseHex(def.HighlightBack, out Rgb back);
+        if (!hasFore && !hasBack) return;
+
+        int start = def.HighlightWholeLine ? 0 : m.Index;
+        int length = def.HighlightWholeLine ? line.Length : m.Length;
+        if (length <= 0) return;
+        ctx.Highlight(hasFore ? fore : null, hasBack ? back : null, start, length);
+    }
+
+    /// <summary>Run <paramref name="action"/> for each non-empty line of an expanded
+    /// send template — a multi-line Send fires one command per line, in order.</summary>
+    public static void ForEachLine(string text, Action<string> action)
+    {
+        if (!text.Contains('\n')) { if (text.Length > 0) action(text); return; }
+        foreach (string raw in text.Split('\n'))
+        {
+            string cmd = raw.TrimEnd('\r');
+            if (cmd.Length > 0) action(cmd);
+        }
+    }
+
+    /// <summary>First line of a possibly multi-line send, with a "+n more" suffix — for
+    /// event-log summaries.</summary>
+    private static string FirstLine(string text)
+    {
+        int nl = text.IndexOf('\n');
+        if (nl < 0) return text;
+        int extra = 0;
+        foreach (string raw in text.Split('\n')) if (raw.TrimEnd('\r').Length > 0) extra++;
+        return $"{text[..nl].TrimEnd('\r')} (+{Math.Max(0, extra - 1)} more)";
     }
 
     /// <summary>Build the same summary <see cref="Fire"/> returns, but WITHOUT
@@ -205,10 +247,10 @@ public sealed class AutomationEngine
         string text = Template.Expand(send, m, _vars);
         string primary = sendTo switch
         {
-            SendTo.World when text.Length > 0 => $"send: {text}",
+            SendTo.World when text.Length > 0 => $"send: {FirstLine(text)}",
             SendTo.World => "send: (empty)",
-            SendTo.Output => $"echo: {text}",
-            SendTo.Command => $"command: {text}",
+            SendTo.Output => $"echo: {FirstLine(text)}",
+            SendTo.Command => $"command: {FirstLine(text)}",
             SendTo.Variable when !string.IsNullOrEmpty(variable) => $"var {variable}={text}",
             SendTo.Variable => "var: (no target)",
             SendTo.Script => "",

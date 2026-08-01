@@ -64,6 +64,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     // per-line routing state, valid only while triggers process the current line (loop-only)
     private readonly List<string> _lineCaptures = new();
+    private readonly List<(Rgb? Fore, Rgb? Back, int Start, int Length)> _lineHighlights = new();
     private bool _lineGagged;
     private bool _lineNotify;
     private bool _processingLine;
@@ -123,6 +124,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public event Action<bool>? EchoModeChanged;
     /// <summary>Raised after MIP vitals/map variables change (drive a HUD from this).</summary>
     public event Action? MipVitalsUpdated;
+    /// <summary>A structured chat message from the MIP feed: (channel, message).
+    /// Tells arrive with channel "Tell". Raised on the loop thread, in addition to
+    /// the formatted output line — drives plugin <c>scrye.onChannel</c> hooks.</summary>
+    public event Action<string, string>? ChannelMessage;
     /// <summary>Raised as a running command sequence progresses (drive the status strip).</summary>
     public event Action<SequenceStatus>? SequenceStatusChanged;
     /// <summary>Fires once per scheduler tick (1s), on the loop thread, with the delta seconds.
@@ -189,8 +194,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // the raw viking (BBE) feed becomes watchable state: vik.<key>
         _mipProc.VikingData += (k, v) => _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
         _mipProc.Notice += text => Echo(text);
-        _mipProc.Tell += text => RaiseLine(Line.FromText(text, MipColour));
-        _mipProc.Channel += (ch, msg) => RaiseLine(Line.FromText($"[{ch}] {msg}", MipColour));
+        _mipProc.Tell += text =>
+        {
+            RaiseLine(Line.FromText(text, MipColour));
+            ChannelMessage?.Invoke("Tell", text);
+        };
+        _mipProc.Channel += (ch, msg) =>
+        {
+            RaiseLine(Line.FromText($"[{ch}] {msg}", MipColour));
+            ChannelMessage?.Invoke(ch, msg);
+        };
     }
 
     private void OnAutomationHit(AutomationHit hit)
@@ -383,6 +396,23 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>Save the current recording to a <c>.scryerec</c> file (no-op if not recording).</summary>
     public void SaveRecording(string path) => _recorder?.Save(path);
 
+    // ---- plugin-facing routing/alert requests (call on the loop thread) -------
+
+    /// <summary>Route a line to a named capture pane (plugin parity with trigger CapturePane).</summary>
+    public void RoutePane(string pane, Line line)
+    {
+        if (!string.IsNullOrWhiteSpace(pane)) LineRouted?.Invoke(pane.Trim(), line);
+    }
+
+    /// <summary>Play a sound (plugin parity with trigger Sound / MSP).</summary>
+    public void RequestSound(string sound)
+    {
+        if (!string.IsNullOrWhiteSpace(sound)) SoundRequested?.Invoke(sound.Trim());
+    }
+
+    /// <summary>Raise a notification toast (plugin parity with trigger Notify).</summary>
+    public void RequestNotify(Line line) => NotifyRequested?.Invoke(line);
+
     /// <summary>Force the MIP handshake now (manual `mipstart`).</summary>
     public void StartMip()
     {
@@ -409,6 +439,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     }
     void IWorldActions.GagLine() { if (_processingLine) _lineGagged = true; }
     void IWorldActions.Notify() { if (_processingLine) _lineNotify = true; }
+    void IWorldActions.Highlight(Rgb? fore, Rgb? back, int start, int length)
+    {
+        if (_processingLine && (fore is not null || back is not null) && length > 0)
+            _lineHighlights.Add((fore, back, start, length));
+    }
     void IWorldActions.PlaySound(string sound)
     {
         if (!string.IsNullOrWhiteSpace(sound)) SoundRequested?.Invoke(sound);
@@ -553,6 +588,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             _mipPending = false;
             SendMipHandshake();
         }
+        // Fallback net: a MIP frame that survived packet-level stripping (unlucky packet
+        // splits, terminators the stream scanner missed) is consumed here rather than
+        // displayed — same belt-and-braces the reference MUSHclient plugin kept.
+        if (Profile.EnableMip && line.PlainText.Contains("#K%")
+            && _mip.TryConsumeDisplayedLine(line.PlainText, out string mipPre))
+        {
+            if (mipPre.Length > 0) RaiseLine(Line.FromText(mipPre));
+            return;
+        }
         if (_autoLogin is not null)
         {
             // Reply to name/password prompts. SendBytes (not SendText) keeps the
@@ -582,6 +626,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // Triggers run BEFORE display so capture/gag can route the line. (Ordering
         // note: engine triggers now fire before plugin onLine filters.)
         _lineCaptures.Clear();
+        _lineHighlights.Clear();
         _lineGagged = false;
         _lineNotify = false;
         _processingLine = true;
@@ -589,6 +634,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _processingLine = false;
         foreach (string pane in _lineCaptures) LineRouted?.Invoke(pane, line);
         if (_lineNotify) NotifyRequested?.Invoke(line);
+
+        // Apply highlight-trigger recolours to the line before display (captures/logs keep
+        // the original styling; only the shown line is recoloured).
+        foreach ((Rgb? fore, Rgb? back, int start, int length) in _lineHighlights)
+            line = line.RecolorRange(start, length, fore, back);
 
         // Plugins may gag (null) or rewrite the DISPLAYED line; automation still sees the original.
         Line? shown = LineDisplayFilter is null ? line : LineDisplayFilter(line);

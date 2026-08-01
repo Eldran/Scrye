@@ -11,14 +11,17 @@ namespace Scrye.Scripting.Plugins;
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
-    private readonly List<PluginDescriptor> _descriptors;   // discovered plugins (mutated on the loop by rescan/remove)
+    private readonly List<PluginDescriptor> _descriptors;   // available plugins (mutated on the loop by rescan/remove)
     private readonly IPluginHost _host;
     private readonly Action<string> _report;
     private readonly Action<string>? _dropPanels;           // (pluginId) → host removes its HUD panels
     private readonly Func<IReadOnlyList<PluginDescriptor>>? _rediscover;   // re-scan disk (for add/remove)
     private readonly string? _userRoot;                     // plugins under here are removable (deletable)
+    private readonly Action<string, bool>? _persistEnable;  // (pluginId, enabled) → save the choice to the profile
     private readonly List<IPluginRuntime> _runtimes = new();
-    private readonly HashSet<string> _disabled = new(StringComparer.Ordinal);   // ids the user turned off this session
+    // Authoritative opt-in set: the plugins this world should load. Seeded from the
+    // character's profile; Enable/Disable mutate it and persist via _persistEnable.
+    private readonly HashSet<string> _enabled;
 
     // Immutable snapshots republished on every set-change (always on the loop / pre-loop) so the
     // UI can read plugin state without touching the mutable _runtimes / _descriptors.
@@ -35,17 +38,28 @@ public sealed class PluginManager : IDisposable
     /// remove that plugin's HUD panels. Invoked on the same thread as the unload.</param>
     /// <param name="rediscover">Re-scans the plugin roots (for <see cref="Rescan"/>).</param>
     /// <param name="userRoot">The writable user plugins folder; plugins under it are removable.</param>
-    public PluginManager(IReadOnlyList<PluginDescriptor> plugins, IPluginHost host, Action<string> report,
+    /// <param name="plugins">All plugins AVAILABLE for this world (the manager's catalogue).</param>
+    /// <param name="enabledIds">Ids the character has opted into — only these load at startup.</param>
+    /// <param name="persistEnable">Called (id, enabled) when the user toggles a plugin, so the
+    /// choice can be saved to the connected character's profile. Null = session-only (quick-connect).</param>
+    public PluginManager(IReadOnlyList<PluginDescriptor> plugins, IEnumerable<string> enabledIds,
+                         IPluginHost host, Action<string> report,
                          Action<string>? dropPanels = null,
-                         Func<IReadOnlyList<PluginDescriptor>>? rediscover = null, string? userRoot = null)
+                         Func<IReadOnlyList<PluginDescriptor>>? rediscover = null, string? userRoot = null,
+                         Action<string, bool>? persistEnable = null)
     {
         _descriptors = plugins.ToList();
+        _enabled = new HashSet<string>(enabledIds, StringComparer.Ordinal);
         _host = host;
         _report = report;
         _dropPanels = dropPanels;
         _rediscover = rediscover;
         _userRoot = string.IsNullOrEmpty(userRoot) ? null : Path.GetFullPath(userRoot);
-        foreach (PluginDescriptor d in _descriptors) LoadOne(d);
+        _persistEnable = persistEnable;
+        // Load only the opted-in plugins (that are actually present in the catalogue).
+        foreach (PluginDescriptor d in _descriptors)
+            if (_enabled.Contains(d.Manifest.Id)) LoadOne(d);
+        Republish();
     }
 
     private void LoadOne(PluginDescriptor d)
@@ -92,30 +106,36 @@ public sealed class PluginManager : IDisposable
 
     // ---- lifecycle (call on the loop thread) ---------------------------------
 
-    /// <summary>Dispose + re-run a plugin's entry script (edit-then-reload). Loop-thread only.</summary>
+    /// <summary>Dispose + re-run a plugin's entry script (edit-then-reload). Loop-thread only.
+    /// Only meaningful for an enabled plugin; does nothing for one that isn't loaded.</summary>
     public void Reload(string id)
     {
         PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
-        if (d is null) return;
-        _disabled.Remove(id);
+        if (d is null || _runtimes.All(r => r.Id != id)) return;
         UnloadRuntime(id);
         LoadOne(d);
     }
 
-    /// <summary>Unload a plugin without reloading, and remember it as off for this session. Loop-thread only.</summary>
+    /// <summary>Turn a plugin OFF for this character: unload it and drop it from the opt-in set
+    /// (persisted to the profile). Loop-thread only.</summary>
     public void Disable(string id)
     {
-        _disabled.Add(id);
+        bool changed = _enabled.Remove(id);
         if (_runtimes.Any(r => r.Id == id)) { UnloadRuntime(id); _report($"disabled plugin '{id}'"); }
+        if (changed) _persistEnable?.Invoke(id, false);
     }
 
-    /// <summary>Load a plugin that isn't currently loaded. Loop-thread only.</summary>
+    /// <summary>Turn a plugin ON for this character: add it to the opt-in set (persisted) and
+    /// load it if present. Loop-thread only.</summary>
     public void Enable(string id)
     {
-        _disabled.Remove(id);
-        if (_runtimes.Any(r => r.Id == id)) return;
-        PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
-        if (d is not null) LoadOne(d);
+        bool changed = _enabled.Add(id);
+        if (_runtimes.All(r => r.Id != id))
+        {
+            PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
+            if (d is not null) LoadOne(d);
+        }
+        if (changed) _persistEnable?.Invoke(id, true);
     }
 
     /// <summary>Re-scan the plugin roots: load newly-added plugins, unload ones deleted from disk.
@@ -134,8 +154,9 @@ public sealed class PluginManager : IDisposable
         _descriptors.Clear();
         _descriptors.AddRange(found);
 
+        // load any opted-in plugin that appeared on disk and isn't running yet
         foreach (PluginDescriptor d in found)
-            if (!_disabled.Contains(d.Manifest.Id) && _runtimes.All(r => r.Id != d.Manifest.Id))
+            if (_enabled.Contains(d.Manifest.Id) && _runtimes.All(r => r.Id != d.Manifest.Id))
                 LoadOne(d);
 
         Republish();
@@ -147,7 +168,7 @@ public sealed class PluginManager : IDisposable
     {
         PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
         UnloadRuntime(id);
-        _disabled.Remove(id);
+        if (_enabled.Remove(id)) _persistEnable?.Invoke(id, false);
         if (d is not null)
         {
             _descriptors.Remove(d);
@@ -171,7 +192,10 @@ public sealed class PluginManager : IDisposable
     /// session's <c>LineDisplayFilter</c>.</summary>
     public Line? ProcessLine(Line line)
     {
-        if (line.IsPrompt) DispatchPrompt();
+        // Prompt hook: GA/EOR-flagged prompts, or a bare ">" line — 3Scapes sends its
+        // prompt as plain text without GA, so IsPrompt alone never fires. Same heuristic
+        // the session core uses for prompt-gated sequences.
+        if (line.IsPrompt || line.PlainText.Trim() == ">") DispatchPrompt();
 
         string text = line.PlainText;
         bool gag = false;
@@ -201,6 +225,11 @@ public sealed class PluginManager : IDisposable
         return current;
     }
 
+    public void DispatchChannel(string channel, string message)
+    {
+        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchChannel(channel, message);
+    }
+
     public void DispatchGmcp(string package, string json)
     {
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchGmcp(package, json);
@@ -217,6 +246,13 @@ public sealed class PluginManager : IDisposable
     public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); }
 
     /// <summary>Fire a panel-button callback owned by <paramref name="pluginId"/>. Runs on the loop thread.</summary>
+    /// <summary>Fire a colorgrid cell-click callback with the clicked cell. Loop-thread only.</summary>
+    public void InvokeCellAction(string pluginId, string actionId, int col, int row, string ch)
+    {
+        IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
+        rt?.InvokeCellAction(actionId, col, row, ch);
+    }
+
     public void InvokeAction(string pluginId, string actionId)
     {
         for (int i = 0; i < _runtimes.Count; i++)

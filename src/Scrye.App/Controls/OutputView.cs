@@ -3,6 +3,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform; // Avalonia 12: SetTextAsync is now an extension method (ClipboardExtensions)
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 using Avalonia.Threading;
@@ -52,6 +53,10 @@ public class OutputView : Control
     /// <summary>When true, search highlighting is case-sensitive.</summary>
     public static readonly StyledProperty<bool> MatchCaseProperty =
         AvaloniaProperty.Register<OutputView, bool>(nameof(MatchCase));
+
+    /// <summary>Show a HH:mm:ss gutter (local time) before each line.</summary>
+    public static readonly StyledProperty<bool> ShowTimestampsProperty =
+        AvaloniaProperty.Register<OutputView, bool>(nameof(ShowTimestamps));
 
     /// <summary>True while the view is glued to the newest line (read-only:
     /// scrolling up clears it, <see cref="ScrollToEnd"/> or scrolling back down sets it).
@@ -104,12 +109,17 @@ public class OutputView : Control
     {
         AffectsMeasure<OutputView>(FontFamilyProperty, FontSizeProperty);
         AffectsRender<OutputView>(FontFamilyProperty, FontSizeProperty, SearchTermProperty,
-                                  ActiveMatchLineProperty, MatchCaseProperty);
+                                  ActiveMatchLineProperty, MatchCaseProperty, ShowTimestampsProperty);
     }
 
     public string? SearchTerm { get => GetValue(SearchTermProperty); set => SetValue(SearchTermProperty, value); }
     public int ActiveMatchLine { get => GetValue(ActiveMatchLineProperty); set => SetValue(ActiveMatchLineProperty, value); }
     public bool MatchCase { get => GetValue(MatchCaseProperty); set => SetValue(MatchCaseProperty, value); }
+    public bool ShowTimestamps { get => GetValue(ShowTimestampsProperty); set => SetValue(ShowTimestampsProperty, value); }
+
+    /// <summary>Left origin of line text: 2px pad plus the timestamp gutter when shown
+    /// ("HH:mm:ss" = 8 chars + a space of separation).</summary>
+    private double OriginX => 2 + (ShowTimestamps ? 9 * _charWidth : 0);
 
     public bool IsFollowingTail => _stickToBottom;
     public int PendingLines => _pendingLines;
@@ -407,7 +417,7 @@ public class OutputView : Control
         int line = _lineHeight > 0 ? (int)(p.Y / _lineHeight) : 0;
         int maxLine = Math.Max(0, (_source?.Count ?? 1) - 1);
         line = Math.Clamp(line, 0, maxLine);
-        int col = _charWidth > 0 ? (int)Math.Round((p.X - 2) / _charWidth) : 0;
+        int col = _charWidth > 0 ? (int)Math.Round((p.X - OriginX) / _charWidth) : 0;
         return (line, Math.Max(0, col));
     }
 
@@ -452,12 +462,14 @@ public class OutputView : Control
         }
         string? term = SearchTerm;
 
+        bool stamps = ShowTimestamps;
         for (int i = first; i <= last; i++)
         {
             double y = i * _lineHeight;
             string plain = src[i].PlainText;
             if (selA is not null) DrawSelection(context, i, y, plain.Length, selA.Value, selB!.Value);
             if (!string.IsNullOrEmpty(term)) DrawMatches(context, plain, term!, y, i == ActiveMatchLine);
+            if (stamps && plain.Length > 0) DrawTimestamp(context, src[i], y);
             DrawLine(context, src[i], y);
             DrawLinks(context, src[i], y);
         }
@@ -471,7 +483,7 @@ public class OutputView : Control
         double uy = y + _lineHeight - 1;
         foreach (LinkSpan span in links)
         {
-            double x = 2 + span.Start * _charWidth;
+            double x = OriginX + span.Start * _charWidth;
             ctx.DrawLine(LinkPen, new Point(x, uy), new Point(x + span.Length * _charWidth, uy));
         }
     }
@@ -485,7 +497,7 @@ public class OutputView : Control
         if (end > len) end = len;
         if (line == a.line && line == b.line && start == end) end = start + 1;   // caret-ish
         if (end <= start) return;
-        double x = 2 + start * _charWidth;
+        double x = OriginX + start * _charWidth;
         ctx.FillRectangle(SelectionBrush, new Rect(x, y, (end - start) * _charWidth, _lineHeight));
     }
 
@@ -497,16 +509,27 @@ public class OutputView : Control
         {
             int idx = plain.IndexOf(term, from, cmp);
             if (idx < 0) break;
-            double x = 2 + idx * _charWidth;
+            double x = OriginX + idx * _charWidth;
             ctx.FillRectangle(active ? ActiveMatchBrush : MatchBrush,
                               new Rect(x, y, term.Length * _charWidth, _lineHeight));
             from = idx + term.Length;
         }
     }
 
+    private static readonly IImmutableBrush TimestampBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x90, 0x6E, 0x76, 0x81));
+
+    /// <summary>Dim HH:mm:ss (local time) in the gutter.</summary>
+    private void DrawTimestamp(DrawingContext context, Line line, double y)
+    {
+        var ft = new FormattedText(line.ReceivedUtc.ToLocalTime().ToString("HH:mm:ss"),
+            CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            new Typeface(FontFamily), FontSize, TimestampBrush);
+        context.DrawText(ft, new Point(2, y));
+    }
+
     private void DrawLine(DrawingContext context, Line line, double y)
     {
-        double x = 2;
+        double x = OriginX;
         foreach (StyledRun run in line.Runs)
         {
             Rgb fore = run.Fore, back = run.Back;

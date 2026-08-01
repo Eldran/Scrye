@@ -38,6 +38,9 @@ public class TerminalPane : Grid
     public static readonly StyledProperty<bool> MatchCaseProperty =
         AvaloniaProperty.Register<TerminalPane, bool>(nameof(MatchCase));
 
+    public static readonly StyledProperty<bool> ShowTimestampsProperty =
+        AvaloniaProperty.Register<TerminalPane, bool>(nameof(ShowTimestamps));
+
     /// <summary>How many lines tall the live-tail pane is while split.</summary>
     public static readonly StyledProperty<int> TailLinesProperty =
         AvaloniaProperty.Register<TerminalPane, int>(nameof(TailLines), 5);
@@ -48,6 +51,7 @@ public class TerminalPane : Grid
     public string? SearchTerm { get => GetValue(SearchTermProperty); set => SetValue(SearchTermProperty, value); }
     public int ActiveMatchLine { get => GetValue(ActiveMatchLineProperty); set => SetValue(ActiveMatchLineProperty, value); }
     public bool MatchCase { get => GetValue(MatchCaseProperty); set => SetValue(MatchCaseProperty, value); }
+    public bool ShowTimestamps { get => GetValue(ShowTimestampsProperty); set => SetValue(ShowTimestampsProperty, value); }
     public int TailLines { get => GetValue(TailLinesProperty); set => SetValue(TailLinesProperty, value); }
 
     /// <summary>Forwarded from both output views (sender is this pane, so the
@@ -160,6 +164,12 @@ public class TerminalPane : Grid
         else if (change.Property == MatchCaseProperty)
         {
             _history.MatchCase = change.GetNewValue<bool>();
+        }
+        else if (change.Property == ShowTimestampsProperty)
+        {
+            bool ts = change.GetNewValue<bool>();
+            _history.ShowTimestamps = ts;
+            _tail.ShowTimestamps = ts;
         }
         else if (change.Property == TailLinesProperty)
         {

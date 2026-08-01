@@ -48,4 +48,10 @@ public static class PluginCatalog
     /// <summary>Enabled plugins that apply to <paramref name="mudId"/>, discovered under the roots.</summary>
     public static IReadOnlyList<PluginDescriptor> ForMud(string mudId, params string[] roots) =>
         Discover(roots).Where(d => d.Manifest.Enabled && d.AppliesTo(mudId)).ToList();
+
+    /// <summary>All plugins that apply to <paramref name="mudId"/> — the catalogue the plugin
+    /// manager offers for opt-in. Ignores the manifest <c>Enabled</c> flag (which plugins load
+    /// is decided per-character by the profile, not the manifest); only the MUD scope filters.</summary>
+    public static IReadOnlyList<PluginDescriptor> AvailableForMud(string mudId, params string[] roots) =>
+        Discover(roots).Where(d => d.AppliesTo(mudId)).ToList();
 }

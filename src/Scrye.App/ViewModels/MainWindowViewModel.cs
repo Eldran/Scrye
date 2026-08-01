@@ -94,6 +94,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             "Scrye", "profiles");
         _store = new ProfileStore(dir);
 
+        // Restore the saved color scheme before the window is shown.
+        Services.ThemeService.Apply(_store.LoadGlobal().Theme);
+
         ConnectCommand = new RelayCommand(QuickConnect);
         NewMudCommand = new RelayCommand(() =>
             Editor = new WorldEditorViewModel("New MUD", null, isNew: true, LayerKind.Mud));
@@ -232,12 +235,53 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void SaveSettings()
     {
         if (Settings is null) return;
-        _store.SaveGlobal(Settings.ToLayer());
+        ProfileLayer layer = Settings.ToLayer();
+        _store.SaveGlobal(layer);
+        Services.ThemeService.Apply(layer.Theme);   // scheme change takes effect immediately
         Settings = null;
         ReapplyToConnected();   // global merges into every chain
     }
 
     // ---- connecting ----------------------------------------------------------
+
+    /// <summary>Save a plugin opt-in choice to the profile layer of the node the world was
+    /// connected as (character, else account, else MUD), so it sticks to that character and
+    /// doesn't leak to siblings. Runs on the UI thread.</summary>
+    private void PersistPluginEnable(ProfileRef r, string id, bool enabled)
+    {
+        // never let a profile-save mishap crash the client (runs on the UI thread)
+        if (!Services.CrashLog.Guard("PersistPluginEnable", () => SavePluginChoice(r, id, enabled)))
+            RaiseToast("Plugins", $"Couldn't save the plugin choice for '{id}' (see logs).");
+    }
+
+    private void SavePluginChoice(ProfileRef r, string id, bool enabled)
+    {
+        // load the connected node's own layer (create an empty one if it doesn't exist yet)
+        ProfileLayer layer;
+        if (r.Character is not null)
+            layer = _store.LoadCharacter(r.Mud, r.Account, r.Character)
+                    ?? new ProfileLayer { Kind = LayerKind.Character, Name = r.Character };
+        else if (r.Account is not null)
+            layer = _store.LoadAccount(r.Mud, r.Account) ?? new ProfileLayer { Kind = LayerKind.Account, Name = r.Account };
+        else
+            layer = _store.LoadMud(r.Mud) ?? new ProfileLayer { Kind = LayerKind.Mud, Name = r.Mud };
+
+        bool changed;
+        if (enabled)
+        {
+            changed = !layer.Plugins.Contains(id);
+            if (changed) layer.Plugins.Add(id);
+        }
+        else
+        {
+            changed = layer.Plugins.RemoveAll(p => p == id) > 0;
+        }
+        if (!changed) return;
+
+        if (r.Character is not null) _store.SaveCharacter(r.Mud, r.Account, r.Character, layer);
+        else if (r.Account is not null) _store.SaveAccount(r.Mud, r.Account, layer);
+        else _store.SaveMud(r.Mud, layer);
+    }
 
     private EffectiveProfile Resolve(ProfileRef r) =>
         r.Character is not null ? _store.ResolveCharacter(r.Mud, r.Account, r.Character)
@@ -263,6 +307,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (eff.PasswordRef is not null)   // inject the auto-login secret at runtime only
             eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
         var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
+        vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
         Worlds.Add(vm);
         Active = vm;
         if (string.IsNullOrEmpty(eff.World.Host))

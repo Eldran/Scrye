@@ -42,6 +42,14 @@ public sealed record TriggerDef
     /// resolved under the Scrye sounds folder. Null = silent.</summary>
     public string? Sound { get; init; }
 
+    /// <summary>Recolour the matched line when set ("#RRGGBB"). Null = no highlight.</summary>
+    public string? HighlightFore { get; init; }
+    /// <summary>Optional highlight background ("#RRGGBB"). Null = leave background as-is.</summary>
+    public string? HighlightBack { get; init; }
+    /// <summary>When highlighting, recolour the WHOLE line (true, default) or just the
+    /// matched text (false). Only meaningful when <see cref="HighlightFore"/>/<see cref="HighlightBack"/> is set.</summary>
+    public bool HighlightWholeLine { get; init; } = true;
+
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }
 }
@@ -86,5 +94,24 @@ public sealed record TimerDef
     public string? Variable { get; init; }
     public string? Script { get; init; }
 
+    public string? Source { get; init; }
+}
+
+/// <summary>A keyboard macro: a key gesture bound to a command template. Sent to the
+/// world (multi-line = one command per line, like a trigger's Send) with ${var}
+/// expansion. The gesture string is the identity, so binding the same key again
+/// replaces it. Examples of <see cref="Key"/>: "F1", "Ctrl+K", "Shift+F2", "NumPad1".</summary>
+public sealed record MacroDef
+{
+    /// <summary>The key gesture, e.g. "F1", "Ctrl+Shift+K", "NumPad0". Case-insensitive;
+    /// modifier order does not matter (normalised by the app's key handler).</summary>
+    public string Key { get; init; } = "";
+
+    /// <summary>Command template to send; supports ${var} and multi-line (one command per line).</summary>
+    public string Send { get; init; } = "";
+
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }
 }

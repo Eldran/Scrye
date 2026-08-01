@@ -1,0 +1,11 @@
+{
+  "id": "3s-market",
+  "name": "3S Market",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "3Scapes Viking market arbitrage finder (parses vtrade goods)",
+  "mudIds": ["*"],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true
+}

@@ -1,9 +1,14 @@
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 
 namespace Scrye.App.Controls;
+
+/// <summary>A clicked cell: zero-based column and row plus the character there.</summary>
+public readonly record struct GridCell(int Col, int Row, char Ch);
 
 /// <summary>
 /// Renders a grid of coloured square cells from a character map: <see cref="GridText"/>
@@ -19,6 +24,13 @@ public class ColorGridView : Control
 
     public static readonly StyledProperty<Dictionary<char, Color>?> PaletteProperty =
         AvaloniaProperty.Register<ColorGridView, Dictionary<char, Color>?>(nameof(Palette));
+
+    /// <summary>Optional command run when a cell is clicked, with a <see cref="GridCell"/>
+    /// parameter (col, row, char). When set, the grid becomes hit-testable and clickable.</summary>
+    public static readonly StyledProperty<ICommand?> CellCommandProperty =
+        AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(CellCommand));
+
+    public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
 
     private static readonly ImmutableSolidColorBrush Unknown = new(Color.FromRgb(0x28, 0x28, 0x28));
     private readonly Dictionary<char, IImmutableBrush> _brushes = new();
@@ -59,6 +71,11 @@ public class ColorGridView : Control
         if (cell <= 0) return;
         Dictionary<char, Color>? palette = Palette;
 
+        // When interactive, fill a transparent background so the whole grid is hit-testable
+        // (a bare Control only receives pointer events where it has drawn something).
+        if (CellCommand is not null)
+            context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         for (int r = 0; r < rows.Length; r++)
         {
             string row = rows[r];
@@ -86,5 +103,27 @@ public class ColorGridView : Control
     {
         base.OnPropertyChanged(change);
         if (change.Property == PaletteProperty) _brushes.Clear();   // palette swap: rebuild brush cache
+        if (change.Property == CellCommandProperty) InvalidateVisual();   // toggle hit-test background
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        ICommand? cmd = CellCommand;
+        if (cmd is null) return;
+
+        string[] rows = Rows(GridText);
+        double cell = CellFor(rows, Bounds.Width);
+        if (cell <= 0) return;
+
+        Point p = e.GetPosition(this);
+        int col = (int)(p.X / cell);
+        int row = (int)(p.Y / cell);
+        if (row < 0 || row >= rows.Length) return;
+        if (col < 0 || col >= rows[row].Length) return;
+
+        var hit = new GridCell(col, row, rows[row][col]);
+        if (cmd.CanExecute(hit)) cmd.Execute(hit);
+        e.Handled = true;
     }
 }
