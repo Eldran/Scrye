@@ -838,14 +838,19 @@ scrye.addPanel{
     { type = "label", text = "S start",     color = "#40C0FF" },
     { type = "value", text = "kills: ", bind = P .. "hunt", color = "#E0524D" },   -- red: kills
     { type = "value", text = "sea ",    bind = P .. "sea",  color = "#2CB5C4" },   -- teal: sea id
-    { type = "button", text = "On/Off", action = function() cs_interface(enabled and "disable" or "enable") end },
-    { type = "button", text = "Step",   action = function() cs_step() end },
-    { type = "button", text = "Auto",   action = function() cs_interface(auto and "auto off" or "auto on") end },
-    { type = "button", text = "Pause",  action = function() cs_pause_toggle() end },
-    { type = "button", text = "Leave",  action = function() cs_leave() end },
-    { type = "button", text = "Reset",  action = function() cs_interface("reset") end },
-    { type = "button", text = "Delay -", action = function() cs_interface("delay " .. (kill_delay - 0.5)) end },
-    { type = "button", text = "Delay +", action = function() cs_interface("delay " .. (kill_delay + 0.5)) end },
+    -- controls laid out two per row (Delay +/- dropped; use "cs delay <n>" if needed)
+    { type = "buttonrow", buttons = {
+        { text = "On/Off", action = function() cs_interface(enabled and "disable" or "enable") end },
+        { text = "Step",   action = function() cs_step() end },
+    } },
+    { type = "buttonrow", buttons = {
+        { text = "Auto",  action = function() cs_interface(auto and "auto off" or "auto on") end },
+        { text = "Pause", action = function() cs_pause_toggle() end },
+    } },
+    { type = "buttonrow", buttons = {
+        { text = "Leave", action = function() cs_leave() end },
+        { text = "Reset", action = function() cs_interface("reset") end },
+    } },
     { type = "button", text = "New Sea", action = function() cs_new_sea() end },
   },
 }

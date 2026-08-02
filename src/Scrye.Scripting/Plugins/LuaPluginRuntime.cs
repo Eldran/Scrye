@@ -396,6 +396,11 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             }
         }
 
+        // buttonrow children: buttons = { {text=, action=fn}, ... } — each parsed like a button
+        // (use ToWidgetList so array order is preserved, same as the main widgets list)
+        DynValue btns = w.Get("buttons");
+        List<WidgetSpec>? children = btns.Type == DataType.Table ? ToWidgetList(btns) : null;
+
         return new WidgetSpec
         {
             Type = Field(w, "type") ?? "label",
@@ -406,6 +411,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Color = Field(w, "color"),
             Palette = palette,
             Action = actionId,
+            Children = children,
         };
     }
 

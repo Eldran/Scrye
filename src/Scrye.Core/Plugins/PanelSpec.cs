@@ -39,6 +39,10 @@ public sealed record WidgetSpec
     /// <summary>For <c>button</c> widgets: an opaque action id the host calls back with when
     /// clicked (the plugin runtime maps it to a Lua callback). Set by the runtime, not authors.</summary>
     public string? Action { get; init; }
+
+    /// <summary>For a <c>buttonrow</c> widget: the child button specs, rendered side by side as
+    /// equal-width columns. Each child is an ordinary button spec (text + action).</summary>
+    public IReadOnlyList<WidgetSpec>? Children { get; init; }
 }
 
 /// <summary>One tab in a tabbed panel: a title and its widgets.</summary>

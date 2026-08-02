@@ -307,6 +307,21 @@
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
                                                     </DataTemplate>
+                                                    <DataTemplate DataType="vm:ButtonRowWidgetViewModel">
+                                                        <ItemsControl ItemsSource="{Binding Buttons}">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate>
+                                                                    <UniformGrid Rows="1" />
+                                                                </ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:ButtonWidgetViewModel">
+                                                                    <Button Content="{Binding Text}" Command="{Binding Command}"
+                                                                            HorizontalAlignment="Stretch" Margin="1" Padding="8,3" FontSize="11" />
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </DataTemplate>
                                                 </Border.DataTemplates>
                                                 <StackPanel Spacing="4">
                                                     <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"

@@ -106,6 +106,18 @@ public sealed class HudViewModel : IDisposable
                 return new ButtonWidgetViewModel(w.Text ?? "Button",
                     () => { if (actionId is not null) _invokeAction?.Invoke(pluginId, actionId); });
             }
+            case "buttonrow":
+            {
+                var row = new ButtonRowWidgetViewModel();
+                if (w.Children is not null)
+                    foreach (WidgetSpec child in w.Children)
+                    {
+                        string? childAction = child.Action;
+                        row.Buttons.Add(new ButtonWidgetViewModel(child.Text ?? "Button",
+                            () => { if (childAction is not null) _invokeAction?.Invoke(pluginId, childAction); }));
+                    }
+                return row;
+            }
             case "progress":
             {
                 var vm = new ProgressWidgetViewModel(w.Text ?? "", w.Color);   // bar honours explicit colour only
@@ -248,6 +260,12 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
         Text = text;
         Command = new RelayCommand(onClick);
     }
+}
+
+/// <summary>A row of buttons rendered side by side as equal-width columns (a "buttonrow" widget).</summary>
+public sealed class ButtonRowWidgetViewModel : ViewModelBase
+{
+    public System.Collections.ObjectModel.ObservableCollection<ButtonWidgetViewModel> Buttons { get; } = new();
 }
 
 /// <summary>Parses "#RRGGBB" into a brush; null for empty/invalid (so the theme colour shows).</summary>

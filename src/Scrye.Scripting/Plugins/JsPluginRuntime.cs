@@ -357,6 +357,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
             actionId = "a" + _nextActionId++;
             _actions[actionId] = action;
         }
+        // buttonrow children: buttons = [ {text, action}, ... ]
+        JsValue btns = Get(w, "buttons");
+        List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns) : null;
         return new WidgetSpec
         {
             Type = Str(w, "type") ?? "label",
@@ -367,6 +370,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Color = Str(w, "color"),
             Palette = ToPalette(Get(w, "palette")),
             Action = actionId,
+            Children = children,
         };
     }
 
