@@ -734,6 +734,16 @@ end
 -- ---------- new sea (only while paused at the cask) ----------
 local function cs_new_sea()
   if not paused then note("New Sea only works while paused (at the cask)") return end
+  -- the game's `unsetsea` only works once the sea is 60 min old; refuse until then so
+  -- we never fire the sequence early (which would leave you in the same sea). When there
+  -- is no active timer we can't tell the age, so allow it and let the game decide.
+  if sea_time then
+    local elm = math.floor((now - sea_time) / 60)
+    if elm < 60 then
+      note(string.format("sea only %dm old - new sea in %dm (unsetsea needs 60m)", elm, 60 - elm))
+      return
+    end
+  end
   note("opening cask & starting new sea #" .. seanum)
   scrye.send("open cask")
   scrye.after(1, function() scrye.send("retreat from the sea") end)
@@ -742,6 +752,13 @@ local function cs_new_sea()
   scrye.after(4, function() scrye.send("enter sea") end)
   sea_time = now   -- start the sea-age clock
   cs_last_sea_min = nil
+  cs_draw()
+end
+
+-- adjust the sea number New Sea will use (clamped 1-120); persists + redraws via cs_draw
+local function cs_set_seanum(n)
+  seanum = math.max(1, math.min(120, math.floor(tonumber(n) or seanum)))
+  note("sea number set to " .. seanum)
   cs_draw()
 end
 
@@ -782,6 +799,7 @@ cs_draw = function()
     seatxt = string.format("#%d  no active sea timer", seanum)
   end
   scrye.setState(P .. "sea", seatxt)
+  scrye.setState(P .. "seanum", tostring(seanum))
 
   -- map of current level, centered on player, north = up
   local x0 = pos.x - math.floor(COLS / 2)
@@ -850,6 +868,11 @@ scrye.addPanel{
     { type = "buttonrow", buttons = {
         { text = "Leave", action = function() cs_leave() end },
         { text = "Reset", action = function() cs_interface("reset") end },
+    } },
+    { type = "value", text = "Sea #: ", bind = P .. "seanum", color = "#6FB7E0" },
+    { type = "buttonrow", buttons = {
+        { text = "Sea# -", action = function() cs_set_seanum(seanum - 1) end },
+        { text = "Sea# +", action = function() cs_set_seanum(seanum + 1) end },
     } },
     { type = "button", text = "New Sea", action = function() cs_new_sea() end },
   },
