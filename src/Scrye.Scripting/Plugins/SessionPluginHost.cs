@@ -52,6 +52,23 @@ public sealed class SessionPluginHost : IPluginHost
     public void Notify(string pluginId, string text) =>
         _session.RequestNotify(Scrye.Core.Text.Line.FromText($"[{pluginId}] {text}"));
 
+    // ---- per-plugin log file (scrye.log) --------------------------------------
+    // Appends to %APPDATA%/Scrye/logs/plugins/<id>.log. Best-effort: a logging
+    // failure must never take down a plugin, so all IO errors are swallowed.
+    private static readonly string LogDir = System.IO.Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "logs", "plugins");
+
+    public void Log(string pluginId, string text)
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(LogDir);
+            string safe = string.Join("_", pluginId.Split(System.IO.Path.GetInvalidFileNameChars()));
+            System.IO.File.AppendAllText(System.IO.Path.Combine(LogDir, safe + ".log"), text + Environment.NewLine);
+        }
+        catch { /* logging is best-effort; never surface IO errors to the plugin */ }
+    }
+
     // ---- persistent per-plugin storage (scrye.store) --------------------------
 
     public string? StoreGet(string pluginId, string key) => _data?.Get(pluginId, key);

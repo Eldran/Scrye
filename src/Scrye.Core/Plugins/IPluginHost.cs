@@ -46,6 +46,12 @@ public interface IPluginHost
     /// <summary>Raise a notification toast tagged with the plugin id. Default no-op.</summary>
     void Notify(string pluginId, string text) { }
 
+    /// <summary>Append a line to the plugin's own log file (real hosts write
+    /// <c>%APPDATA%/Scrye/logs/plugins/&lt;id&gt;.log</c>). Sandboxed scripts can't touch the
+    /// filesystem, so this is the sanctioned way for a plugin to keep a durable log.
+    /// Default no-op so headless hosts and tests need not care.</summary>
+    void Log(string pluginId, string text) { }
+
     // ---- persistent per-plugin storage (scrye.store) --------------------------
     // Backed by PluginDataStore in real hosts; defaults are no-ops so headless
     // hosts and tests need not care. Data survives sessions and app restarts.

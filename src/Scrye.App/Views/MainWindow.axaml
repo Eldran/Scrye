@@ -307,6 +307,20 @@
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
                                                     </DataTemplate>
+                                                    <DataTemplate DataType="vm:InputWidgetViewModel">
+                                                        <DockPanel Margin="0,1">
+                                                            <TextBlock DockPanel.Dock="Left" Text="{Binding Prefix}" FontSize="11"
+                                                                       VerticalAlignment="Center" Margin="0,0,4,0"
+                                                                       Foreground="{DynamicResource ScryeTextDim}" />
+                                                            <Button DockPanel.Dock="Right" Content="Set" Command="{Binding SubmitCommand}"
+                                                                    Padding="8,2" FontSize="11" Margin="4,0,0,0" />
+                                                            <TextBox Text="{Binding Text}" FontSize="11" Padding="4,2">
+                                                                <TextBox.KeyBindings>
+                                                                    <KeyBinding Gesture="Enter" Command="{Binding SubmitCommand}" />
+                                                                </TextBox.KeyBindings>
+                                                            </TextBox>
+                                                        </DockPanel>
+                                                    </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonRowWidgetViewModel">
                                                         <ItemsControl ItemsSource="{Binding Buttons}">
                                                             <ItemsControl.ItemsPanel>

@@ -472,7 +472,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Hud = new HudViewModel(_session.GameState,
             (pluginId, actionId) => _session.Post(() => _plugins!.InvokeAction(pluginId, actionId)),
             (pluginId, actionId, col, row, ch) =>
-                _session.Post(() => _plugins!.InvokeCellAction(pluginId, actionId, col, row, ch)));
+                _session.Post(() => _plugins!.InvokeCellAction(pluginId, actionId, col, row, ch)),
+            (pluginId, actionId, text) =>
+                _session.Post(() => _plugins!.InvokeSubmit(pluginId, actionId, text)));
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.

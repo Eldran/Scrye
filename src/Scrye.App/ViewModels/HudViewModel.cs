@@ -20,6 +20,7 @@ public sealed class HudViewModel : IDisposable
     private readonly StateStore _state;
     private readonly Action<string, string>? _invokeAction;   // (pluginId, actionId) → run on loop
     private readonly Action<string, string, int, int, string>? _invokeCellAction;  // (pluginId, actionId, col, row, char)
+    private readonly Action<string, string, string>? _invokeSubmit;  // (pluginId, actionId, text) → input widget submit
     // State-watch subscriptions per plugin, so a reload/disable can dispose exactly its watches.
     // Only mutated on the construction thread (pre-loop) or the loop thread — never concurrently.
     private readonly Dictionary<string, List<IDisposable>> _pluginSubs = new();
@@ -34,11 +35,13 @@ public sealed class HudViewModel : IDisposable
     public Action? PanelMoved { get; set; }
 
     public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
-                        Action<string, string, int, int, string>? invokeCellAction = null)
+                        Action<string, string, int, int, string>? invokeCellAction = null,
+                        Action<string, string, string>? invokeSubmit = null)
     {
         _state = state;
         _invokeAction = invokeAction;
         _invokeCellAction = invokeCellAction;
+        _invokeSubmit = invokeSubmit;
     }
 
     /// <summary>Add a panel from a spec. Called during plugin load — on the UI thread at
@@ -142,6 +145,14 @@ public sealed class HudViewModel : IDisposable
             {
                 var vm = new TextWidgetViewModel(textColor);
                 BindText(w.Bind, s => vm.Text = s, subs);
+                return vm;
+            }
+            case "input":
+            {
+                string? actionId = w.Action;
+                var vm = new InputWidgetViewModel(w.Text ?? "",
+                    text => { if (actionId is not null) _invokeSubmit?.Invoke(pluginId, actionId, text); });
+                BindText(w.Bind, vm.SetValue, subs);   // seed + track the current value
                 return vm;
             }
             case "colorgrid":
@@ -266,6 +277,30 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
 public sealed class ButtonRowWidgetViewModel : ViewModelBase
 {
     public System.Collections.ObjectModel.ObservableCollection<ButtonWidgetViewModel> Buttons { get; } = new();
+}
+
+/// <summary>An inline text field with a label; pressing Enter (or the Set button) submits the
+/// current text to the plugin. <see cref="Prefix"/> labels it; <see cref="Text"/> is two-way and
+/// seeded from the widget's bound state so it shows the current value.</summary>
+public sealed class InputWidgetViewModel : ViewModelBase
+{
+    private readonly Action<string> _submit;
+    public string Prefix { get; }
+
+    private string _text = "";
+    public string Text { get => _text; set => SetField(ref _text, value); }
+
+    public RelayCommand SubmitCommand { get; }
+
+    public InputWidgetViewModel(string prefix, Action<string> submit)
+    {
+        Prefix = prefix;
+        _submit = submit;
+        SubmitCommand = new RelayCommand(() => _submit(_text ?? ""));
+    }
+
+    /// <summary>Update the displayed value from state without firing a submit.</summary>
+    public void SetValue(string v) => Text = v ?? "";
 }
 
 /// <summary>Parses "#RRGGBB" into a brush; null for empty/invalid (so the theme colour shows).</summary>

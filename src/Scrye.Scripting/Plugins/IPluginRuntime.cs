@@ -34,4 +34,7 @@ public interface IPluginRuntime : IDisposable
 
     /// <summary>Invoke a colorgrid cell-click callback with the clicked cell (col, row, char).</summary>
     void InvokeCellAction(string actionId, int col, int row, string ch) { }
+
+    /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
+    void InvokeSubmit(string actionId, string text) { }
 }

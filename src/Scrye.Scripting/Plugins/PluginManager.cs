@@ -259,6 +259,13 @@ public sealed class PluginManager : IDisposable
             if (_runtimes[i].Id == pluginId) { _runtimes[i].InvokeAction(actionId); return; }
     }
 
+    /// <summary>Fire an input widget's submit callback with the entered text. Loop-thread only.</summary>
+    public void InvokeSubmit(string pluginId, string actionId, string text)
+    {
+        IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
+        rt?.InvokeSubmit(actionId, text);
+    }
+
     public void Dispose()
     {
         foreach (IPluginRuntime r in _runtimes) r.Dispose();

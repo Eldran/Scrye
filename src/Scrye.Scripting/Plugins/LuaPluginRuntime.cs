@@ -144,6 +144,13 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Safe("cellAction", () => _script.Call(fn!, col, row, ch));
     }
 
+    /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
+    public void InvokeSubmit(string actionId, string text)
+    {
+        if (_actions.TryGetValue(actionId, out DynValue? fn))
+            Safe("submit", () => _script.Call(fn!, text));
+    }
+
     private void FireAll(List<DynValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -175,6 +182,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
 
         t["print"] = Fn(a => { _host.Print(Id, Arg(a, 0)); return DynValue.Nil; });
         t["send"]  = Fn(a => { _host.Send(Arg(a, 0)); return DynValue.Nil; });
+        t["log"]   = Fn(a => { _host.Log(Id, Arg(a, 0)); return DynValue.Nil; });
 
         t["getVariable"] = Fn(a => DynValue.NewString(_host.GetVariable(Arg(a, 0)) ?? ""));
         t["setVariable"] = Fn(a => { _host.SetVariable(Arg(a, 0), Arg(a, 1)); return DynValue.Nil; });
@@ -373,10 +381,11 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     {
         // A 'button' widget with an action=function is registered as a callback and
         // referenced by an opaque id the host calls back with on click.
-        // 'action' (button) or 'onClick' (colorgrid cell) — either is a function stored under an id.
+        // 'action' (button) / 'onClick' (colorgrid cell) / 'onSubmit' (input) — a function stored under an id.
         string? actionId = null;
         DynValue action = w.Get("action");
         if (action.Type != DataType.Function) action = w.Get("onClick");
+        if (action.Type != DataType.Function) action = w.Get("onSubmit");
         if (action.Type == DataType.Function)
         {
             actionId = "a" + _nextActionId++;

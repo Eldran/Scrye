@@ -146,6 +146,13 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Safe("cellAction", () => _engine.Invoke(fn!, col, row, ch));
     }
 
+    /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
+    public void InvokeSubmit(string actionId, string text)
+    {
+        if (_actions.TryGetValue(actionId, out JsValue? fn))
+            Safe("submit", () => _engine.Invoke(fn!, text));
+    }
+
     private void FireAll(List<JsValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -178,6 +185,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
         print = (Action<string>)(s => _host.Print(Id, s ?? "")),
         send  = (Action<string>)(s => _host.Send(s ?? "")),
+        log   = (Action<string>)(s => _host.Log(Id, s ?? "")),
 
         getVariable = (Func<string, string>)(name => _host.GetVariable(name) ?? ""),
         setVariable = (Action<string, string>)((name, value) => _host.SetVariable(name, value ?? "")),
@@ -348,10 +356,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private WidgetSpec ToWidgetSpec(JsValue w)
     {
-        // 'action' (button) or 'onClick' (colorgrid cell) — either is a function stored under an id.
+        // 'action' (button) / 'onClick' (colorgrid) / 'onSubmit' (input) — a function stored under an id.
         string? actionId = null;
         JsValue action = Get(w, "action");
         if (!IsFn(action)) action = Get(w, "onClick");
+        if (!IsFn(action)) action = Get(w, "onSubmit");
         if (IsFn(action))
         {
             actionId = "a" + _nextActionId++;
