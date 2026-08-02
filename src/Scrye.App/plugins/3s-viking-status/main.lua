@@ -879,7 +879,7 @@ local function build_feeds()
     local v = gv(k)
     L[#L + 1] = string.format("%-14s %s", k:sub(1, 14), v:sub(1, 40))
   end
-  if #L == 0 then L[1] = "(no feed keys seen yet - run vmapon)" end
+  if #L == 0 then L[1] = "(no feed keys seen yet - waiting for the feed)" end
   return table.concat(L, "\n")
 end
 
@@ -888,7 +888,7 @@ local function build_map()
   local hd = split(gv("VMAPH"), "|")
   local mw, mh, px, py = num(hd[1]), num(hd[2]), num(hd[3]), num(hd[4])
   if mw == 0 then
-    scrye.setState(P .. "maphdr", "(no map feed - run vmapon)")
+    scrye.setState(P .. "maphdr", "(waiting for map feed - loads on the next map update)")
     scrye.setState(P .. "map", "")
     scrye.setState(P .. "maplocs", "")
     return
