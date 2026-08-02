@@ -536,28 +536,25 @@ local function build_city()
       add(string.format("%-4s %-10s -> %-16s %5s  x%s", f[1] or "?", f[2] or "?", f[3] or "?", eta, f[5] or "?"))
     end
   end
-  add("")
-  add("-- Refinery --")
-  if gv("REFINERY") == "" then
-    add("none")
-  else
-    for _, r in ipairs(split(gv("REFINERY"), "|")) do
-      local f = split(r, ":")
-      if f[1] and f[1] ~= "" then
-        local name = f[1]:gsub("_", " "):gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b:lower() end)
-        local cur, max = num(f[3]), num(f[4])
-        local tip = {}
-        for _, s in ipairs(split(f[5] or "", ";")) do
-          local g = split(s, ",")
-          if g[1] and g[1] ~= "" then
-            tip[#tip + 1] = string.format("%s %d (%d%%)", g[1], num(g[2]), num(g[3]))
-          end
-        end
-        add(string.format("%-16s T%s  %3d/%-4d  %s", name, f[2] or "?", cur, max,
-          #tip > 0 and table.concat(tip, "  ") or "empty"))
+  -- Refinery -> a barlist (label | caption | value | max | refined): fill = cur/max,
+  -- the filled part splits into refined (green) and raw (amber). refined = quality-weighted
+  -- units = sum over stages of qty * pct/100.
+  local R = {}
+  for _, r in ipairs(split(gv("REFINERY"), "|")) do
+    local f = split(r, ":")
+    if f[1] and f[1] ~= "" then
+      local name = f[1]:gsub("_", " "):gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b:lower() end)
+      local cur, max = num(f[3]), num(f[4])
+      local refined = 0
+      for _, s in ipairs(split(f[5] or "", ";")) do
+        local g = split(s, ",")
+        if g[1] and g[1] ~= "" then refined = refined + num(g[2]) * num(g[3]) / 100 end
       end
+      R[#R + 1] = string.format("%s\tT%s %d/%d\t%d\t%d\t%d",
+        name, f[2] or "?", cur, max, cur, max, math.floor(refined + 0.5))
     end
   end
+  scrye.setState(P .. "refinery", table.concat(R, "\n"))
   return table.concat(L, "\n")
 end
 
@@ -1668,6 +1665,8 @@ scrye.addPanel{
     } },
     { title = "City", widgets = {
         { type = "text", bind = P .. "city" },
+        { type = "label", text = "-- Refinery --   bar = fill x quality (amber raw -> green refined)", color = "#8FA0B0" },
+        { type = "barlist", bind = P .. "refinery" },
     } },
     { title = "Builds", widgets = {
         { type = "text", bind = P .. "builds" },

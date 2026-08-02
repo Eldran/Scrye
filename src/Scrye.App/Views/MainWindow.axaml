@@ -303,6 +303,9 @@
                                                         <controls:ColorGridView GridText="{Binding GridText}" Palette="{Binding Palette}"
                                                                                 CellCommand="{Binding CellCommand}" Margin="0,3" />
                                                     </DataTemplate>
+                                                    <DataTemplate DataType="vm:BarListWidgetViewModel">
+                                                        <controls:BarListView Rows="{Binding Rows}" Margin="0,3" />
+                                                    </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />

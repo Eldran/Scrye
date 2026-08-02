@@ -147,6 +147,12 @@ public sealed class HudViewModel : IDisposable
                 BindText(w.Bind, s => vm.Text = s, subs);
                 return vm;
             }
+            case "barlist":
+            {
+                var vm = new BarListWidgetViewModel();
+                BindText(w.Bind, s => vm.Rows = s, subs);
+                return vm;
+            }
             case "input":
             {
                 string? actionId = w.Action;
@@ -402,6 +408,15 @@ public sealed class TextWidgetViewModel : ViewModelBase
 
     private string _text = "";
     public string Text { get => _text; set => SetField(ref _text, value); }
+}
+
+/// <summary>A dynamic list of labelled "fill × quality" bars. <see cref="Rows"/> is a
+/// newline-separated string; each line is <c>label \t caption \t value \t max \t refined</c>.
+/// Rendered by <c>BarListView</c>.</summary>
+public sealed class BarListWidgetViewModel : ViewModelBase
+{
+    private string _rows = "";
+    public string Rows { get => _rows; set => SetField(ref _rows, value); }
 }
 
 /// <summary>A grid of coloured cells: newline-separated rows of characters, coloured
