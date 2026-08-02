@@ -2,6 +2,11 @@
 
 **Status:** Design / proposal · **Last updated:** 2026-08-02
 
+*Rev. 3 — protocol and seams reconciled against the actual engine: §3 rewritten (batched
+frames, style table, corrected state DTO), §4 verified with a new §4.1 on threading, §6
+scrollback reuse, new §7.3 on the scripting-permission gap, §11.4 closed.*
+*Rev. 2 — §11 decisions resolved; §5, §7.1, §7.2, §8, §10 revised to follow.*
+
 This document describes how Scrye becomes a "full-circle" MUD platform: the desktop
 client keeps doing the hard work (Telnet, ANSI, triggers, scripts, maps, state) and a
 mobile — or browser — companion acts as a thin, touch-friendly frontend over a secure
@@ -91,27 +96,45 @@ of specs the desktop already emits.** The protocol should be built around that f
 Structured messages, never screenshots. JSON over WebSocket for the live channel; a small
 request/response surface (over the same socket or plain HTTPS) for setup and history.
 
-Output line (note the batching guidance in §3.1):
+*The shapes below were reconciled against the engine on 2026-08-02; §3.3 records what the
+first draft got wrong and why.*
+
+Output frame — a **batch** of lines plus the style table they index into (§3.1):
 
 ```json
 {
-  "type": "output.line",
+  "type": "output.batch",
   "sessionId": "threescapes-eldran",
-  "sequence": 18422,
-  "timestamp": "2026-08-01T17:58:31+02:00",
-  "spans": [
-    { "text": "The wiremouth ", "fg": 1 },
-    { "text": "attacks you!", "fg": 15, "bold": true }
+  "styles": [
+    { "fg": "#AA0000", "bg": "#000000" },
+    { "fg": "#FFFFFF", "bg": "#000000", "flags": ["bold"] }
+  ],
+  "lines": [
+    {
+      "sequence": 18422,
+      "timestamp": "2026-08-01T17:58:31+02:00",
+      "prompt": false,
+      "spans": [
+        { "text": "The wiremouth ", "s": 0 },
+        { "text": "attacks you!",  "s": 1 }
+      ]
+    }
   ]
 }
 ```
 
-State update:
+A span may also carry `"link": { "action": "kill wiremouth", "isUrl": false, "prompt": false }`
+— see §4 on MXP links.
+
+State update. `kind` mirrors `StateKind`; `text` is the canonical form, so the phone can
+render a string leaf without guessing:
 
 ```json
 { "type": "state.update", "sessionId": "threescapes-eldran",
-  "path": "character.health", "value": 812, "maximum": 1000 }
+  "path": "char.vitals.hp", "kind": "number", "text": "812" }
 ```
+
+There is deliberately no `maximum` field — see §3.3.
 
 Command from the phone:
 
@@ -138,25 +161,48 @@ Session state:
 ### 3.1 Throughput matters
 
 3Scapes combat can emit hundreds of lines per second. Do **not** send one WebSocket frame
-per line with a full span array each. Two mitigations:
+per line with a full span array each. Three mitigations, in order of value:
 
-- **Batch/coalesce** output lines within a short window (~50–100 ms) into a single frame.
-- **Palette-index spans.** Send an ANSI/theme palette *index* (`"fg": 1`) rather than a
-  hex string per span; the phone resolves it against the palette it was handed at pairing.
-  Fall back to hex only for true-color spans.
+- **Batch/coalesce** output lines into a single frame. Scrye already does exactly this:
+  `WorldViewModel` queues incoming lines on a `ConcurrentQueue<Line>` and drains them into
+  `ScrollbackBuffer` from a `DispatcherTimer` at **33 ms**. That existing flush *is* the
+  batch window, and it is tighter than the 50–100 ms this document originally asked for.
+  Tap the drain; do not build a second batcher.
+- **Per-frame style table.** Within one 33 ms batch only a handful of distinct
+  (fore, back, flags) combinations occur. Emit them once as `styles[]` and have each span
+  carry an index `"s"`. This is where the wire savings actually are.
+- **`permessage-deflate`** on the WebSocket. MUD output is extremely compressible and this
+  costs one Kestrel option.
 
-### 3.2 Suggested C# contract (`Scrye.Companion.Protocol`)
+Note what is *not* on that list: the original "palette-index spans" idea. It cannot be
+built — see §3.3.
+
+### 3.2 C# contract (`Scrye.Companion.Protocol`)
 
 ```csharp
-public sealed record OutputLineMessage(
-    string SessionId, long Sequence, DateTimeOffset Timestamp,
+// One frame carries many lines and the style table they index into.
+public sealed record OutputBatchMessage(
+    string SessionId,
+    IReadOnlyList<StyleDto> Styles,
+    IReadOnlyList<OutputLineDto> Lines);
+
+public sealed record StyleDto(string Fg, string Bg, RunFlags Flags);
+
+public sealed record OutputLineDto(
+    long Sequence, DateTimeOffset Timestamp, bool IsPrompt,
     IReadOnlyList<OutputSpanDto> Spans);
 
-public sealed record OutputSpanDto(string Text, int Fg, int Bg, bool Bold);
+// StyleIndex points into OutputBatchMessage.Styles. Link is non-null for MXP
+// <SEND>/<A> runs and auto-detected URLs (Line.Links already computes these).
+public sealed record OutputSpanDto(string Text, int StyleIndex, LinkDto? Link = null);
 
+public sealed record LinkDto(string Action, bool IsUrl, bool Prompt, string? Hint);
+
+// Mirrors Scrye.Core.State.StateValue: a kind plus the canonical text form.
 public sealed record StateUpdateMessage(
-    string SessionId, string Path, double Value, double? Maximum);
+    string SessionId, string Path, StateKind Kind, string Text, bool Removed);
 
+// Source is what lets the server apply per-device permissions (§7.3).
 public sealed record SendCommandMessage(string SessionId, string Command);
 
 public sealed record SessionStateMessage(
@@ -165,51 +211,132 @@ public sealed record SessionStateMessage(
 public sealed record HudPanelMessage(string SessionId, string PanelId, PanelSpecDto Spec);
 ```
 
+`RunFlags` and `StateKind` are reused from `Scrye.Core` rather than redeclared, so
+`Scrye.Companion.Protocol` references `Scrye.Core` — but **not** `Scrye.App`, which is
+`WinExe` and pulls in the Windows-only `System.Speech`. Keeping that boundary clean is
+what lets a future Avalonia-mobile head (§8.2) share the contract.
+
 These DTOs are the one contract both sides code against, and the only genuinely new
 shared code the project needs.
+
+### 3.3 What the first draft got wrong
+
+Three corrections, all found by reading the engine rather than reasoning about it. They
+are recorded rather than silently fixed because each one rules out a tempting redesign.
+
+**Palette-index spans are impossible.** `StyledRun` carries `Rgb Fore, Rgb Back` —
+24-bit colour. `AnsiParser` resolves 16- and 256-colour codes through `Rgb.Ansi16` /
+`Rgb.Xterm256` at parse time and **discards the index**; `Rgb.AnsiPalette` is a static
+whose changes only affect lines parsed afterwards. There is no index left to put on the
+wire, and the desktop itself cannot re-theme existing scrollback. Send resolved hex,
+compressed via the style table.
+
+**`state.update` cannot type its value as a number.** `StateValue` is
+`Null | String | Number | Bool` with a canonical `Text` form. `char.name` and
+`room.exits.0` are strings; typing the wire field as `double` silently destroys them.
+Mirror the kind + text. Also carry `Removed`, because `StateStore` genuinely removes
+leaves (`ClearPrefix`, and the diffing resend inside `SetJson`) and the phone must be able
+to drop them rather than keep a stale value.
+
+**There is no `maximum`.** Max is a *sibling path* — `char.vitals.hp` and
+`char.vitals.maxhp` are two independent leaves. `WidgetSpec` already models this correctly
+with separate `Value` and `Max` path strings, and the companion should follow it. The
+original `double? Maximum` invented a pairing the state tree does not have.
+
+**Not wrong, just missed:** `Line` also carries `IsPrompt` (a line flushed by telnet
+GA/EOR — the server is waiting for input) and `Links`, and `RunFlags` has Underline,
+Italic, Blink and Inverse alongside Bold. All are now in the contract. `IsPrompt` matters
+more on a phone than on the desktop: it marks where the input bar should anchor instead of
+letting the prompt scroll away.
 
 ---
 
 ## 4. Integration seams in the current codebase
 
-The companion touches Scrye at a small number of well-defined points:
+The companion touches Scrye at a small number of well-defined points. Type and member
+names below were verified against the source on 2026-08-02.
 
-- **Output out:** tap the same line model `OutputView` consumes; assign each line a
-  monotonic `sequence` as it is appended (the ring buffer for resume — see §6 — reuses
-  the existing Replay / capture / logging buffers).
-- **State out:** subscribe to the shared state tree (`character.*`, `vik.*`,
-  `plugin.<id>.*`) — the same channel `scrye.watch` already exposes.
+- **Output out:** tap `WorldViewModel.Flush()` — the `DispatcherTimer` drain that moves
+  `_pending` into `Scrollback` (§3.1). The `_drainBuffer` it builds is exactly one
+  companion frame. Assign each line a monotonic `sequence` here, as it is appended.
+- **State out:** `StateStore.Changed` (an `Action<StateChange>` carrying path, value and a
+  `Removed` flag) is a better tap than `Watch`, because it fires for every leaf without
+  needing a subscription per subtree. This is the same channel `scrye.watch` sits on.
 - **HUD out:** serialize `PanelSpec` on panel build and stream `setState` bindings as
-  `hud.state` deltas.
-- **Commands in:** phone `command.send` must land on the **same hook as typed input** —
-  `WorldViewModel.SubmitCommand` / `ReceiveBroadcast` — so aliases, triggers, highlights,
-  and logging apply exactly as if the command had been typed at the desktop. The phone
-  never bypasses the command pipeline.
-- **Sessions:** the companion enumerates `MainWindowViewModel.Worlds`; switching the
-  active session on the phone just changes which `sessionId` it subscribes to. The
-  desktop keeps every world connected regardless.
+  `hud.state` deltas. `PanelSpec`/`WidgetSpec` live in `Scrye.Core.Plugins` and are pure
+  records with no Avalonia dependency — including `Tabs` and `buttonrow` children — so
+  this needs no adapter layer at all. §2's central claim holds up in full.
+- **MXP links (free win):** `Line.Links` already computes clickable spans from MXP
+  `<SEND>`/`<A>` runs and auto-detected URLs, and `WorldViewModel.HandleCommandLink(
+  command, prompt)` already routes a click. Carrying `LinkDto` on the wire makes MUD text
+  tappable on the phone for almost no work — a better affordance than the fixed command
+  pads in §8.3, because the MUD authors it.
+- **Commands in:** the intent is right — phone input must run through aliases, triggers,
+  highlights and logging exactly as typed input does — but `WorldViewModel.Submit()` is
+  **private and reads the `Input` property**, so the companion cannot call it without
+  poking `Input` and racing the UI thread. Extract:
+
+  ```csharp
+  public void SubmitText(string text, CommandSource source);   // Submit() delegates with source: Local
+  ```
+
+  and route `command.send` through it with `source: Companion`. That parameter is also the
+  hook the permission check in §7.3 needs — which is not optional, see there.
+- **Sessions:** the companion enumerates `MainWindowViewModel.Worlds` (an
+  `ObservableCollection<WorldViewModel>`); switching the active session on the phone just
+  changes which `sessionId` it subscribes to. The desktop keeps every world connected
+  regardless. Note `MainWindowViewModel.Broadcast` / `WorldViewModel.ReceiveBroadcast`
+  already exist for send-to-all-worlds; expose that as an explicit companion action rather
+  than letting the phone toggle `IsBroadcast` behind its own back.
+
+### 4.1 Threading — get this right on day one
+
+Three different threading contracts meet in the companion server, and none of them is a
+Kestrel request thread:
+
+- `StateStore` is **single-threaded by contract** — "fed and read on the session's mailbox
+  loop; UI/plugin consumers marshal to their own thread."
+- `ScrollbackBuffer` and `Flush()` are **UI-thread**, driven by the `DispatcherTimer`.
+- WebSocket sends happen on **Kestrel threads**.
+
+So the server must never read `StateStore` or `Scrollback` directly from a socket handler.
+Give it its own outbound queue, filled from the flush timer and the state-change callback,
+and drained by the socket writers. Done this way it works under load; done the obvious way
+it works fine until the first heavy combat round and then corrupts or tears.
 
 ---
 
 ## 5. Transport tiers
 
-Three ways to connect the phone to the PC, in the order they should be adopted.
+Three ways to connect the phone to the PC. The mesh-VPN tier is listed second for
+conceptual ordering only — in practice it is the **primary** target, for reasons that turn
+out to be about TLS rather than about remote access (see §7.1).
 
-**Local network (first version).** Phone → `192.168.x.x:port` → desktop, over Wi-Fi.
-Fast, no external server, no account. Works while both devices share a network; may need
-a firewall allowance. This is the right first target.
+**Local network (bare LAN).** Phone → `192.168.x.x:port` → desktop, over Wi-Fi. Fast, no
+external server, no account. Works while both devices share a network; may need a firewall
+allowance. Fine for early protocol bring-up and for a native client that does its own cert
+pinning. Its real limitation is *not* reach — it is that a LAN IP with a self-signed cert
+is not a browser **secure context**, so the PWA path (service worker, offline shell, Web
+Push) cannot work over it. See §7.1.
 
-**User-run mesh VPN (best for remote).** A private WireGuard/Tailscale mesh makes the
-phone and PC behave as if on the same LAN, from anywhere, with no public exposure of the
-desktop and no service for us to operate. From Scrye's perspective it is still just a
-private IP. **This is the recommended remote-access path** for anyone comfortable
-installing Tailscale.
+**User-run mesh VPN (the actual primary tier).** A private WireGuard/Tailscale mesh makes
+the phone and PC behave as if on the same LAN, from anywhere, with no public exposure of
+the desktop and no service for us to operate. From Scrye's perspective it is still just a
+private IP.
 
-**Hosted relay (deliberately deferred, probably never built by us).** Both ends dial out
-to a relay that bridges them. It "just works" from anywhere and enables push — but it is
-not a feature, it is a *service*: user accounts, uptime, security liability, bandwidth,
-and (for EU users) GDPR responsibility over other people's private MUD chat. See §7.2 for
-the one narrow reason a relay might still be justified.
+Beyond remote access, Tailscale specifically solves the certificate problem: `tailscale
+cert` / `tailscale serve` issues a genuine Let's Encrypt certificate for
+`machine.tailnet-name.ts.net`, trusted by every browser, while the host stays reachable
+only inside the tailnet. That single fact makes it the recommended path **even when both
+devices are on the same Wi-Fi**, because it is what lets the browser companion be a real
+installable PWA. Treat "install Tailscale" as part of the normal setup story, not as an
+advanced remote-access option.
+
+**Hosted relay (deliberately deferred; on current analysis, never built by us).** Both
+ends dial out to a relay that bridges them. It "just works" from anywhere — but it is not
+a feature, it is a *service*: user accounts, uptime, security liability, bandwidth, and
+(for EU users) GDPR responsibility over other people's private MUD chat. Push-while-closed
+used to be the one argument that could justify it; §7.2 now explains why it no longer does.
 
 ---
 
@@ -229,6 +356,16 @@ variables, current room, character state, active timers, command shortcuts, and 
 HUD panels — and the phone rebuilds from scratch. Because the PC never dropped the MUD
 connection, "the phone was asleep for an hour" is just a large resume gap, not a lost
 session.
+
+**Use the existing scrollback; do not add a parallel buffer.** `ScrollbackBuffer` already
+holds **50,000 lines** by default and trims in 2,000-line chunks. At 3Scapes' line rates
+that is a very long resume window, and a second buffer would double the memory for no gain.
+
+**One trap:** `ScrollbackBuffer` is index-addressed and trims from the *front*, so after
+the first trim `index != sequence`. Keep a monotonic counter alongside it plus the sequence
+of `_lines[0]`; then `index = sequence - baseSequence`, and "is this gap replayable?"
+is simply `lastReceivedSequence >= baseSequence`. Getting this wrong produces a resume that
+silently serves the wrong lines rather than failing — which is much worse than a snapshot.
 
 ---
 
@@ -252,6 +389,8 @@ Joakim's iPhone may:
   ✗ Edit scripts   ✗ Install plugins   ✗ Change saved passwords
 ```
 
+That last line is not free — see §7.3.
+
 ### 7.1 Pairing
 
 1. Open "Mobile companion" in the desktop client.
@@ -261,30 +400,114 @@ Joakim's iPhone may:
 4. Approve the device on the PC.
 5. Devices exchange keys; the phone **pins** the desktop cert from the QR.
 
-Because the QR carries the cert fingerprint, a **self-signed certificate is completely
-fine** — the phone pins it at pairing time, so there is no CA problem and no plaintext
-LAN traffic. Use TLS even on the LAN. Bind the listener to the LAN/loopback interface;
-never `0.0.0.0` by default. Prefer device-specific keys with revocation over a single
-shared password.
+Bind the listener to the LAN/loopback interface; never `0.0.0.0` by default. Prefer
+device-specific keys with revocation over a single shared password. Use TLS even on the
+LAN.
 
-### 7.2 The one thing that forces a server: background push
+**Certificates: two paths, and they are not interchangeable.** An earlier draft of this
+document claimed a self-signed cert was universally fine because the QR pins it. That
+holds for a *native* client and not for a browser, and the browser is the MVP — so the
+two cases have to be stated separately:
 
-A VPN keeps the *socket* alive but the mobile OS still suspends the *app*. So "a tell
-arrived while your phone was asleep and Scrye wasn't open" cannot be delivered over LAN
-or VPN alone — it requires APNs/FCM and therefore a small push service. The decision is
-therefore not "relay or not" but **"is push-while-closed a must-have?"** If no, the whole
-accounts/hosting/liability burden disappears. If yes, build the *smallest possible* push
-relay and route **only** notifications through it — never the session traffic.
+- **Native client (Avalonia-mobile, §8.2): self-signed + QR pinning.** The client controls
+  its own TLS validation, so pinning the fingerprint from the QR is genuinely sufficient.
+  No CA involved, no plaintext on the LAN.
+- **Browser / PWA client: a real certificate is required.** Browsers do not honour our
+  pinning; a self-signed cert produces an interstitial, and — decisively — a
+  **service worker requires a genuine secure context**, so without a trusted cert there is
+  no PWA install, no offline shell, and no Web Push (§7.2). `http://localhost` counts as a
+  secure context; a LAN IP does not.
 
-Notifications the desktop could raise (delivered live while the app is connected;
-push-while-closed needs §7.2): tell received, character disconnected, low health, script
-paused, route completed, login finished.
+The clean answer for the browser path is the Tailscale-issued Let's Encrypt cert described
+in §5: a real, browser-trusted certificate on `machine.tailnet-name.ts.net`, with no
+public exposure and no CA paperwork. The alternative — installing a self-signed root as a
+trusted profile on iOS — works but is enough friction to sink the MVP's first impression.
+
+The QR (and its fingerprint) stays useful in both cases: it still carries the host address,
+pairing token and protocol version, and pinning a Tailscale-issued cert is harmless.
+
+### 7.2 Background push — resolved, and it does *not* force a server
+
+The premise this section used to carry ("push-while-closed is the one thing that forces us
+to run a service") is wrong, and correcting it removes the largest open risk in the
+document.
+
+The first half still holds: a VPN keeps the *socket* alive, but the mobile OS still
+suspends the *app*, so "a tell arrived while your phone was asleep and Scrye wasn't open"
+genuinely cannot be delivered over LAN or VPN alone. It has to go through APNs/FCM. What
+does not follow is that *we* must operate the thing that talks to APNs/FCM.
+
+**Decision: use Web Push with the desktop as the application server.** The phone's push
+subscription returns an endpoint URL hosted by the browser vendor's push service. Whoever
+holds the VAPID key pair POSTs the encrypted payload to that endpoint — and that
+"whoever" is `Scrye.App` itself. Requirements on our side amount to: generate a VAPID
+keypair once, store the subscription the phone hands over at pairing, and make outbound
+HTTPS POSTs. The desktop already has outbound internet. There is no relay, no user
+account, no uptime obligation, and no bandwidth cost.
+
+The privacy story is better than the relay's too: Web Push payloads are encrypted with
+keys the push service never possesses, so Apple and Google forward ciphertext. Our GDPR
+surface for other people's private MUD chat drops to approximately nothing.
+
+Two constraints this places on the rest of the design:
+
+- **The browser companion must be an installable PWA**, not just a page. On iOS, Web Push
+  is only available to a PWA that the user has added to the home screen. Manifest +
+  service worker therefore move into the step-3 MVP (§10) rather than being a later polish
+  item.
+- **It needs a browser-trusted certificate** (§7.1) — service workers require a secure
+  context. This is the concrete reason §5 promotes Tailscale to the primary tier.
+
+A **webhook notifier** is the sensible companion feature and a good fallback: let the user
+point Scrye at their own ntfy / Pushover / Discord / Telegram endpoint and POST to it.
+It is perhaps a day of work, needs no PWA and no VAPID, and covers users who never install
+to the home screen. Shape it as a scripting-visible `scrye.notify(...)` so plugins can
+raise notifications too. The tradeoff is that the payload passes through a third party,
+which is acceptable precisely because the *user* chose it.
+
+Notifications the desktop could raise — delivered live over the socket while the app is
+connected, and via Web Push (or webhook) when it is not: tell received, character
+disconnected, low health, script paused, route completed, login finished.
+
+### 7.3 "Send commands" must not imply "run scripts"
+
+The permission table above promises `✓ Send commands` and `✗ Edit scripts` are separable.
+In the current code they are not, and §4's rule ("phone input lands on the same hook as
+typed input") is what fuses them. `WorldViewModel.Submit()` dispatches on the text before
+it ever reaches the MUD:
+
+```csharp
+if (text == "mipstart") { _session.StartMip(); return; }
+if (TryClientCommand(text)) { ... }                              // "." client commands / sequences
+if (text.StartsWith('/') && text.Length > 1) { _session.RunScript(text[1..]); return; }
+```
+
+So a paired phone holding nothing but "send commands" can type
+`/world.AddAlias("x", "*", "...")` — or anything else — and get **arbitrary Lua executing
+on the session loop**. A stolen phone, or a device paired for a friend to watch a fight,
+becomes full scripting access to the client.
+
+**Decision: gate at the entry point, not in the UI.** `SubmitText(text, CommandSource)`
+(§4) inspects `source`. For `CommandSource.Companion`, the `/` prefix and the `.` client
+commands are rejected unless the device holds an explicit **Run scripts** permission, which
+is **off by default** and separate from Send commands. Rejection is an error frame back to
+the phone, not a silent drop.
+
+Two things this deliberately does not do. It does not filter on the *content* of ordinary
+commands — aliases, triggers and macros still expand normally, because that is the whole
+point of §4. And it does not put the check in the input box or anywhere else on the UI
+side: the gate belongs at the one place companion input enters the pipeline, so a future
+second entry point cannot bypass it by forgetting.
+
+Related, from the same reading: the MXP link path (`HandleCommandLink`) sends a command the
+*MUD* supplied. Route companion link taps through `SubmitText` with the companion source
+too, so a hostile MUD cannot use an MXP `<SEND>` to smuggle a `/` command onto a phone.
 
 ---
 
 ## 8. Frontend: browser first, native maybe later
 
-### 8.1 Browser companion is the MVP
+### 8.1 An installable PWA is the MVP
 
 Because Scrye is .NET, the desktop can host Kestrel + a WebSocket endpoint **in-process**
 trivially, and serve a small single-page app. A browser frontend:
@@ -297,6 +520,12 @@ The Telnet restriction never applies to the browser, because the *PC* makes the 
 connection; the browser only speaks HTTPS/WebSocket to the PC. **Live in the browser
 version for a few weeks before deciding native is worth it.**
 
+Build it as an **installable PWA from the start** — a web app manifest and a service
+worker, served over the browser-trusted cert from §7.1. That is a small delta over a plain
+SPA and it buys a home-screen icon, standalone display without Safari chrome, an offline
+shell, and — per §7.2 — Web Push. On iOS none of those are available to a page that has
+not been added to the home screen, so this is not a polish step to defer.
+
 ### 8.2 If/when native: Avalonia mobile, not MAUI
 
 The instinct is that MAUI suits a thin companion. For *this* codebase the opposite holds:
@@ -304,7 +533,14 @@ Scrye already has custom Avalonia HUD controls (`BarListView`, the dim-ramp gaug
 `colorgrid`). Avalonia-mobile lets the companion **reuse those renderers** and share the
 protocol DTOs; MAUI would mean rebuilding every one of them. So Avalonia-mobile is the
 cheaper native path here — but only after the browser version has proven what native
-actually needs to add (better keyboard, notifications, offline cache, device integration).
+actually needs to add.
+
+The PWA route (§7.2, §8.1) already covers notifications and offline cache, which narrows
+the honest remaining candidates to HUD-control reuse and **text input**. Expect the input
+box to be the deciding factor: mobile Safari gives a MUD command line viewport-resize jank,
+autocorrect fighting MUD syntax, no key repeat, no modifier keys, and no reliable
+up-arrow history. Watch that specifically while living with the PWA — it is a better
+signal that native is worth the cost than layout or notifications will ever be.
 
 ### 8.3 Mobile UX the structured feed unlocks
 
@@ -353,28 +589,97 @@ the `WorldViewModel`/`MainWindowViewModel` state it taps, with no IPC.
 
 ## 10. Recommended build order
 
-1. **Companion protocol** — the `Scrye.Companion.Protocol` DTOs (§3.2).
+0. **Seam prep in the existing app** — small, independently useful, and a prerequisite for
+   step 2: extract `WorldViewModel.SubmitText(text, CommandSource)` out of the private
+   `Submit()` (§4), and add the monotonic sequence counter + base-sequence alongside
+   `ScrollbackBuffer` (§6). Neither has a companion dependency; both can land now.
+1. **Companion protocol** — the `Scrye.Companion.Protocol` DTOs (§3.2), referencing
+   `Scrye.Core` but never `Scrye.App`.
 2. **In-app companion server** — Kestrel + WebSocket inside `Scrye.App`, tapping the
-   seams in §4; LAN-bound, TLS with a self-signed cert.
-3. **Browser MVP** — a small SPA rendering output, session state, and streamed HUD panels;
-   sending `command.send`. This is the point the concept is proven.
-4. **Pairing & permissions** — QR pairing with cert pinning (§7.1), per-device keys,
-   revocation, the paired-devices list.
+   seams in §4; interface-bound, TLS, `permessage-deflate` on. Self-signed is fine at this
+   stage, since nothing is rendering in a browser yet. Build it **multi-subscriber from the
+   start** (§11.3), with its own outbound queue (§4.1) and the `CommandSource` gate (§7.3)
+   present from the first commit that accepts input.
+3. **Browser MVP, as an installable PWA** — a small SPA rendering output, session state
+   and streamed HUD panels, sending `command.send`; plus a manifest and service worker so
+   it installs to the home screen (§8.1). This is the point the concept is proven.
+   Requires a browser-trusted cert, so in practice step 6 lands alongside this one.
+4. **Pairing & permissions** — QR pairing (§7.1), per-device keys, revocation, the
+   paired-devices list, and capture of the phone's Web Push subscription at pairing time.
 5. **Resume & snapshot** — sequence numbers on the output ring buffer + snapshot path (§6).
-6. **Remote access** — document the Tailscale/WireGuard path; no service to build.
-7. *(Optional)* **Native app** — Avalonia-mobile, reusing DTOs and HUD controls (§8.2).
-8. *(Optional, only if push-while-closed is required)* **Minimal push relay** (§7.2).
+6. **Trusted cert + remote access** — the Tailscale path (§5): a browser-trusted
+   Let's Encrypt cert on the tailnet name, which delivers remote access as a side effect.
+   No service to build. Effectively a prerequisite of step 3, not a sequel to it.
+7. **Notifications** — VAPID keypair and outbound Web Push from `Scrye.App` (§7.2), plus
+   the `scrye.notify(...)` webhook notifier as the no-PWA fallback.
+8. *(Optional)* **Native app** — Avalonia-mobile, reusing DTOs and HUD controls (§8.2).
 
-Steps 1–3 are the whole idea, working. Everything after hardens or extends it, and each
-is independently shippable.
+Steps 1–3 (with 6) are the whole idea, working. Everything after hardens or extends it,
+and each is independently shippable. The former step 8, "minimal push relay", is deleted:
+§7.2 shows there is nothing left for it to do.
 
 ---
 
-## 11. Open decisions
+## 11. Decisions
 
-- **Is push-while-closed a must-have?** This single answer determines whether a hosted
-  component ever gets built (§7.2).
-- **Native at all, or is the browser companion enough long-term?** Defer until after
-  living with the browser MVP.
-- **How many concurrent devices / sessions to support in v1?** LAN single-user is the
-  simplest first target.
+*Resolved 2026-08-02. The first two were open questions in the previous revision; the
+answer to 11.1 turned out to dissolve the question rather than pick a side, and that
+cascaded into §5, §7.1, §7.2, §8 and §10.*
+
+### 11.1 Push-while-closed — **yes, and no hosted component**
+
+The question was framed as a binary: accept no background push, or build a relay and take
+on accounts, uptime and GDPR liability. It is a false binary. **Web Push with `Scrye.App`
+itself as the application server** delivers push-while-closed with nothing for us to
+operate — see §7.2 for the mechanism and §7.1/§5 for the certificate consequences.
+
+Cost of the decision: the browser MVP must be an installable PWA (manifest + service
+worker), and it needs a browser-trusted certificate, which is why Tailscale is promoted to
+the primary transport tier. Both are cheap; neither involves running a service. A webhook
+notifier (`scrye.notify(...)` → ntfy / Pushover / Discord / Telegram) ships alongside as
+the fallback for users who never install to the home screen.
+
+### 11.2 Native at all — **not yet; re-evaluate on one specific signal**
+
+Unchanged in direction, sharper in criterion. Live with the PWA first. Notifications and
+offline cache are no longer arguments for native, since §7.2 covers both. The two honest
+remaining arguments are reuse of the existing Avalonia HUD controls and, above all,
+**text input quality** — see §8.2. Treat "the command line on mobile Safari is
+unacceptable in daily play" as the trigger to start step 8, and treat nothing else as one.
+
+### 11.3 Concurrent devices — **single *user* in v1, multi-*subscriber* from day one**
+
+Distinguish the two. The v1 *scope* is one person, no accounts, per-device keys as
+described in §7 — that stays. But even one person is realistically a phone, a tablet and a
+desktop browser at once, so the server must not bake in a single-connection assumption.
+From the first commit of `Scrye.Companion.Server`:
+
+- per-connection sequence cursors, not one global cursor;
+- broadcast fan-out of `output.line`, `state.update` and `hud.*` to all subscribers;
+- commands echoed to **every** connected client, not just the sender — which follows
+  naturally from §4's rule that phone input lands on the same hook as typed input;
+- the paired-devices list (§7) is already per-device, so nothing new is needed there.
+
+This is nearly free now and a rewrite later. What is deferred indefinitely is multi-*user*:
+separate accounts, per-user permission sets, and anything that implies identity beyond
+"this device is paired to this desktop."
+
+### 11.4 Closed by reading the code (2026-08-02)
+
+Both questions left open in the previous revision turned out to be answered by the engine
+already:
+
+- **Ring buffer size for resume** — moot. `ScrollbackBuffer` already holds 50,000 lines;
+  resume reads it directly rather than adding a second buffer (§6). What replaced this as
+  a real concern is the index-vs-sequence trap after trimming, also §6.
+- **Palette handover** — moot, and the underlying idea was wrong. Colour is resolved to
+  24-bit `Rgb` at parse time and the palette index is discarded, so there is no palette to
+  hand over and no way to re-theme old lines even on the desktop (§3.3).
+
+Three new decisions were taken in the same pass and are recorded in place rather than
+here: the wire format switches to batched frames with a per-frame style table (§3.1–3.2),
+companion input gets its own entry point with a scripting-permission gate (§7.3), and the
+server owns an outbound queue rather than touching `StateStore` or `Scrollback` from socket
+threads (§4.1).
+
+Nothing is currently blocking step 1.
