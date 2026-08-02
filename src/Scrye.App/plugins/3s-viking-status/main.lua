@@ -1653,12 +1653,13 @@ scrye.addPanel{
   accent = "#5A93D4",          -- signature: viking steel-blue
   tabs = {
     { title = "Stats", widgets = {
-        { type = "gauge", text = "HP",   value = "character.health.current", max = "character.health.max" },
-        { type = "gauge", text = "Seid", value = "vik.seid", max = "vik.mseid" },
-        { type = "gauge", text = "Vig",  value = "vik.vig",  max = "vik.mvig" },
-        { type = "gauge", text = "Rad",  value = "vik.rad",  max = "vik.mrad" },
+        -- dim = true: the bar darkens as the value drops (green base for stats)
+        { type = "gauge", text = "HP",   value = "character.health.current", max = "character.health.max", dim = true },
+        { type = "gauge", text = "Seid", value = "vik.seid", max = "vik.mseid", dim = true },
+        { type = "gauge", text = "Vig",  value = "vik.vig",  max = "vik.mvig",  dim = true },
+        { type = "gauge", text = "Rad",  value = "vik.rad",  max = "vik.mrad",  dim = true },
         { type = "value", text = "Enemy: ", bind = "enemy.name", color = "#E0524D" },              -- red: enemy
-        { type = "progress", text = "Enemy HP", value = "enemy.health", max = 100, color = "#E0524D" },
+        { type = "gauge", text = "Enemy", value = "enemy.health", max = 100, dim = true, color = "#E0524D" },
         { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn", color = "#6FB7E0" },         -- info blue
         { type = "text", bind = P .. "stats" },
         { type = "button", text = "Commit patrol (last count)", action = patrol_commit },

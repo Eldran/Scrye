@@ -377,6 +377,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Value = Str(w, "value"),
             Max = Str(w, "max"),
             Color = Str(w, "color"),
+            Dim = Get(w, "dim") is { } dv && dv.IsBoolean() && dv.AsBoolean(),
             Palette = ToPalette(Get(w, "palette")),
             Action = actionId,
             Children = children,

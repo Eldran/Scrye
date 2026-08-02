@@ -418,6 +418,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Value = Field(w, "value"),
             Max = Field(w, "max"),
             Color = Field(w, "color"),
+            Dim = w.Get("dim").Type == DataType.Boolean && w.Get("dim").Boolean,
             Palette = palette,
             Action = actionId,
             Children = children,

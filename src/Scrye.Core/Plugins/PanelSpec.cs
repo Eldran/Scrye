@@ -33,6 +33,11 @@ public sealed record WidgetSpec
     /// the gauge's health gradient). Null = follow the theme / the panel's default foreground.</summary>
     public string? Color { get; init; }
 
+    /// <summary>For a <c>gauge</c>: dim the bar toward dark as the value drops (brightness scales
+    /// with the fill ratio) instead of the cyan→amber→red gradient. Uses <see cref="Color"/> as the
+    /// base hue (default green when unset).</summary>
+    public bool Dim { get; init; }
+
     /// <summary>For <c>colorgrid</c>: character → "#RRGGBB" cell colour.</summary>
     public IReadOnlyDictionary<string, string>? Palette { get; init; }
 

@@ -136,7 +136,7 @@ public sealed class HudViewModel : IDisposable
             }
             case "gauge":
             {
-                var vm = new GaugeWidgetViewModel(w.Text ?? "", w.Color);   // bar honours explicit colour only
+                var vm = new GaugeWidgetViewModel(w.Text ?? "", w.Color, w.Dim);   // dim: darken as value drops
                 BindNumber(w.Value, v => vm.Value = v, subs);
                 BindNumber(w.Max, v => vm.Maximum = v, subs);
                 return vm;
@@ -359,12 +359,22 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
 
     public string Label { get; }
     private readonly Avalonia.Media.IBrush? _custom;   // plugin-chosen bar colour (overrides the gradient)
+    private readonly bool _dim;                         // dim mode: bar darkens as the value drops
+    private readonly Avalonia.Media.Color _base;        // base hue for dim mode
 
-    public GaugeWidgetViewModel(string label, string? colorHex = null)
+    public GaugeWidgetViewModel(string label, string? colorHex = null, bool dim = false)
     {
         Label = label;
-        _custom = HudColor.Brush(colorHex);
+        _dim = dim;
+        _base = ParseColor(colorHex) ?? Avalonia.Media.Color.FromRgb(0x46, 0xB4, 0x5A);  // default green
+        _custom = dim ? null : HudColor.Brush(colorHex);   // fixed colour only when not dimming
     }
+
+    private static Avalonia.Media.Color? ParseColor(string? hex) =>
+        hex is { Length: 7 } && hex[0] == '#' &&
+        uint.TryParse(hex[1..], System.Globalization.NumberStyles.HexNumber, null, out uint v)
+            ? Avalonia.Media.Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v)
+            : (Avalonia.Media.Color?)null;
 
     private double _value;
     public double Value
@@ -381,8 +391,20 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
     }
 
     public string Caption => $"{_value:0}/{_maximum:0}";
-    public Avalonia.Media.IBrush BarBrush =>
-        _custom ?? (_value / _maximum >= 0.5 ? Healthy : _value / _maximum >= 0.25 ? Warning : Critical);
+    public Avalonia.Media.IBrush BarBrush
+    {
+        get
+        {
+            double r = System.Math.Clamp(_maximum > 0 ? _value / _maximum : 0, 0, 1);
+            if (_dim)
+            {
+                double b = 0.30 + 0.70 * r;   // brightness 30% (empty) → 100% (full)
+                return new Avalonia.Media.Immutable.ImmutableSolidColorBrush(
+                    Avalonia.Media.Color.FromRgb((byte)(_base.R * b), (byte)(_base.G * b), (byte)(_base.B * b)));
+            }
+            return _custom ?? (r >= 0.5 ? Healthy : r >= 0.25 ? Warning : Critical);
+        }
+    }
 
     private void Changed()
     {
