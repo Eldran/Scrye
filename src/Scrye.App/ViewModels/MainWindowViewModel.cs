@@ -23,6 +23,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public RelayCommand OpenSettingsCommand { get; }
     public RelayCommand SaveSettingsCommand { get; }
     public RelayCommand CancelSettingsCommand { get; }
+    public RelayCommand<WorldViewModel> CloseWorldCommand { get; }   // ✕ on a world tab
 
     // quick-connect fields
     private string _host = "";
@@ -112,6 +113,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         OpenSettingsCommand = new RelayCommand(() => Settings = new GlobalSettingsViewModel(_store.LoadGlobal()));
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         CancelSettingsCommand = new RelayCommand(() => Settings = null);
+        CloseWorldCommand = new RelayCommand<WorldViewModel>(CloseWorld);
 
         RefreshTree();
     }
@@ -320,6 +322,29 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         try { await vm.ConnectAsync(); }
         catch (System.Exception ex) { vm.AppendSystem($"connect failed: {ex.Message}"); }
+    }
+
+    /// <summary>Close a world tab (the ✕ on its header): pick an adjacent tab to fall
+    /// back to, drop it from the list, then dispose it — which disconnects the session
+    /// and tears down its plugins, HUD, capture panes and float windows.</summary>
+    private void CloseWorld(WorldViewModel world)
+    {
+        int idx = Worlds.IndexOf(world);
+        if (idx < 0) return;
+
+        if (ReferenceEquals(Active, world))               // choose a neighbour before removal
+            Active = Worlds.Count > 1
+                ? Worlds[idx == Worlds.Count - 1 ? idx - 1 : idx + 1]
+                : null;
+
+        Worlds.Remove(world);
+        _ = DisposeWorldAsync(world);                     // fire-and-forget: closes the socket + cleans up
+    }
+
+    private static async System.Threading.Tasks.Task DisposeWorldAsync(WorldViewModel world)
+    {
+        try { await world.DisposeAsync(); }
+        catch { /* teardown is best-effort; the tab is already gone */ }
     }
 
     private async void QuickConnect()

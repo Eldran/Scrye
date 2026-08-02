@@ -71,6 +71,11 @@
                                     IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding UnreadText}" FontSize="11" Foreground="White" />
                             </Border>
+                            <Button Content="✕" FontSize="11" Padding="4,0" Margin="2,0,0,0"
+                                    Background="Transparent" BorderThickness="0" VerticalAlignment="Center"
+                                    ToolTip.Tip="Close this world"
+                                    Command="{Binding $parent[TabControl].((vm:MainWindowViewModel)DataContext).CloseWorldCommand}"
+                                    CommandParameter="{Binding}" />
                         </StackPanel>
                     </DataTemplate>
                 </TabControl.ItemTemplate>
