@@ -321,14 +321,22 @@ end
 
 -- match a market row on frame-stripped text: town, price, qty, then the keyword
 -- ("avail"/"wants") on a word boundary, then the affinity remainder.
+--
+-- IMPORTANT: MoonSharp (Scrye's Lua engine) aborts with "pattern too complex" when
+-- a pattern has to backtrack a lot -- e.g. a monolithic "town + two numbers + word"
+-- pattern run against a "sold out" row (one number, no keyword) or a column-header
+-- line. So we (1) gate on a cheap plain-text find of the keyword, then (2) use small,
+-- lightly-backtracking patterns for the numbers and the town separately.
 local function rowmatch(line, word)
-  local town, price, qty, rest =
-    line:match("^%s*([%a][%a' ]-)%s+(%d+)%s+(%d+)%s+(" .. word .. ".*)$")
-  if not town then return nil end
-  if rest == word then return town, price, qty, "" end
-  local tail = rest:match("^" .. word .. "[^%w](.*)$")   -- word boundary ("available" won't match)
-  if tail == nil then return nil end
-  return town, price, qty, tail
+  if not line:find(word, 1, true) then return nil end             -- cheap gate: keyword must be present
+  local price, qty, tail = line:match("(%d+)%s+(%d+)%s+" .. word .. "(.*)$")
+  if not price then return nil end
+  local town = line:match("^%s*([%a][%a' ]*)%s+%d") or ""          -- leading letters/'/space run before the price
+  town = (town:gsub("%s+$", ""))                                    -- drop the greedy town's trailing spaces
+  if tail == "" then return town, price, qty, "" end
+  local aff = tail:match("^[^%w](.*)$")   -- word boundary: "available" (tail "able...") is rejected
+  if aff == nil then return nil end
+  return town, price, qty, aff
 end
 
 scrye.onLine(function(line)
@@ -338,11 +346,15 @@ scrye.onLine(function(line)
   -- only touch the framed vtrade block; leave everything else (tells, etc.) alone
   if not line:match("^%s*%-~%*") then return end
   local clean = strip_frame(line)
-  -- "<Good> - Market Overview" header
-  local res = clean:match("^([%a][%a ]-)%s*%-%s*Market Overview")
-  if res then
-    pcall(mk_header, res)
-    return false
+  -- "<Good> - Market Overview" header (gate on a plain find first: the header pattern
+  -- would otherwise backtrack over long all-letter column-header lines and MoonSharp
+  -- would abort with "pattern too complex")
+  if clean:find("Market Overview", 1, true) then
+    local res = clean:match("^([%a][%a ]*)%s*%-%s*Market Overview")
+    if res then
+      pcall(mk_header, res)
+      return false
+    end
   end
   -- buy row:  Town  <price>  <qty> avail [affinity]
   local town, price, qty, aff = rowmatch(clean, "avail")
