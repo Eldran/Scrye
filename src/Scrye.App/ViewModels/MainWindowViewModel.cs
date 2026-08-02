@@ -94,8 +94,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             "Scrye", "profiles");
         _store = new ProfileStore(dir);
 
-        // Restore the saved color scheme before the window is shown.
-        Services.ThemeService.Apply(_store.LoadGlobal().Theme);
+        // Restore the saved color scheme + ANSI palette before the window is shown.
+        ProfileLayer startupGlobal = _store.LoadGlobal();
+        Services.ThemeService.Apply(startupGlobal.Theme);
+        Services.ThemeService.ApplyAnsiPalette(startupGlobal.AnsiPalette);
 
         ConnectCommand = new RelayCommand(QuickConnect);
         NewMudCommand = new RelayCommand(() =>
@@ -238,6 +240,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         ProfileLayer layer = Settings.ToLayer();
         _store.SaveGlobal(layer);
         Services.ThemeService.Apply(layer.Theme);   // scheme change takes effect immediately
+        Services.ThemeService.ApplyAnsiPalette(layer.AnsiPalette);
         Settings = null;
         ReapplyToConnected();   // global merges into every chain
     }

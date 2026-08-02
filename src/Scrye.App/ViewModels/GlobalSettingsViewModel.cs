@@ -79,6 +79,13 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     private ThemeScheme _theme;
     public ThemeScheme Theme { get => _theme; set => SetField(ref _theme, value); }
 
+    // ---- ANSI palette (how the MUD's colour codes are painted) ----
+    public const string PaletteModern = "Modern (xterm)";
+    public const string PaletteClassic = "MUSHclient (classic)";
+    public IReadOnlyList<string> PaletteChoices { get; } = new[] { PaletteModern, PaletteClassic };
+    private string _ansiPalette;
+    public string AnsiPalette { get => _ansiPalette; set => SetField(ref _ansiPalette, value); }
+
     // ---- global rule sets + variables ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
@@ -119,6 +126,8 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _fontFamily = layer.FontFamily ?? "";
         _fontSize = layer.FontSize?.ToString(CultureInfo.InvariantCulture) ?? "";
         _theme = ThemeService.Find(layer.Theme);
+        _ansiPalette = string.Equals(layer.AnsiPalette, "classic", StringComparison.OrdinalIgnoreCase)
+            ? PaletteClassic : PaletteModern;
 
         // monospaced fonts on this machine, "Default" first; include any current custom
         // value so it stays visible/selectable in the dropdown even if it isn't monospaced
@@ -196,6 +205,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _layer.FontSize = double.TryParse(FontSize, NumberStyles.Any, CultureInfo.InvariantCulture, out double sz) && sz > 0
             ? sz : null;
         _layer.Theme = Theme.Key;
+        _layer.AnsiPalette = (AnsiPalette == PaletteClassic) ? "classic" : "modern";
 
         var triggers = new List<TriggerDef>();
         foreach (TriggerRowViewModel r in Triggers) if (!string.IsNullOrWhiteSpace(r.Name)) triggers.Add(r.ToDef());

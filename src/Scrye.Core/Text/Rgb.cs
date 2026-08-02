@@ -28,10 +28,21 @@ public readonly record struct Rgb(byte R, byte G, byte B)
         return false;
     }
 
-    /// <summary>The 16 standard ANSI colours (0-7 normal, bright = high-intensity).</summary>
-    public static Rgb Ansi16(int index, bool bright)
+    /// <summary>The active 16-colour ANSI palette. <see cref="AnsiPaletteMode.Modern"/> is the
+    /// xterm/VGA palette (default); <see cref="AnsiPaletteMode.Classic"/> matches MUSHclient's
+    /// default (pure-primary brights, olive normal-yellow). Set from the global appearance setting;
+    /// affects lines parsed after the change.</summary>
+    public enum AnsiPaletteMode { Modern, Classic }
+    public static AnsiPaletteMode AnsiPalette = AnsiPaletteMode.Modern;
+
+    /// <summary>The 16 standard ANSI colours (0-7 normal, bright = high-intensity),
+    /// resolved through the currently-selected <see cref="AnsiPalette"/>.</summary>
+    public static Rgb Ansi16(int index, bool bright) =>
+        AnsiPalette == AnsiPaletteMode.Classic ? Ansi16Classic(index, bright) : Ansi16Modern(index, bright);
+
+    // modern xterm/VGA palette (normal at 0xAA, bright at 0x55-lifted)
+    private static Rgb Ansi16Modern(int index, bool bright)
     {
-        // classic VGA-ish palette
         (byte r, byte g, byte b) = (index & 7) switch
         {
             0 => bright ? ((byte)0x55, (byte)0x55, (byte)0x55) : ((byte)0x00, (byte)0x00, (byte)0x00), // black / grey
@@ -42,6 +53,23 @@ public readonly record struct Rgb(byte R, byte G, byte B)
             5 => bright ? ((byte)0xFF, (byte)0x55, (byte)0xFF) : ((byte)0xAA, (byte)0x00, (byte)0xAA), // magenta
             6 => bright ? ((byte)0x55, (byte)0xFF, (byte)0xFF) : ((byte)0x00, (byte)0xAA, (byte)0xAA), // cyan
             _ => bright ? ((byte)0xFF, (byte)0xFF, (byte)0xFF) : ((byte)0xAA, (byte)0xAA, (byte)0xAA), // white
+        };
+        return new Rgb(r, g, b);
+    }
+
+    // MUSHclient default palette (normal at 0x80, bright = pure primaries)
+    private static Rgb Ansi16Classic(int index, bool bright)
+    {
+        (byte r, byte g, byte b) = (index & 7) switch
+        {
+            0 => bright ? ((byte)0x80, (byte)0x80, (byte)0x80) : ((byte)0x00, (byte)0x00, (byte)0x00), // black / grey
+            1 => bright ? ((byte)0xFF, (byte)0x00, (byte)0x00) : ((byte)0x80, (byte)0x00, (byte)0x00), // red
+            2 => bright ? ((byte)0x00, (byte)0xFF, (byte)0x00) : ((byte)0x00, (byte)0x80, (byte)0x00), // green
+            3 => bright ? ((byte)0xFF, (byte)0xFF, (byte)0x00) : ((byte)0x80, (byte)0x80, (byte)0x00), // yellow / olive
+            4 => bright ? ((byte)0x00, (byte)0x00, (byte)0xFF) : ((byte)0x00, (byte)0x00, (byte)0x80), // blue
+            5 => bright ? ((byte)0xFF, (byte)0x00, (byte)0xFF) : ((byte)0x80, (byte)0x00, (byte)0x80), // magenta
+            6 => bright ? ((byte)0x00, (byte)0xFF, (byte)0xFF) : ((byte)0x00, (byte)0x80, (byte)0x80), // cyan
+            _ => bright ? ((byte)0xFF, (byte)0xFF, (byte)0xFF) : ((byte)0xC0, (byte)0xC0, (byte)0xC0), // white / silver
         };
         return new Rgb(r, g, b);
     }

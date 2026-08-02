@@ -40,6 +40,8 @@ public sealed class ProfileLayer
     public string? FontFamily { get; set; }
     public double? FontSize { get; set; }
     public string? Theme { get; set; }
+    /// <summary>ANSI 16-colour palette: "modern" (xterm/VGA, default) or "classic" (MUSHclient).</summary>
+    public string? AnsiPalette { get; set; }
 
     // ---- collections, merged by name ----
     public List<TriggerDef> Triggers { get; set; } = new();

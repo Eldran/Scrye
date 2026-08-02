@@ -943,6 +943,11 @@
                                 <TextBlock Text="Theme" />
                                 <ComboBox ItemsSource="{Binding Settings.Themes}" SelectedItem="{Binding Settings.Theme}"
                                           HorizontalAlignment="Left" MinWidth="220" />
+                                <TextBlock Text="MUD colors (ANSI palette)" Margin="0,6,0,0" />
+                                <ComboBox ItemsSource="{Binding Settings.PaletteChoices}" SelectedItem="{Binding Settings.AnsiPalette}"
+                                          HorizontalAlignment="Left" MinWidth="220" />
+                                <TextBlock Text="How the MUD's color codes are painted. 'MUSHclient (classic)' matches MUSHclient's palette (pure-primary bold colors, olive yellow); 'Modern' uses the softer xterm palette. Applies to new output."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
                                 <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
                                 <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
                                           HorizontalAlignment="Left" MinWidth="260" />

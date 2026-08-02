@@ -69,6 +69,13 @@ public static class ThemeService
     }
 
     /// <summary>Apply the scheme with the given key (null → default) app-wide.</summary>
+    /// <summary>Apply the ANSI palette choice ("classic" = MUSHclient, else modern). Affects
+    /// MUD lines parsed after this call.</summary>
+    public static void ApplyAnsiPalette(string? mode) =>
+        Scrye.Core.Text.Rgb.AnsiPalette = string.Equals(mode, "classic", StringComparison.OrdinalIgnoreCase)
+            ? Scrye.Core.Text.Rgb.AnsiPaletteMode.Classic
+            : Scrye.Core.Text.Rgb.AnsiPaletteMode.Modern;
+
     public static void Apply(string? key)
     {
         if (Application.Current is not Application app) return;
