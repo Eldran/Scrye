@@ -19,7 +19,8 @@
 --   * persisted via scrye.store: "showmax" toggle and the scanned cost table
 --     (serialized to a string).
 
-local STATE_REPORT = "plugin." .. scrye.id .. ".report"
+local STATE_REPORT  = "plugin." .. scrye.id .. ".report"
+local STATE_SUMMARY = "plugin." .. scrye.id .. ".summary"
 
 local function note(s) scrye.print(s) end
 
@@ -344,6 +345,12 @@ local function bp_draw()
     lines[#lines + 1] = string.format("%s %-15s %-5s %s", mark, r.b.name, tierstr, body)
   end
   report_lines = lines
+
+  -- colored summary: how many buildings are affordable right now
+  local ready = 0
+  for _, r in ipairs(shown) do if r.cat == 1 and r.buildable then ready = ready + 1 end end
+  scrye.setState(STATE_SUMMARY, string.format("%d ready  |  %s daler", ready, comma(daler)))
+
   scrye.setState(STATE_REPORT, table.concat(lines, "\n"))
 end
 
@@ -514,7 +521,9 @@ scrye.addAlias{ pattern = [[^build start (.+)$]], regex = true, run = function(w
 scrye.addPanel{
   title = "Build Planner",
   width = 480,
+  accent = "#4FB05A",          -- signature: build green
   widgets = {
+    { type = "value", text = "",  bind = STATE_SUMMARY, color = "#4FB05A" },  -- green: buildable-now count
     { type = "text",   bind = STATE_REPORT },
     { type = "button", text = "Refresh", action = function() bp_draw() end },
     { type = "button", text = "Scan",    action = function() bp_scan() end },

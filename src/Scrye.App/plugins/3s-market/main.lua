@@ -391,9 +391,10 @@ scrye.addAlias{
 scrye.addPanel{
   title = "3S Market",
   width = 520,
+  accent = "#D9A521",          -- signature: market gold
   widgets = {
     { type = "button", text = "Refresh", action = function() mk_refresh(false) end },
-    { type = "label",  bind = P .. "status" },
+    { type = "label",  bind = P .. "status", color = "#E0A830" },   -- status line in gold
     { type = "text",   bind = P .. "report" },
   },
 }

@@ -1617,15 +1617,16 @@ end
 scrye.addPanel{
   title = "Viking Status",
   width = 560,
+  accent = "#5A93D4",          -- signature: viking steel-blue
   tabs = {
     { title = "Stats", widgets = {
         { type = "gauge", text = "HP",   value = "character.health.current", max = "character.health.max" },
         { type = "gauge", text = "Seid", value = "vik.seid", max = "vik.mseid" },
         { type = "gauge", text = "Vig",  value = "vik.vig",  max = "vik.mvig" },
         { type = "gauge", text = "Rad",  value = "vik.rad",  max = "vik.mrad" },
-        { type = "value", text = "Enemy: ", bind = "enemy.name" },
-        { type = "progress", text = "Enemy HP", value = "enemy.health", max = 100 },
-        { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn" },
+        { type = "value", text = "Enemy: ", bind = "enemy.name", color = "#E0524D" },              -- red: enemy
+        { type = "progress", text = "Enemy HP", value = "enemy.health", max = 100, color = "#E0524D" },
+        { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn", color = "#6FB7E0" },         -- info blue
         { type = "text", bind = P .. "stats" },
         { type = "button", text = "Commit patrol (last count)", action = patrol_commit },
     } },
@@ -1648,7 +1649,7 @@ scrye.addPanel{
         { type = "text", bind = P .. "holds" },
     } },
     { title = "Sea", widgets = {
-        { type = "value", text = "", bind = P .. "seanav" },
+        { type = "value", text = "", bind = P .. "seanav", color = "#5A93D4" },   -- section header
         { type = "text", bind = P .. "sea" },
         { type = "colorgrid", bind = P .. "seachart", palette = SEA_PAL },
         { type = "label", text = "S ship  X objective  H harbor  W wreck  T storm  I island  F fog  # unrevealed  O open sea  * resolved  B stormbelt  + path  > destination" },
@@ -1658,14 +1659,14 @@ scrye.addPanel{
         { type = "text", bind = P .. "voyage" },
     } },
     { title = "Map", widgets = {
-        { type = "value", text = "", bind = P .. "maphdr" },
+        { type = "value", text = "", bind = P .. "maphdr", color = "#5A93D4" },   -- section header
         { type = "colorgrid", bind = P .. "map", palette = MAP_PAL },
         { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
         { type = "text", bind = P .. "maplocs" },
     } },
     { title = "Travel", widgets = travel_widgets },
     { title = "Plan", widgets = {
-        { type = "value", text = "", bind = P .. "planhdr" },
+        { type = "value", text = "", bind = P .. "planhdr", color = "#5A93D4" },   -- section header
         { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL },
         { type = "text", bind = P .. "planlist" },
     } },

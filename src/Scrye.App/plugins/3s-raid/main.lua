@@ -145,10 +145,11 @@ end
 scrye.addPanel{
   title = "Auto-Raid",
   width = 260,
+  accent = "#D6524E",          -- signature: raid red
   widgets = {
-    { type = "value", text = "Armed: ",  bind = SP .. "armed"  },
-    { type = "value", text = "Target: ", bind = SP .. "target" },
-    { type = "value", text = "Docked: ", bind = SP .. "docked" },
+    { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "#E08A3C" },  -- amber: the arm switch
+    { type = "value", text = "Target: ", bind = SP .. "target", color = "#6FB7E0" },  -- blue: destination
+    { type = "value", text = "Docked: ", bind = SP .. "docked", color = "#4FB05A" },  -- green: ships ready
   },
 }
 

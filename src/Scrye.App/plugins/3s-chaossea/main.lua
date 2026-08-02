@@ -819,8 +819,9 @@ end
 scrye.addPanel{
   title = "3S Chaos Sea",
   width = 300,
+  accent = "#2CB5C4",          -- signature: chaos-sea teal
   widgets = {
-    { type = "value", text = "", bind = P .. "status" },
+    { type = "value", text = "", bind = P .. "status", color = "#6FB7E0" },   -- info blue
     { type = "value", text = "pos ",   bind = P .. "stats" },
     { type = "colorgrid", bind = P .. "map", palette = {
         ["."] = "#080A0C",   -- unknown / wall (map background)
@@ -830,9 +831,13 @@ scrye.addPanel{
         ["S"] = "#40C0FF",   -- start room 0 0 0
         ["@"] = "#60FF60",   -- you
       } },
-    { type = "label", text = "@ you  f frontier  v down exit  S start" },
-    { type = "value", text = "kills: ", bind = P .. "hunt" },
-    { type = "value", text = "sea ",    bind = P .. "sea" },
+    -- legend, each entry in its own map color
+    { type = "label", text = "@ you",       color = "#60FF60" },
+    { type = "label", text = "f frontier",  color = "#3070FF" },
+    { type = "label", text = "v down exit", color = "#30C0F0" },
+    { type = "label", text = "S start",     color = "#40C0FF" },
+    { type = "value", text = "kills: ", bind = P .. "hunt", color = "#E0524D" },   -- red: kills
+    { type = "value", text = "sea ",    bind = P .. "sea",  color = "#2CB5C4" },   -- teal: sea id
     { type = "button", text = "On/Off", action = function() cs_interface(enabled and "disable" or "enable") end },
     { type = "button", text = "Step",   action = function() cs_step() end },
     { type = "button", text = "Auto",   action = function() cs_interface(auto and "auto off" or "auto on") end },
