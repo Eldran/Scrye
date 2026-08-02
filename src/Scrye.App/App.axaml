@@ -18,7 +18,7 @@
              These are the startup defaults; ThemeService.Apply swaps them (and the
              accent family above) at runtime when a color scheme is selected. -->
         <SolidColorBrush x:Key="ScryeBg" Color="#14181F" />
-        <SolidColorBrush x:Key="ScryeOutputBg" Color="#10141A" />
+        <SolidColorBrush x:Key="ScryeOutputBg" Color="#080A0C" />
         <SolidColorBrush x:Key="ScryeOutputText" Color="#D6DEE8" />
         <SolidColorBrush x:Key="ScryeInsetBg" Color="#10141A" />
         <SolidColorBrush x:Key="ScryePanel" Color="#1B212B" />

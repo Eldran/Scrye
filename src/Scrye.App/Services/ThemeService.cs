@@ -39,7 +39,7 @@ public sealed record ThemeScheme(
 public static class ThemeService
 {
     /// <summary>The fixed terminal surface color (matches OutputView's fill).</summary>
-    private static readonly Color OutputBg = Color.FromRgb(0x10, 0x14, 0x1A);
+    private static readonly Color OutputBg = Color.FromRgb(0x08, 0x0A, 0x0C);
     /// <summary>The fixed terminal text colour — used for the command input line so the
     /// interactive output area reads the same in every scheme (matching the game output,
     /// whose per-run colours are already theme-independent).</summary>

@@ -951,7 +951,7 @@
                                 <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
                                 <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
                                           HorizontalAlignment="Left" MinWidth="260" />
-                                <Border Background="#10141A" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
+                                <Border Background="#080A0C" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
                                         CornerRadius="3" Padding="8,6" Margin="0,4,0,0">
                                     <StackPanel Spacing="1">
                                         <TextBlock Text="The quick brown fox jumps over the lazy dog" Foreground="#C0C0C0"

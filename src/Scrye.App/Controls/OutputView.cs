@@ -89,8 +89,8 @@ public class OutputView : Control
 
     private readonly Dictionary<uint, IImmutableBrush> _brushCache = new();
     private readonly Dictionary<(uint fore, uint back), Rgb> _readableCache = new();
-    private static readonly IImmutableBrush Background = new ImmutableSolidColorBrush(Color.FromRgb(0x10, 0x14, 0x1A));
-    private static readonly Rgb SurfaceRgb = new(0x10, 0x14, 0x1A);   // the colour behind default-background text (matches Background)
+    private static readonly IImmutableBrush Background = new ImmutableSolidColorBrush(Color.FromRgb(0x08, 0x0A, 0x0C));
+    private static readonly Rgb SurfaceRgb = new(0x08, 0x0A, 0x0C);   // the colour behind default-background text (matches Background)
     private const double MinContrast = 3.0;                          // readability floor (WCAG contrast ratio) for glyph vs surface
     private static readonly IImmutableBrush SelectionBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x35, 0xC4, 0xD6));
     private static readonly IImmutableBrush MatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0xF0, 0xC0, 0x40));
