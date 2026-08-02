@@ -113,12 +113,17 @@ local function mk_compute()
     if #sells > 0 then      -- include sell-only goods (produced, no town supplies them)
       table.sort(sells, function(a, b)
         if a.price ~= b.price then return a.price > b.price end return a.qty > b.qty end)
-      local profit
+      local profit = nil
       if #buys > 0 then
         table.sort(buys, function(a, b)
           if a.price ~= b.price then return a.price < b.price end return a.qty > b.qty end)
         profit = sells[1].price - buys[1].price
       end
+      -- Normalize to number-or-nil. A MoonSharp codegen quirk in this nested-loop +
+      -- closures function can leave the unassigned `profit` aliasing a table for
+      -- sell-only goods, which then blows up "a.profit > b.profit" (sort) and
+      -- "r.profit >= 0" (render) with "compare number with table". Force it clean.
+      if type(profit) ~= "number" then profit = nil end
       results[#results + 1] = {
         res = DISPLAY[res] or titlecase(res), cmd = res, buys = buys, sells = sells, profit = profit,
       }
