@@ -1660,7 +1660,23 @@ scrye.addPanel{
     } },
     { title = "Map", widgets = {
         { type = "value", text = "", bind = P .. "maphdr", color = "#5A93D4" },   -- section header
-        { type = "colorgrid", bind = P .. "map", palette = MAP_PAL },
+        -- click a cell to travel there (settlements / lin holds); other cells just report what's there
+        { type = "colorgrid", bind = P .. "map", palette = MAP_PAL,
+          onClick = function(col, row, ch)
+            local key = col .. "|" .. row
+            local code = travel_code(key)
+            if code then
+              travel_to(code)
+            else
+              local name = locname(col, row)
+              if name then
+                scrye.print(string.format("[viking] %s (%d,%d) - no travel route", name, col, row))
+              else
+                scrye.print(string.format("[viking] map (%d,%d) '%s' - nothing to travel to", col, row, ch))
+              end
+            end
+          end },
+        { type = "label", text = "click a settlement or lin to travel there", color = "#E0C040" },
         { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
         { type = "text", bind = P .. "maplocs" },
     } },
