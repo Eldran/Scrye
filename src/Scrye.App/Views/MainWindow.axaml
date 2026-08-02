@@ -314,11 +314,8 @@
                                                                        Foreground="{DynamicResource ScryeTextDim}" />
                                                             <Button DockPanel.Dock="Right" Content="Set" Command="{Binding SubmitCommand}"
                                                                     Padding="8,2" FontSize="11" Margin="4,0,0,0" />
-                                                            <TextBox Text="{Binding Text}" FontSize="11" Padding="4,2">
-                                                                <TextBox.KeyBindings>
-                                                                    <KeyBinding Gesture="Enter" Command="{Binding SubmitCommand}" />
-                                                                </TextBox.KeyBindings>
-                                                            </TextBox>
+                                                            <TextBox Text="{Binding Text, Mode=TwoWay}" FontSize="11" Padding="4,2"
+                                                                     KeyDown="OnInputWidgetKeyDown" />
                                                         </DockPanel>
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonRowWidgetViewModel">

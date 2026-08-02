@@ -152,6 +152,19 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Enter in a plugin HUD input widget submits its value (mirrors the command line;
+    /// a KeyBinding proved unreliable inside the widget DataTemplate).</summary>
+    private void OnInputWidgetKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox box || box.DataContext is not InputWidgetViewModel vm) return;
+        if (e.Key == Key.Enter)
+        {
+            vm.Text = box.Text ?? "";        // commit the latest keystrokes before submitting
+            vm.SubmitCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
     /// <summary>An MXP command link was clicked in a world's output.</summary>
     private void OnCommandLinkClicked(object? sender, Controls.CommandLinkClickedEventArgs e)
     {
