@@ -135,23 +135,21 @@ local function publish()
     scrye.setState(SP .. "armed",  ar.on and "ON" or "OFF")
     scrye.setState(SP .. "target", tgt)
     scrye.setState(SP .. "docked", string.format("%d / %d", #avail, maxs))
-    scrye.setState(SP .. "status", string.format("%s | %s | docked %d/%d | ships %s | keep %d | convoy %s",
-      ar.on and "ON" or "OFF", tgt, #avail, maxs, tostring(ar.ships), ar.keep,
-      ar.convoy and "yes" or "no"))
+    scrye.setState(SP .. "status", string.format(
+      "ships %s | keep %d | auto %s | convoy %s | hold %ds | reserve %s",
+      tostring(ar.ships), ar.keep, ar.auto_target and "on" or "off",
+      ar.convoy and "on" or "off", ar.hold or 60, ar.reserve ~= "" and ar.reserve or "none"))
+    -- seed the panel's input fields with the current settings
+    scrye.setState(SP .. "v_target",  ar.target)
+    scrye.setState(SP .. "v_ships",   tostring(ar.ships))
+    scrye.setState(SP .. "v_keep",    tostring(ar.keep))
+    scrye.setState(SP .. "v_hold",    tostring(ar.hold))
+    scrye.setState(SP .. "v_reserve", ar.reserve ~= "" and ar.reserve or "none")
   end)
   if not ok then scrye.setState(SP .. "status", "feed parse error") end
 end
 
-scrye.addPanel{
-  title = "Auto-Raid",
-  width = 260,
-  accent = "#D6524E",          -- signature: raid red
-  widgets = {
-    { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "#E08A3C" },  -- amber: the arm switch
-    { type = "value", text = "Target: ", bind = SP .. "target", color = "#6FB7E0" },  -- blue: destination
-    { type = "value", text = "Docked: ", bind = SP .. "docked", color = "#4FB05A" },  -- green: ships ready
-  },
-}
+-- (HUD panel is defined at the end, after the config functions it calls.)
 
 -- ---------- core raid pass ----------
 
@@ -267,6 +265,33 @@ local function ar_config(rest)
   ar_status()
   publish()
 end
+
+-- ---------- HUD panel (status + controls) ----------
+scrye.addPanel{
+  title = "Auto-Raid",
+  width = 320,
+  accent = "#D6524E",          -- signature: raid red
+  widgets = {
+    { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "#E08A3C" },  -- amber: the arm switch
+    { type = "value", text = "Target: ", bind = SP .. "target", color = "#6FB7E0" },  -- blue: destination
+    { type = "value", text = "Docked: ", bind = SP .. "docked", color = "#4FB05A" },  -- green: ships ready
+    { type = "buttonrow", buttons = {
+        { text = "Arm On/Off",  action = function() ar_config(ar.on and "off" or "on") end },
+        { text = "Targets",     action = function() ar_list_targets() end },
+    } },
+    { type = "buttonrow", buttons = {
+        { text = "Auto-tgt On/Off", action = function() ar_config(ar.auto_target and "auto off" or "auto on") end },
+        { text = "Convoy On/Off",   action = function() ar_config(ar.convoy and "convoy off" or "convoy on") end },
+    } },
+    { type = "label", text = "Settings (type a value, Enter):", color = "#8FA0B0" },
+    { type = "input", text = "Target town ",  bind = SP .. "v_target",  onSubmit = function(t) ar_config("target " .. t) end },
+    { type = "input", text = "Ships (n/all) ", bind = SP .. "v_ships",   onSubmit = function(t) ar_config("ships " .. t) end },
+    { type = "input", text = "Keep docked ",  bind = SP .. "v_keep",    onSubmit = function(t) ar_config("keep " .. t) end },
+    { type = "input", text = "Hold secs ",    bind = SP .. "v_hold",    onSubmit = function(t) ar_config("hold " .. t) end },
+    { type = "input", text = "Reserve ship ", bind = SP .. "v_reserve", onSubmit = function(t) ar_config("reserve " .. t) end },
+    { type = "text", bind = SP .. "status" },
+  },
+}
 
 scrye.addAlias{ pattern = "^araid$",         regex = true, run = function() ar_status() end }
 scrye.addAlias{ pattern = "^araid targets$", regex = true, run = function() ar_list_targets() end }
