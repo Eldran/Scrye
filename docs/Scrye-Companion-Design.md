@@ -2,6 +2,12 @@
 
 **Status:** Design / proposal · **Last updated:** 2026-08-02
 
+*Rev. 6 — step 6 done: reachable from a phone over a real certificate, 2026-08-02.
+Setup walkthrough in `Scrye-Companion-Setup.md`.*
+*Rev. 5 — step 2 built and wired; protocol proven end-to-end from a browser on 2026-08-02.*
+*Rev. 4 — steps 0 and 1 built. §7.3 narrowed to gate only `/` (not `.` sequences); new
+§7.4 retracts a recommendation that would have made MXP links executable; §10 marks
+progress.*
 *Rev. 3 — protocol and seams reconciled against the actual engine: §3 rewritten (batched
 frames, style table, corrected state DTO), §4 verified with a new §4.1 on threading, §6
 scrollback reuse, new §7.3 on the scripting-permission gap, §11.4 closed.*
@@ -277,8 +283,13 @@ names below were verified against the source on 2026-08-02.
   poking `Input` and racing the UI thread. Extract:
 
   ```csharp
-  public void SubmitText(string text, CommandSource source);   // Submit() delegates with source: Local
+  public CommandSubmitResult SubmitText(string text, CommandOrigin origin);  // Submit() passes CommandOrigin.Local
   ```
+
+  **Built (rev. 4).** `CommandOrigin` is a readonly record struct carrying the source plus
+  `MayRunScripts`; `Submit()` now only reads the input box, records history/completion and
+  delegates. Note that history and completion stay in `Submit()`: they belong to *that*
+  input box, and a companion device keeps its own.
 
   and route `command.send` through it with `source: Companion`. That parameter is also the
   hook the permission check in §7.3 needs — which is not optional, see there.
@@ -318,6 +329,8 @@ allowance. Fine for early protocol bring-up and for a native client that does it
 pinning. Its real limitation is *not* reach — it is that a LAN IP with a self-signed cert
 is not a browser **secure context**, so the PWA path (service worker, offline shell, Web
 Push) cannot work over it. See §7.1.
+
+*Confirmed in practice on 2026-08-02 — see `docs/Scrye-Companion-Setup.md`.*
 
 **User-run mesh VPN (the actual primary tier).** A private WireGuard/Tailscale mesh makes
 the phone and PC behave as if on the same LAN, from anywhere, with no public exposure of
@@ -487,21 +500,46 @@ So a paired phone holding nothing but "send commands" can type
 on the session loop**. A stolen phone, or a device paired for a friend to watch a fight,
 becomes full scripting access to the client.
 
-**Decision: gate at the entry point, not in the UI.** `SubmitText(text, CommandSource)`
-(§4) inspects `source`. For `CommandSource.Companion`, the `/` prefix and the `.` client
-commands are rejected unless the device holds an explicit **Run scripts** permission, which
-is **off by default** and separate from Send commands. Rejection is an error frame back to
-the phone, not a silent drop.
+**Decision: gate at the entry point, not in the UI.** `SubmitText(text, CommandOrigin)`
+(§4) takes an origin carrying both the source and its capabilities. A `/` command from an
+origin without `MayRunScripts` is rejected — before any echo, so a refused command leaves no
+trace of having half-run — and the rejection is an error frame back to the phone, not a
+silent drop. `CommandOrigin.Companion()` defaults to `mayRunScripts: false`; the per-device
+lookup belongs to the server, which knows which device sent the frame, and the view model
+only enforces.
 
-Two things this deliberately does not do. It does not filter on the *content* of ordinary
-commands — aliases, triggers and macros still expand normally, because that is the whole
-point of §4. And it does not put the check in the input box or anywhere else on the UI
-side: the gate belongs at the one place companion input enters the pipeline, so a future
-second entry point cannot bypass it by forgetting.
+The rule itself lives in `Scrye.Core.Automation.CommandPrivilege`, not in the view model:
+it is small, security-relevant, and needs exactly one definition that every entry point
+shares — and in `Scrye.Core` it is unit-testable without any UI.
 
-Related, from the same reading: the MXP link path (`HandleCommandLink`) sends a command the
-*MUD* supplied. Route companion link taps through `SubmitText` with the companion source
-too, so a hostile MUD cannot use an MXP `<SEND>` to smuggle a `/` command onto a phone.
+**Only `/` is gated. `.` client commands are not.** An earlier draft lumped them together as
+"the scripting surface"; that is wrong. `/…` runs arbitrary Lua on the session loop. `.…`
+fires *sequences* — `.walk`, `.seq`, `.stop`, `.log`, `.tts` — which are command lists this
+desktop already authored, take no arbitrary paths, and execute no user-supplied code.
+Firing a walk route from a phone is one of the better reasons to have a companion at all,
+so gating it would be a self-inflicted wound. The privileged set is exactly one prefix.
+
+Two things the gate deliberately does not do. It does not filter on the *content* of
+ordinary commands — aliases, triggers and macros still expand normally, which is the whole
+point of §4. And it does not live in the input box or anywhere else on the UI side.
+
+### 7.4 MXP links must NOT be prefix-dispatched
+
+A companion note in an earlier draft suggested routing MXP link taps through the same
+`SubmitText` path "so a hostile MUD cannot smuggle a `/` command onto a phone." That
+recommendation was backwards and is retracted here, because following it would have
+*created* the vulnerability it was trying to prevent.
+
+`HandleCommandLink` currently sends the link's action straight to `MudSession.Submit` as
+literal text. It never touches the `/` or `.` dispatch. That is already the safe behaviour:
+an MXP `<SEND>` whose action is `/world.AddAlias(...)` is transmitted to the MUD as the
+string `/world.AddAlias(...)`, not executed. Routing it through the full pipeline is exactly
+what would have executed it.
+
+The principle: **prefix dispatch applies to text a human entered, never to text the MUD
+supplied.** A companion server handling a link tap must send it raw for the same reason.
+(The `SEND PROMPT` variant, which puts the action in the input box rather than sending it,
+stays safe by a different route — the user sees the text and has to press Enter themselves.)
 
 ---
 
@@ -589,27 +627,41 @@ the `WorldViewModel`/`MainWindowViewModel` state it taps, with no IPC.
 
 ## 10. Recommended build order
 
-0. **Seam prep in the existing app** — small, independently useful, and a prerequisite for
-   step 2: extract `WorldViewModel.SubmitText(text, CommandSource)` out of the private
-   `Submit()` (§4), and add the monotonic sequence counter + base-sequence alongside
-   `ScrollbackBuffer` (§6). Neither has a companion dependency; both can land now.
-1. **Companion protocol** — the `Scrye.Companion.Protocol` DTOs (§3.2), referencing
-   `Scrye.Core` but never `Scrye.App`.
-2. **In-app companion server** — Kestrel + WebSocket inside `Scrye.App`, tapping the
-   seams in §4; interface-bound, TLS, `permessage-deflate` on. Self-signed is fine at this
-   stage, since nothing is rendering in a browser yet. Build it **multi-subscriber from the
-   start** (§11.3), with its own outbound queue (§4.1) and the `CommandSource` gate (§7.3)
-   present from the first commit that accepts input.
+0. ~~**Seam prep in the existing app**~~ — **done 2026-08-02.** `SubmitText(text,
+   CommandOrigin)` extracted from the private `Submit()` with the §7.3 gate in place, the
+   rule itself in `Scrye.Core.Automation.CommandPrivilege`; `ScrollbackBuffer` gained
+   `BaseSequence` / `NextSequence` / `SequenceAt` / `TryGetIndex` / `CanReplayFrom` /
+   `LinesAfter` (§6). `Clear()` advances the base rather than resetting, so a stale client
+   is forced to snapshot instead of being served the wrong lines.
+1. ~~**Companion protocol**~~ — **done 2026-08-02.** `src/Scrye.Companion.Protocol`:
+   the DTOs (§3.2), `OutputBatchBuilder` (per-frame style interning), and `CompanionJson`
+   (camelCase, string enums, nulls omitted). References `Scrye.Core`, never `Scrye.App`.
+2. ~~**In-app companion server**~~ — **done 2026-08-02.** `src/Scrye.Companion.Server`:
+   Kestrel + WebSocket inside `Scrye.App`, multi-subscriber, per-connection bounded outbound
+   queues, the §7.3 gate at the boundary, replay-or-snapshot resume. The app side reaches it
+   only through `ICompanionSessionSource`, which owns all UI-thread marshalling (§4.1).
+   Started with the temporary `.companion` client command. First-cut posture is **loopback +
+   one shared token, plain HTTP** — `127.0.0.1` is a browser secure context, so a PWA works
+   for bring-up without a certificate; `permessage-deflate` and TLS come with step 6.
 3. **Browser MVP, as an installable PWA** — a small SPA rendering output, session state
    and streamed HUD panels, sending `command.send`; plus a manifest and service worker so
-   it installs to the home screen (§8.1). This is the point the concept is proven.
-   Requires a browser-trusted cert, so in practice step 6 lands alongside this one.
+   it installs to the home screen (§8.1). Requires a browser-trusted cert, so in practice
+   step 6 lands alongside this one.
+   *Partly done: a debug page is served at `/` from the companion host — same origin as the
+   socket, so no page CSP is involved. It renders output through the style table, sends
+   commands, and exercises resume. **The concept is proven end-to-end as of 2026-08-02.**
+   It is a protocol scope, not the mobile UI; the PWA still has to be built.*
 4. **Pairing & permissions** — QR pairing (§7.1), per-device keys, revocation, the
    paired-devices list, and capture of the phone's Web Push subscription at pairing time.
 5. **Resume & snapshot** — sequence numbers on the output ring buffer + snapshot path (§6).
-6. **Trusted cert + remote access** — the Tailscale path (§5): a browser-trusted
-   Let's Encrypt cert on the tailnet name, which delivers remote access as a side effect.
-   No service to build. Effectively a prerequisite of step 3, not a sequel to it.
+6. ~~**Trusted cert + remote access**~~ — **done 2026-08-02.** `tailscale serve --bg
+   --https=443 http://127.0.0.1:4747` puts Tailscale's TLS proxy in front of the
+   loopback-bound server. Verified working from an iPhone over the tailnet.
+   Decisive detail: the proxy **renews the certificate itself**, whereas `tailscale cert`
+   makes renewal the user's problem and Let's Encrypt certs lapse after 90 days — a manual
+   cert would break the phone on a forgotten Tuesday. Scrye stays loopback-bound and holds
+   no certificate code at all. `.companion tailscale` reports node state and prints the
+   command. Walkthrough: `docs/Scrye-Companion-Setup.md`.
 7. **Notifications** — VAPID keypair and outbound Web Push from `Scrye.App` (§7.2), plus
    the `scrye.notify(...)` webhook notifier as the no-PWA fallback.
 8. *(Optional)* **Native app** — Avalonia-mobile, reusing DTOs and HUD controls (§8.2).

@@ -27,6 +27,22 @@ public sealed class HudViewModel : IDisposable
 
     public ObservableCollection<HudPanelViewModel> Panels { get; } = new();
 
+    // The original specs, kept alongside the rendered panels. AddPanel turns a spec into
+    // view models and would otherwise discard it — but the companion streams the *spec*, not
+    // the rendering, so a mobile client can draw the panel itself (companion design §2).
+    private readonly Dictionary<string, PanelSpec> _specs = new(StringComparer.Ordinal);
+
+    /// <summary>Live panel specs by panel key (<c>pluginId|title</c>), for companion
+    /// snapshots. Mutated on the same threads as <see cref="_pluginSubs"/>.</summary>
+    public IReadOnlyDictionary<string, PanelSpec> PanelSpecs => _specs;
+
+    /// <summary>Raised with (panelKey, spec) when a panel is built, so a companion server can
+    /// stream it. Null when no companion server is running.</summary>
+    public Action<string, PanelSpec>? PanelAdded { get; set; }
+
+    /// <summary>Raised with the panel key when a panel goes away (plugin disabled or reloaded).</summary>
+    public Action<string>? PanelRemoved { get; set; }
+
     /// <summary>Saved canvas position for a panel key (pluginId|title), or null. Set by the
     /// world before plugins load so restored panels come back where the user dragged them.</summary>
     public Func<string, (double X, double Y)?>? LoadPosition { get; set; }
@@ -78,6 +94,8 @@ public sealed class HudViewModel : IDisposable
             if (!_pluginSubs.TryGetValue(pluginId, out List<IDisposable>? list)) _pluginSubs[pluginId] = list = new();
             list.AddRange(subs);
         }
+        _specs[panel.Key] = spec;
+        PanelAdded?.Invoke(panel.Key, spec);
         Post(() => Panels.Add(panel));
     }
 
@@ -90,6 +108,19 @@ public sealed class HudViewModel : IDisposable
             foreach (IDisposable s in subs) s.Dispose();
             _pluginSubs.Remove(pluginId);
         }
+        // Drop the retained specs on the caller's thread (same as the subscriptions above),
+        // not inside the marshalled UI edit — otherwise a companion snapshot taken between
+        // the two would still advertise panels that are already gone.
+        string prefix = pluginId + "|";
+        var doomed = new List<string>();
+        foreach (string key in _specs.Keys)
+            if (key.StartsWith(prefix, StringComparison.Ordinal)) doomed.Add(key);
+        foreach (string key in doomed)
+        {
+            _specs.Remove(key);
+            PanelRemoved?.Invoke(key);
+        }
+
         Post(() =>
         {
             for (int i = Panels.Count - 1; i >= 0; i--)

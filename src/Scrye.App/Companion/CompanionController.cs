@@ -1,0 +1,101 @@
+using Scrye.App.ViewModels;
+using Scrye.Companion.Protocol;
+using Scrye.Companion.Server;
+using Scrye.Core.Plugins;
+
+namespace Scrye.App.Companion;
+
+/// <summary>
+/// Owns the companion server's lifetime and keeps it attached to the worlds that exist.
+///
+/// <para>Separate from <c>MainWindowViewModel</c> on purpose: starting a listener, minting a
+/// credential and wiring per-world publishers is not view-model work, and keeping it apart
+/// means the companion can be removed or disabled without touching the window.</para>
+///
+/// <para>Started on demand from the UI, never at launch — an idle Scrye should not be
+/// listening on a socket the user did not ask for (companion design §7).</para>
+/// </summary>
+public sealed class CompanionController : IAsyncDisposable
+{
+    private readonly MainWindowViewModel _main;
+    private CompanionServer? _server;
+
+    public CompanionController(MainWindowViewModel main) => _main = main;
+
+    public bool IsRunning => _server is not null;
+
+    /// <summary>URL to hand to a client, or null when stopped.</summary>
+    public string? Url => _server?.WebSocketUrl;
+
+    /// <summary>The bearer token for this run, or null when stopped. Show it in the UI so it
+    /// can be copied; it becomes the QR payload once pairing lands (§7.1).</summary>
+    public string? Token { get; private set; }
+
+    public async Task StartAsync()
+    {
+        if (_server is not null) return;
+
+        CompanionServerOptions options = CompanionServerOptions.CreateDefault();
+        Token = options.Token;
+
+        var server = new CompanionServer(options, new AppSessionSource(_main));
+        await server.StartAsync().ConfigureAwait(true);
+        _server = server;
+
+        foreach (WorldViewModel w in _main.Worlds) Attach(w);
+    }
+
+    public async Task StopAsync()
+    {
+        if (_server is null) return;
+
+        foreach (WorldViewModel w in _main.Worlds) Detach(w);
+
+        await _server.DisposeAsync().ConfigureAwait(true);
+        _server = null;
+        Token = null;
+    }
+
+    /// <summary>Hook a world up to the running server. Call for every newly opened world;
+    /// a no-op while the server is stopped, so callers need no condition.</summary>
+    public void Attach(WorldViewModel world)
+    {
+        if (_server is null) return;
+
+        world.Companion = _server.Hub;
+
+        // Panels already built (plugins load before the server may have started) plus any
+        // built from here on. Streaming the spec, not the rendering, is what gives every
+        // plugin a mobile UI for free (§2).
+        world.Hud.PanelAdded = (key, spec) =>
+            _server?.Hub.PublishHudPanel(new HudPanelMessage(world.SessionId, key, spec));
+        world.Hud.PanelRemoved = key =>
+            _server?.Hub.PublishHudPanelRemoved(new HudPanelRemovedMessage(world.SessionId, key));
+
+        foreach (KeyValuePair<string, PanelSpec> kv in world.Hud.PanelSpecs)
+            _server.Hub.PublishHudPanel(new HudPanelMessage(world.SessionId, kv.Key, kv.Value));
+
+        _server.Hub.PublishSessionState(AppSessionSource.Describe(world));
+    }
+
+    /// <summary>Unhook a world — on close, or when the server stops.</summary>
+    public void Detach(WorldViewModel world)
+    {
+        world.Companion = null;
+        world.Hud.PanelAdded = null;
+        world.Hud.PanelRemoved = null;
+
+        // Tell devices it is gone; otherwise a phone keeps offering a session that
+        // no longer exists in its picker.
+        _server?.Hub.PublishSessionState(
+            new SessionStateMessage(world.SessionId, false, world.Ref?.Character ?? world.Title,
+                                    world.Ref?.Mud ?? world.Title));
+    }
+
+    /// <summary>Re-announce a world whose connection state changed, so session pickers on
+    /// every device stay honest.</summary>
+    public void NotifySessionState(WorldViewModel world) =>
+        _server?.Hub.PublishSessionState(AppSessionSource.Describe(world));
+
+    public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
+}

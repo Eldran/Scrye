@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Scrye.App.Companion;
 using Scrye.Core.Model;
 using Scrye.Core.Profiles;
 
@@ -10,6 +11,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public ObservableCollection<WorldViewModel> Worlds { get; } = new();          // connected tabs
     public ObservableCollection<ProfileNodeViewModel> Muds { get; } = new();      // sidebar tree roots
+
+    /// <summary>Mobile companion server. Not started at launch — an idle client should not
+    /// be listening on a socket the user did not ask for (companion design §7).</summary>
+    public CompanionController Companion { get; }
 
     public RelayCommand ConnectCommand { get; }         // quick-connect
     public RelayCommand NewMudCommand { get; }
@@ -114,6 +119,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         CancelSettingsCommand = new RelayCommand(() => Settings = null);
         CloseWorldCommand = new RelayCommand<WorldViewModel>(CloseWorld);
+        Companion = new CompanionController(this);
 
         RefreshTree();
     }
@@ -313,7 +319,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
         var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
         vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
+        vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
         Worlds.Add(vm);
+        Companion.Attach(vm);
         Active = vm;
         if (string.IsNullOrEmpty(eff.World.Host))
         {
@@ -331,6 +339,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         int idx = Worlds.IndexOf(world);
         if (idx < 0) return;
+
+        Companion.Detach(world);   // stop publishing and tell devices the session is gone
 
         if (ReferenceEquals(Active, world))               // choose a neighbour before removal
             Active = Worlds.Count > 1
@@ -356,7 +366,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             UseTls = UseTls, AcceptInvalidCertificates = UseTls, EnableMip = EnableMip,
         })
         { Broadcast = SendBroadcast, Toast = RaiseToast };
+        vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
         Worlds.Add(vm);
+        Companion.Attach(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }
         catch (System.Exception ex) { vm.AppendSystem($"connect failed: {ex.Message}"); }

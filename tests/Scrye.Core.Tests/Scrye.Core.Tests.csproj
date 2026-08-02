@@ -9,5 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scrye.Core\Scrye.Core.csproj" />
+    <ProjectReference Include="..\..\src\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
   </ItemGroup>
 </Project>

@@ -22,6 +22,9 @@
   <ItemGroup>
     <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
     <ProjectReference Include="..\Scrye.Scripting\Scrye.Scripting.csproj" />
+    <!-- Mobile companion: the protocol contract and the in-process Kestrel/WebSocket host. -->
+    <ProjectReference Include="..\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
+    <ProjectReference Include="..\Scrye.Companion.Server\Scrye.Companion.Server.csproj" />
   </ItemGroup>
 
   <ItemGroup>

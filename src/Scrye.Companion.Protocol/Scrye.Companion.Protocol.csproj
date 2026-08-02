@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The wire contract shared by the desktop companion server and every companion client.
+
+    Deliberately references Scrye.Core ONLY. Scrye.App is a WinExe that pulls in the
+    Windows-only System.Speech package, so referencing it here would make the contract
+    un-shareable with a future Avalonia-mobile head (design doc §3.2, §8.2).
+    Like Scrye.Core, this project takes no NuGet dependencies.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
+  </ItemGroup>
+</Project>

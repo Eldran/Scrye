@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The in-process companion server: Kestrel + a WebSocket endpoint, hosted INSIDE
+    Scrye.App so it sits next to the WorldViewModel/MainWindowViewModel state it taps,
+    with no IPC (design doc §9).
+
+    Kestrel and System.Net.WebSockets come from the shared framework via FrameworkReference,
+    so — like Scrye.Core and Scrye.Companion.Protocol — this project takes no NuGet
+    dependencies. It also does not reference Scrye.App: everything it needs from the app
+    arrives through ICompanionSessionSource (Sessions/ICompanionSessionSource.cs), which
+    keeps the server testable against a fake and keeps the dependency arrow pointing one way.
+  -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
+    <ProjectReference Include="..\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
+  </ItemGroup>
+</Project>

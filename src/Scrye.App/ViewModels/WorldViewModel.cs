@@ -3,6 +3,9 @@ using System.Collections.Concurrent;
 using System.IO;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Scrye.App.Companion;
+using Scrye.Companion.Protocol;
+using Scrye.Companion.Server.Hub;
 using Scrye.Core.Automation;
 using Scrye.Core.Logging;
 using Scrye.Core.Model;
@@ -44,6 +47,26 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Which profile chain (mud/account/character) this tab was resolved from,
     /// so layer edits can be re-resolved and live-applied. Null for quick-connect tabs.</summary>
     public ProfileRef? Ref { get; init; }
+
+    private string? _sessionId;
+
+    /// <summary>Stable identity for the companion protocol. Derived from <see cref="Ref"/>
+    /// so it survives reconnects and desktop restarts; quick-connect tabs (no profile) get a
+    /// random ephemeral id instead.
+    ///
+    /// <para>Computed lazily rather than in the constructor because <see cref="Ref"/> is an
+    /// <c>init</c> property — it is not assigned until the object initializer has run.</para></summary>
+    public string SessionId => _sessionId ??= Ref is { } r
+        ? CompanionSessionId.FromProfile(r.Mud, r.Account, r.Character)
+        : CompanionSessionId.NewEphemeral();
+
+    /// <summary>The companion fan-out point, or null when the server is not running.
+    /// Set by <c>MainWindowViewModel</c> when the server starts.</summary>
+    public CompanionHub? Companion { get; set; }
+
+    /// <summary>The session's shared state tree. Owned by the session loop — read it from
+    /// another thread only through a snapshot.</summary>
+    public Scrye.Core.State.StateStore GameState => _session.GameState;
 
     public ScrollbackBuffer Scrollback { get; } = new();
     public RelayCommand SubmitCommand { get; }
@@ -423,12 +446,25 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Title = profile.Name;
         _session = new MudSession(profile);
         _session.LineReady += line => _pending.Enqueue(line);
+
+        // Companion state feed. Fires on the session loop, which is where StateStore lives —
+        // publishing is a channel write per subscriber, so nothing crosses back to the UI
+        // thread (companion design §4.1). Changed is preferred over Watch: it covers every
+        // leaf without a subscription per subtree, and already carries the Removed flag.
+        _session.GameState.Changed += change =>
+            Companion?.PublishState(StateUpdateMessage.From(SessionId, change));
         _session.StateChanged += s =>
         {
             _pending.Enqueue(Line.FromText($"[{s}]", SystemColour));
             Dispatcher.UIThread.Post(() =>
             {
                 ConnState = s;   // status dot on the UI thread
+
+                // Keep every device's session picker honest about connect/disconnect.
+                Companion?.PublishSessionState(new SessionStateMessage(
+                    SessionId, s == ConnectionState.Connected,
+                    Ref?.Character ?? Title, Ref?.Mud ?? Title));
+
                 if (s is ConnectionState.Connected or ConnectionState.Disconnected or ConnectionState.Failed)
                     Toast?.Invoke(Title, s switch
                     {
@@ -620,6 +656,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             while (_pending.TryDequeue(out Line? line))
                 _drainBuffer.Add(line);
             Scrollback.AddRange(_drainBuffer);
+            PublishToCompanion();
             // harvest words for tab-completion on the UI thread (engine isn't thread-safe)
             foreach (Line l in _drainBuffer) _completion.Observe(l.PlainText);
             if (!IsActive) Unread += _drainBuffer.Count;   // badge while another tab is up
@@ -631,6 +668,24 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         DrainRouted();
         Debugger.Drain();   // always drain events, even on a frame with no output lines
         StateInspector.Drain();
+    }
+
+    /// <summary>Send the lines just drained into scrollback on to any connected companion
+    /// devices. Called from <see cref="Flush"/>, on the UI thread, immediately after
+    /// <c>Scrollback.AddRange</c> — the 33 ms flush already is the batch window, so there is
+    /// deliberately no second batcher here (companion design §3.1).
+    ///
+    /// <para>The first sequence is derived from <c>NextSequence</c> <em>after</em> the add,
+    /// so it stays correct even when this same flush pushed the buffer past its cap and
+    /// triggered a trim.</para></summary>
+    private void PublishToCompanion()
+    {
+        if (Companion is not { } hub || _drainBuffer.Count == 0) return;
+
+        long firstSequence = Scrollback.NextSequence - _drainBuffer.Count;
+        var builder = new OutputBatchBuilder();
+        builder.AddRange(_drainBuffer, firstSequence);
+        hub.PublishOutput(builder.Build(SessionId));
     }
 
     /// <summary>Deliver trigger-routed lines to their capture panes (UI thread).
@@ -668,7 +723,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public void OpenFind() => Find.Open();
 
     /// <summary>An MXP command link was clicked: send it (with local echo), or put it
-    /// in the input box when the link asked for a prompt.</summary>
+    /// in the input box when the link asked for a prompt.
+    ///
+    /// <para>Deliberately does NOT go through <see cref="SubmitText"/>. The action here was
+    /// authored by the <em>MUD</em>, not the user, so it must never be prefix-dispatched:
+    /// routing it through the normal pipeline would let a hostile MXP <c>&lt;SEND&gt;</c>
+    /// smuggle a <c>/</c> Lua command into the console. It goes straight to the session as
+    /// literal text, and a leading <c>/</c> is sent to the MUD rather than executed.
+    /// A companion server handling a link tap must send it raw for the same reason.</para></summary>
     public void HandleCommandLink(string command, bool prompt)
     {
         if (string.IsNullOrWhiteSpace(command)) return;
@@ -677,6 +739,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.Submit(command);
     }
 
+    /// <summary>The command line's Enter handler: take what is in the input box, record it
+    /// for recall, and run it through the pipeline as local input.</summary>
     private void Submit()
     {
         string text = Input ?? "";
@@ -684,29 +748,73 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _history.Add(text);        // record for up/down recall
         _completion.Observe(text); // typed words feed completion too
 
-        if (text == "mipstart") { _pending.Enqueue(Line.FromText("> " + text, EchoColour)); _session.StartMip(); return; }
+        SubmitText(text, CommandOrigin.Local);
+    }
 
-        // client "." commands (sequences); unknown dot-input falls through to the MUD.
-        if (TryClientCommand(text)) { _pending.Enqueue(Line.FromText(text, EchoColour)); return; }
+    /// <summary>
+    /// The single entry point for user-entered command text, whatever produced it. Applies
+    /// the client-command and Lua-console prefixes, then aliases/triggers/logging by way of
+    /// <c>MudSession.Submit</c> — so a command from a phone behaves exactly as one typed
+    /// here (companion design §4).
+    ///
+    /// <para><paramref name="origin"/> carries the privilege decision, enforced here at the
+    /// one place input enters the pipeline rather than in the UI — so a second entry point
+    /// added later cannot bypass the check by forgetting about it (§7.3).</para>
+    ///
+    /// <para>Deliberately does NOT touch command history or tab completion: those belong to
+    /// <em>this</em> input box, and a companion device keeps its own. Callers that represent
+    /// a real input box (see <see cref="Submit"/>) record them first.</para>
+    /// </summary>
+    public CommandSubmitResult SubmitText(string text, CommandOrigin origin)
+    {
+        text ??= "";
 
-        // "/..." is a local Lua console — runs on the session loop, not sent to the MUD.
-        // e.g.  /world.AddAlias("greet", "hi *", "say hello %1")
-        if (text.StartsWith('/') && text.Length > 1)
+        // "/..." is a local Lua console — arbitrary script on the session loop, not sent to
+        // the MUD. e.g.  /world.AddAlias("greet", "hi *", "say hello %1")
+        // This is the ONE privileged prefix and the only thing origin gates; everything
+        // below is either ordinary MUD input or a pre-authored client command. Checked
+        // before any echo, so a refused command leaves no trace of having half-run.
+        bool isScript = CommandPrivilege.IsScriptConsole(text);
+        if (isScript && !origin.MayRunScripts)
+            return CommandSubmitResult.RejectedScriptingNotPermitted;
+
+        if (text == "mipstart")
+        {
+            _pending.Enqueue(Line.FromText("> " + text, EchoColour));
+            _session.StartMip();
+            return CommandSubmitResult.Accepted;
+        }
+
+        // client "." commands (sequences, logging, tts); unknown dot-input falls through to
+        // the MUD. Deliberately NOT gated: a sequence is a command list this desktop already
+        // authored, and firing a walk route from a phone is a core companion use case.
+        if (TryClientCommand(text))
+        {
+            _pending.Enqueue(Line.FromText(text, EchoColour));
+            return CommandSubmitResult.Accepted;
+        }
+
+        if (isScript)
         {
             _pending.Enqueue(Line.FromText(text, EchoColour));
             _session.RunScript(text[1..]);
-            return;
+            return CommandSubmitResult.Accepted;
         }
 
         // "All" toggle: plain commands fan out to every connected world (each echoes "» cmd").
-        if (IsBroadcast && Broadcast is not null && text.Length > 0)
+        // Local input only — a companion device must not silently inherit a toggle it cannot
+        // see, so "north" from a phone always means *this* world. Broadcasting from a
+        // companion is a separate, explicit action (§4).
+        if (origin.Source == CommandSource.Local
+            && IsBroadcast && Broadcast is not null && text.Length > 0)
         {
             Broadcast(text);
-            return;
+            return CommandSubmitResult.Accepted;
         }
 
         _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
         _session.Submit(text);
+        return CommandSubmitResult.Accepted;
     }
 
     /// <summary>Handle client "." commands. Returns false for unrecognized ones so they
@@ -736,6 +844,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 Broadcast(arg);
                 return true;
             case ".tts": HandleTtsCommand(arg); return true;
+            case ".companion": HandleCompanionCommand(arg); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
                 AppendSystem(ShowTimestamps ? "timestamps on" : "timestamps off");
@@ -803,6 +912,135 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 break;
             default: AppendSystem("usage: .tts [on|off|stop|rate N]"); break;
         }
+    }
+
+    /// <summary>Hook the app's companion controller up to this world, so <c>.companion</c>
+    /// can drive it. Set by <c>MainWindowViewModel</c>; null in tests or if the feature is
+    /// compiled out.</summary>
+    public CompanionController? CompanionControl { get; set; }
+
+    /// <summary><c>.companion [on|off|status]</c> — start or stop the mobile companion
+    /// server and print its address and token.
+    ///
+    /// <para>A client command rather than a menu item for now: it needs no XAML, follows the
+    /// same shape as <c>.log</c> and <c>.tts</c>, and prints the credential straight into the
+    /// output pane where it can be copied. A proper panel replaces it once the protocol has
+    /// been proven from a browser (companion design §10 step 3).</para>
+    ///
+    /// <para>Note the token is echoed into scrollback, which means session logging can
+    /// capture it. That is acceptable for a loopback-only bring-up credential that is
+    /// regenerated on every start, and is another reason this is temporary.</para></summary>
+    private void HandleCompanionCommand(string arg)
+    {
+        if (CompanionControl is not CompanionController c)
+        {
+            AppendSystem("companion server unavailable");
+            return;
+        }
+
+        string a = arg.Trim().ToLowerInvariant();
+
+        if (a is "off" or "stop")
+        {
+            if (!c.IsRunning) { AppendSystem("companion server is not running"); return; }
+            _ = StopCompanionAsync(c);
+            return;
+        }
+
+        if (a is "status")
+        {
+            AppendSystem(c.IsRunning
+                ? $"companion server running at {c.Url}"
+                : "companion server stopped");
+            if (c.IsRunning) AppendSystem($"  token: {c.Token}");
+            AppendSystem($"  this world's sessionId: {SessionId}");
+            _ = ReportTailscaleAsync(c);
+            return;
+        }
+
+        if (a is "tailscale" or "remote")
+        {
+            _ = ReportTailscaleAsync(c, verbose: true);
+            return;
+        }
+
+        if (c.IsRunning)
+        {
+            AppendSystem($"companion server already running at {c.Url}");
+            AppendSystem($"  token: {c.Token}");
+            AppendSystem($"  this world's sessionId: {SessionId}");
+            return;
+        }
+
+        _ = StartCompanionAsync(c);
+    }
+
+    private async Task StartCompanionAsync(CompanionController c)
+    {
+        try
+        {
+            await c.StartAsync();
+            AppendSystem($"companion server started at {c.Url}");
+            AppendSystem($"  token: {c.Token}");
+            AppendSystem($"  this world's sessionId: {SessionId}");
+            AppendSystem("  usage: .companion status | .companion tailscale | .companion off");
+        }
+        catch (Exception ex)
+        {
+            // Most likely the port is already taken. Report it rather than failing silently.
+            AppendSystem($"companion server failed to start: {ex.Message}");
+        }
+    }
+
+    private async Task StopCompanionAsync(CompanionController c)
+    {
+        try
+        {
+            await c.StopAsync();
+            AppendSystem("companion server stopped");
+        }
+        catch (Exception ex)
+        {
+            AppendSystem($"companion server failed to stop cleanly: {ex.Message}");
+        }
+    }
+
+    /// <summary>Report how a phone would reach this server from outside the machine.
+    ///
+    /// <para>Scrye stays bound to loopback and Tailscale's own proxy terminates TLS in front
+    /// of it (companion design §5, §7.1). That keeps certificate <em>renewal</em> out of this
+    /// codebase entirely — Let's Encrypt certs last 90 days, and a manually installed one
+    /// would break the phone silently the day it lapsed.</para>
+    ///
+    /// <para>The serve command is printed, never run: it changes the user's tailnet
+    /// configuration and its first invocation opens a browser consent page.</para></summary>
+    private async Task ReportTailscaleAsync(CompanionController c, bool verbose = false)
+    {
+        Scrye.Companion.Server.Tailscale.TailscaleStatus ts =
+            await Scrye.Companion.Server.Tailscale.TailscaleInfo.QueryAsync();
+
+        if (!ts.Installed)
+        {
+            if (verbose)
+            {
+                AppendSystem("tailscale is not installed — it is what lets a phone reach this");
+                AppendSystem("  see docs/Scrye-Companion-Setup.md for the walkthrough");
+            }
+            return;
+        }
+
+        if (!ts.Running || ts.DnsName is null)
+        {
+            AppendSystem($"tailscale: {ts.Detail}");
+            return;
+        }
+
+        AppendSystem($"tailscale node: {ts.DnsName}");
+        AppendSystem($"  phone URL (once serving): {ts.PublicUrl}");
+        AppendSystem("  to start the TLS proxy, run in a terminal:");
+        AppendSystem($"    {Scrye.Companion.Server.Tailscale.TailscaleInfo.ServeCommand(4747)}");
+        if (verbose)
+            AppendSystem($"    (stop it with: {Scrye.Companion.Server.Tailscale.TailscaleInfo.ServeOffCommand(4747)})");
     }
 
     /// <summary>Handle <c>.log</c> / <c>.log html</c> / <c>.log off</c>. Bare <c>.log</c> toggles.</summary>
