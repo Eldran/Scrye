@@ -28,10 +28,19 @@ public partial class MainWindow : Window
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
     }
 
-    /// <summary>Fire a keyboard macro for the active world if the pressed key is bound.</summary>
+    /// <summary>Window-level keys: F11 toggles fullscreen; otherwise fire a keyboard macro
+    /// for the active world if the pressed key is bound.</summary>
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Handled) return;
+
+        if (e.Key == Key.F11)
+        {
+            WindowState = WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;
+            e.Handled = true;
+            return;
+        }
+
         if (DataContext is MainWindowViewModel vm && vm.Active is WorldViewModel world
             && world.TryFireMacro(e.Key, e.KeyModifiers))
             e.Handled = true;
