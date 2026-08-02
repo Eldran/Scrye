@@ -364,16 +364,52 @@ local function resolve_town(s)
   return nil
 end
 
--- Travel tab widget list (one button per settlement).
+-- 2-column clickable town buttons, sorted by name (shared by the Travel tab and the Map tab).
+local function town_button_rows()
+  local rows, pending = {}, nil
+  for _, code in ipairs(TRAVEL_TOWNS) do
+    local b = { text = town_label(code), action = function() travel_to(code) end }
+    if pending then
+      rows[#rows + 1] = { type = "buttonrow", buttons = { pending, b } }; pending = nil
+    else
+      pending = b
+    end
+  end
+  if pending then rows[#rows + 1] = { type = "button", text = pending.text, action = pending.action } end
+  return rows
+end
+
+-- Travel tab widget list (clickable town buttons, two per row).
 local travel_widgets = {
   { type = "label", text = "Walk to a settlement (uses the built-in route from where you are):" },
 }
-for _, code in ipairs(TRAVEL_TOWNS) do
-  travel_widgets[#travel_widgets + 1] =
-    { type = "button", text = town_label(code), action = function() travel_to(code) end }
-end
+for _, w in ipairs(town_button_rows()) do travel_widgets[#travel_widgets + 1] = w end
 travel_widgets[#travel_widgets + 1] =
   { type = "label", text = "Walks from the wrong place? Set where you are:  vhere <town>" }
+
+-- Map tab widgets: the rendered map (also clickable) + a clickable town list + the full location list.
+local map_widgets = {
+  { type = "value", text = "", bind = P .. "maphdr", color = "#5A93D4" },   -- section header
+  { type = "colorgrid", bind = P .. "map", palette = MAP_PAL,
+    onClick = function(col, row, ch)
+      local key = col .. "|" .. row
+      local code = travel_code(key)
+      if code then
+        travel_to(code)
+      else
+        local name = locname(col, row)
+        if name then
+          scrye.print(string.format("[viking] %s (%d,%d) - no travel route", name, col, row))
+        else
+          scrye.print(string.format("[viking] map (%d,%d) '%s' - nothing to travel to", col, row, ch))
+        end
+      end
+    end },
+  { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
+  { type = "label", text = "Click a town to travel there:", color = "#E0C040" },
+}
+for _, w in ipairs(town_button_rows()) do map_widgets[#map_widgets + 1] = w end
+map_widgets[#map_widgets + 1] = { type = "text", bind = P .. "maplocs" }   -- full location list w/ coords
 
 -- ---------------------------------------------------- seconds counter
 -- No os.time in the sandbox: count elapsed seconds ourselves (throttles/cooldowns).
@@ -1658,28 +1694,7 @@ scrye.addPanel{
     { title = "Voyage", widgets = {
         { type = "text", bind = P .. "voyage" },
     } },
-    { title = "Map", widgets = {
-        { type = "value", text = "", bind = P .. "maphdr", color = "#5A93D4" },   -- section header
-        -- click a cell to travel there (settlements / lin holds); other cells just report what's there
-        { type = "colorgrid", bind = P .. "map", palette = MAP_PAL,
-          onClick = function(col, row, ch)
-            local key = col .. "|" .. row
-            local code = travel_code(key)
-            if code then
-              travel_to(code)
-            else
-              local name = locname(col, row)
-              if name then
-                scrye.print(string.format("[viking] %s (%d,%d) - no travel route", name, col, row))
-              else
-                scrye.print(string.format("[viking] map (%d,%d) '%s' - nothing to travel to", col, row, ch))
-              end
-            end
-          end },
-        { type = "label", text = "click a settlement or lin to travel there", color = "#E0C040" },
-        { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
-        { type = "text", bind = P .. "maplocs" },
-    } },
+    { title = "Map", widgets = map_widgets },
     { title = "Travel", widgets = travel_widgets },
     { title = "Plan", widgets = {
         { type = "value", text = "", bind = P .. "planhdr", color = "#5A93D4" },   -- section header
