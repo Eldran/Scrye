@@ -13,7 +13,9 @@
 --   * chatup / chatdown / chatend (paging) — the pane scrolls natively.
 --   * Ring buffer + buffer save/restore — the pane keeps its own scrollback.
 --   * io log file (3s_chat.log) — Scrye's session logger already logs.
---   * Per-line HH:MM timestamps — Scrye panes render their own timestamps.
+--   * Per-line HH:MM timestamps — restored: each pane line is prefixed with the
+--     arrival time (HH:MM) so tells/notifications are timestamped regardless of
+--     the world's global ".ts" toggle.
 --   * Channel colour map — the pane is single-style; the [Chan] tag remains.
 --   * "chat clear" is kept as a no-op that just prints a note (pane content is
 --     managed by Scrye).
@@ -65,7 +67,15 @@ scrye.onChannel(function(chan, text)
   local ok, stripped = pcall(strip_banner, chan, text)
   if ok and stripped then text = stripped end
 
-  scrye.capture(PANE, string.format("[%s] %s", chan, text))
+  -- prepend an HH:MM timestamp so you can see when each tell/message arrived
+  -- (chat-pane specific, independent of the global ".ts" toggle)
+  local stamp = ""
+  do
+    local ok_t, s = pcall(os.date, "%H:%M")
+    if ok_t and type(s) == "string" then stamp = s .. " " end
+  end
+
+  scrye.capture(PANE, string.format("%s[%s] %s", stamp, chan, text))
 
   for name in pairs(watches) do
     if text:lower():find(name:lower(), 1, true) then
