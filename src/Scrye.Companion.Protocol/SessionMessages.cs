@@ -65,10 +65,35 @@ public sealed record SnapshotMessage(
     [property: JsonPropertyName("session")] SessionStateMessage Session,
     [property: JsonPropertyName("output")] OutputBatchMessage Output,
     [property: JsonPropertyName("state")] IReadOnlyList<StateUpdateMessage> State,
-    [property: JsonPropertyName("panels")] IReadOnlyList<HudPanelMessage> Panels)
+    [property: JsonPropertyName("panels")] IReadOnlyList<HudPanelMessage> Panels,
+    // Recent capture-pane history. Without this a reconnect empties the chat view —
+    // precisely the moment you most want to catch up on what was said.
+    [property: JsonPropertyName("panes")] IReadOnlyList<PaneOutputMessage>? Panes = null)
 {
     [JsonPropertyName("type")]
     public string Type => MessageTypes.Snapshot;
+}
+
+/// <summary>Client → desktop: register this device for Web Push. The three fields are
+/// exactly what <c>pushManager.subscribe</c> returns, passed through unchanged.
+///
+/// <para>The desktop is the application server (§7.2), so this never leaves the machine
+/// except as an encrypted POST to the browser vendor's endpoint.</para></summary>
+public sealed record PushSubscribeMessage(
+    [property: JsonPropertyName("endpoint")] string Endpoint,
+    [property: JsonPropertyName("p256dh")] string P256dh,
+    [property: JsonPropertyName("auth")] string Auth)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.PushSubscribe;
+}
+
+/// <summary>Client → desktop: stop notifying this device.</summary>
+public sealed record PushUnsubscribeMessage(
+    [property: JsonPropertyName("endpoint")] string Endpoint)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.PushUnsubscribe;
 }
 
 /// <summary>A rejection, always sent rather than dropped silently, so the client can tell

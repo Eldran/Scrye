@@ -59,6 +59,35 @@ self.addEventListener('activate', e => {
       .then(() => self.clients.claim()));
 });
 
+// A push arrives while the app is closed — the whole point of §7.2. iOS requires a
+// *visible* notification for every push (userVisibleOnly), so there is deliberately no
+// silent path here: showing nothing would get the subscription revoked.
+self.addEventListener('push', e => {
+  let data = { title: 'Scrye', body: '' };
+  try { if (e.data) data = { ...data, ...e.data.json() }; }
+  catch { if (e.data) data.body = e.data.text(); }
+
+  e.waitUntil(self.registration.showNotification(data.title || 'Scrye', {
+    body: data.body || '',
+    icon: '/icon.svg',
+    badge: '/icon.svg',
+    tag: 'scrye',            // collapse bursts rather than stacking twenty tells
+    renotify: true,
+    data: { sessionId: data.sessionId || null },
+  }));
+});
+
+// Tapping the notification should land in the running app if it is already open, rather
+// than spawning a second window pointed at the same session.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const c of all) if ('focus' in c) return c.focus();
+    if (self.clients.openWindow) return self.clients.openWindow('/');
+  })());
+});
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   // Live data and the socket are never cached.

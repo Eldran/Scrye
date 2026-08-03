@@ -19,10 +19,19 @@
 --   * Channel colour map — the pane is single-style; the [Chan] tag remains.
 --   * "chat clear" is kept as a no-op that just prints a note (pane content is
 --     managed by Scrye).
+--
+-- Notifications: scrye.notify() reaches the desktop toast AND, when the mobile
+-- companion is running, the phone as a Web Push. Three things fire it:
+--   * tells        — always, unless turned off with "chat notify tells off"
+--   * channels     — opt-in per channel via "chat notify <channel>"
+--   * watch names  — as before, "chat watch <name>"
+-- Both lists persist via scrye.store.
 
 local PANE = "Chats"
 
-local watches = {}   -- set: lowered-as-typed name -> true (stored as typed)
+local watches = {}    -- set: lowered-as-typed name -> true (stored as typed)
+local notify_chans = {}   -- set: lowercased channel name -> true
+local notify_tells = true -- tells notify by default; the whole point of notifications
 
 -- ---------------- watch persistence (scrye.store, newline-joined) -----------
 
@@ -38,6 +47,33 @@ do
   if w then
     for n in w:gmatch("[^\n]+") do watches[n] = true end
   end
+end
+
+-- ---------------- notify channel persistence --------------------------------
+
+local function save_notify_chans()
+  local t = {}
+  for c in pairs(notify_chans) do t[#t + 1] = c end
+  table.sort(t)
+  scrye.store.set("notify_chans", table.concat(t, "\n"))
+  return t
+end
+
+do
+  local c = scrye.store.get("notify_chans")
+  if c then
+    for n in c:gmatch("[^\n]+") do notify_chans[n] = true end
+  end
+  -- stored as "0"/"1" so an unset value keeps the default rather than reading as off
+  local t = scrye.store.get("notify_tells")
+  if t == "0" then notify_tells = false end
+end
+
+-- A tell is the case notifications exist for: someone addressed you personally.
+-- The MIP feed names the channel "Tell"; be lenient about exact spelling.
+local function is_tell(chan)
+  local c = tostring(chan or ""):lower()
+  return c == "tell" or c:find("tell", 1, true) ~= nil
 end
 
 -- ---------------- banner stripping (verbatim from original) -----------------
@@ -77,12 +113,22 @@ scrye.onChannel(function(chan, text)
 
   scrye.capture(PANE, string.format("%s[%s] %s", stamp, chan, text))
 
-  for name in pairs(watches) do
-    if text:lower():find(name:lower(), 1, true) then
-      scrye.notify(string.format("[%s] %s", chan, text))
-      scrye.sound("beep")
-      break
+  -- Decide once whether this line is worth interrupting someone for, then notify at
+  -- most once — a tell from a watched name on a notified channel is still one buzz.
+  local why = nil
+  if notify_tells and is_tell(chan) then
+    why = "tell"
+  elseif notify_chans[chan:lower()] then
+    why = "channel"
+  else
+    for name in pairs(watches) do
+      if text:lower():find(name:lower(), 1, true) then why = "watch"; break end
     end
+  end
+
+  if why then
+    scrye.notify(string.format("[%s] %s", chan, text))
+    scrye.sound("beep")
   end
 end)
 
@@ -113,6 +159,51 @@ scrye.addAlias{
     local t = {}
     for n in pairs(watches) do t[#t + 1] = n end
     note_watching(t)
+  end,
+}
+
+-- ---------------- notify commands -------------------------------------------
+
+local function note_notifying()
+  local t = {}
+  for c in pairs(notify_chans) do t[#t + 1] = c end
+  table.sort(t)
+  scrye.print("notify tells: " .. (notify_tells and "on" or "off"))
+  scrye.print("notify channels: " .. (#t > 0 and table.concat(t, ", ") or "(none)"))
+  local w = {}
+  for n in pairs(watches) do w[#w + 1] = n end
+  scrye.print("watch names: " .. (#w > 0 and table.concat(w, ", ") or "(nobody)"))
+end
+
+scrye.addAlias{
+  pattern = "^chat notify$", regex = true,
+  run = note_notifying,
+}
+
+scrye.addAlias{
+  pattern = "^chat notify tells (on|off)$", regex = true,
+  run = function(state)
+    notify_tells = (state:lower() == "on")
+    scrye.store.set("notify_tells", notify_tells and "1" or "0")
+    note_notifying()
+  end,
+}
+
+scrye.addAlias{
+  pattern = "^chat notify (?!tells\\s)(.+)$", regex = true,
+  run = function(chan)
+    notify_chans[chan:lower()] = true
+    save_notify_chans()
+    note_notifying()
+  end,
+}
+
+scrye.addAlias{
+  pattern = "^chat unnotify (.+)$", regex = true,
+  run = function(chan)
+    notify_chans[chan:lower()] = nil
+    save_notify_chans()
+    note_notifying()
   end,
 }
 

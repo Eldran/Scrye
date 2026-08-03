@@ -64,6 +64,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// Set by <c>MainWindowViewModel</c> when the server starts.</summary>
     public CompanionHub? Companion { get; set; }
 
+    /// <summary>Web Push fan-out, or null when the companion server is not running.
+    /// Set alongside <see cref="Companion"/>.</summary>
+    public Scrye.Companion.Server.Push.PushNotifier? Notifier { get; set; }
+
     /// <summary>The session's shared state tree. Owned by the session loop — read it from
     /// another thread only through a snapshot.</summary>
     public Scrye.Core.State.StateStore GameState => _session.GameState;
@@ -477,7 +481,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         // trigger notifications + sounds (session loop → UI/audio)
         _session.NotifyRequested += line =>
+        {
             Dispatcher.UIThread.Post(() => Toast?.Invoke(Title, line.PlainText));
+
+            // The same event also reaches the phone, as a Web Push if any device opted in
+            // (companion design §7.2). No new concept for the user: whatever they already
+            // flagged Notify on — a tell, low health, a finished route — now travels.
+            // Fire-and-forget, so a slow push service cannot stall the session loop.
+            Notifier?.NotifyInBackground(
+                Ref?.Character ?? Title, line.PlainText, SessionId, DateTimeOffset.UtcNow);
+        };
         _session.SoundRequested += sound => Services.SoundService.Play(sound, Title);
         _session.MsspReceived += mssp =>
         {
@@ -669,6 +682,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Debugger.Drain();   // always drain events, even on a frame with no output lines
         StateInspector.Drain();
     }
+
+    /// <summary>Capture panes and their scrollback, for companion snapshots. UI-thread
+    /// state — read it through <c>AppSessionSource</c>, which marshals.</summary>
+    public IReadOnlyList<CapturePaneViewModel> CapturePanes => _allPanes;
 
     /// <summary>Fire a plugin panel action, exactly as a click on the desktop HUD would.
     /// Posts onto the session loop first: plugin script is loop-thread-only.</summary>
@@ -987,6 +1004,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             if (c.IsRunning && c.TrustedLogin is { } who)
                 AppendSystem($"  tailnet login {who} connects without a token");
             if (c.IsRunning) AppendSystem($"  token (only needed off-tailnet): {c.Token}");
+            if (c.IsRunning) AppendSystem($"  push devices registered: {c.PushSubscriberCount}");
             AppendSystem($"  this world's sessionId: {SessionId}");
             _ = ReportTailscaleAsync(c);
             return;
@@ -995,6 +1013,26 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (a is "tailscale" or "remote")
         {
             _ = ReportTailscaleAsync(c, verbose: true);
+            return;
+        }
+
+        if (a is "notify" or "push")
+        {
+            ReportNotifySources(c);
+            return;
+        }
+
+        if (a is "notify test" or "push test" or "test")
+        {
+            if (!c.IsRunning) { AppendSystem("companion server is not running"); return; }
+            if (c.PushSubscriberCount == 0)
+            {
+                AppendSystem("no devices registered for notifications");
+                AppendSystem("  on the phone: ⋯ menu → Enable notifications");
+                AppendSystem("  (iOS only allows this once Scrye is on the home screen)");
+                return;
+            }
+            _ = TestNotifyAsync(c);
             return;
         }
 
@@ -1019,12 +1057,69 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 AppendSystem($"  tailnet login {login} may connect WITHOUT a token");
             AppendSystem($"  token (only needed off-tailnet): {c.Token}");
             AppendSystem($"  this world's sessionId: {SessionId}");
-            AppendSystem("  usage: .companion status | .companion tailscale | .companion off");
+            AppendSystem("  usage: .companion status | tailscale | notify | notify test | off");
         }
         catch (Exception ex)
         {
             // Most likely the port is already taken. Report it rather than failing silently.
             AppendSystem($"companion server failed to start: {ex.Message}");
+        }
+    }
+
+    /// <summary>List everything that can raise a notification for this world.
+    ///
+    /// <para>Worth having as a command rather than only a per-trigger checkbox: once
+    /// notifications reach a phone, "what will buzz my pocket?" is a question you want
+    /// answered in one place, not by clicking through every rule.</para></summary>
+    private void ReportNotifySources(CompanionController c)
+    {
+        IReadOnlyList<(Scrye.Core.Automation.TriggerDef Def, bool Enabled)> notifying =
+            _session.Automation.NotifyingTriggers;
+
+        if (notifying.Count == 0)
+        {
+            AppendSystem("no triggers in this world are set to Notify");
+        }
+        else
+        {
+            AppendSystem($"{notifying.Count} trigger(s) set to Notify:");
+            foreach ((Scrye.Core.Automation.TriggerDef def, bool enabled) in notifying)
+            {
+                string name = string.IsNullOrWhiteSpace(def.Name) ? "(unnamed)" : def.Name;
+                string group = string.IsNullOrWhiteSpace(def.Group) ? "" : $" [{def.Group}]";
+                string state = enabled ? "" : "  (DISABLED)";
+                AppendSystem($"  {name}{group}: {def.Pattern}{state}");
+            }
+        }
+
+        // Plugin code is arbitrary, so there is no honest way to enumerate its notify calls
+        // — but saying nothing would make this list look complete when it is not.
+        AppendSystem("plugins may also notify via scrye.notify(); those are not listed here");
+
+        if (c.IsRunning)
+        {
+            AppendSystem($"phone devices registered: {c.PushSubscriberCount}");
+            AppendSystem("  '.companion notify test' sends a test notification");
+        }
+        else
+        {
+            AppendSystem("companion server is stopped — notifications stay on this PC");
+        }
+    }
+
+    private async Task TestNotifyAsync(CompanionController c)
+    {
+        AppendSystem($"sending a test notification to {c.PushSubscriberCount} device(s)...");
+        try
+        {
+            int delivered = await c.TestNotifyAsync();
+            AppendSystem(delivered > 0
+                ? $"delivered to {delivered} device(s)"
+                : "no device accepted it — check the phone's notification settings");
+        }
+        catch (Exception ex)
+        {
+            AppendSystem($"notification failed: {ex.Message}");
         }
     }
 

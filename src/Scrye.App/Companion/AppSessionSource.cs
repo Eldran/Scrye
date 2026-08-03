@@ -98,7 +98,22 @@ public sealed class AppSessionSource : ICompanionSessionSource
             foreach (KeyValuePair<string, PanelSpec> kv in w.Hud.PanelSpecs)
                 panels.Add(new HudPanelMessage(sessionId, kv.Key, kv.Value));
 
-            return new SnapshotMessage(sessionId, Describe(w), output.Build(sessionId), state, panels);
+            // Pane tails, newest-first order preserved. Capped well below the main output
+            // budget: chat is skimmed, not scrolled back through, on a phone.
+            var panes = new List<PaneOutputMessage>();
+            foreach (CapturePaneViewModel pane in w.CapturePanes)
+            {
+                if (pane.Buffer.Count == 0) continue;
+                var pb = new OutputBatchBuilder();
+                int pTake = Math.Min(200, pane.Buffer.Count);
+                int pStart = pane.Buffer.Count - pTake;
+                for (int i = pStart; i < pane.Buffer.Count; i++)
+                    pb.Add(pane.Buffer[i], pane.Buffer.SequenceAt(i));
+                OutputBatchMessage built = pb.Build(sessionId);
+                panes.Add(new PaneOutputMessage(sessionId, pane.Name, built.Styles, built.Lines));
+            }
+
+            return new SnapshotMessage(sessionId, Describe(w), output.Build(sessionId), state, panels, panes);
         });
 
     private WorldViewModel? Find(string sessionId)

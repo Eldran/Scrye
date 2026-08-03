@@ -703,7 +703,7 @@
                                                     <TextBlock Text="Sound on match (beep, path, or sounds-folder file)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                                     <TextBox Text="{Binding Sound}" PlaceholderText="e.g. beep or alert.wav" />
                                                 </StackPanel>
-                                                <CheckBox Grid.Column="1" Content="Notify (toast + flash)" IsChecked="{Binding Notify}"
+                                                <CheckBox Grid.Column="1" Content="Notify (toast, flash, phone)" IsChecked="{Binding Notify}"
                                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
                                             </Grid>
                                             <Grid ColumnDefinitions="*,*,Auto" Margin="0,2,0,0">
@@ -1055,7 +1055,7 @@
                                                     <TextBlock Text="Sound on match (beep, path, or sounds-folder file)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                                     <TextBox Text="{Binding Sound}" PlaceholderText="e.g. beep or alert.wav" />
                                                 </StackPanel>
-                                                <CheckBox Grid.Column="1" Content="Notify (toast + flash)" IsChecked="{Binding Notify}"
+                                                <CheckBox Grid.Column="1" Content="Notify (toast, flash, phone)" IsChecked="{Binding Notify}"
                                                           VerticalAlignment="Bottom" Margin="6,0,0,4" />
                                             </Grid>
                                             <Grid ColumnDefinitions="*,*,Auto" Margin="0,2,0,0">

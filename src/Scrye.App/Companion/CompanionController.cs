@@ -47,12 +47,19 @@ public sealed class CompanionController : IAsyncDisposable
             await Scrye.Companion.Server.Tailscale.TailscaleInfo.QueryAsync().ConfigureAwait(true);
         TrustedLogin = ts is { Running: true, Login: { Length: > 0 } } ? ts.Login : null;
 
+        // Push identity and subscriptions live next to the profiles, so they survive
+        // restarts. A regenerated VAPID key silently invalidates every subscription.
+        string dataDir = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye");
+
         CompanionServerOptions options = new()
         {
             Token = CompanionServerOptions.NewToken(),
             TrustedTailnetLogins = TrustedLogin is null
                 ? Array.Empty<string>()
                 : new[] { TrustedLogin },
+            VapidKeyPath = System.IO.Path.Combine(dataDir, "companion-vapid.json"),
+            PushSubscriptionPath = System.IO.Path.Combine(dataDir, "companion-push.json"),
         };
         Token = options.Token;
 
@@ -81,6 +88,7 @@ public sealed class CompanionController : IAsyncDisposable
         if (_server is null) return;
 
         world.Companion = _server.Hub;
+        world.Notifier = _server.Notifier;
 
         // Panels already built (plugins load before the server may have started) plus any
         // built from here on. Streaming the spec, not the rendering, is what gives every
@@ -100,6 +108,7 @@ public sealed class CompanionController : IAsyncDisposable
     public void Detach(WorldViewModel world)
     {
         world.Companion = null;
+        world.Notifier = null;
         world.Hud.PanelAdded = null;
         world.Hud.PanelRemoved = null;
 
@@ -114,6 +123,16 @@ public sealed class CompanionController : IAsyncDisposable
     /// every device stay honest.</summary>
     public void NotifySessionState(WorldViewModel world) =>
         _server?.Hub.PublishSessionState(AppSessionSource.Describe(world));
+
+    /// <summary>Devices currently registered for push, for status output.</summary>
+    public int PushSubscriberCount => _server?.Notifier.SubscriberCount ?? 0;
+
+    /// <summary>Send a test notification to every registered device.</summary>
+    public Task<int> TestNotifyAsync() =>
+        _server is null
+            ? Task.FromResult(0)
+            : _server.Notifier.NotifyAsync("Scrye", "Test notification from your PC.", null,
+                                           DateTimeOffset.UtcNow);
 
     public async ValueTask DisposeAsync() => await StopAsync().ConfigureAwait(false);
 }

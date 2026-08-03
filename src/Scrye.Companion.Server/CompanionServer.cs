@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Scrye.Companion.Protocol;
 using Scrye.Companion.Server.Hub;
+using Scrye.Companion.Server.Push;
 using Scrye.Companion.Server.Sessions;
 
 namespace Scrye.Companion.Server;
@@ -39,8 +40,22 @@ public sealed class CompanionServer : IAsyncDisposable
         _options = options;
         _source = source;
         _logger = logger;
-        Hub = new CompanionHub(source);
+
+        Vapid = VapidKeys.LoadOrCreate(
+            options.VapidKeyPath ?? Path.Combine(Path.GetTempPath(), "scrye-vapid.json"));
+        PushStore = new PushStore(options.PushSubscriptionPath);
+        Notifier = new PushNotifier(PushStore, new PushSender(Vapid), logger);
+
+        Hub = new CompanionHub(source) { PushStore = PushStore };
     }
+
+    /// <summary>This desktop's Web Push identity (§7.2). Scrye is the application server.</summary>
+    public VapidKeys Vapid { get; }
+
+    public PushStore PushStore { get; }
+
+    /// <summary>Send a notification to every registered device.</summary>
+    public PushNotifier Notifier { get; }
 
     /// <summary>Publish desktop-side events through this.</summary>
     public CompanionHub Hub { get; }
@@ -95,6 +110,11 @@ public sealed class CompanionServer : IAsyncDisposable
             Asset(Client.PwaAssets.Manifest, "application/manifest+json; charset=utf-8"));
 
         app.MapGet("/icon.svg", () => Asset(Client.PwaAssets.Icon, "image/svg+xml; charset=utf-8"));
+
+        // The client needs the application server's public key to call
+        // pushManager.subscribe. It is public by definition — it is what identifies us TO
+        // the push service — so serving it unauthenticated costs nothing.
+        app.MapGet("/push-key", () => Results.Json(new { key = Vapid.PublicKeyBase64Url }));
 
         // Lets the client find out whether it needs a token *before* opening the socket.
         // A failed WebSocket handshake gives the browser almost nothing to report — no

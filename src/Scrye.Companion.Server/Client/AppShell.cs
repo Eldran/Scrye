@@ -84,6 +84,66 @@ internal static class AppShell
   #pad button:active { background:var(--accent); color:#0d0f12; }
   #pad button.wide { grid-column:span 2; }
 
+  /* ---- tabs ---- */
+  #tabs { display:flex; flex:0 0 auto; background:var(--panel); border-bottom:1px solid var(--line); }
+  #tabs button { flex:1; padding:8px 0; background:none; border:0; border-bottom:2px solid transparent;
+                 color:var(--dim); font:inherit; font-size:13px; }
+  #tabs button.on { color:var(--fg); border-bottom-color:var(--accent); }
+  #tabs .badge { display:inline-block; min-width:16px; margin-left:5px; padding:0 4px; border-radius:8px;
+                 background:#2a3140; color:var(--fg); font-size:11px; }
+
+  /* ---- chat view ---- */
+  #chat { flex:1 1 auto; display:none; flex-direction:column; min-height:0; }
+  #chat.show { display:flex; }
+  #chatpanes { display:flex; gap:4px; padding:6px 8px; overflow-x:auto; flex:0 0 auto;
+               border-bottom:1px solid var(--line); }
+  #chatpanes button { flex:0 0 auto; padding:5px 10px; border-radius:14px; border:1px solid #2a3140;
+                      background:var(--bg); color:var(--dim); font:inherit; font-size:12px;
+                      white-space:nowrap; }
+  #chatpanes button.on { color:var(--fg); border-color:var(--accent); }
+  #chatpanes .n { margin-left:5px; padding:0 5px; border-radius:8px; background:var(--accent);
+                  color:#0d0f12; font-size:10px; font-weight:700; }
+  #chatlines { flex:1 1 auto; overflow-y:auto; padding:8px 10px; white-space:pre-wrap;
+               word-break:break-word; -webkit-overflow-scrolling:touch; }
+  #chatlines div { min-height:1.4em; }
+  #chatempty { color:var(--dim); font-size:13px; font-style:italic; }
+
+  /* ---- panels view ---- */
+  #panels { flex:1 1 auto; overflow-y:auto; padding:8px; display:none; }
+  #panels.show { display:block; }
+  #out.hide { display:none; }
+  .panel { border:1px solid var(--line); border-radius:10px; margin-bottom:10px; overflow:hidden;
+           background:#10141a; }
+  .panel > h2 { margin:0; padding:7px 10px; font-size:13px; font-weight:600;
+                border-bottom:1px solid var(--line); }
+  .panel .body { padding:9px 10px; display:flex; flex-direction:column; gap:8px; }
+  .ptabs { display:flex; flex-wrap:wrap; gap:4px; padding:6px 8px 0; }
+  .ptabs button { padding:5px 9px; border-radius:6px; border:1px solid #2a3140; background:var(--bg);
+                  color:var(--dim); font:inherit; font-size:12px; }
+  .ptabs button.on { color:var(--fg); border-color:var(--accent); }
+
+  .w-label { font-size:13px; }
+  .w-text { font-size:12px; white-space:pre-wrap; word-break:break-word; line-height:1.35; }
+  .w-gauge .cap { display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px; }
+  .w-gauge .cap span:last-child { color:var(--dim); }
+  .bar { height:9px; border-radius:5px; background:#1c232c; overflow:hidden; }
+  .bar i { display:block; height:100%; transition:width .25s ease; }
+  .w-buttons { display:flex; gap:6px; flex-wrap:wrap; }
+  .w-buttons button { flex:1 1 auto; min-width:72px; padding:9px 10px; border-radius:8px;
+                      border:1px solid #2a3140; background:var(--bg); color:var(--fg); font:inherit;
+                      font-size:13px; }
+  .w-buttons button:active { background:var(--accent); color:#0d0f12; }
+  .w-buttons button[disabled] { opacity:.45; }
+  .barlist { display:flex; flex-direction:column; gap:4px; }
+  .barrow { font-size:11px; }
+  .barrow .top { display:flex; justify-content:space-between; gap:8px; }
+  .barrow .top b { font-weight:600; }
+  .barrow .top span { color:#9fb0c0; }
+  .barrow .track { height:8px; border-radius:4px; background:#1c232c; overflow:hidden; display:flex; }
+  .barrow .track i { display:block; height:100%; }
+  .grid { font-size:11px; line-height:1.05; white-space:pre; overflow-x:auto; }
+  .w-note { font-size:11px; color:var(--dim); font-style:italic; }
+
   /* ---- setup sheet ---- */
   #setup { position:fixed; inset:0; background:rgba(8,10,13,.96); display:flex;
            align-items:center; justify-content:center; padding:20px; z-index:10; }
@@ -110,7 +170,18 @@ internal static class AppShell
     <button id="menu" title="Settings">⋯</button>
   </header>
 
+  <div id="tabs">
+    <button id="tab-out" class="on">Output</button>
+    <button id="tab-chat">Chat</button>
+    <button id="tab-panels">Panels</button>
+  </div>
+
   <div id="out"></div>
+  <div id="chat">
+    <div id="chatpanes"></div>
+    <div id="chatlines"></div>
+  </div>
+  <div id="panels"></div>
   <div id="prompt"></div>
 
   <footer>
@@ -135,6 +206,8 @@ internal static class AppShell
     <label for="session">Session</label>
     <select id="session"><option value="">(connect first)</option></select>
     <button id="go">Connect</button>
+    <button id="notify" style="margin-top:8px;background:#2a3140;color:var(--fg)">Enable notifications</button>
+    <div id="notifystate" class="w-note" style="margin-top:6px"></div>
     <div id="err"></div>
   </div>
 </div>

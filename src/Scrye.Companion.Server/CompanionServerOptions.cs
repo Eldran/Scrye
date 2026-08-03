@@ -53,6 +53,14 @@ public sealed class CompanionServerOptions
     /// <summary>Lines included in a snapshot when a resume gap is too large (§6).</summary>
     public int SnapshotLines { get; init; } = 500;
 
+    /// <summary>Where the VAPID keypair lives. Null keeps it in memory only, which means
+    /// every restart invalidates existing push subscriptions — fine for tests, wrong for
+    /// real use (§7.2).</summary>
+    public string? VapidKeyPath { get; init; }
+
+    /// <summary>Where registered push subscriptions live. Null keeps them in memory only.</summary>
+    public string? PushSubscriptionPath { get; init; }
+
     /// <summary>Loopback binding with a fresh 256-bit token.</summary>
     public static CompanionServerOptions CreateDefault() => new() { Token = NewToken() };
 

@@ -10,5 +10,12 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Scrye.Core\Scrye.Core.csproj" />
     <ProjectReference Include="..\..\src\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\Scrye.Companion.Server\Scrye.Companion.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The companion server is built on Kestrel; testing it needs the same shared
+         framework. Still no NuGet dependency. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>

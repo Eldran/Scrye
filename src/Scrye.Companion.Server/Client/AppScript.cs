@@ -163,6 +163,427 @@ function renderVitals() {
   host.innerHTML = html;
 }
 
+
+
+
+// ---- Web Push ---------------------------------------------------------------
+//
+// §7.2: notifications while the app is closed, with no hosted component — the desktop
+// itself is the VAPID application server. Everything here is opt-in and behind a button,
+// because a page that asks for notification permission on load gets denied by reflex.
+
+function isStandalone() {
+  // Guarded: this runs at load, and an exception here would take the whole app down over
+  // a cosmetic capability check.
+  try {
+    if (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) return true;
+  } catch { /* ignore */ }
+  return window.navigator.standalone === true;
+}
+
+async function pushState() {
+  const box = $('notifystate');
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    // On iOS this is what a *browser tab* looks like: the API only exists once the app has
+    // been added to the home screen. Saying so beats an inert button.
+    box.textContent = isStandalone()
+      ? 'Push is not supported by this browser.'
+      : 'Add Scrye to your home screen first — iOS only allows notifications for installed apps.';
+    $('notify').disabled = true;
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    box.textContent = 'Notifications are blocked in system settings.';
+    $('notify').disabled = true;
+    return;
+  }
+  const reg = await navigator.serviceWorker.ready;
+  const sub = await reg.pushManager.getSubscription();
+  box.textContent = sub ? 'Notifications are on for this device.' : 'Notifications are off.';
+  $('notify').textContent = sub ? 'Disable notifications' : 'Enable notifications';
+  $('notify').disabled = false;
+}
+
+// applicationServerKey wants raw bytes, not the base64url string the server sends.
+function b64urlToBytes(s) {
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const raw = atob((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(raw, c => c.charCodeAt(0));
+}
+
+async function toggleNotifications() {
+  const box = $('notifystate');
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const existing = await reg.pushManager.getSubscription();
+
+    if (existing) {
+      send({ type:'push.unsubscribe', endpoint: existing.endpoint });
+      await existing.unsubscribe();
+      await pushState();
+      return;
+    }
+
+    // Must be called from a user gesture — this is why it lives behind the button.
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { await pushState(); return; }
+
+    const { key } = await (await fetch('/push-key', { cache:'no-store' })).json();
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,                 // required; iOS revokes silent subscriptions
+      applicationServerKey: b64urlToBytes(key),
+    });
+
+    const j = sub.toJSON();
+    send({ type:'push.subscribe', endpoint: sub.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth });
+    await pushState();
+  } catch (e) {
+    box.textContent = 'Could not enable notifications: ' + (e && e.message ? e.message : e);
+  }
+}
+
+// ---- chat / capture panes ---------------------------------------------------
+//
+// Driven entirely by the desktop's own trigger routing (`output.pane`). The filtering
+// rules already exist there; duplicating them here as regexes would guarantee drift, and
+// would miss gagged lines the desktop hides from main output but routes to a pane.
+
+const panes = new Map();         // pane name -> { lines: [DocumentFragment-able nodes], unread }
+let activePane = null;
+const PANE_MAX = 500;
+
+function paneState(name) {
+  if (!panes.has(name)) panes.set(name, { nodes: [], unread: 0 });
+  return panes.get(name);
+}
+
+function addPaneLines(name, msg) {
+  const p = paneState(name);
+  const table = msg.styles || [];
+  const showing = activePane === name && $('chat').classList.contains('show');
+
+  for (const line of msg.lines || []) {
+    p.nodes.push(buildLine(line, table));
+    if (p.nodes.length > PANE_MAX) p.nodes.shift();
+    if (!showing) p.unread++;
+  }
+
+  if (activePane === null) activePane = name;
+  if (activePane === name) renderPaneLines();
+  renderPaneTabs();
+  updateChatBadge();
+}
+
+function renderPaneTabs() {
+  const host = $('chatpanes');
+  host.replaceChildren();
+  for (const [name, p] of panes) {
+    const b = el('button', name === activePane ? 'on' : null);
+    b.appendChild(document.createTextNode(name));
+    if (p.unread > 0) b.appendChild(el('span', 'n', String(p.unread)));
+    b.addEventListener('click', () => selectPane(name));
+    host.appendChild(b);
+  }
+}
+
+function renderPaneLines() {
+  const host = $('chatlines');
+  host.replaceChildren();
+  const p = activePane && panes.get(activePane);
+  if (!p || p.nodes.length === 0) {
+    host.appendChild(el('div', null, '')).appendChild(
+      el('span', 'w-note', activePane ? 'Nothing here yet.'
+        : 'No capture panes yet — a trigger has to route lines to one.'));
+    return;
+  }
+  // Nodes are reused rather than rebuilt: they were already styled once on arrival.
+  for (const n of p.nodes) host.appendChild(n);
+  host.scrollTop = host.scrollHeight;
+}
+
+function selectPane(name) {
+  activePane = name;
+  const p = panes.get(name);
+  if (p) p.unread = 0;
+  renderPaneTabs();
+  renderPaneLines();
+  updateChatBadge();
+}
+
+function updateChatBadge() {
+  let total = 0;
+  for (const [, p] of panes) total += p.unread;
+  $('tab-chat').innerHTML = 'Chat' + (total ? ` <span class="badge">${total}</span>` : '');
+}
+
+function clearPanes() {
+  panes.clear();
+  activePane = null;
+  renderPaneTabs();
+  renderPaneLines();
+  updateChatBadge();
+}
+
+// ---- HUD panels -------------------------------------------------------------
+//
+// The design's headline claim (§2): panels are *data*, so the phone renders the same
+// PanelSpec the desktop does rather than a second UI built by hand. Colours and thresholds
+// below mirror HudViewModel/BarListView deliberately — a gauge that reads "warning" on the
+// desktop must not read "healthy" here.
+
+const panels = new Map();        // panelId -> spec
+const binders = new Map();       // state path -> [fn(value)]
+const panelTab = new Map();      // panelId -> selected tab index
+
+const GAUGE_HEALTHY = '#35c4d6', GAUGE_WARN = '#e0a830', GAUGE_CRIT = '#e05050';
+const BAR_REFINED = '#46b45a', BAR_RAW = '#e0a020';
+
+function bind(path, fn) {
+  if (!path) return;
+  if (!binders.has(path)) binders.set(path, []);
+  binders.get(path).push(fn);
+  fn(stateText(path));            // seed, exactly as BindText does
+}
+
+const stateText = p => (state[p] ? state[p].text : '');
+
+// Mirrors BindNumber: a numeric string that is NOT a known state path is a literal
+// (`max = 100`), otherwise it is a path to watch.
+function bindNumber(pathOrLiteral, fn) {
+  if (!pathOrLiteral) return;
+  const asNum = parseFloat(pathOrLiteral);
+  if (!isNaN(asNum) && !(pathOrLiteral in state)) { fn(asNum); return; }
+  bind(pathOrLiteral, v => fn(parseFloat(v) || 0));
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function gaugeColour(ratio, colour, dim) {
+  if (dim) {
+    const base = colour || '#46b45a';
+    const b = 0.30 + 0.70 * ratio;          // brightness 30% empty -> 100% full
+    const n = parseInt(base.slice(1), 16);
+    const r = Math.round(((n >> 16) & 255) * b);
+    const g = Math.round(((n >> 8) & 255) * b);
+    const bl = Math.round((n & 255) * b);
+    return `rgb(${r},${g},${bl})`;
+  }
+  if (colour) return colour;
+  return ratio >= 0.5 ? GAUGE_HEALTHY : ratio >= 0.25 ? GAUGE_WARN : GAUGE_CRIT;
+}
+
+function buildBarList(rows) {
+  const host = el('div', 'barlist');
+  for (const raw of (rows || '').split('\n')) {
+    if (!raw.trim()) continue;
+    const parts = raw.split('\t');
+    // label \t caption \t value \t max \t refined — anything else is plain text, so
+    // headers and "none" rows still show, matching BarListView.
+    if (parts.length < 4) { host.appendChild(el('div', 'barrow', raw)); continue; }
+    const [label, caption, v, m, ref] = parts;
+    const max = parseFloat(m) || 0, val = parseFloat(v) || 0, refined = parseFloat(ref) || 0;
+    const row = el('div', 'barrow');
+    const top = el('div', 'top');
+    top.appendChild(el('b', null, label));
+    top.appendChild(el('span', null, caption));
+    row.appendChild(top);
+    const track = el('div', 'track');
+    const pct = x => max > 0 ? Math.max(0, Math.min(100, (x / max) * 100)) : 0;
+    const refPart = Math.min(refined, val);
+    const g = el('i'); g.style.width = pct(refPart) + '%'; g.style.background = BAR_REFINED;
+    const a = el('i'); a.style.width = pct(val - refPart) + '%'; a.style.background = BAR_RAW;
+    track.appendChild(g); track.appendChild(a);
+    row.appendChild(track);
+    host.appendChild(row);
+  }
+  return host;
+}
+
+function buildGrid(text, palette) {
+  const host = el('div', 'grid');
+  for (const line of (text || '').split('\n')) {
+    const row = el('div');
+    for (const ch of line) {
+      const c = el('span', null, ch);
+      const col = palette && palette[ch];
+      if (col) c.style.color = col;
+      row.appendChild(c);
+    }
+    host.appendChild(row);
+  }
+  return host;
+}
+
+function buildWidget(panelId, w, panelFg) {
+  const type = (w.type || 'label').toLowerCase();
+  const fg = w.color || panelFg;
+
+  switch (type) {
+    case 'button':
+    case 'buttonrow': {
+      const box = el('div', 'w-buttons');
+      const kids = type === 'button' ? [w] : (w.children || []);
+      for (const b of kids) {
+        const btn = el('button', null, b.text || 'Button');
+        if (b.action) btn.addEventListener('click', () =>
+          send({ type:'hud.action', sessionId, panelId, action: b.action }));
+        else btn.disabled = true;
+        box.appendChild(btn);
+      }
+      return box;
+    }
+
+    case 'gauge':
+    case 'progress': {
+      const box = el('div', 'w-gauge');
+      const cap = el('div', 'cap');
+      cap.appendChild(el('span', null, w.text || ''));
+      const readout = el('span', null, '');
+      cap.appendChild(readout);
+      box.appendChild(cap);
+      const bar = el('div', 'bar');
+      const fill = el('i');
+      bar.appendChild(fill);
+      box.appendChild(bar);
+
+      let val = 0, max = 100;
+      const paint = () => {
+        const ratio = max > 0 ? Math.max(0, Math.min(1, val / max)) : 0;
+        fill.style.width = (ratio * 100) + '%';
+        // progress honours an explicit colour only; gauge falls back to the ramp.
+        fill.style.background = type === 'progress'
+          ? (w.color || GAUGE_HEALTHY)
+          : gaugeColour(ratio, w.color, !!w.dim);
+        readout.textContent = `${Math.round(val)}/${Math.round(max)}`;
+      };
+      bindNumber(w.value, v => { val = v; paint(); });
+      bindNumber(w.max, v => { max = v <= 0 ? 1 : v; paint(); });
+      paint();
+      return box;
+    }
+
+    case 'value': {
+      const e = el('div', 'w-label');
+      if (fg) e.style.color = fg;
+      bind(w.bind, v => { e.textContent = (w.text || '') + v; });
+      return e;
+    }
+
+    case 'text': {
+      const e = el('div', 'w-text');
+      if (fg) e.style.color = fg;
+      bind(w.bind, v => { e.textContent = v; });
+      return e;
+    }
+
+    case 'barlist': {
+      const host = el('div');
+      bind(w.bind, v => { host.replaceChildren(buildBarList(v)); });
+      return host;
+    }
+
+    case 'colorgrid': {
+      const host = el('div');
+      bind(w.bind, v => { host.replaceChildren(buildGrid(v, w.palette)); });
+      return host;
+    }
+
+    case 'input': {
+      // The submit callback has its own runtime entry point (InvokeSubmit) with no wire
+      // message yet, so this renders read-only rather than pretending to work.
+      const box = el('div');
+      box.appendChild(el('div', 'w-label', w.text || ''));
+      const cur = el('div', 'w-note', '');
+      bind(w.bind, v => { cur.textContent = v ? `${v} (read-only on mobile)` : '(read-only on mobile)'; });
+      box.appendChild(cur);
+      return box;
+    }
+
+    default: {                       // label
+      const e = el('div', 'w-label', w.text || '');
+      if (fg) e.style.color = fg;
+      if (w.bind) bind(w.bind, v => { e.textContent = v; });
+      return e;
+    }
+  }
+}
+
+function buildPanel(panelId, spec) {
+  const box = el('div', 'panel');
+  if (spec.background) box.style.background = spec.background;
+  if (spec.accent) box.style.borderColor = spec.accent;
+
+  const title = el('h2', null, spec.title || panelId);
+  if (spec.accent) { title.style.color = spec.accent; title.style.borderBottomColor = spec.accent; }
+  box.appendChild(title);
+
+  const body = el('div', 'body');
+  const tabs = spec.tabs || [];
+
+  if (tabs.length > 0) {
+    const strip = el('div', 'ptabs');
+    let active = panelTab.get(panelId) ?? 0;
+    if (active >= tabs.length) active = 0;
+    tabs.forEach((t, i) => {
+      const b = el('button', i === active ? 'on' : null, t.title || `Tab ${i + 1}`);
+      b.addEventListener('click', () => { panelTab.set(panelId, i); renderPanels(); });
+      strip.appendChild(b);
+    });
+    box.appendChild(strip);
+    for (const w of tabs[active].widgets || []) body.appendChild(buildWidget(panelId, w, spec.foreground));
+  } else {
+    for (const w of spec.widgets || []) body.appendChild(buildWidget(panelId, w, spec.foreground));
+  }
+
+  box.appendChild(body);
+  return box;
+}
+
+function renderPanels() {
+  // Rebuild wholesale and re-register binders. The widget *set* is fixed once a panel is
+  // built (only bound values change), so this only runs when panels themselves change or a
+  // tab is switched — not on every state update.
+  binders.clear();
+  const host = $('panels');
+  host.replaceChildren();
+
+  if (panels.size === 0) {
+    host.appendChild(el('div', 'w-note', 'No plugin panels for this session.'));
+  } else {
+    for (const [id, spec] of panels) host.appendChild(buildPanel(id, spec));
+  }
+
+  const badge = $('tab-panels');
+  badge.innerHTML = 'Panels' + (panels.size ? ` <span class="badge">${panels.size}</span>` : '');
+}
+
+function applyStateToPanels(path) {
+  const fns = binders.get(path);
+  if (!fns) return;
+  const v = stateText(path);
+  for (const fn of fns) fn(v);
+}
+
+function showTab(which) {
+  $('panels').classList.toggle('show', which === 'panels');
+  $('chat').classList.toggle('show', which === 'chat');
+  $('out').classList.toggle('hide', which !== 'out');
+  $('tab-out').classList.toggle('on', which === 'out');
+  $('tab-chat').classList.toggle('on', which === 'chat');
+  $('tab-panels').classList.toggle('on', which === 'panels');
+
+  // Opening Chat clears the badge for whatever pane you land on — you are looking at it.
+  if (which === 'chat' && activePane) selectPane(activePane);
+
+  // The command line stays available on every tab: reading a tell and replying should
+  // not require switching back to Output first.
+}
+
 // ---- command pad ------------------------------------------------------------
 
 const PAD = [
@@ -238,10 +659,23 @@ function handle(msg) {
       break;
     }
     case 'session.snapshot':
+      // Adopt the id the snapshot names. Normally subscribe() already set it, but a
+      // snapshot can also arrive as the answer to a resume, and a client that had not
+      // yet set sessionId would go on sending commands addressed to null.
+      if (msg.sessionId) { sessionId = msg.sessionId; store.session = msg.sessionId; }
       out.innerHTML = '';
       lastSeq = -1;
       state = {};
       for (const s of msg.state || []) state[s.path] = { kind:s.kind, text:s.text };
+      panels.clear();
+      for (const p of msg.panels || []) panels.set(p.panelId, p.spec);
+      renderPanels();
+      clearPanes();
+      for (const p of msg.panes || []) addPaneLines(p.pane, p);
+      // History is not "unread" — it is what you already missed being told about.
+      for (const [, st] of panes) st.unread = 0;
+      renderPaneTabs();
+      updateChatBadge();
       applyBatch(msg.output);
       renderVitals();
       setWho(msg.session);
@@ -251,13 +685,22 @@ function handle(msg) {
       applyBatch(msg);
       break;
     case 'output.pane':
-      // Chat and other routed panes: not shown in this build, but they arrive here and
-      // the sequence numbering is per pane, ready for a dedicated view.
+      addPaneLines(msg.pane, msg);
       break;
     case 'state.update':
       if (msg.removed) delete state[msg.path];
       else state[msg.path] = { kind:msg.kind, text:msg.text };
       renderVitals();
+      applyStateToPanels(msg.path);
+      break;
+    case 'hud.panel':
+      panels.set(msg.panelId, msg.spec);
+      renderPanels();
+      break;
+    case 'hud.panel.removed':
+      panels.delete(msg.panelId);
+      panelTab.delete(msg.panelId);
+      renderPanels();
       break;
     case 'session.state':
       if (msg.sessionId === sessionId) setWho(msg);
@@ -355,6 +798,15 @@ $('cmd').addEventListener('keydown', e => {
   if (e.key === 'ArrowUp') { e.preventDefault(); recall(); }
 });
 $('menu').addEventListener('click', () => $('setup').classList.toggle('hidden'));
+$('notify').addEventListener('click', toggleNotifications);
+pushState().catch(() => {});   // never let a capability probe break startup
+
+$('tab-out').addEventListener('click', () => showTab('out'));
+$('tab-chat').addEventListener('click', () => showTab('chat'));
+$('tab-panels').addEventListener('click', () => showTab('panels'));
+renderPanels();
+renderPaneTabs();
+renderPaneLines();
 
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});

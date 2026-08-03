@@ -24,6 +24,8 @@ public static class MessageTypes
     public const string HudAction = "hud.action";
     public const string SessionResume = "session.resume";
     public const string SessionSubscribe = "session.subscribe";
+    public const string PushSubscribe = "push.subscribe";
+    public const string PushUnsubscribe = "push.unsubscribe";
 }
 
 /// <summary>

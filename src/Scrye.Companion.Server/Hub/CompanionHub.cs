@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Scrye.Companion.Protocol;
 using Scrye.Core.Automation;
+using Scrye.Companion.Server.Push;
 using Scrye.Companion.Server.Sessions;
 
 namespace Scrye.Companion.Server.Hub;
@@ -21,6 +22,9 @@ public sealed class CompanionHub
 {
     private readonly ConcurrentDictionary<string, CompanionSubscriber> _subscribers = new(StringComparer.Ordinal);
     private readonly ICompanionSessionSource _source;
+
+    /// <summary>Where push subscriptions land. Null when push is not configured.</summary>
+    public PushStore? PushStore { get; init; }
 
     public CompanionHub(ICompanionSessionSource source) => _source = source;
 
@@ -167,6 +171,28 @@ public sealed class CompanionHub
                                        .ConfigureAwait(false);
                 return ok ? null : new ErrorMessage(
                     CompanionErrorCode.BadRequest, $"no such panel action '{m.Action}'", m.SessionId);
+            }
+
+            case MessageTypes.PushSubscribe:
+            {
+                var m = CompanionJson.Deserialize<PushSubscribeMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.Endpoint) ||
+                    string.IsNullOrEmpty(m.P256dh) || string.IsNullOrEmpty(m.Auth))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "incomplete push subscription");
+                if (PushStore is null)
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "push is not configured");
+
+                PushStore.Add(new PushSubscription(m.Endpoint, m.P256dh, m.Auth));
+                return null;
+            }
+
+            case MessageTypes.PushUnsubscribe:
+            {
+                var m = CompanionJson.Deserialize<PushUnsubscribeMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.Endpoint))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "missing endpoint");
+                PushStore?.Remove(m.Endpoint);
+                return null;
             }
 
             default:

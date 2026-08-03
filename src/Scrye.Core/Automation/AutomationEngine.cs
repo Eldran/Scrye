@@ -24,6 +24,20 @@ public sealed class AutomationEngine
 
     public VariableStore Variables => _vars;
     public int TriggerCount => _triggers.Count;
+
+    /// <summary>Triggers flagged <see cref="TriggerDef.Notify"/>, with their live enabled
+    /// state. Exposed so the user can audit what will raise a notification — which matters
+    /// far more once notifications leave the desktop and reach a phone.</summary>
+    public IReadOnlyList<(TriggerDef Def, bool Enabled)> NotifyingTriggers
+    {
+        get
+        {
+            var list = new List<(TriggerDef, bool)>();
+            foreach (Trig t in _triggers)
+                if (t.Def.Notify) list.Add((t.Def, t.Enabled));
+            return list;
+        }
+    }
     public int AliasCount => _aliases.Count;
     public int TimerCount => _timers.Count;
 
