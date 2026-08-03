@@ -2,6 +2,9 @@
 
 **Status:** Design / proposal · **Last updated:** 2026-08-02
 
+*Rev. 8 — steps 5 and 7 done (resume/snapshot was already built; Web Push shipped).
+Chat view, HUD panel rendering and `permessage-deflate` landed. §3 documents `output.pane`
+and `hud.action`.*
 *Rev. 7 — step 3 done: installable PWA on the home screen, and tailnet identity replaces
 token typing (new §7.5). `hud.action` and `output.pane` added to the protocol.*
 *Rev. 6 — step 6 done: reachable from a phone over a real certificate, 2026-08-02.
@@ -159,6 +162,28 @@ HUD panel spec (streamed, then updated in place):
   "bind": "vik.refinery", "value": [ ... ] }
 ```
 
+Capture-pane output — a **separate stream** from the main batch, because a trigger can
+capture *and* gag, so a routed chat line often never reaches the main output at all (§3.4):
+
+```json
+{ "type": "output.pane", "sessionId": "...", "pane": "Chats",
+  "styles": [ ... ], "lines": [ ... ] }
+```
+
+Panel button, client → desktop. Carries only an id the desktop itself published, so it
+grants a device nothing beyond firing its own plugins' callbacks:
+
+```json
+{ "type": "hud.action", "sessionId": "...", "panelId": "3s-raid|Auto Raid", "action": "btn-arm" }
+```
+
+Push registration, client → desktop (§7.2):
+
+```json
+{ "type": "push.subscribe", "endpoint": "https://web.push.apple.com/...",
+  "p256dh": "...", "auth": "..." }
+```
+
 Session state:
 
 ```json
@@ -179,8 +204,13 @@ per line with a full span array each. Three mitigations, in order of value:
 - **Per-frame style table.** Within one 33 ms batch only a handful of distinct
   (fore, back, flags) combinations occur. Emit them once as `styles[]` and have each span
   carry an index `"s"`. This is where the wire savings actually are.
-- **`permessage-deflate`** on the WebSocket. MUD output is extremely compressible and this
-  costs one Kestrel option.
+- **`permessage-deflate`** on the WebSocket. *Enabled 2026-08-02* via
+  `WebSocketAcceptContext.DangerousEnableCompression`, together with
+  `DisableServerContextTakeover`. The "Dangerous" name is about CRIME-style size oracles
+  when a stream mixes a secret with attacker-chosen text; no credential travels inside this
+  socket (the token rides on the handshake URL), and resetting the compression context per
+  message removes the cross-message oracle regardless. The cost is small here because a
+  frame is already a whole batch rather than one short message.
 
 Note what is *not* on that list: the original "palette-index spans" idea. It cannot be
 built — see §3.3.
@@ -256,6 +286,22 @@ GA/EOR — the server is waiting for input) and `Links`, and `RunFlags` has Unde
 Italic, Blink and Inverse alongside Bold. All are now in the contract. `IsPrompt` matters
 more on a phone than on the desktop: it marks where the input bar should anchor instead of
 letting the prompt scroll away.
+
+### 3.4 Why capture panes are their own stream
+
+The obvious design is a `pane` field on `OutputLineDto`. It does not work.
+
+Capture-to-pane and gag are **independent trigger actions**, and the usual chat setup uses
+both: route the line to a pane *and* hide it from the main output. A gagged line never
+reaches `LineReady`, so it never enters `ScrollbackBuffer` and never appears in an
+`output.batch`. Tagging main-stream lines would therefore miss precisely the lines a chat
+view exists to show.
+
+`output.pane` carries real sequence numbers, because each `CapturePaneViewModel` owns its
+own `ScrollbackBuffer` — so per-pane resume is possible later without redesign. It is not
+implemented yet; instead `session.snapshot` carries recent pane history, so a reconnecting
+client rebuilds rather than starting empty. That matters: a reconnect is exactly when you
+want to catch up on what was said while the phone was asleep.
 
 ---
 
@@ -685,7 +731,10 @@ the `WorldViewModel`/`MainWindowViewModel` state it taps, with no IPC.
    uses WebKit and Apple reserves installation for Safari. Chrome cannot do it at all.*
 4. **Pairing & permissions** — QR pairing (§7.1), per-device keys, revocation, the
    paired-devices list, and capture of the phone's Web Push subscription at pairing time.
-5. **Resume & snapshot** — sequence numbers on the output ring buffer + snapshot path (§6).
+5. ~~**Resume & snapshot**~~ — **done 2026-08-02**, inside steps 0 and 2 rather than as a
+   separate pass. Sequence numbers on `ScrollbackBuffer`, `CanReplayFrom` deciding replay
+   versus snapshot, and the client resuming both on reconnect and on `visibilitychange` —
+   so backgrounding the phone costs nothing.
 6. ~~**Trusted cert + remote access**~~ — **done 2026-08-02.** `tailscale serve --bg
    --https=443 http://127.0.0.1:4747` puts Tailscale's TLS proxy in front of the
    loopback-bound server. Verified working from an iPhone over the tailnet.
@@ -694,9 +743,19 @@ the `WorldViewModel`/`MainWindowViewModel` state it taps, with no IPC.
    cert would break the phone on a forgotten Tuesday. Scrye stays loopback-bound and holds
    no certificate code at all. `.companion tailscale` reports node state and prints the
    command. Walkthrough: `docs/Scrye-Companion-Setup.md`.
-7. **Notifications** — VAPID keypair and outbound Web Push from `Scrye.App` (§7.2), plus
-   the `scrye.notify(...)` webhook notifier as the no-PWA fallback.
+7. ~~**Notifications**~~ — **done 2026-08-02.** `src/Scrye.Companion.Server/Push`:
+   RFC 8291 encryption verified against the RFC's own test vector, VAPID identity persisted
+   next to the profiles, subscription storage with 404/410 pruning. Hooked to the existing
+   `MudSession.NotifyRequested`, so triggers already flagged Notify reach the phone with no
+   new configuration; `3s-chat` gained always-on tells plus per-channel opt-in.
+   `.companion notify` audits what will fire.
+   *The webhook fallback (ntfy/Pushover/etc.) was not built — Web Push made it unnecessary
+   for the tailnet case, and it remains the answer if a non-PWA client ever needs one.*
 8. *(Optional)* **Native app** — Avalonia-mobile, reusing DTOs and HUD controls (§8.2).
+
+Built alongside the numbered steps, and worth listing because they are not in it: HUD panel
+rendering on the phone with `hud.action` (§2's headline claim, now real), the chat view over
+`output.pane`, tailnet identity authentication (§7.5), and `permessage-deflate`.
 
 Steps 1–3 (with 6) are the whole idea, working. Everything after hardens or extends it,
 and each is independently shippable. The former step 8, "minimal push relay", is deleted:

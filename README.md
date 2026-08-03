@@ -31,6 +31,8 @@ A strict engine/UI split, a staged receive pipeline (bytes → telnet → decode
 | `Scrye.Scripting` | The Lua host (MoonSharp) and JavaScript host (Jint), the `world.*` facade, and the plugin manager. |
 | `Scrye.App` | The Avalonia MVVM UI: world tabs, output view, HUD panels, settings, profile tree, debugger. |
 | `Scrye.Cli` | A dependency-free harness; `--selftest` runs canned bytes through the telnet + ANSI pipeline and prints the parsed lines. |
+| `Scrye.Companion.Protocol` | The mobile-companion wire contract: message DTOs, batching and JSON config. References `Scrye.Core` only — no NuGet. |
+| `Scrye.Companion.Server` | Kestrel + WebSocket host running inside `Scrye.App`, plus the PWA client and Web Push. Kestrel comes from the shared framework — no NuGet. |
 | `Scrye.Core.Tests` | xUnit tests over the engine — parser, telnet, automation, highlights, profiles, state store, MIP, plugins, sequences, replay, logging, reconnect. |
 
 `Scrye.Core` staying NuGet-free is deliberate: it keeps the engine portable and makes it cheap to host somewhere other than the desktop app.
@@ -93,14 +95,43 @@ Because a panel is data rather than drawing code, the same spec can be rendered 
 
 See **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** for the user guide and the full `scrye.*` plugin API.
 
+## Mobile companion
+
+Scrye plays from a phone. The desktop keeps the MUD connection and does all the work —
+telnet, triggers, scripts, state — while a phone acts as a touch-friendly frontend over a
+secure WebSocket. It is not a screen share: the desktop streams *structured data* (styled
+output lines, state changes, HUD panel specs) and the phone renders its own UI.
+
+- **Installable PWA** — add to the home screen and it runs standalone: ANSI output with
+  tappable MXP links, a pinned prompt, command line and directional pad.
+- **Your HUD panels, rendered natively** — gauges, barlists, colorgrids and working buttons,
+  from the same `PanelSpec` the desktop uses. Every plugin gets a mobile UI for free.
+- **Chat view** — driven by your existing capture-pane triggers, with per-pane unread counts.
+- **Notifications** — Web Push while the app is closed, wired to the existing trigger
+  `Notify` flag. Scrye is its own push application server; there is no service to run.
+- **Resume, not reload** — every output line carries a sequence number, so a phone that was
+  asleep replays the gap instead of starting over.
+
+Two new projects, both NuGet-free: `Scrye.Companion.Protocol` (the wire contract) and
+`Scrye.Companion.Server` (Kestrel + WebSocket, hosted inside `Scrye.App`).
+
+Start it with `.companion` in any connected world. To reach it from outside the machine,
+see **[docs/Scrye-Companion-Setup.md](docs/Scrye-Companion-Setup.md)** — it stays bound to
+loopback and Tailscale provides the certificate and the route.
+
 ## Roadmap
 
-The next major piece is a **mobile companion**: the desktop keeps the MUD connection and does all the work, while a phone or browser acts as a touch-friendly frontend over a secure WebSocket — streaming output, state and HUD panels, and sending commands back through the normal pipeline. The architecture, protocol and build order are written up in **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)**.
+Per-device pairing and revocation, panel `input`/`colorgrid` interactions, and a desktop
+settings panel to replace the `.companion` command. A native Avalonia-mobile client remains
+optional — the PWA has not yet run out of road. The full build order and the reasoning
+behind each decision are in
+**[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)**.
 
 ## Documentation
 
 - **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** — using Scrye, and writing plugins.
 - **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)** — mobile companion architecture and decisions.
+- **[docs/Scrye-Companion-Setup.md](docs/Scrye-Companion-Setup.md)** — reaching Scrye from your phone.
 
 ## License
 

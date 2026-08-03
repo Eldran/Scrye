@@ -150,7 +150,25 @@ public sealed class CompanionServer : IAsyncDisposable
                 return;
             }
 
-            using WebSocket socket = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+            // permessage-deflate (§3.1's third throughput mitigation). MUD output is
+            // extremely compressible — repeated room descriptions, combat verbs, ANSI-free
+            // structured JSON — so this is the cheapest bandwidth win available on a phone
+            // connection.
+            //
+            // It is called "Dangerous" because compressing a stream that mixes a secret with
+            // attacker-chosen text enables CRIME-style size-oracle attacks. That does not
+            // apply here — no credential travels inside the socket; the token rides on the
+            // handshake URL — but DisableServerContextTakeover is set anyway, which resets
+            // the compression context per message and removes the cross-message oracle
+            // entirely. The cost is small for this traffic, because a frame is already a
+            // whole batch of lines rather than a single short message.
+            var accept = new WebSocketAcceptContext
+            {
+                DangerousEnableCompression = true,
+                DisableServerContextTakeover = true,
+            };
+
+            using WebSocket socket = await ctx.WebSockets.AcceptWebSocketAsync(accept).ConfigureAwait(false);
             await RunConnectionAsync(socket, ctx.RequestAborted).ConfigureAwait(false);
         });
 
