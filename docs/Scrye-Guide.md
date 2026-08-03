@@ -100,11 +100,13 @@ Once Tailscale is serving, the phone URL looks like `https://desktop-xxxx.your-t
 
 ### Putting it on the home screen
 
-Do this in **Safari** — Chrome on iOS cannot install web apps, and notifications on iOS only work from an installed app.
+**On iPhone / iPad**, do this in **Safari** — Chrome on iOS cannot install web apps, and notifications on iOS only work from an installed app.
 
 1. Open the `https://…ts.net/` URL in Safari.
 2. Tap the **Share** button, scroll down, tap **Add to Home Screen**.
 3. Launch it from the home‑screen icon. It runs full‑screen with no browser chrome.
+
+**On Android**, installing is optional. Chrome gives an ordinary tab everything the companion needs, notifications included — there's no equivalent of the iOS restriction. If you want the icon and the full‑screen window anyway, open the URL in Chrome and use **⋮ → Add to Home screen** (or the install prompt Chrome offers on its own). Firefox and Samsung Internet work too.
 
 ### Using it
 
@@ -120,7 +122,7 @@ One deliberate restriction: the phone **cannot run script**. Commands starting w
 
 ### Notifications
 
-Tap **⋯ → Enable notifications** on the phone and accept the iOS prompt. Then `.companion notify test` from the desktop to confirm it arrives.
+Tap **⋯ → Enable notifications** on the phone and accept the permission prompt. Then `.companion notify test` from the desktop to confirm it arrives. On iOS the button only works once Scrye is on the home screen; on Android it works straight away.
 
 What actually fires one:
 

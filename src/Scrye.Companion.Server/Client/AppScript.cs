@@ -184,11 +184,16 @@ function isStandalone() {
 async function pushState() {
   const box = $('notifystate');
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    // On iOS this is what a *browser tab* looks like: the API only exists once the app has
-    // been added to the home screen. Saying so beats an inert button.
-    box.textContent = isStandalone()
-      ? 'Push is not supported by this browser.'
-      : 'Add Scrye to your home screen first — iOS only allows notifications for installed apps.';
+    // Two very different causes land here, and telling the user the wrong one wastes their
+    // time. On iOS a *browser tab* looks exactly like this — the API only appears once the
+    // app is on the home screen — so an un-installed iOS browser gets the install advice.
+    // Everywhere else (Android grants push to an ordinary tab) a missing API means the
+    // browser genuinely lacks it, and "add to home screen" would be a wild goose chase.
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    box.textContent = (iOS && !isStandalone())
+      ? 'Add Scrye to your home screen first — iOS only allows notifications for installed apps.'
+      : 'Push is not supported by this browser.';
     $('notify').disabled = true;
     return;
   }

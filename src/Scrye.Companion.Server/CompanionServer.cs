@@ -111,6 +111,19 @@ public sealed class CompanionServer : IAsyncDisposable
 
         app.MapGet("/icon.svg", () => Asset(Client.PwaAssets.Icon, "image/svg+xml; charset=utf-8"));
 
+        // The rasters the manifest actually points at, and what Chrome draws in the
+        // notification tray. Unlike the shell these do not change within a build, so they
+        // get a real cache lifetime rather than no-cache — a phone re-fetching the icon on
+        // every launch is pure waste, and unlike app.js there is no stale-protocol hazard.
+        app.MapGet("/icon-192.png", (HttpContext ctx) => IconPng(ctx, Client.PwaAssets.Icon192));
+        app.MapGet("/icon-512.png", (HttpContext ctx) => IconPng(ctx, Client.PwaAssets.Icon512));
+
+        static IResult IconPng(HttpContext ctx, byte[] bytes)
+        {
+            ctx.Response.Headers.CacheControl = "public, max-age=604800";
+            return Results.Bytes(bytes, "image/png");
+        }
+
         // The client needs the application server's public key to call
         // pushManager.subscribe. It is public by definition — it is what identifies us TO
         // the push service — so serving it unauthenticated costs nothing.

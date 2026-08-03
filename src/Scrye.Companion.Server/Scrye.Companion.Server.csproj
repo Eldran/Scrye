@@ -18,4 +18,15 @@
     <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
     <ProjectReference Include="..\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
   </ItemGroup>
+
+  <!--
+    The PWA assets (manifest, service worker, icons) are internal because nothing outside
+    this assembly should be routing to them — but they are exactly the sort of thing that
+    fails silently: a manifest naming an icon that 404s, or a PNG that is not the size it
+    claims, costs installability on Android with no error surfacing anywhere. Opening them
+    to the test assembly is cheaper than making them public or standing up Kestrel.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Scrye.Core.Tests" />
+  </ItemGroup>
 </Project>
