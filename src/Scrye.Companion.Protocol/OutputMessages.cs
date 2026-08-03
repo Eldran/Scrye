@@ -66,3 +66,27 @@ public sealed record OutputBatchMessage(
     [JsonPropertyName("type")]
     public string Type => MessageTypes.OutputBatch;
 }
+
+/// <summary>
+/// Lines a trigger routed into a named capture pane — chat, tells, combat log.
+///
+/// <para><b>Why this is a separate message rather than a <c>pane</c> field on
+/// <see cref="OutputLineDto"/>:</b> capture and gag are independent trigger actions, and the
+/// common chat setup uses both — route to a pane <i>and</i> hide from the main output. A
+/// gagged line never reaches <c>LineReady</c>, so it never enters scrollback and never
+/// appears in an <see cref="OutputBatchMessage"/>. Tagging main-stream lines would therefore
+/// miss precisely the lines a chat view exists to show.</para>
+///
+/// <para>Sequences are real: each capture pane owns a <c>ScrollbackBuffer</c>, so pane lines
+/// have their own monotonic sequence space, per pane. Resume for panes is not implemented
+/// yet — a reconnecting client rebuilds them — but the numbering is already correct for it.</para>
+/// </summary>
+public sealed record PaneOutputMessage(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("pane")] string Pane,
+    [property: JsonPropertyName("styles")] IReadOnlyList<StyleDto> Styles,
+    [property: JsonPropertyName("lines")] IReadOnlyList<OutputLineDto> Lines)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.PaneOutput;
+}

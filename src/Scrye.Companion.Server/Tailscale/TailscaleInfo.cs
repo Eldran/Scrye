@@ -9,11 +9,15 @@ namespace Scrye.Companion.Server.Tailscale;
 /// <param name="Running">Backend state is "Running" — installed but logged out reports false.</param>
 /// <param name="DnsName">MagicDNS name without the trailing dot, e.g. <c>desktop.tail1234.ts.net</c>.</param>
 /// <param name="Detail">Human-readable note when something is missing, for display to the user.</param>
+/// <param name="Login">The tailnet user this node is signed in as, e.g. <c>you@gmail.com</c>.
+/// Matches the <c>Tailscale-User-Login</c> header the proxy sets, so it can be trusted
+/// directly as an allow-list entry.</param>
 public sealed record TailscaleStatus(
     bool Installed,
     bool Running,
     string? DnsName,
-    string? Detail)
+    string? Detail,
+    string? Login = null)
 {
     public static TailscaleStatus NotInstalled(string detail) => new(false, false, null, detail);
 
@@ -71,23 +75,42 @@ public static class TailscaleInfo
             bool running = string.Equals(backend, "Running", StringComparison.Ordinal);
 
             string? dns = null;
-            if (root.TryGetProperty("Self", out JsonElement self) &&
-                self.TryGetProperty("DNSName", out JsonElement d))
+            string? login = null;
+            if (root.TryGetProperty("Self", out JsonElement self))
             {
-                // MagicDNS names come back fully qualified with a trailing dot.
-                dns = d.GetString()?.TrimEnd('.');
-                if (string.IsNullOrWhiteSpace(dns)) dns = null;
+                if (self.TryGetProperty("DNSName", out JsonElement d))
+                {
+                    // MagicDNS names come back fully qualified with a trailing dot.
+                    dns = d.GetString()?.TrimEnd('.');
+                    if (string.IsNullOrWhiteSpace(dns)) dns = null;
+                }
+
+                // Self.UserID indexes into the User map, which holds the LoginName.
+                if (self.TryGetProperty("UserID", out JsonElement uid) &&
+                    root.TryGetProperty("User", out JsonElement users) &&
+                    users.ValueKind == JsonValueKind.Object)
+                {
+                    string key = uid.ValueKind == JsonValueKind.Number
+                        ? uid.GetRawText()
+                        : uid.GetString() ?? "";
+                    if (users.TryGetProperty(key, out JsonElement u) &&
+                        u.TryGetProperty("LoginName", out JsonElement ln))
+                    {
+                        login = ln.GetString();
+                        if (string.IsNullOrWhiteSpace(login)) login = null;
+                    }
+                }
             }
 
             string? detail = running
                 ? (dns is null ? "MagicDNS name unavailable — is MagicDNS enabled?" : null)
                 : $"tailscale is installed but not running (state: {backend ?? "unknown"})";
 
-            return new TailscaleStatus(true, running, dns, detail);
+            return new TailscaleStatus(true, running, dns, detail, login);
         }
         catch (JsonException ex)
         {
-            return new TailscaleStatus(true, false, null, "could not parse tailscale status: " + ex.Message);
+            return new TailscaleStatus(true, false, null, "could not parse tailscale status: " + ex.Message, null);
         }
     }
 

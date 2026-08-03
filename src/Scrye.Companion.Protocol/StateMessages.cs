@@ -53,3 +53,37 @@ public sealed record HudPanelRemovedMessage(
     [JsonPropertyName("type")]
     public string Type => MessageTypes.HudPanelRemoved;
 }
+
+/// <summary>
+/// Client → desktop: a panel button was tapped. <see cref="Action"/> is the opaque id the
+/// plugin runtime put in <c>WidgetSpec.Action</c>; <see cref="PanelId"/> is the panel key
+/// (<c>pluginId|title</c>), from which the desktop recovers which plugin to call.
+///
+/// <para>Without this a streamed panel is a picture: gauges and bars you can read and
+/// buttons you cannot press. It carries no script or command text — only an id the desktop
+/// already published — so it grants a device nothing beyond firing a callback its own
+/// plugins defined. That is why it is not gated like the <c>/</c> console (§7.3).</para>
+///
+/// <para>Only plain <c>button</c> widgets for now. <c>colorgrid</c> cell taps and
+/// <c>input</c> submits have their own runtime entry points and can follow the same shape
+/// when a client needs them.</para>
+/// </summary>
+public sealed record HudActionMessage(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("panelId")] string PanelId,
+    [property: JsonPropertyName("action")] string Action)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.HudAction;
+
+    /// <summary>The plugin that owns the panel — the part of the key before the '|'
+    /// separator that <c>HudPanelViewModel.Key</c> builds. Empty when malformed.</summary>
+    public string PluginId
+    {
+        get
+        {
+            int bar = PanelId.IndexOf('|');
+            return bar > 0 ? PanelId[..bar] : "";
+        }
+    }
+}

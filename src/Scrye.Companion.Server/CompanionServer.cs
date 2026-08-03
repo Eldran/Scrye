@@ -61,11 +61,59 @@ public sealed class CompanionServer : IAsyncDisposable
         WebApplication app = builder.Build();
         app.UseWebSockets();
 
-        // Debug client, served from the same origin as the socket so no page CSP is involved
-        // (a chrome:// or third-party page restricts connect-src and blocks the upgrade).
-        // Unauthenticated on purpose: it is inert markup, and the token is still required to
-        // open the socket. Replaced by the real PWA at §10 step 3.
-        app.MapGet("/", () => Results.Content(DebugClient.Html, "text/html; charset=utf-8"));
+        // Client assets, served from the same origin as the socket so no page CSP is
+        // involved (a chrome:// or third-party page restricts connect-src and blocks the
+        // upgrade). All unauthenticated on purpose: they are inert, and the token is still
+        // required to open the socket.
+        //
+        // Cache-Control: no-cache means "revalidate", not "never store" — the shell may sit
+        // in the service worker's cache but must not go stale against a rebuilt desktop
+        // while the protocol is still moving.
+        static IResult Asset(string body, string type) =>
+            Results.Text(body, type);
+
+        app.MapGet("/", (HttpContext ctx) =>
+        {
+            ctx.Response.Headers.CacheControl = "no-cache";
+            return Asset(Client.AppShell.Html, "text/html; charset=utf-8");
+        });
+
+        app.MapGet("/app.js", (HttpContext ctx) =>
+        {
+            ctx.Response.Headers.CacheControl = "no-cache";
+            return Asset(Client.AppScript.Js, "text/javascript; charset=utf-8");
+        });
+
+        // Must be served from the scope it claims ("/"), or registration fails.
+        app.MapGet("/sw.js", (HttpContext ctx) =>
+        {
+            ctx.Response.Headers.CacheControl = "no-cache";
+            return Asset(Client.PwaAssets.ServiceWorker, "text/javascript; charset=utf-8");
+        });
+
+        app.MapGet("/manifest.webmanifest", () =>
+            Asset(Client.PwaAssets.Manifest, "application/manifest+json; charset=utf-8"));
+
+        app.MapGet("/icon.svg", () => Asset(Client.PwaAssets.Icon, "image/svg+xml; charset=utf-8"));
+
+        // Lets the client find out whether it needs a token *before* opening the socket.
+        // A failed WebSocket handshake gives the browser almost nothing to report — no
+        // status code reaches script — so without this the app could only guess why it
+        // could not connect, and would prompt for a token even when none was required.
+        app.MapGet("/whoami", (HttpContext ctx) =>
+        {
+            string login = ctx.Request.Headers[TailscaleLoginHeader].ToString().Trim();
+            bool viaTailnet = IsTrustedTailnetUser(ctx);
+            return Results.Json(new
+            {
+                authorized = viaTailnet,
+                login = login.Length > 0 ? login : null,
+                needsToken = !viaTailnet,
+            });
+        });
+
+        // The protocol scope from the previous pass, kept for debugging the wire directly.
+        app.MapGet("/debug", () => Asset(DebugClient.Html, "text/html; charset=utf-8"));
 
         app.Map("/companion", async (HttpContext ctx) =>
         {
@@ -95,7 +143,29 @@ public sealed class CompanionServer : IAsyncDisposable
 
     // ---- auth ----------------------------------------------------------------
 
-    private bool IsAuthorized(HttpContext ctx)
+    /// <summary>The tailnet login this request carries, or null. Set by <c>tailscale serve</c>,
+    /// which strips any client-supplied copy first.</summary>
+    internal const string TailscaleLoginHeader = "Tailscale-User-Login";
+
+    private bool IsAuthorized(HttpContext ctx) => IsTrustedTailnetUser(ctx) || HasValidToken(ctx);
+
+    /// <summary>Whether the proxy vouched for a login we allow. This is what lets a phone
+    /// open the tailnet URL and simply work, with no credential to type.</summary>
+    private bool IsTrustedTailnetUser(HttpContext ctx)
+    {
+        if (_options.TrustedTailnetLogins.Count == 0) return false;
+
+        string login = ctx.Request.Headers[TailscaleLoginHeader].ToString().Trim();
+        if (login.Length == 0) return false;
+
+        foreach (string allowed in _options.TrustedTailnetLogins)
+            if (string.Equals(login, allowed.Trim(), StringComparison.OrdinalIgnoreCase))
+                return true;
+
+        return false;
+    }
+
+    private bool HasValidToken(HttpContext ctx)
     {
         string? presented = null;
 

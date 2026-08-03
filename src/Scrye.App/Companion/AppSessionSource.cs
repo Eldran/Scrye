@@ -52,6 +52,16 @@ public sealed class AppSessionSource : ICompanionSessionSource
             return w is null ? CommandSubmitResult.Accepted : w.SubmitText(command, origin);
         });
 
+    public async ValueTask<bool> InvokeHudActionAsync(string sessionId, string pluginId, string actionId) =>
+        await Dispatcher.UIThread.InvokeAsync<bool>(() =>
+        {
+            WorldViewModel? w = Find(sessionId);
+            if (w is null) return false;
+            // Same entry point a desktop click uses, which already posts onto the session
+            // loop before touching plugin Lua — plugin script is loop-thread-only.
+            return w.InvokeHudAction(pluginId, actionId);
+        });
+
     public async ValueTask<OutputBatchMessage?> TryReplayAsync(string sessionId, long afterSequence) =>
         await Dispatcher.UIThread.InvokeAsync<OutputBatchMessage?>(() =>
         {

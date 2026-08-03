@@ -10,6 +10,7 @@ public static class MessageTypes
 {
     // desktop → client
     public const string OutputBatch = "output.batch";
+    public const string PaneOutput = "output.pane";
     public const string StateUpdate = "state.update";
     public const string SessionState = "session.state";
     public const string SessionList = "session.list";
@@ -20,6 +21,7 @@ public static class MessageTypes
 
     // client → desktop
     public const string CommandSend = "command.send";
+    public const string HudAction = "hud.action";
     public const string SessionResume = "session.resume";
     public const string SessionSubscribe = "session.subscribe";
 }

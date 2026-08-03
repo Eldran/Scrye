@@ -31,11 +31,29 @@ public sealed class CompanionController : IAsyncDisposable
     /// can be copied; it becomes the QR payload once pairing lands (§7.1).</summary>
     public string? Token { get; private set; }
 
+    /// <summary>The tailnet login allowed to connect without a token, when one was found.
+    /// Null when Tailscale is absent or signed out.</summary>
+    public string? TrustedLogin { get; private set; }
+
     public async Task StartAsync()
     {
         if (_server is not null) return;
 
-        CompanionServerOptions options = CompanionServerOptions.CreateDefault();
+        // If this machine is signed into a tailnet, trust that identity: `tailscale serve`
+        // strips client-supplied identity headers and sets its own, so a phone reaching us
+        // through the proxy is already authenticated and has nothing to type. The token
+        // remains for loopback and for setups without Tailscale.
+        Scrye.Companion.Server.Tailscale.TailscaleStatus ts =
+            await Scrye.Companion.Server.Tailscale.TailscaleInfo.QueryAsync().ConfigureAwait(true);
+        TrustedLogin = ts is { Running: true, Login: { Length: > 0 } } ? ts.Login : null;
+
+        CompanionServerOptions options = new()
+        {
+            Token = CompanionServerOptions.NewToken(),
+            TrustedTailnetLogins = TrustedLogin is null
+                ? Array.Empty<string>()
+                : new[] { TrustedLogin },
+        };
         Token = options.Token;
 
         var server = new CompanionServer(options, new AppSessionSource(_main));

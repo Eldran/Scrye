@@ -55,6 +55,15 @@ public sealed class CompanionHub
     /// <c>StateStore.Changed</c>.</summary>
     public void PublishState(StateUpdateMessage update) => Broadcast(update.SessionId, update);
 
+    /// <summary>Publish lines a trigger routed into a capture pane. A separate stream from
+    /// <see cref="PublishOutput"/> because a captured line may also be gagged from the main
+    /// output, and would otherwise never reach a client at all.</summary>
+    public void PublishPaneOutput(PaneOutputMessage pane)
+    {
+        if (pane.Lines.Count == 0) return;
+        Broadcast(pane.SessionId, pane);
+    }
+
     public void PublishHudPanel(HudPanelMessage panel) => Broadcast(panel.SessionId, panel);
 
     public void PublishHudPanelRemoved(HudPanelRemovedMessage removed) => Broadcast(removed.SessionId, removed);
@@ -139,6 +148,25 @@ public sealed class CompanionHub
                     ? new ErrorMessage(CompanionErrorCode.PermissionDenied,
                         "this device may not run script console commands", m.SessionId)
                     : null;
+            }
+
+            case MessageTypes.HudAction:
+            {
+                var m = CompanionJson.Deserialize<HudActionMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "missing sessionId");
+                if (!KnownSession(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
+                if (string.IsNullOrEmpty(m.PluginId) || string.IsNullOrEmpty(m.Action))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "malformed panelId or action", m.SessionId);
+
+                // Deliberately NOT behind the scripting permission: the action id was minted
+                // by the desktop's own plugin runtime and published in a panel spec, so a
+                // device can only fire callbacks the user's own plugins already defined.
+                bool ok = await _source.InvokeHudActionAsync(m.SessionId, m.PluginId, m.Action)
+                                       .ConfigureAwait(false);
+                return ok ? null : new ErrorMessage(
+                    CompanionErrorCode.BadRequest, $"no such panel action '{m.Action}'", m.SessionId);
             }
 
             default:

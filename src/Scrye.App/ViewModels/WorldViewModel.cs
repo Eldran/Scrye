@@ -670,6 +670,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         StateInspector.Drain();
     }
 
+    /// <summary>Fire a plugin panel action, exactly as a click on the desktop HUD would.
+    /// Posts onto the session loop first: plugin script is loop-thread-only.</summary>
+    public bool InvokeHudAction(string pluginId, string actionId)
+    {
+        if (string.IsNullOrEmpty(pluginId) || string.IsNullOrEmpty(actionId)) return false;
+        _session.Post(() => _plugins.InvokeAction(pluginId, actionId));
+        return true;
+    }
+
     /// <summary>Send the lines just drained into scrollback on to any connected companion
     /// devices. Called from <see cref="Flush"/>, on the UI thread, immediately after
     /// <c>Scrollback.AddRange</c> — the 33 ms flush already is the batch window, so there is
@@ -694,6 +703,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         if (_pendingRouted.IsEmpty) return;
         bool created = false;
+        // Group this tick's routed lines by pane so the companion gets one frame per pane
+        // rather than one per line, matching how the main output stream batches (§3.1).
+        Dictionary<string, OutputBatchBuilder>? companionBatches =
+            Companion is null ? null : new Dictionary<string, OutputBatchBuilder>(StringComparer.Ordinal);
+
         while (_pendingRouted.TryDequeue(out (string Pane, Line Line) item))
         {
             CapturePaneViewModel? pane = FindPane(item.Pane);
@@ -703,11 +717,29 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 created = true;
             }
             pane.Buffer.Add(item.Line);
+
+            if (companionBatches is not null)
+            {
+                if (!companionBatches.TryGetValue(item.Pane, out OutputBatchBuilder? b))
+                    companionBatches[item.Pane] = b = new OutputBatchBuilder();
+                // Each pane's buffer carries its own sequence space; read it after the add.
+                b.Add(item.Line, pane.Buffer.SequenceAt(pane.Buffer.Count - 1));
+            }
             bool visible = pane.Dock == PaneDock.Floating
                 || ReferenceEquals(pane, SelectedBottomPane)
                 || ReferenceEquals(pane, SelectedRightPane);
             if (!visible) pane.Unread++;
         }
+
+        if (companionBatches is not null && Companion is { } hub)
+        {
+            foreach (KeyValuePair<string, OutputBatchBuilder> kv in companionBatches)
+            {
+                OutputBatchMessage built = kv.Value.Build(SessionId);
+                hub.PublishPaneOutput(new PaneOutputMessage(SessionId, kv.Key, built.Styles, built.Lines));
+            }
+        }
+
         if (created) SaveLayout();
     }
 
@@ -952,7 +984,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             AppendSystem(c.IsRunning
                 ? $"companion server running at {c.Url}"
                 : "companion server stopped");
-            if (c.IsRunning) AppendSystem($"  token: {c.Token}");
+            if (c.IsRunning && c.TrustedLogin is { } who)
+                AppendSystem($"  tailnet login {who} connects without a token");
+            if (c.IsRunning) AppendSystem($"  token (only needed off-tailnet): {c.Token}");
             AppendSystem($"  this world's sessionId: {SessionId}");
             _ = ReportTailscaleAsync(c);
             return;
@@ -981,7 +1015,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         {
             await c.StartAsync();
             AppendSystem($"companion server started at {c.Url}");
-            AppendSystem($"  token: {c.Token}");
+            if (c.TrustedLogin is { } login)
+                AppendSystem($"  tailnet login {login} may connect WITHOUT a token");
+            AppendSystem($"  token (only needed off-tailnet): {c.Token}");
             AppendSystem($"  this world's sessionId: {SessionId}");
             AppendSystem("  usage: .companion status | .companion tailscale | .companion off");
         }

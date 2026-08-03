@@ -31,6 +31,25 @@ public sealed class CompanionServerOptions
     /// arbitrary script" (§7.3).</summary>
     public bool MayRunScripts { get; init; }
 
+    /// <summary>
+    /// Tailnet logins that may connect without a token, e.g. <c>you@gmail.com</c>. Empty
+    /// disables the mechanism entirely.
+    ///
+    /// <para>When <c>tailscale serve</c> proxies a request it <b>strips any client-supplied
+    /// identity headers and sets its own</b>, so a <c>Tailscale-User-Login</c> arriving here
+    /// genuinely came from the proxy and names the tailnet user who made the request. That
+    /// makes it a better credential than a shared token: nothing to type on a phone, nothing
+    /// to leak into scrollback, and it is per-user rather than per-installation.</para>
+    ///
+    /// <para><b>The honest caveat:</b> the header is only trustworthy for traffic that
+    /// actually came through the proxy, and the server cannot distinguish that from another
+    /// local process connecting to the loopback port and setting the header itself. That is
+    /// a smaller hole than it sounds — a hostile process running as you could read the token,
+    /// read Scrye's memory, or drive the client directly — but it is why this is an explicit
+    /// allow-list rather than "trust any Tailscale header".</para>
+    /// </summary>
+    public IReadOnlyList<string> TrustedTailnetLogins { get; init; } = Array.Empty<string>();
+
     /// <summary>Lines included in a snapshot when a resume gap is too large (§6).</summary>
     public int SnapshotLines { get; init; } = 500;
 

@@ -29,6 +29,11 @@ public interface ICompanionSessionSource
     /// triggers, highlights and logging all stop applying (§4).</summary>
     ValueTask<CommandSubmitResult> SubmitCommandAsync(string sessionId, string command, CommandOrigin origin);
 
+    /// <summary>Fire a HUD panel button's plugin callback. Implementations must marshal
+    /// onto the session loop before touching plugin script — the desktop already does this
+    /// for local clicks. Returns false when the panel or plugin is unknown.</summary>
+    ValueTask<bool> InvokeHudActionAsync(string sessionId, string pluginId, string actionId);
+
     /// <summary>Everything a client needs to rebuild from scratch: the session state, the
     /// tail of scrollback, the whole state tree and the current HUD panels. Used when a
     /// resume gap is too large to replay (§6).</summary>

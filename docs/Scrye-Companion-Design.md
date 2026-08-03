@@ -2,6 +2,8 @@
 
 **Status:** Design / proposal · **Last updated:** 2026-08-02
 
+*Rev. 7 — step 3 done: installable PWA on the home screen, and tailnet identity replaces
+token typing (new §7.5). `hud.action` and `output.pane` added to the protocol.*
 *Rev. 6 — step 6 done: reachable from a phone over a real certificate, 2026-08-02.
 Setup walkthrough in `Scrye-Companion-Setup.md`.*
 *Rev. 5 — step 2 built and wired; protocol proven end-to-end from a browser on 2026-08-02.*
@@ -541,6 +543,36 @@ supplied.** A companion server handling a link tap must send it raw for the same
 (The `SEND PROMPT` variant, which puts the action in the input box rather than sending it,
 stays safe by a different route — the user sees the text and has to press Enter themselves.)
 
+### 7.5 Tailnet identity beats a shared token
+
+Shipped 2026-08-02, replacing token entry as the normal path.
+
+`tailscale serve` **strips any client-supplied identity headers and sets its own**, so a
+`Tailscale-User-Login` arriving at the companion server genuinely came from the proxy and
+names the tailnet user who made the request. Scrye reads its own login from
+`tailscale status` at startup and allows exactly that one.
+
+The practical problem this solved was not theoretical: a 43-character token, regenerated on
+every server start, had to be *typed on a phone* — there is no clipboard between a Windows
+PC and an iPhone. That pressure runs one way, toward shorter and weaker tokens. Identity
+headers remove the credential from the interaction entirely.
+
+The token survives as a fallback for loopback testing and for setups without Tailscale.
+`GET /whoami` tells the client which applies, because a failed WebSocket handshake exposes
+no status code to script — without it the app would have to prompt for a credential it may
+not need.
+
+**The honest caveat:** the header is only trustworthy for requests that actually traversed
+the proxy, and the server cannot distinguish those from another local process connecting to
+the loopback port with a forged header. This is a smaller hole than it appears — anything
+running as the user could read the token, read process memory, or drive the desktop client
+directly — but it is why this is an explicit allow-list of one login rather than "trust any
+Tailscale header".
+
+**Consequence for step 4.** Per-device pairing is now less urgent than when this document
+was written, and should be designed as *the answer for devices that are not on the tailnet*
+rather than as the primary mechanism.
+
 ---
 
 ## 8. Frontend: browser first, native maybe later
@@ -643,14 +675,14 @@ the `WorldViewModel`/`MainWindowViewModel` state it taps, with no IPC.
    Started with the temporary `.companion` client command. First-cut posture is **loopback +
    one shared token, plain HTTP** — `127.0.0.1` is a browser secure context, so a PWA works
    for bring-up without a certificate; `permessage-deflate` and TLS come with step 6.
-3. **Browser MVP, as an installable PWA** — a small SPA rendering output, session state
-   and streamed HUD panels, sending `command.send`; plus a manifest and service worker so
-   it installs to the home screen (§8.1). Requires a browser-trusted cert, so in practice
-   step 6 lands alongside this one.
-   *Partly done: a debug page is served at `/` from the companion host — same origin as the
-   socket, so no page CSP is involved. It renders output through the style table, sends
-   commands, and exercises resume. **The concept is proven end-to-end as of 2026-08-02.**
-   It is a protocol scope, not the mobile UI; the PWA still has to be built.*
+3. ~~**Browser MVP, as an installable PWA**~~ — **done 2026-08-02.** Installed to an iPhone
+   home screen and in use. Output pane with ANSI and tappable MXP links, pinned prompt strip,
+   command line with history, directional/action pad, vitals meters bound to state paths;
+   manifest, service worker and icon served from the companion host. Resumes from its last
+   sequence on reconnect and on `visibilitychange`, so backgrounding the phone costs nothing.
+   The protocol scope from the earlier pass remains at `/debug`.
+   *Note: on iOS only **Safari** can install a PWA to the home screen — every browser there
+   uses WebKit and Apple reserves installation for Safari. Chrome cannot do it at all.*
 4. **Pairing & permissions** — QR pairing (§7.1), per-device keys, revocation, the
    paired-devices list, and capture of the phone's Web Push subscription at pairing time.
 5. **Resume & snapshot** — sequence numbers on the output ring buffer + snapshot path (§6).
