@@ -64,9 +64,9 @@ public sealed record HudPanelRemovedMessage(
 /// already published — so it grants a device nothing beyond firing a callback its own
 /// plugins defined. That is why it is not gated like the <c>/</c> console (§7.3).</para>
 ///
-/// <para>Only plain <c>button</c> widgets for now. <c>colorgrid</c> cell taps and
-/// <c>input</c> submits have their own runtime entry points and can follow the same shape
-/// when a client needs them.</para>
+/// <para>Buttons only. <c>colorgrid</c> cell taps and <c>input</c> submits have their own
+/// runtime entry points and so their own messages — <see cref="HudCellMessage"/> and
+/// <see cref="HudSubmitMessage"/>.</para>
 /// </summary>
 public sealed record HudActionMessage(
     [property: JsonPropertyName("sessionId")] string SessionId,
@@ -78,12 +78,49 @@ public sealed record HudActionMessage(
 
     /// <summary>The plugin that owns the panel — the part of the key before the '|'
     /// separator that <c>HudPanelViewModel.Key</c> builds. Empty when malformed.</summary>
-    public string PluginId
+    public string PluginId => PluginIdOf(PanelId);
+
+    internal static string PluginIdOf(string panelId)
     {
-        get
-        {
-            int bar = PanelId.IndexOf('|');
-            return bar > 0 ? PanelId[..bar] : "";
-        }
+        int bar = panelId.IndexOf('|');
+        return bar > 0 ? panelId[..bar] : "";
     }
+}
+
+/// <summary>
+/// Client → desktop: an <c>input</c> widget was submitted. Separate from
+/// <see cref="HudActionMessage"/> because the plugin runtime has a distinct entry point
+/// (<c>InvokeSubmit</c>) that takes the entered text.
+///
+/// <para>Unlike a button this carries <b>user-supplied text</b> — but it reaches a callback
+/// the plugin defined for exactly this widget, never the command pipeline, so it grants no
+/// more than typing into the same field on the desktop would.</para>
+/// </summary>
+public sealed record HudSubmitMessage(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("panelId")] string PanelId,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("text")] string Text)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.HudSubmit;
+
+    public string PluginId => HudActionMessage.PluginIdOf(PanelId);
+}
+
+/// <summary>Client → desktop: a <c>colorgrid</c> cell was tapped. The plugin's callback
+/// receives the cell's column, row and character and maps them back to its own data — a map
+/// square, a chart column — so the coordinates mean nothing outside that plugin.</summary>
+public sealed record HudCellMessage(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("panelId")] string PanelId,
+    [property: JsonPropertyName("action")] string Action,
+    [property: JsonPropertyName("col")] int Col,
+    [property: JsonPropertyName("row")] int Row,
+    [property: JsonPropertyName("ch")] string Ch)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.HudCell;
+
+    public string PluginId => HudActionMessage.PluginIdOf(PanelId);
 }

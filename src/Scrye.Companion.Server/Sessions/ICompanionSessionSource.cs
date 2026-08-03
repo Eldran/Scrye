@@ -34,6 +34,14 @@ public interface ICompanionSessionSource
     /// for local clicks. Returns false when the panel or plugin is unknown.</summary>
     ValueTask<bool> InvokeHudActionAsync(string sessionId, string pluginId, string actionId);
 
+    /// <summary>Fire an <c>input</c> widget's submit callback with the entered text.</summary>
+    ValueTask<bool> InvokeHudSubmitAsync(string sessionId, string pluginId, string actionId, string text);
+
+    /// <summary>Fire a <c>colorgrid</c> cell callback. Coordinates are meaningful only to the
+    /// plugin, which maps them back to its own data.</summary>
+    ValueTask<bool> InvokeHudCellAsync(string sessionId, string pluginId, string actionId,
+                                       int col, int row, string ch);
+
     /// <summary>Everything a client needs to rebuild from scratch: the session state, the
     /// tail of scrollback, the whole state tree and the current HUD panels. Used when a
     /// resume gap is too large to replay (§6).</summary>

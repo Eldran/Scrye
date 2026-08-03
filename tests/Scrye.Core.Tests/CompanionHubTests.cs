@@ -256,6 +256,54 @@ public class CompanionHubTests
             sub, CompanionJson.Serialize(new HudActionMessage(World, "p|Panel", "btn"))));
     }
 
+    [Fact]
+    public async Task HudSubmitCarriesTheTypedText()
+    {
+        var source = new FakeSource();
+        var hub = new CompanionHub(source);
+        CompanionSubscriber sub = hub.Add("a", false);
+
+        object? reply = await hub.HandleClientMessageAsync(sub, CompanionJson.Serialize(
+            new HudSubmitMessage(World, "3s-raid|Auto Raid", "in-target", "wiremouth")));
+
+        Assert.Null(reply);
+        Assert.Equal(("3s-raid", "in-target", "wiremouth"), source.HudSubmits.Single());
+    }
+
+    [Fact]
+    public async Task HudCellCarriesTheCoordinatesVerbatim()
+    {
+        // The plugin maps col/row/ch back to its own data, so the hub must not
+        // reinterpret them — a transposed pair here is a wrong map square there.
+        var source = new FakeSource();
+        var hub = new CompanionHub(source);
+        CompanionSubscriber sub = hub.Add("a", false);
+
+        object? reply = await hub.HandleClientMessageAsync(sub, CompanionJson.Serialize(
+            new HudCellMessage(World, "3s-raid|Map", "grid-1", 4, 2, "#")));
+
+        Assert.Null(reply);
+        Assert.Equal(("3s-raid", "grid-1", 4, 2, "#"), source.HudCells.Single());
+    }
+
+    [Fact]
+    public async Task AMalformedPanelIdIsRejectedForSubmitAndCellToo()
+    {
+        var source = new FakeSource();
+        var hub = new CompanionHub(source);
+        CompanionSubscriber sub = hub.Add("a", false);
+
+        var onSubmit = Assert.IsType<ErrorMessage>(await hub.HandleClientMessageAsync(
+            sub, CompanionJson.Serialize(new HudSubmitMessage(World, "no-separator", "in", "x"))));
+        var onCell = Assert.IsType<ErrorMessage>(await hub.HandleClientMessageAsync(
+            sub, CompanionJson.Serialize(new HudCellMessage(World, "no-separator", "grid", 0, 0, "#"))));
+
+        Assert.Equal(CompanionErrorCode.BadRequest, onSubmit.Code);
+        Assert.Equal(CompanionErrorCode.BadRequest, onCell.Code);
+        Assert.Empty(source.HudSubmits);
+        Assert.Empty(source.HudCells);
+    }
+
     // ---- push subscriptions --------------------------------------------------
 
     [Fact]
@@ -335,6 +383,8 @@ public class CompanionHubTests
 
         public List<(string Command, CommandOrigin Origin)> Commands { get; } = new();
         public List<(string Plugin, string Action)> HudActions { get; } = new();
+        public List<(string Plugin, string Action, string Text)> HudSubmits { get; } = new();
+        public List<(string Plugin, string Action, int Col, int Row, string Ch)> HudCells { get; } = new();
 
         public IReadOnlyList<SessionStateMessage> GetSessions() =>
             new[] { new SessionStateMessage(World, true, "Eldran", "3Scapes") };
@@ -350,6 +400,19 @@ public class CompanionHubTests
         public ValueTask<bool> InvokeHudActionAsync(string sessionId, string pluginId, string actionId)
         {
             HudActions.Add((pluginId, actionId));
+            return ValueTask.FromResult(HudActionSucceeds);
+        }
+
+        public ValueTask<bool> InvokeHudSubmitAsync(string sessionId, string pluginId, string actionId, string text)
+        {
+            HudSubmits.Add((pluginId, actionId, text));
+            return ValueTask.FromResult(HudActionSucceeds);
+        }
+
+        public ValueTask<bool> InvokeHudCellAsync(string sessionId, string pluginId, string actionId,
+                                                  int col, int row, string ch)
+        {
+            HudCells.Add((pluginId, actionId, col, row, ch));
             return ValueTask.FromResult(HudActionSucceeds);
         }
 

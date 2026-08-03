@@ -22,6 +22,8 @@ public static class MessageTypes
     // client → desktop
     public const string CommandSend = "command.send";
     public const string HudAction = "hud.action";
+    public const string HudSubmit = "hud.submit";
+    public const string HudCell = "hud.cell";
     public const string SessionResume = "session.resume";
     public const string SessionSubscribe = "session.subscribe";
     public const string PushSubscribe = "push.subscribe";

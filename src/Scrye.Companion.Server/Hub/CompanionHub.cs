@@ -173,6 +173,38 @@ public sealed class CompanionHub
                     CompanionErrorCode.BadRequest, $"no such panel action '{m.Action}'", m.SessionId);
             }
 
+            case MessageTypes.HudSubmit:
+            {
+                var m = CompanionJson.Deserialize<HudSubmitMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "missing sessionId");
+                if (!KnownSession(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
+                if (string.IsNullOrEmpty(m.PluginId) || string.IsNullOrEmpty(m.Action))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "malformed panelId or action", m.SessionId);
+
+                bool ok = await _source.InvokeHudSubmitAsync(m.SessionId, m.PluginId, m.Action, m.Text ?? "")
+                                       .ConfigureAwait(false);
+                return ok ? null : new ErrorMessage(
+                    CompanionErrorCode.BadRequest, $"no such panel input '{m.Action}'", m.SessionId);
+            }
+
+            case MessageTypes.HudCell:
+            {
+                var m = CompanionJson.Deserialize<HudCellMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "missing sessionId");
+                if (!KnownSession(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
+                if (string.IsNullOrEmpty(m.PluginId) || string.IsNullOrEmpty(m.Action))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "malformed panelId or action", m.SessionId);
+
+                bool ok = await _source.InvokeHudCellAsync(
+                    m.SessionId, m.PluginId, m.Action, m.Col, m.Row, m.Ch ?? "").ConfigureAwait(false);
+                return ok ? null : new ErrorMessage(
+                    CompanionErrorCode.BadRequest, $"no such panel grid '{m.Action}'", m.SessionId);
+            }
+
             case MessageTypes.PushSubscribe:
             {
                 var m = CompanionJson.Deserialize<PushSubscribeMessage>(json);

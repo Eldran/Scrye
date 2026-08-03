@@ -696,6 +696,23 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         return true;
     }
 
+    /// <summary>Fire an input widget's submit callback with text entered on a companion
+    /// device — the same path a desktop Enter takes.</summary>
+    public bool InvokeHudSubmit(string pluginId, string actionId, string text)
+    {
+        if (string.IsNullOrEmpty(pluginId) || string.IsNullOrEmpty(actionId)) return false;
+        _session.Post(() => _plugins.InvokeSubmit(pluginId, actionId, text ?? ""));
+        return true;
+    }
+
+    /// <summary>Fire a colorgrid cell callback from a companion tap.</summary>
+    public bool InvokeHudCell(string pluginId, string actionId, int col, int row, string ch)
+    {
+        if (string.IsNullOrEmpty(pluginId) || string.IsNullOrEmpty(actionId)) return false;
+        _session.Post(() => _plugins.InvokeCellAction(pluginId, actionId, col, row, ch ?? ""));
+        return true;
+    }
+
     /// <summary>Send the lines just drained into scrollback on to any connected companion
     /// devices. Called from <see cref="Flush"/>, on the UI thread, immediately after
     /// <c>Scrollback.AddRange</c> — the 33 ms flush already is the batch window, so there is

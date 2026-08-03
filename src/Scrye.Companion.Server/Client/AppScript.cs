@@ -404,15 +404,26 @@ function buildBarList(rows) {
   return host;
 }
 
-function buildGrid(text, palette) {
+function buildGrid(text, palette, panelId, action) {
   const host = el('div', 'grid');
-  for (const line of (text || '').split('\n')) {
+  const lines = (text || '').split('\n');
+  for (let r = 0; r < lines.length; r++) {
     const row = el('div');
-    for (const ch of line) {
-      const c = el('span', null, ch);
-      const col = palette && palette[ch];
-      if (col) c.style.color = col;
-      row.appendChild(c);
+    const chars = [...lines[r]];
+    for (let c = 0; c < chars.length; c++) {
+      const ch = chars[c];
+      const cell = el('span', null, ch);
+      const colour = palette && palette[ch];
+      if (colour) cell.style.color = colour;
+      if (action) {
+        // Coordinates go back verbatim; only the plugin knows what a cell means.
+        cell.style.cursor = 'pointer';
+        cell.dataset.c = String(c);
+        cell.dataset.r = String(r);
+        cell.addEventListener('click', () =>
+          send({ type:'hud.cell', sessionId, panelId, action, col:c, row:r, ch }));
+      }
+      row.appendChild(cell);
     }
     host.appendChild(row);
   }
@@ -489,18 +500,38 @@ function buildWidget(panelId, w, panelFg) {
 
     case 'colorgrid': {
       const host = el('div');
-      bind(w.bind, v => { host.replaceChildren(buildGrid(v, w.palette)); });
+      bind(w.bind, v => { host.replaceChildren(buildGrid(v, w.palette, panelId, w.action)); });
       return host;
     }
 
     case 'input': {
-      // The submit callback has its own runtime entry point (InvokeSubmit) with no wire
-      // message yet, so this renders read-only rather than pretending to work.
-      const box = el('div');
-      box.appendChild(el('div', 'w-label', w.text || ''));
-      const cur = el('div', 'w-note', '');
-      bind(w.bind, v => { cur.textContent = v ? `${v} (read-only on mobile)` : '(read-only on mobile)'; });
-      box.appendChild(cur);
+      const box = el('div', 'w-input');
+      if (w.text) box.appendChild(el('div', 'w-label', w.text));
+
+      const row = el('div', 'w-inputrow');
+      const field = document.createElement('input');
+      field.type = 'text';
+      field.autocomplete = 'off';
+      field.autocapitalize = 'off';
+      field.spellcheck = false;
+      field.enterKeyHint = 'send';
+
+      const submit = () => {
+        if (!w.action) return;
+        send({ type:'hud.submit', sessionId, panelId, action: w.action, text: field.value });
+      };
+
+      const go = el('button', null, 'Set');
+      if (w.action) go.addEventListener('click', submit); else go.disabled = true;
+      field.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+
+      // The bind path seeds the field and tracks it, matching the desktop. Skip the update
+      // while the field has focus, so a state echo cannot overwrite what is being typed.
+      bind(w.bind, v => { if (document.activeElement !== field) field.value = v; });
+
+      row.appendChild(field);
+      row.appendChild(go);
+      box.appendChild(row);
       return box;
     }
 

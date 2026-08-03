@@ -1,6 +1,6 @@
 # Scrye — User & Plugin Guide
 
-Scrye is a cross‑platform MUD client (C# / .NET 10, Avalonia UI). It connects to text MUDs, renders their ANSI/MXP output, and gives you the usual automation — triggers, aliases, timers, macros, highlights — plus a profile system, themeable UI, capture panes, the MIP feed, and a Lua/JavaScript **plugin** system that can add commands and live **HUD panels**.
+Scrye is a cross‑platform MUD client (C# / .NET 10, Avalonia UI). It connects to text MUDs, renders their ANSI/MXP output, and gives you the usual automation — triggers, aliases, timers, macros, highlights — plus a profile system, themeable UI, capture panes, the MIP feed, a Lua/JavaScript **plugin** system that can add commands and live **HUD panels**, and a **mobile companion** that mirrors all of it to your phone.
 
 This guide has two parts:
 
@@ -77,6 +77,69 @@ Plugins add commands and HUD panels. Manage them in the **Plugins** panel for a 
 - Each plugin can be **enabled / disabled / reloaded / removed**.
 - **Reload** re‑reads the plugin's script from disk, so you can edit a Lua plugin and reload it live — no restart needed (this works for script‑only changes; changes to Scrye itself need a rebuild).
 
+## Mobile companion
+
+Scrye can serve a small web app to your phone so you can read output, send commands, watch your HUD panels and get push notifications while you're away from the PC. The desktop stays in charge: it holds the connection, runs the triggers and plugins, and the phone is just another view of it. Close the phone, come back an hour later, and it resumes where it left off — or takes a fresh snapshot if it's been away too long.
+
+### Turning it on
+
+In the world's command line:
+
+| Command | What it does |
+|---|---|
+| `.companion` | Start the server. Prints the URL, the access token, and this world's session id. |
+| `.companion status` | Is it running, where, how many phones are registered for notifications. |
+| `.companion tailscale` | How to reach it from outside the house — prints the exact `tailscale serve` command to run. |
+| `.companion notify` | List everything in this world that can raise a notification. |
+| `.companion notify test` | Send a test notification to every registered phone. |
+| `.companion off` | Stop the server. |
+
+The server binds to **loopback only**. On the same machine that's `http://127.0.0.1:4747`; to reach it from a phone you need [Tailscale](https://tailscale.com) in front of it, which also gives you HTTPS (iOS won't allow notifications or home‑screen install without it). `.companion tailscale` prints the one command you need; the full walkthrough — including the login and consent steps that aren't obvious — is in **`docs/Scrye-Companion-Setup.md`**.
+
+Once Tailscale is serving, the phone URL looks like `https://desktop-xxxx.your-tailnet.ts.net/`. If the phone is signed into the same tailnet, Scrye recognises it by its Tailscale login and **you never type the token**. The token is the fallback for anything off the tailnet, and it changes every time the server starts.
+
+### Putting it on the home screen
+
+Do this in **Safari** — Chrome on iOS cannot install web apps, and notifications on iOS only work from an installed app.
+
+1. Open the `https://…ts.net/` URL in Safari.
+2. Tap the **Share** button, scroll down, tap **Add to Home Screen**.
+3. Launch it from the home‑screen icon. It runs full‑screen with no browser chrome.
+
+### Using it
+
+Three tabs across the top:
+
+- **Output** — the game's text, in colour, with a command line, a **↑** history button and a command pad underneath.
+- **Chat** — your capture panes (Chats, and any others plugins route into), each on its own sub‑tab.
+- **Panels** — your HUD panels, rendered from the same specs the desktop uses. Gauges, bars and text update live; buttons, input fields and colorgrid cells are all tappable and fire the same plugin callbacks they do on the desktop.
+
+The header shows the connection dot, the character, and vitals. The **⋯** menu switches worlds and enables notifications.
+
+One deliberate restriction: the phone **cannot run script**. Commands starting with `/` (the script console) are rejected from a companion device. Everything else — commands, aliases, sequences, panel buttons — works normally.
+
+### Notifications
+
+Tap **⋯ → Enable notifications** on the phone and accept the iOS prompt. Then `.companion notify test` from the desktop to confirm it arrives.
+
+What actually fires one:
+
+- **Triggers** with **Notify** ticked. `.companion notify` lists them for the current world, including any that are currently disabled.
+- **Plugins** calling `scrye.notify()`. These can't be enumerated (plugin code is arbitrary), so the list mentions them but can't name them.
+
+On 3Scapes, the **3s-chat** plugin is the usual source. It notifies on **tells by default** and on nothing else, so your pocket stays quiet during ordinary channel chatter:
+
+| Command | What it does |
+|---|---|
+| `chat notify` | Show what currently notifies. |
+| `chat notify tells off` \| `on` | Turn tell notifications off or back on. |
+| `chat notify <channel>` | Also notify for that channel. |
+| `chat unnotify <channel>` | Stop notifying for that channel. |
+| `chat watch <name>` | Notify (and beep) when that name appears in any chat message. |
+| `chat unwatch <name>` / `chat watched` | Remove one / list them. |
+
+All of these persist per character.
+
 ## Where files live
 
 Scrye stores its data under your user profile:
@@ -89,6 +152,8 @@ Scrye stores its data under your user profile:
 | Crash / session logs | `%APPDATA%/Scrye/logs` |
 | User plugins | `%APPDATA%/Scrye/plugins` (also loaded from the `plugins` folder next to the app) |
 | Sounds | `%APPDATA%/Scrye/sounds` |
+| Companion push signing key | `%APPDATA%/Scrye/companion-vapid.json` (generated once; deleting it un‑registers every phone) |
+| Registered phones | `%APPDATA%/Scrye/companion-push.json` |
 
 (On macOS/Linux "%APPDATA%" maps to the platform's application‑data folder.)
 

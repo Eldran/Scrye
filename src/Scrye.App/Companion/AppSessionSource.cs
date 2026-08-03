@@ -62,6 +62,15 @@ public sealed class AppSessionSource : ICompanionSessionSource
             return w.InvokeHudAction(pluginId, actionId);
         });
 
+    public async ValueTask<bool> InvokeHudSubmitAsync(string sessionId, string pluginId, string actionId, string text) =>
+        await Dispatcher.UIThread.InvokeAsync<bool>(() =>
+            Find(sessionId)?.InvokeHudSubmit(pluginId, actionId, text) ?? false);
+
+    public async ValueTask<bool> InvokeHudCellAsync(string sessionId, string pluginId, string actionId,
+                                                    int col, int row, string ch) =>
+        await Dispatcher.UIThread.InvokeAsync<bool>(() =>
+            Find(sessionId)?.InvokeHudCell(pluginId, actionId, col, row, ch) ?? false);
+
     public async ValueTask<OutputBatchMessage?> TryReplayAsync(string sessionId, long afterSequence) =>
         await Dispatcher.UIThread.InvokeAsync<OutputBatchMessage?>(() =>
         {

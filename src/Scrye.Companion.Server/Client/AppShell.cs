@@ -142,6 +142,15 @@ internal static class AppShell
   .barrow .track { height:8px; border-radius:4px; background:#1c232c; overflow:hidden; display:flex; }
   .barrow .track i { display:block; height:100%; }
   .grid { font-size:11px; line-height:1.05; white-space:pre; overflow-x:auto; }
+  .grid span { display:inline-block; min-width:0.62em; }
+  .w-inputrow { display:flex; gap:6px; margin-top:4px; }
+  .w-inputrow input { flex:1; min-width:0; font:inherit; font-size:13px; padding:7px 8px;
+                      border-radius:7px; background:var(--bg); color:var(--fg);
+                      border:1px solid #2a3140; }
+  .w-inputrow input:focus { outline:none; border-color:var(--accent); }
+  .w-inputrow button { flex:0 0 auto; padding:7px 12px; border-radius:7px; border:1px solid #2a3140;
+                       background:var(--bg); color:var(--fg); font:inherit; font-size:13px; }
+  .w-inputrow button[disabled] { opacity:.45; }
   .w-note { font-size:11px; color:var(--dim); font-style:italic; }
 
   /* ---- setup sheet ---- */
