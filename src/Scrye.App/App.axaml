@@ -28,6 +28,12 @@
         <SolidColorBrush x:Key="ScryeText" Color="#D6DEE8" />
         <SolidColorBrush x:Key="ScryeTextDim" Color="#8A97A8" />
         <SolidColorBrush x:Key="ScryeAccent" Color="#35C4D6" />
+        <!-- Semantic status colours. Also the desktop resolution of the plugin API's
+             ThemeToken.Success/Warning/Error/Info names. -->
+        <SolidColorBrush x:Key="ScryeSuccess" Color="#4CBB6C" />
+        <SolidColorBrush x:Key="ScryeWarning" Color="#E0A830" />
+        <SolidColorBrush x:Key="ScryeError" Color="#E05050" />
+        <SolidColorBrush x:Key="ScryeInfo" Color="#5AA8E0" />
     </Application.Resources>
 
     <Application.Styles>

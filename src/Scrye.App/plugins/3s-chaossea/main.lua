@@ -53,9 +53,11 @@ local goal_found = false
 local room_goal_idx = nil      -- index in `goals` of the best match seen this room
 local room_goal_word = nil     -- the matched word, acted on at the prompt
 local excluded = {}            -- mob long names never to attack
+local party = {}               -- lowercased group member names: seeing one is NOT "a player is here"
 local steps_done = 0
 local seanum = 1
 local sea_time = nil           -- `now` value when the current sea was entered
+local sea_started_here = false -- true only if THIS session started the sea (see cs_new_sea)
 local now = 0                  -- seconds since plugin load (1 s ticker)
 
 local cs_flags = { item = false, gold = false, player = false }
@@ -63,7 +65,8 @@ local cs_flags = { item = false, gold = false, player = false }
 -- forward declarations (mutually recursive)
 local cs_draw, cs_step, cs_advance, mark_dirty
 
-local function note(s) scrye.print(s) end
+-- the original drew ":: CSS ::" in red/grey/red before every message
+local function note(s) scrye.print("@{#FF2E88,bold}::@{} @{#21E6FF}CSS@{} @{#FF2E88,bold}::@{} " .. s) end
 
 local function parse_goals()
   goals = {}
@@ -199,6 +202,8 @@ local function load_state()
   end
   local exl = scrye.store.get("excluded")
   if exl then for n in exl:gmatch("[^\n]+") do excluded[n] = true end end
+  local pty = scrye.store.get("party")
+  if pty then for n in pty:gmatch("[^\n]+") do party[n] = true end end
   killname = scrye.store.get("killname") or "mutant"
   goal = scrye.store.get("goal") or "cask portal"
   parse_goals()
@@ -209,6 +214,38 @@ local function load_state()
   local se = tonumber(scrye.store.get("sea_elapsed") or "")
   if se then sea_time = now - se end
   if not get_room(pos) then add_room(pos) end
+end
+
+-- ---------- party whitelist ----------
+-- The MUSHclient version read the area-bot plugin's "party" variable, which Scrye has
+-- no equivalent for (no cross-plugin reads), so the whitelist had no producer and every
+-- =P= line stopped the bot killing. Names are kept here instead; a world variable named
+-- "party" is still honoured if anything else sets one.
+
+local function party_list()
+  local t = {}
+  for n in pairs(party) do t[#t + 1] = n end
+  table.sort(t)
+  return t
+end
+
+local function save_party()
+  scrye.store.set("party", table.concat(party_list(), "\n"))
+end
+
+local function in_party(name)
+  local low = (name or ""):lower()
+  for member in pairs(party) do
+    if low:find(member, 1, true) then return true end
+  end
+  local wv = scrye.getVariable("party")
+  if wv ~= nil and wv ~= "" then
+    for member in wv:gmatch("[^\n,]+") do
+      member = member:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+      if member ~= "" and low:find(member, 1, true) then return true end
+    end
+  end
+  return false
 end
 
 -- ---------- BFS through known rooms, returns dir list ----------
@@ -431,12 +468,7 @@ end
 
 local function cs_on_player(name)
   if not enabled then return end
-  local party = scrye.getVariable("party")
-  if party ~= nil and party ~= "" then
-    for member in party:gmatch("[^\n]+") do
-      if name:find(member, 1, true) then return end
-    end
-  end
+  if in_party(name) then return end
   cs_flags.player = true
 end
 
@@ -737,7 +769,11 @@ local function cs_new_sea()
   -- the game's `unsetsea` only works once the sea is 60 min old; refuse until then so
   -- we never fire the sequence early (which would leave you in the same sea). When there
   -- is no active timer we can't tell the age, so allow it and let the game decide.
-  if sea_time then
+  -- `now` is seconds since plugin load, not wall clock, so a sea_elapsed restored from
+  -- the store stops ageing while Scrye is closed. Only enforce the 60 min guard when we
+  -- started this sea in this session and can therefore trust the clock; otherwise let the
+  -- game reject an early `unsetsea` itself (which is what the MUSHclient version did).
+  if sea_time and sea_started_here then
     local elm = math.floor((now - sea_time) / 60)
     if elm < 60 then
       note(string.format("sea only %dm old - new sea in %dm (unsetsea needs 60m)", elm, 60 - elm))
@@ -751,6 +787,7 @@ local function cs_new_sea()
   scrye.after(3, function() scrye.send("setsea " .. seanum) end)
   scrye.after(4, function() scrye.send("enter sea") end)
   sea_time = now   -- start the sea-age clock
+  sea_started_here = true
   cs_last_sea_min = nil
   cs_draw()
 end
@@ -894,6 +931,7 @@ function cs_interface(args)
     note("  cs delay <secs>       pause after killing blows (default 2.5s)")
     note("  cs rest <seid> [secs] rest when Seid drops below <seid> (0 = off)")
     note("  cs seanum <n>         set the sea number (1-120) for New Sea")
+    note("  cs party <names>      group members to ignore (comma separated; 'clear' to reset)")
     note("  cs pause              hold everything / continue (also the Pause button)")
   elseif args == "enable" then
     enabled = true
@@ -971,6 +1009,24 @@ function cs_interface(args)
     elseif parts[1] == "exclude" then
       local name = args:gsub("^exclude%s+", "")
       excluded[name] = true; note("excluded: " .. name)
+    elseif parts[1] == "party" then
+      local rest = args:gsub("^party%s*", "")
+      if rest == "" then
+        local l = party_list()
+        note("party (mobs are still fought when these are in the room): "
+          .. (#l > 0 and table.concat(l, ", ") or "(nobody)"))
+      elseif rest:lower() == "clear" then
+        party = {}; save_party(); note("party list cleared")
+      else
+        local added = {}
+        for n in rest:gmatch("[^,]+") do
+          n = n:gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if n ~= "" then party[n] = true; added[#added + 1] = n end
+        end
+        save_party()
+        note("party: " .. table.concat(party_list(), ", ")
+          .. (#added > 0 and ("   (added " .. table.concat(added, ", ") .. ")") or ""))
+      end
     elseif parts[1] == "seanum" then
       local n = tonumber(parts[2])
       if n and n >= 1 and n <= 120 then
@@ -1016,6 +1072,13 @@ scrye.addAlias{ pattern = [[^cs(?:\s+(.*))?$]], regex = true,
 -- ---------- timers ----------
 scrye.every(1, function() now = now + 1 end)   -- the clock (no os.time in Scrye)
 scrye.every(5, cs_watchdog)
+
+-- MUSHclient called OnPluginSaveState on world save/close; Scrye has no such hook, so
+-- flush the 3 s debounce when the world goes away rather than losing the last edits.
+scrye.onDisconnect(function()
+  if dirty_timer then scrye.cancel(dirty_timer); dirty_timer = nil end
+  save_state()
+end)
 
 -- ---------- startup (was OnPluginInstall) ----------
 load_state()

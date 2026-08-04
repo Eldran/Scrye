@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
@@ -16,6 +17,12 @@ public readonly record struct GridCell(int Col, int Row, char Ch);
 /// Cell size adapts to the available width (min 3, max 12 px) with a 1px gap so each
 /// cell reads as its own tile — the Avalonia successor to MUSHclient miniwindow maps.
 /// Unknown characters render dark; whitespace renders as background.
+///
+/// <para>Characters listed in <see cref="LabelChars"/> also get drawn as a letter on top of
+/// their tile, in black or white depending on how light the tile is. A colour alone says
+/// "something is here"; the letter says what — which is what the legend under these charts
+/// has always been compensating for. Letters are skipped when the cells are too small to
+/// hold one, so a dense grid degrades to plain tiles rather than to mush.</para>
 /// </summary>
 public class ColorGridView : Control
 {
@@ -30,7 +37,19 @@ public class ColorGridView : Control
     public static readonly StyledProperty<ICommand?> CellCommandProperty =
         AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(CellCommand));
 
+    /// <summary>Characters that get a letter drawn on their tile (e.g. "SXHWTI&gt;*B").
+    /// Empty means tiles only.</summary>
+    public static readonly StyledProperty<string> LabelCharsProperty =
+        AvaloniaProperty.Register<ColorGridView, string>(nameof(LabelChars), "");
+
     public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
+    public string LabelChars { get => GetValue(LabelCharsProperty); set => SetValue(LabelCharsProperty, value); }
+
+    /// <summary>Below this cell size a letter is illegible, so we draw tiles only.</summary>
+    private const double MinLabelCell = 7;
+
+    private static readonly ImmutableSolidColorBrush LabelDark = new(Color.FromRgb(0x08, 0x06, 0x14));
+    private static readonly ImmutableSolidColorBrush LabelLight = new(Color.FromRgb(0xF4, 0xEF, 0xFF));
 
     private static readonly ImmutableSolidColorBrush Unknown = new(Color.FromRgb(0x28, 0x28, 0x28));
     private readonly Dictionary<char, IImmutableBrush> _brushes = new();
@@ -38,7 +57,7 @@ public class ColorGridView : Control
     static ColorGridView()
     {
         AffectsMeasure<ColorGridView>(GridTextProperty);
-        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty);
+        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty, LabelCharsProperty);
     }
 
     public string GridText { get => GetValue(GridTextProperty); set => SetValue(GridTextProperty, value); }
@@ -76,6 +95,10 @@ public class ColorGridView : Control
         if (CellCommand is not null)
             context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
+        string labels = LabelChars ?? "";
+        bool drawLabels = labels.Length > 0 && cell >= MinLabelCell;
+        double fontSize = System.Math.Floor(cell * 0.78);
+
         for (int r = 0; r < rows.Length; r++)
         {
             string row = rows[r];
@@ -85,9 +108,40 @@ public class ColorGridView : Control
                 if (ch == ' ') continue;
                 context.FillRectangle(BrushFor(ch, palette),
                     new Rect(c * cell, r * cell, cell - 1, cell - 1));
+
+                if (!drawLabels || labels.IndexOf(ch) < 0) continue;
+                Color tile = palette is not null && palette.TryGetValue(ch, out Color pc)
+                    ? pc : Color.FromRgb(0x28, 0x28, 0x28);
+                FormattedText ft = LabelFor(ch, tile, fontSize);
+                // centre in the tile (the tile is cell-1 wide because of the 1px gap)
+                context.DrawText(ft, new Point(
+                    c * cell + (cell - 1 - ft.Width) / 2,
+                    r * cell + (cell - 1 - ft.Height) / 2));
             }
         }
     }
+
+    // FormattedText is not cheap to build, and a 16x16 chart redraws on every feed tick, so
+    // cache per (char, ink). The ink only has two values, so the cache stays tiny.
+    private readonly Dictionary<(char, bool), FormattedText> _labels = new();
+    private double _labelSize;
+
+    private FormattedText LabelFor(char ch, Color tile, double fontSize)
+    {
+        if (fontSize != _labelSize) { _labels.Clear(); _labelSize = fontSize; }
+        bool onLight = IsLight(tile);
+        if (_labels.TryGetValue((ch, onLight), out FormattedText? cached)) return cached;
+        var ft = new FormattedText(ch.ToString(), CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
+            new Typeface("Cascadia Mono, Consolas, monospace", FontStyle.Normal, FontWeight.Bold),
+            fontSize, onLight ? LabelDark : LabelLight);
+        _labels[(ch, onLight)] = ft;
+        return ft;
+    }
+
+    /// <summary>Perceived lightness (ITU-R BT.601), which tracks how bright a colour looks far
+    /// better than a raw RGB average — the neon cyans and limes here are light despite their
+    /// modest red channel.</summary>
+    private static bool IsLight(Color c) => (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) > 140;
 
     private IImmutableBrush BrushFor(char ch, Dictionary<char, Color>? palette)
     {
@@ -102,7 +156,7 @@ public class ColorGridView : Control
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == PaletteProperty) _brushes.Clear();   // palette swap: rebuild brush cache
+        if (change.Property == PaletteProperty) { _brushes.Clear(); _labels.Clear(); }   // palette swap: rebuild caches
         if (change.Property == CellCommandProperty) InvalidateVisual();   // toggle hit-test background
     }
 

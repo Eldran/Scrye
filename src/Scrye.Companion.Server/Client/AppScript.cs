@@ -343,6 +343,39 @@ const panelTab = new Map();      // panelId -> selected tab index
 const GAUGE_HEALTHY = '#35c4d6', GAUGE_WARN = '#e0a830', GAUGE_CRIT = '#e05050';
 const BAR_REFINED = '#46b45a', BAR_RAW = '#e0a020';
 
+// Semantic theme tokens (Scrye.Core.Plugins.ThemeToken). A plugin colour is either a #RRGGBB
+// literal or one of these names; the name resolves against whichever host is rendering, so the
+// SAME spec follows the desktop colour scheme there and the phone's palette here. Values come
+// from the stylesheet's custom properties rather than being duplicated in JS, so restyling the
+// PWA does not require touching this file.
+const THEME_VARS = {
+  accent: '--accent', text: '--fg', dim: '--dim', bg: '--bg', panel: '--panel',
+  panelalt: '--tok-panelalt', inset: '--tok-inset', line: '--line',
+  success: '--tok-ok', warning: '--warn', error: '--bad', info: '--tok-info',
+};
+
+let themeCache = null;
+
+// Resolve a plugin colour string to something CSS accepts, or '' when it names nothing we know
+// (so the caller leaves the element's inherited colour alone rather than painting it wrong).
+function colour(v) {
+  if (!v) return '';
+  const s = String(v).trim();
+  if (s[0] === '#') return s;
+  if (!themeCache) themeCache = getComputedStyle(document.documentElement);
+  const varName = THEME_VARS[s.toLowerCase()];
+  if (!varName) return '';
+  return (themeCache.getPropertyValue(varName) || '').trim();
+}
+
+// A palette (char -> colour) with every value resolved once, for colorgrid.
+function resolvePalette(p) {
+  if (!p) return p;
+  const out = {};
+  for (const k of Object.keys(p)) out[k] = colour(p[k]) || p[k];
+  return out;
+}
+
 function bind(path, fn) {
   if (!path) return;
   if (!binders.has(path)) binders.set(path, []);
@@ -368,9 +401,10 @@ function el(tag, cls, text) {
   return e;
 }
 
-function gaugeColour(ratio, colour, dim) {
+function gaugeColour(ratio, spec, dim) {
+  const resolved = colour(spec);
   if (dim) {
-    const base = colour || '#46b45a';
+    const base = resolved || '#46b45a';
     const b = 0.30 + 0.70 * ratio;          // brightness 30% empty -> 100% full
     const n = parseInt(base.slice(1), 16);
     const r = Math.round(((n >> 16) & 255) * b);
@@ -378,7 +412,7 @@ function gaugeColour(ratio, colour, dim) {
     const bl = Math.round((n & 255) * b);
     return `rgb(${r},${g},${bl})`;
   }
-  if (colour) return colour;
+  if (resolved) return resolved;
   return ratio >= 0.5 ? GAUGE_HEALTHY : ratio >= 0.25 ? GAUGE_WARN : GAUGE_CRIT;
 }
 
@@ -435,9 +469,42 @@ function buildGrid(text, palette, panelId, action) {
   return host;
 }
 
+function buildTable(rows, sep, cols, align, dimTrail, fg) {
+  const table = el('table', dimTrail ? 'w-table dimtrail' : 'w-table');
+  if (fg) table.style.color = fg;
+  const cls = i => {
+    const a = (align[i] || 'l').toLowerCase();
+    return a === 'r' ? 'a-r' : a === 'c' ? 'a-c' : null;
+  };
+
+  if (cols) {
+    const head = el('tr');
+    cols.forEach((c, i) => head.appendChild(el('th', cls(i), c)));
+    const thead = el('thead');
+    thead.appendChild(head);
+    table.appendChild(thead);
+  }
+
+  const body = el('tbody');
+  // Trailing blank lines are dropped so a plugin ending its composed value with a newline
+  // doesn't leave an empty row (matching DataTableView).
+  const lines = (rows || '').split('\n');
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const width = cols ? cols.length : lines.reduce((n, l) => Math.max(n, l.split(sep).length), 0);
+
+  for (const line of lines) {
+    const cells = line.split(sep);
+    const tr = el('tr');
+    for (let i = 0; i < width; i++) tr.appendChild(el('td', cls(i), cells[i] ?? ''));
+    body.appendChild(tr);
+  }
+  table.appendChild(body);
+  return table;
+}
+
 function buildWidget(panelId, w, panelFg) {
   const type = (w.type || 'label').toLowerCase();
-  const fg = w.color || panelFg;
+  const fg = colour(w.color || panelFg);
 
   switch (type) {
     case 'button':
@@ -473,7 +540,7 @@ function buildWidget(panelId, w, panelFg) {
         fill.style.width = (ratio * 100) + '%';
         // progress honours an explicit colour only; gauge falls back to the ramp.
         fill.style.background = type === 'progress'
-          ? (w.color || GAUGE_HEALTHY)
+          ? (colour(w.color) || GAUGE_HEALTHY)
           : gaugeColour(ratio, w.color, !!w.dim);
         readout.textContent = `${Math.round(val)}/${Math.round(max)}`;
       };
@@ -505,7 +572,21 @@ function buildWidget(panelId, w, panelFg) {
 
     case 'colorgrid': {
       const host = el('div');
-      bind(w.bind, v => { host.replaceChildren(buildGrid(v, w.palette, panelId, w.action)); });
+      const pal = resolvePalette(w.palette);
+      bind(w.bind, v => { host.replaceChildren(buildGrid(v, pal, panelId, w.action)); });
+      return host;
+    }
+
+    // list and table are the same renderer, as on the desktop: a list is a headerless
+    // two-column table whose trailing column is dimmed and right-aligned.
+    case 'list':
+    case 'table': {
+      const host = el('div');
+      const sep = w.separator || '\t';
+      const cols = Array.isArray(w.columns) && w.columns.length ? w.columns : null;
+      const align = w.align || (type === 'list' ? 'lr' : '');
+      const dimTrail = type === 'list';
+      bind(w.bind, v => { host.replaceChildren(buildTable(v, sep, cols, align, dimTrail, fg)); });
       return host;
     }
 
@@ -551,11 +632,12 @@ function buildWidget(panelId, w, panelFg) {
 
 function buildPanel(panelId, spec) {
   const box = el('div', 'panel');
-  if (spec.background) box.style.background = spec.background;
-  if (spec.accent) box.style.borderColor = spec.accent;
+  const bg = colour(spec.background), ac = colour(spec.accent);
+  if (bg) box.style.background = bg;
+  if (ac) box.style.borderColor = ac;
 
   const title = el('h2', null, spec.title || panelId);
-  if (spec.accent) { title.style.color = spec.accent; title.style.borderBottomColor = spec.accent; }
+  if (ac) { title.style.color = ac; title.style.borderBottomColor = ac; }
   box.appendChild(title);
 
   const body = el('div', 'body');

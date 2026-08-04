@@ -1,3 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- Engine core: depends ONLY on the base framework (no NuGet). UI-free. -->
+  <ItemGroup>
+    <!-- The plugin contract, split out so plugin authors can reference the API without the
+         engine. Also NuGet-free, so this keeps the "no NuGet" property above intact.
+         Everything downstream (Scripting, App, Companion.*, tests) picks it up transitively;
+         only add a direct reference somewhere if that project stops referencing Core. -->
+    <ProjectReference Include="..\Scrye.PluginContracts\Scrye.PluginContracts.csproj" />
+  </ItemGroup>
 </Project>

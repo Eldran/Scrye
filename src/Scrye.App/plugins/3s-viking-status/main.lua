@@ -2,6 +2,8 @@
 --
 -- NOTE: dropped / simplified vs the original:
 --  * vikbar / viktab dropped: the HUD manages panel visibility and tab switching.
+--    Both are still consumed by the plugin (with a note) rather than being sent to
+--    the MUD as unrecognised commands.
 --  * All miniwindow drawing replaced by one scrye.addPanel with tabs; Map / Sea chart /
 --    City Plan grids are colorgrid widgets; reports are composed text widgets.
 --  * Town travel RESTORED via the "Travel" tab: a button per settlement walks you there
@@ -26,6 +28,60 @@
 --    "tick HH:MM" header) simplified to the raw feed values.
 
 local P = "plugin." .. scrye.id .. "."
+
+-- ---------------------------------------------------------------- colour
+-- Feed values come from the MUD, so escape them before embedding in markup.
+-- (A lone "@" is safe -- markup only starts at "@{" -- but a name could contain one.)
+local function esc(s) return (tostring(s or ""):gsub("@", "@@")) end
+
+-- Pad BEFORE colouring: "#" counts markup characters, which are never drawn, so padding a
+-- decorated string silently breaks column alignment.
+local function padesc(s, n)
+  s = tostring(s or "")
+  return esc(s .. string.rep(" ", math.max(0, n - #s)))
+end
+
+local function col(c, s) return "@{" .. c .. "}" .. esc(s) .. "@{}" end
+local function colb(c, s) return "@{" .. c .. ",bold}" .. esc(s) .. "@{}" end
+
+-- Tier palette, carried over from the original's TIERCOL and repainted for the neon scheme.
+-- Literals rather than theme tokens: a tier's colour is identity, not semantics.
+local TIERCOL = { [1] = "#E8DFFF", [2] = "#21E6FF", [3] = "#B6FF3C", [4] = "#FFD028", [5] = "#FF2E88" }
+local function tiercol(t) return TIERCOL[tonumber(t) or 0] or "text" end
+
+-- Percentage -> status token. Used for warehouse quality, mood, water, voyage bars, so one
+-- rule decides "healthy / worth a look / bad" everywhere in the panel.
+local function pctcol(v, good, warn)
+  v = tonumber(v) or 0
+  if v >= (good or 80) then return "success" end
+  if v >= (warn or 50) then return "warning" end
+  return "error"
+end
+
+-- Standing words the MUD uses, mapped onto the semantic tokens.
+local STANDCOL = {
+  allied = "success", friendly = "success", cordial = "success",
+  neutral = "dim", wary = "warning", unfriendly = "warning",
+  hostile = "error", war = "error", enemy = "error",
+}
+local function standcol(w) return STANDCOL[tostring(w or ""):lower()] or "text" end
+
+-- Two-column layout. Padding has to be measured on the UNDECORATED string, because markup
+-- characters take width in Lua but none on screen. Each item is { raw = , txt = }: raw for
+-- measuring, txt for display.
+local function padcell(item, width)
+  return item.txt .. string.rep(" ", math.max(0, width - #item.raw))
+end
+
+-- Fill down the first column, then the second -- the same reading order the Buildings and
+-- Production tabs already use, so an alphabetical list stays alphabetical down each column.
+local function two_col(items, width, add)
+  local rows = math.ceil(#items / 2)
+  for i = 1, rows do
+    local a, b = items[i], items[i + rows]
+    add(padcell(a, width) .. (b and ("  " .. b.txt) or ""))
+  end
+end
 
 -- ---------------------------------------------------------------- helpers
 local function num(s) return tonumber(s) or 0 end
@@ -262,9 +318,9 @@ local ROUTES = {
   BlotMid = { "e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","n","n","n","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","n","n","n","n","n","n","n","n","enter" },
   BorMid = { "leave","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","n","n","n","n","n","n","n","n","enter" },
   EirMid = { "leave","w","e","e","s","s","s","s","s","s","w","w","s","e","s","s","s","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
-  EriMid = { "leave","w","w","s","s","s","s","s","s","s","s","w","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
+  EriMid = { "leave","w","w","s","s","s","s","s","s","s","s","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
   HafMid = { "leave","e","s","s","s","s","s","s","s","s","s","s","w","w","w","enter" },
-  HolMid = { "leave","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
+  HolMid = { "leave","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
   ImaMid = { "leave","e","s","s","s","s","s","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","n","n","n","n","n","enter" },
   LerMid = { "leave","n","n","n","n","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","w","enter" },
   LodMid = { "leave","s","s","s","s","s","s","s","s","s","s","s","s","s","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","e","n","n","n","n","n","enter" },
@@ -479,7 +535,12 @@ end
 -- ------------------------------------------------------ report builders
 local function build_stats()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- War --")
   add(string.format("God %s > %s   next %ss", q("GOD_POWER"), q("GOD_POWER_FOCUS"), q("GOD_POWER_NEXT")))
   add(string.format("Raid %s   Blot %s", q("RAID"), q("BLOT"):sub(1, 16)))
@@ -514,16 +575,36 @@ end
 
 local function build_city()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Ships --")
   local ships = split(gv("SHIPS"), ";")
   if #ships == 0 then add("none")
   else
-    for i = 1, math.min(#ships, 10) do
+    -- Two columns: a fleet is mostly idle ships showing "0m", which wasted a whole line each.
+    -- Docked ships are dimmed so the ones actually out stand out at a glance.
+    local items = {}
+    for i = 1, math.min(#ships, 16) do
       local f = split(ships[i], "|")
-      local eta = tonumber(f[5]) and (math.floor(num(f[5]) / 60) .. "m") or ""
-      add(string.format("%-12s %-10s %s", f[1] or "?", f[4] or "", eta))
+      local mins = tonumber(f[5]) and math.floor(num(f[5]) / 60) or nil
+      local eta = mins and (mins .. "m") or ""
+      local dest = f[4] or ""
+      local raw = string.format("%-8s %-12s %4s", (f[1] or "?"):sub(1, 8), dest:sub(1, 12), eta)
+      local out
+      if dest == "" and (mins or 0) == 0 then
+        out = col("dim", raw)                                    -- docked, nothing to see
+      else
+        out = padesc((f[1] or "?"):sub(1, 8), 8) .. " "
+           .. col("info", string.format("%-12s", dest:sub(1, 12))) .. " "
+           .. col("warning", string.format("%4s", eta))
+      end
+      items[#items + 1] = { raw = raw, txt = out }
     end
+    two_col(items, 26, add)
   end
   add("")
   add("-- Carts --")
@@ -560,19 +641,32 @@ end
 
 local function build_builds()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Buildings   Daler " .. q("DALER") .. " --")
   local blist = {}
   for entry in gv("BUILDINGS"):gmatch("[^,]+") do
     local name, tier = entry:match("^(.-):(%d+)$")
-    if name then blist[#blist + 1] = titlecase(name) .. " T" .. tier end
+    if name then blist[#blist + 1] = { label = titlecase(name) .. " T" .. tier,
+                                       name = titlecase(name), tier = tier } end
   end
-  table.sort(blist)
+  table.sort(blist, function(a, b) return a.label < b.label end)
   if #blist == 0 then add("none")
   else
+    -- pad on the undecorated label, then colour only the tier token, so the two
+    -- columns still line up
+    local function bcell(e, width)
+      if not e then return "" end
+      local padding = width and string.rep(" ", math.max(0, width - #e.label)) or ""
+      return esc(e.name) .. " " .. colb(tiercol(e.tier), "T" .. e.tier) .. padding
+    end
     local rows = math.ceil(#blist / 2)
     for i = 1, rows do
-      add(string.format("%-30s %s", blist[i] or "", blist[i + rows] or ""))
+      add(bcell(blist[i], 30) .. " " .. bcell(blist[i + rows]))
     end
   end
   local builds = split(gv("BUILDS"), ";")
@@ -592,7 +686,12 @@ end
 
 local function build_production()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Production / tick --")
   local prod = {}
   for pair in gv("PRODUCTION"):gmatch("[^,]+") do
@@ -603,12 +702,17 @@ local function build_production()
   else
     table.sort(prod, function(x, y) return x.r < y.r end)
     local rows = math.ceil(#prod / 2)
-    local function pcell(e)
+    -- the original tinted the delta green when producing, red when draining
+    local function pcell(e, width)
       if not e then return "" end
-      return string.format("%-9s %s%d", (e.r:gsub("^%l", string.upper)), e.a >= 0 and "+" or "", e.a)
+      local name = (e.r:gsub("^%l", string.upper))
+      local amt = (e.a >= 0 and "+" or "") .. e.a
+      local raw = string.format("%-9s %s", name, amt)
+      local padding = width and string.rep(" ", math.max(0, width - #raw)) or ""
+      return padesc(name, 9) .. " " .. col(e.a >= 0 and "success" or "error", amt) .. padding
     end
     for i = 1, rows do
-      add(string.format("%-24s %s", pcell(prod[i]), pcell(prod[i + rows])))
+      add(pcell(prod[i], 24) .. " " .. pcell(prod[i + rows]))
     end
   end
   add("")
@@ -621,12 +725,24 @@ local function build_production()
       if f[2] then
         local road = not (f[7] or "No"):find("No")
         local fort = not (f[8] or "No"):find("No")
-        local mk = (road and fort) and "[road+fort]" or (road and "[road]") or (fort and "[fort]") or ""
-        rlist[#rlist + 1] = string.format("%-14s %s", f[2]:sub(1, 12), mk)
+        -- the original coloured these green / yellow / grey; same three states, as tokens
+        -- the original coloured these green / yellow / grey; same three states, as tokens
+        local mkraw = (road and fort) and "[road+fort]" or (road and "[road]")
+                   or (fort and "[fort]") or "[none]"
+        local mk = (road and fort) and colb("success", mkraw)
+                or (road and col("success", mkraw))
+                or (fort and col("warning", mkraw))
+                or col("dim", mkraw)
+        local name = f[2]:sub(1, 12)
+        rlist[#rlist + 1] = {
+          sort = name,
+          raw  = string.format("%-14s%s", name, mkraw),
+          txt  = padesc(name, 14) .. mk,
+        }
       end
     end
-    table.sort(rlist)
-    for _, r in ipairs(rlist) do add(r) end
+    table.sort(rlist, function(a, b) return a.sort < b.sort end)
+    two_col(rlist, 26, add)      -- 14 towns was 14 lines; now 7
   end
   add("")
   -- warehouse with freshness
@@ -658,8 +774,15 @@ local function build_production()
     for _, f in ipairs(stock) do
       local g = f.g
       local avgq = g.amt > 0 and math.floor(g.qsum / g.amt + 0.5) or 100
-      local st = g.stale > 0 and string.format("  stale %d@%d%%", g.stale, g.minq) or ""
-      add(string.format("%-10s %4d  q%3d%%%s", f.good, g.amt, avgq, st))
+      -- the original drew a per-good quality bar; the colour carried the same information
+      -- NB: the port counts anything under 100%% as "stale", so a good at 97%% lists its whole
+      -- pile. Colour it by the worst quality present rather than a flat amber, otherwise a
+      -- perfectly good warehouse reads as one long warning.
+      local st = g.stale > 0
+        and ("  " .. col(pctcol(g.minq, 95, 80), string.format("stale %d@%d%%", g.stale, g.minq)))
+        or ""
+      add(padesc(f.good, 10) .. " " .. esc(string.format("%4d", g.amt)) .. "  "
+          .. col(pctcol(avgq, 95, 80), string.format("q%3d%%", avgq)) .. st)
     end
   end
   return table.concat(L, "\n")
@@ -667,7 +790,12 @@ end
 
 local function build_people()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Forces --")
   add(string.format("Thralls %s   Followers %s", q("THRALLS"), q("THRALL_FOLLOWER"):sub(1, 30)))
   add(string.format("Garrison %s   Threk %s", q("GARRISON"), q("MTHREK")))
@@ -736,7 +864,12 @@ end
 
 local function build_settlers()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Settlement --")
   add(string.format("Blot %s   Sproj %s", q("BLOT"):sub(1, 14), (gv("SPROJ") ~= "" and gv("SPROJ")) or "-"))
   add("")
@@ -751,9 +884,18 @@ local function build_settlers()
   local wr, wm         = srep:match("Water reserve:%s*(%d+)/(%d+)")
   if not wr then wr = s[4] end
   add("-- Settlers --")
-  add(string.format("Population %s   Mood %s %s/100   Sentiment %s",
-    pop or "?", moodname or "?", mood or "?", sentiment or "?"))
-  if wr then add(string.format("Water reserve %s%s", wr, wm and ("/" .. wm) or "")) end
+  local moodtxt = string.format("%s %s/100", moodname or "?", mood or "?")
+  local senti = tonumber(sentiment)
+  add("Population " .. esc(pop or "?")
+      .. "   Mood " .. col(mood and pctcol(mood, 70, 40) or "dim", moodtxt)
+      .. "   Sentiment " .. col(senti and (senti >= 0 and "success" or "error") or "dim",
+                                sentiment or "?"))
+  if wr then
+    -- the original turned the water reserve amber when the reserve ran low
+    local pct = (wm and tonumber(wm) and tonumber(wm) > 0)
+      and (tonumber(wr) * 100 / tonumber(wm)) or 100
+    add("Water reserve " .. col(pctcol(pct, 50, 25), wr .. (wm and ("/" .. wm) or "")))
+  end
   add("")
   add(sts and "-- Economy (last tick) --" or "-- Economy --")
   if inc then
@@ -811,7 +953,12 @@ end
 
 local function build_holds()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Holds: standing & reputation --")
   local vrep = parse_idx_table(gv("VREP"))
   local stand = parse_idx_table(gv("STANDINGS"))
@@ -820,8 +967,10 @@ local function build_holds()
     local v, s = vrep[i], stand[i]
     if v or s then
       local name = HOLDCITY[i] or (v and v[2]) or (s and s[2]) or ("?" .. i)
-      add(string.format("%-16s %-10s %6s %6s", name:sub(1, 16),
-        (s and s[4]) or "-", (s and s[3]) or "-", (v and v[3]) or "-"))
+      local standing = (s and s[4]) or "-"
+      add(padesc(name:sub(1, 16), 16) .. " "
+          .. col(standcol(standing), string.format("%-10s", standing))
+          .. esc(string.format(" %6s %6s", (s and s[3]) or "-", (v and v[3]) or "-")))
     end
   end
   add("")
@@ -838,7 +987,12 @@ end
 
 local function build_voyage()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   local function listsec(title, field)
     add(title)
     local v = gv(field)
@@ -877,7 +1031,12 @@ end
 
 local function build_mission()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   add("-- Missions  (type: vmission fulfill <no>) --")
   if gv("MISSIONS") == "" then add("no missions")
   else
@@ -1078,6 +1237,20 @@ local sea_nav = {
 }
 local SEANAV_TARGETS = { I = true, W = true, X = true }
 
+-- The chars worth a letter on the chart -- the original's SEALETTER set. Everything else
+-- (fog, open sea, unrevealed) stays a plain tile so the map still reads as a map.
+local SEALETTERS = "SXHWTI>*B"
+
+-- Chart cells are labelled A01..P16: row letter, then 1-based column.
+local function sea_coord(cl, rw) return string.char(65 + rw) .. string.format("%02d", cl + 1) end
+
+-- legend names, for the click confirmation
+local SEA_NAME = {
+  S = "ship", X = "objective", H = "harbor", W = "wreck", T = "storm",
+  I = "island", F = "fog", ["#"] = "unrevealed", O = "open sea",
+  ["*"] = "resolved", B = "stormbreak", [">"] = "course",
+}
+
 local function update_seanav_state()
   local s = "Auto-nav: " .. (sea_nav.on and "ON" or "off")
   if sea_nav.on and sea_nav.target then s = s .. "  ->  " .. sea_nav.target.coord end
@@ -1234,7 +1407,12 @@ end
 -- --------------------------------------------------------------- Sea tab
 local function build_sea()
   local L = {}
-  local function add(s) L[#L + 1] = s end
+  -- section headers ("-- Foo --") take the accent colour in every tab, for free
+  local function add(s)
+    s = tostring(s or "")
+    if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
+    L[#L + 1] = s
+  end
   local v = split(gv("VOYAGE"), "|")
   if #v < 10 then
     add("-- Sea --")
@@ -1293,16 +1471,22 @@ local function build_sea()
   else
     scrye.setState(P .. "seachart", "")
   end
-  -- pending resolve options (buttons in the original; type the command here)
+  -- Pending resolve options. VOFFERS is the richer list when the MUD sends one; the same
+  -- preference the auto-resolver uses. Published newline-separated to drive the bound
+  -- buttonrow on the Sea tab -- an empty value clears the buttons, which is how the panel
+  -- knows there is nothing to resolve right now.
   local resolves = {}
-  for a in gv("VRESOLVE"):gmatch("[^,]+") do
+  local optsrc = (gv("VOFFERS") ~= "") and gv("VOFFERS") or gv("VRESOLVE")
+  for a in (optsrc or ""):gmatch("[^,]+") do
     local t = a:gsub("^%s+", ""):gsub("%s+$", "")
     if t ~= "" then resolves[#resolves + 1] = t end
   end
+  scrye.setState(P .. "resolveopts", table.concat(resolves, "\n"))
   if #resolves > 0 then
-    add("Resolve pending: " .. table.concat(resolves, ", ") .. "   (vvoyage resolve <opt>)")
+    add(col("warning", "Resolve pending: " .. table.concat(resolves, ", "))
+        .. col("dim", "   (click a button below, or: vvoyage resolve <opt>)"))
   else
-    add("(no resolve pending)")
+    add(col("dim", "(no resolve pending)"))
   end
   local u = {}
   for c in pairs(unknown) do u[#u + 1] = c end
@@ -1629,6 +1813,16 @@ scrye.addAlias{
   end,
 }
 
+-- consumed, not passed to the MUD: the HUD owns panel visibility and tab selection
+scrye.addAlias{
+  pattern = "^vikbar$", regex = true,
+  run = function() scrye.print("[viking] the Viking panel is managed by Scrye - show or hide it from the HUD.") end,
+}
+scrye.addAlias{
+  pattern = "^viktab(?: .*)?$", regex = true,
+  run = function() scrye.print("[viking] tabs are switched in the HUD panel itself, not with a command.") end,
+}
+
 scrye.addAlias{
   pattern = "^vplan clear$", regex = true,
   run = function()
@@ -1687,7 +1881,24 @@ scrye.addPanel{
     { title = "Sea", widgets = {
         { type = "value", text = "", bind = P .. "seanav", color = "#5A93D4" },   -- section header
         { type = "text", bind = P .. "sea" },
-        { type = "colorgrid", bind = P .. "seachart", palette = SEA_PAL },
+        -- Letters on the notable cells (the original's SEALETTER set) so the chart is
+        -- readable without cross-referencing the legend; plain terrain stays a colour tile.
+        -- Clicking a cell queues a course there, replacing the original's chart hotspots.
+        { type = "colorgrid", bind = P .. "seachart", palette = SEA_PAL,
+          labels = SEALETTERS,
+          onClick = function(cl, rw, ch)
+            if ch == nil or ch == "" or ch == " " then return end
+            local coord = sea_coord(cl, rw)
+            scrye.send("vvoyage queue " .. coord)
+            scrye.print("[viking] queued course to " .. coord
+              .. (SEA_NAME[ch] and ("  (" .. SEA_NAME[ch] .. ")") or ""))
+          end },
+        { type = "label", text = "Resolve:", color = "dim" },
+        { type = "buttonrow", bind = P .. "resolveopts",
+          onClick = function(label)
+            scrye.send("vvoyage resolve " .. label)
+            scrye.print("[viking] resolving node with '" .. label .. "'")
+          end },
         { type = "label", text = "S ship  X objective  H harbor  W wreck  T storm  I island  F fog  # unrevealed  O open sea  * resolved  B stormbelt  + path  > destination" },
         { type = "button", text = "Clear voyage queue", action = function() scrye.send("vvoyage clear") end },
     } },

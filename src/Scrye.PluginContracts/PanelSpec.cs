@@ -1,0 +1,138 @@
+namespace Scrye.Core.Plugins;
+
+/// <summary>
+/// A declarative UI widget in a plugin panel. Data only — no drawing. The host
+/// renders it and binds it to game state. Which fields matter depends on
+/// <see cref="Type"/>:
+/// <list type="bullet">
+/// <item><c>label</c> — static <see cref="Text"/>, or bound to <see cref="Bind"/>.</item>
+/// <item><c>value</c> — <see cref="Text"/> as a prefix + the live value at <see cref="Bind"/>.</item>
+/// <item><c>progress</c> — a bar; <see cref="Value"/> and <see cref="Max"/> are state paths
+/// (or numeric literals for <see cref="Max"/>), <see cref="Text"/> is the caption/label.</item>
+/// <item><c>gauge</c> — a labelled bar with the current/max readout inside and a
+/// fill colour that shifts with the percentage (healthy → warning → critical).</item>
+/// <item><c>text</c> — a multi-line monospace block bound to <see cref="Bind"/>
+/// (plugins compose reports into a state path and bind it here).</item>
+/// <item><c>colorgrid</c> — a grid of coloured cells: the state value at
+/// <see cref="Bind"/> is newline-separated rows of characters, and
+/// <see cref="Palette"/> maps each character to a "#RRGGBB" colour (maps, charts).</item>
+/// <item><c>button</c> — a clickable button firing the plugin callback in <see cref="Action"/>.</item>
+/// <item><c>colorgrid</c> cells are clickable when the widget sets an <c>onClick</c> callback;
+/// the host invokes it with the clicked cell's (col, row, char).</item>
+/// <item><c>list</c> — a dynamic list of rows from <see cref="Bind"/>: one row per line, each
+/// optionally <c>label &lt;sep&gt; value</c> with the value right-aligned and dimmed. The row
+/// count follows the bound value, so unlike the fixed widget set a list grows and shrinks at
+/// runtime.</item>
+/// <item><c>table</c> — the same rows split into columns by <see cref="Separator"/>, with
+/// optional <see cref="Columns"/> headers and per-column <see cref="Align"/>. Columns are
+/// measured to their widest cell.</item>
+/// </list>
+///
+/// <para><b>Colours.</b> <see cref="Color"/> and the values in <see cref="Palette"/> accept
+/// either a <c>"#RRGGBB"</c> literal or one of the semantic names in <see cref="ThemeToken"/>
+/// (<c>"accent"</c>, <c>"warning"</c>, <c>"dim"</c>, …). Prefer the token — a literal hard-codes
+/// one colour scheme into a client that ships six, and the mobile companion resolves the same
+/// token against its own palette. Tokens resolve when the panel is built, so a scheme change
+/// re-colours plugin panels after a plugin reload.</para>
+///
+/// <para><b>On dynamic content generally.</b> <c>list</c> and <c>table</c> exist because the
+/// widget <i>set</i> is fixed once a panel is built; before them, the only way to show a
+/// variable-length collection was to compose it into one <c>text</c> blob or a
+/// <c>colorgrid</c> — which is why plugins ended up doing column alignment in Lua. If you are
+/// reaching for <c>string.format</c> and padding, you probably want <c>table</c>.</para>
+/// </summary>
+public sealed record WidgetSpec
+{
+    public string Type { get; init; } = "label";
+    public string? Text { get; init; }
+    public string? Bind { get; init; }
+    public string? Value { get; init; }
+    public string? Max { get; init; }
+    /// <summary>Custom colour — a "#RRGGBB" literal or a <see cref="ThemeToken"/> name. Applies to
+    /// <c>label</c>/<c>value</c>/<c>text</c>/<c>list</c>/<c>table</c> (foreground) and
+    /// <c>progress</c>/<c>gauge</c> (bar fill, overriding the theme accent / the gauge's health
+    /// gradient). Null = follow the theme / the panel's default foreground.</summary>
+    public string? Color { get; init; }
+
+    /// <summary>For a <c>gauge</c>: dim the bar toward dark as the value drops (brightness scales
+    /// with the fill ratio) instead of the cyan→amber→red gradient. Uses <see cref="Color"/> as the
+    /// base hue (default green when unset).</summary>
+    public bool Dim { get; init; }
+
+    /// <summary>For <c>colorgrid</c>: character → cell colour ("#RRGGBB" or a
+    /// <see cref="ThemeToken"/> name).</summary>
+    public IReadOnlyDictionary<string, string>? Palette { get; init; }
+
+    /// <summary>For <c>table</c>: optional header labels. When set, a header row is drawn and the
+    /// column count is taken from here; extra fields in a data row are ignored and missing ones
+    /// render blank. When unset the table is headerless and sizes to the widest row.</summary>
+    public IReadOnlyList<string>? Columns { get; init; }
+
+    /// <summary>For <c>list</c>/<c>table</c>: the field separator inside each bound line.
+    /// Defaults to a tab, which is what a plugin composing rows in script will reach for anyway
+    /// and which cannot collide with display text the way "|" or "," can.</summary>
+    public string? Separator { get; init; }
+
+    /// <summary>For <c>table</c>: per-column alignment as one character each — <c>'l'</c> left,
+    /// <c>'r'</c> right, <c>'c'</c> centre (e.g. <c>"llr"</c>). Shorter than the column count
+    /// leaves the rest left-aligned. Right-aligning numeric columns is the whole reason this
+    /// exists; without it a table of quantities reads worse than the text blob it replaced.</summary>
+    public string? Align { get; init; }
+
+    /// <summary>For <c>button</c> widgets: an opaque action id the host calls back with when
+    /// clicked (the plugin runtime maps it to a Lua callback). Set by the runtime, not authors.</summary>
+    public string? Action { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only: the characters that should be drawn as a letter on top of their
+    /// cell colour, e.g. <c>"SXHWTI&gt;*B"</c>. A colour tile says "something is here"; the letter
+    /// says what, which is how the MUSHclient charts read. Everything not listed stays a plain
+    /// tile, so terrain still reads as terrain rather than a wall of characters.
+    ///
+    /// <para>Null or empty means no letters. Letters are skipped automatically when the cells
+    /// are too small to fit one.</para>
+    /// </summary>
+    public string? Labels { get; init; }
+
+    /// <summary>For a <c>buttonrow</c> widget: the child button specs, rendered side by side as
+    /// equal-width columns. Each child is an ordinary button spec (text + action).</summary>
+    public IReadOnlyList<WidgetSpec>? Children { get; init; }
+}
+
+/// <summary>One tab in a tabbed panel: a title and its widgets.</summary>
+public sealed record PanelTabSpec
+{
+    public string Title { get; init; } = "";
+    public IReadOnlyList<WidgetSpec> Widgets { get; init; } = Array.Empty<WidgetSpec>();
+}
+
+/// <summary>
+/// A declarative panel a plugin contributes via <c>scrye.addPanel</c>. The host turns
+/// it into a HUD panel and keeps its bound widgets in sync with the state store
+/// (Foundation D — the alternative to MUSHclient's imperative miniwindow drawing).
+/// Either a flat <see cref="Widgets"/> list, or a set of <see cref="Tabs"/> (when
+/// non-empty the panel renders as a tab strip and <see cref="Widgets"/> is ignored).
+/// </summary>
+public sealed record PanelSpec
+{
+    public string Title { get; init; } = "";
+    public IReadOnlyList<WidgetSpec> Widgets { get; init; } = Array.Empty<WidgetSpec>();
+    public IReadOnlyList<PanelTabSpec> Tabs { get; init; } = Array.Empty<PanelTabSpec>();
+
+    /// <summary>Panel width in pixels; 0 = the HUD default (narrow).</summary>
+    public double Width { get; init; }
+
+    /// <summary>Optional panel background ("#RRGGBB" or a <see cref="ThemeToken"/> name) — overrides
+    /// the theme's panel colour so a plugin can give its pane a distinct look. Null = follow the
+    /// active colour scheme.</summary>
+    public string? Background { get; init; }
+
+    /// <summary>Optional accent for the panel's border and title ("#RRGGBB" or a
+    /// <see cref="ThemeToken"/> name). Null = theme accent.</summary>
+    public string? Accent { get; init; }
+
+    /// <summary>Optional default text colour ("#RRGGBB" or a <see cref="ThemeToken"/> name) for
+    /// text-bearing widgets in this panel that don't set their own <see cref="WidgetSpec.Color"/>.
+    /// Null = theme text colour.</summary>
+    public string? Foreground { get; init; }
+}

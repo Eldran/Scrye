@@ -25,6 +25,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private readonly PluginDescriptor _descriptor;
     private readonly IPluginHost _host;
+    private readonly PluginDiagnostics? _diagnostics;
     private readonly Engine _engine;
 
     private readonly List<JsValue> _lineHooks = new();
@@ -43,10 +44,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     public string Id => _descriptor.Manifest.Id;
 
-    public JsPluginRuntime(PluginDescriptor descriptor, IPluginHost host)
+    /// <param name="diagnostics">Failure/cost accounting. Optional so a headless host or a test
+    /// can construct a runtime without one; when supplied, every swallowed callback exception is
+    /// reported to it, which is what makes repeated-failure quarantine possible.</param>
+    public JsPluginRuntime(PluginDescriptor descriptor, IPluginHost host, PluginDiagnostics? diagnostics = null)
     {
         _descriptor = descriptor;
         _host = host;
+        _diagnostics = diagnostics;
         // Default Jint Engine is sandboxed: no CLR access, no file/network, and we never
         // call AllowClr(). Only the scrye API object is reachable from script.
         _engine = new Engine();
@@ -379,9 +384,29 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Color = Str(w, "color"),
             Dim = Get(w, "dim") is { } dv && dv.IsBoolean() && dv.AsBoolean(),
             Palette = ToPalette(Get(w, "palette")),
+            Columns = ToStringList(Get(w, "columns")),
+            Separator = Str(w, "separator"),
+            Align = Str(w, "align"),
             Action = actionId,
             Children = children,
         };
+    }
+
+    /// <summary>A JS string array (a table's <c>columns</c>) as a CLR list; null when absent.
+    /// Uses the same length + indexed-Get walk as <see cref="ToWidgetList"/> rather than Jint's
+    /// array types, so it stays valid across the whole 3.x range the csproj allows.</summary>
+    private List<string>? ToStringList(JsValue v)
+    {
+        if (v is null || !v.IsObject()) return null;
+        int len = (int)ToNum(Get(v, "length"));
+        if (len <= 0) return null;
+        var result = new List<string>(len);
+        for (int i = 0; i < len; i++)
+        {
+            JsValue item = v.AsObject().Get(i.ToString());
+            result.Add(item.IsUndefined() || item.IsNull() ? "" : item.ToString());
+        }
+        return result;
     }
 
     // ---- JsValue helpers -----------------------------------------------------
@@ -412,15 +437,37 @@ public sealed class JsPluginRuntime : IPluginRuntime
     /// invoke is wrapped in <see cref="Safe"/>/<see cref="SafeCall"/>.</summary>
     private static bool IsFn(JsValue v) => v is not null && v.IsObject();
 
+    // Every plugin callback goes through one of these two. They swallow the exception (one bad
+    // plugin must never take down line processing) but no longer swallow the *fact* of it:
+    // diagnostics counts consecutive failures and the manager quarantines a plugin that is
+    // failing on every line rather than letting it print the same error forever.
     private void Safe(string what, Action action)
     {
-        try { action(); }
-        catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); }
+        try
+        {
+            action();
+            _diagnostics?.RecordSuccess(Id);
+        }
+        catch (Exception ex)
+        {
+            _host.Print(Id, $"{what} error: {ex.Message}");
+            _diagnostics?.RecordFailure(Id, what, ex.Message);
+        }
     }
 
     private JsValue? SafeCall(string what, JsValue fn, params object[] args)
     {
-        try { return _engine.Invoke(fn, args); }
-        catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); return null; }
+        try
+        {
+            JsValue result = _engine.Invoke(fn, args);
+            _diagnostics?.RecordSuccess(Id);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _host.Print(Id, $"{what} error: {ex.Message}");
+            _diagnostics?.RecordFailure(Id, what, ex.Message);
+            return null;
+        }
     }
 }

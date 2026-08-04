@@ -101,7 +101,11 @@ local update_pending = false  -- a market-tick refresh is already queued (deboun
 local user_refreshed = false  -- at least one manual refresh this session
 
 local mk_refreshed_at = 0     -- os.time() the market data was last finalised (for the auto-trader)
-local connected = false       -- tracked via onConnect/onDisconnect
+local connected = true        -- tracked via onConnect/onDisconnect. Starts true: a plugin
+                              -- (re)load mid-session never receives an onConnect, and the
+                              -- auto-trader must not sit idle waiting for one.
+local mk_last_dispatch = 0    -- os.time() of the last auto-dispatch (self-rescan guard)
+local last_status = ""        -- last status line passed to mk_render (for re-rendering in place)
 
 -- ====================== auto-trader settings (persisted via scrye.store) ======================
 local function sget(k) local x = scrye.store.get(k); if x == nil or x == "" then return nil end; return x end
@@ -130,8 +134,12 @@ local at = {
 }
 for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
 
+-- manual dispatch cart size (the MUSHclient window had a Units hotspot, 20-350)
+local MK_UNITS_MIN, MK_UNITS_MAX = 20, 350
+local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk_units")) or 100))
+
 -- forward declarations (mk_finish / the feed watch call these before they're defined)
-local at_schedule, at_draw, auto_trade_tick
+local at_schedule, at_draw, auto_trade_tick, publish_dispatch
 
 -- forward declaration (mk_header schedules an early finish)
 local start_settle
@@ -249,7 +257,8 @@ local function extra_towns(list)
 end
 
 local function mk_render(status)
-  scrye.setState(P .. "status", status)
+  last_status = status or last_status
+  scrye.setState(P .. "status", last_status)
   local lines = {}
   lines[#lines + 1] = string.format(FMT, "Good", "Buy", "Town", "Stk", "Sell", "Town", "Stk", "Profit")
   if #results == 0 then
@@ -264,7 +273,9 @@ local function mk_render(status)
       else
         profit = "sell"          -- sell-only good, no buy side
       end
-      lines[#lines + 1] = string.format(FMT, r.res, bp, bt, bq, sp, st, sq, profit)
+      -- held goods are marked "#" (the MUSHclient window tinted them blue instead)
+      local label = at.exempt[disp_cmd(r.cmd)] and ("#" .. r.res) or r.res
+      lines[#lines + 1] = string.format(FMT, label, bp, bt, bq, sp, st, sq, profit)
       local b2, b3 = extra_towns(r.buys)
       local s2, s3 = extra_towns(r.sells)
       if b2 or s2 then
@@ -283,9 +294,10 @@ local function mk_render(status)
       end
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = "* stock under " .. LOWSTOCK .. " (next-best town shown)"
+    lines[#lines + 1] = "* stock under " .. LOWSTOCK .. " (next-best town shown)   # held (atrade exempt)"
   end
   scrye.setState(P .. "report", table.concat(lines, "\n"))
+  if publish_dispatch then publish_dispatch() end
 end
 
 -- ====================== refresh scan ======================
@@ -435,9 +447,15 @@ scrye.onLine(function(line)
     pcall(mk_row, "sell", town, price, qty, aff)
     return false
   end
-  -- separators, "price N daler", "Trading Post tier", column headers, etc:
-  -- still part of the vtrade block, so hide them too
-  return false
+  -- The remaining vtrade decoration. Only the lines the MUSHclient version gagged are
+  -- hidden here: a blanket `return false` also swallowed unrelated framed output (channel
+  -- banners, `vbuild list`) whenever a background auto-trader scan happened to be running.
+  if clean:find("price", 1, true) and clean:match("price%s+%d+%s+daler") then return false end
+  if clean:find("Trading Post tier", 1, true) then return false end
+  if clean:find("Best places to", 1, true) then return false end
+  if clean:find("Settlement", 1, true) and clean:match("Settlement%s+Price") then return false end
+  if clean:match("^[%s%-=~%*%+_|]*$") then return false end   -- separators / empty frame lines
+  return
 end)
 
 -- market tick: the periodic price-update line carries percentages (e.g. "Mead +3%").
@@ -450,6 +468,9 @@ scrye.addTrigger{
   regex = true,
   run = function()
     if not user_refreshed then return end
+    -- our own `vtrade dispatch` echo comes back as a [Viking-Trade] line with a
+    -- percentage in it; without this guard every auto-dispatch kicks off a full rescan.
+    if os.time() - mk_last_dispatch < 10 then return end
     if update_pending or scanning then return end
     update_pending = true
     scrye.after(2, function()
@@ -460,7 +481,7 @@ scrye.addTrigger{
 }
 
 -- ====================== auto-trader ======================
-local function note(s) scrye.print("[auto] " .. s) end
+local function note(s) scrye.print("@{#FFD028,bold}[auto]@{} " .. s) end
 
 -- read the shared viking feed (daler / warehouse / carts / buildings) from vik.* state
 local function feed(k) return scrye.getState("vik." .. k) end
@@ -510,7 +531,6 @@ local function at_record(side, qty, cmd, town, amount)
   if at_draw then at_draw() end
 end
 
-local mk_last_dispatch = 0
 local at_cd_retry
 
 -- one dispatch pass: pick the single most worthwhile cart to send (restock > sells/scalps)
@@ -748,6 +768,7 @@ local function at_toggle_exempt(word)
   if word == "" then return end
   at.exempt[word] = (not at.exempt[word]) or nil
   at_save_exempt()
+  mk_render(nil)          -- refresh the "#" held markers in the Market report
 end
 
 -- ---------- numeric settings ----------
@@ -757,12 +778,18 @@ local AT_KEY   = { reserve="at_reserve", margin="at_margin", stock="at_stock", f
 local AT_FIELD = { reserve="reserve", margin="margin", stock="stock", flush="flush",
                    min="min_pct", rel="min_rel", keep="keep", soft="soft",
                    full="full", clear="clear_pct", carts="carts", escort="escort" }
+-- clamps for settings the game itself bounds; everything else is just floored at 0
+local AT_RANGE = { escort = { 1, 20 } }
 local function at_setnum(name, val)
   local field, key = AT_FIELD[name], AT_KEY[name]
   if not field then note("unknown setting: " .. tostring(name)); return end
   local n = tonumber(val)
   if not n then note("not a number: " .. tostring(val)); return end
-  at[field] = math.max(0, math.floor(n)); sset(key, at[field]); at_draw()
+  n = math.floor(n)
+  local r = AT_RANGE[name]
+  if r then n = math.max(r[1], math.min(r[2], n)) else n = math.max(0, n) end
+  at[field] = n; sset(key, n); at_draw()
+  note(string.format("%s = %d%s", name, n, (n ~= math.floor(tonumber(val))) and " (clamped)" or ""))
 end
 
 -- ---------- status + drawing the Auto / Log tabs ----------
@@ -804,6 +831,7 @@ at_draw = function()
   scrye.setState(P .. "v_full",    tostring(at.full))
   scrye.setState(P .. "v_clear",   tostring(at.clear_pct))
   scrye.setState(P .. "v_escort",  tostring(at.escort))
+  scrye.setState(P .. "v_units",   tostring(mk_units))
 
   local s = at.stats
   local mins = math.floor((os.time() - (s.since or os.time())) / 60)
@@ -875,11 +903,207 @@ local function at_config(rest)
 end
 
 
+-- ====================== manual dispatch ======================
+-- Restores the MUSHclient window's click-a-town action: it sent
+--   vtrade dispatch <side> <units> <good> <town> escort <n>
+-- Here it is a command instead, since panel widgets are built once at load and the
+-- ranked town list changes on every refresh.
+local function mnote(t) scrye.print("@{#FFD028,bold}[market]@{} " .. t) end
+
+-- every town name present in the current market data
+local function known_towns()
+  local seen, out = {}, {}
+  for _, towns in pairs(market) do
+    for town in pairs(towns) do
+      if not seen[town] then seen[town] = true; out[#out + 1] = town end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+-- exact, then prefix, then substring -- so "lodbrok" finds "Lodbrok's Hold"
+local function resolve_town(str)
+  local q = trim(str or ""):lower()
+  if q == "" then return nil end
+  local towns = known_towns()
+  for _, t in ipairs(towns) do if t:lower() == q then return t end end
+  for _, t in ipairs(towns) do if t:lower():sub(1, #q) == q then return t end end
+  for _, t in ipairs(towns) do if t:lower():find(q, 1, true) then return t end end
+  return nil
+end
+
+-- pull a leading good name off "<good> <town>". Goods can be two words ("fine furs",
+-- "salted fish"), so the longest matching name or command word wins.
+local function split_good_town(str)
+  str = trim(str or "")
+  local low = str:lower()
+  local cmd, len = nil, 0
+  for _, r in ipairs(RES) do
+    for _, form in ipairs({ r.name:lower(), r.cmd }) do
+      if #form > len and low:sub(1, #form) == form then
+        local nxt = low:sub(#form + 1, #form + 1)
+        if nxt == "" or nxt == " " then cmd, len = r.cmd, #form end
+      end
+    end
+  end
+  if not cmd then return nil, nil end
+  return cmd, trim(str:sub(len + 1))
+end
+
+local function mk_setunits(val)
+  local n = tonumber(val)
+  if not n then mnote("not a number: " .. tostring(val)); return end
+  n = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, math.floor(n)))
+  mk_units = n; sset("mk_units", n)
+  scrye.setState(P .. "v_units", tostring(n))
+  mnote(string.format("manual dispatch units = %d", n))
+end
+
+-- ---------- quick dispatch (the window's click-a-town action, as buttons) ----------
+-- The original let you click a town in the market window to send a cart there. A bound
+-- buttonrow is the equivalent: the options are recomputed from the live feed, and the
+-- click carries the index back so we dispatch the exact cart the label described rather
+-- than re-parsing it.
+local dispatch_opts = {}
+
+publish_dispatch = function()
+  dispatch_opts = {}
+  local labels = {}
+  local ok = pcall(function()
+    local v = at_getvars()
+    -- warehouse stock per good (same normalisation the auto-trader uses)
+    local stock = {}
+    for entry in (v.WSTOCK or ""):gmatch("[^;]+") do
+      local g, a = entry:match("^([^|]+)|(%d+)")
+      if g then
+        local k = trim(g):lower():gsub("_", " ")
+        stock[k] = (stock[k] or 0) + tonumber(a)
+      end
+    end
+    local _, cap = at_capacity(v)
+    if not cap or cap <= 0 then return end
+
+    -- one candidate per good: what you hold, sold to its best-paying town
+    local cand = {}
+    for _, r in ipairs(results) do
+      local best = r.sells[1]
+      if best then
+        local have = (stock[(r.cmd or ""):gsub("_", " ")] or stock[(r.res or ""):lower()] or 0)
+                     - (at.keep or 0)                       -- respect the mission reserve
+        if have > 0 and not at.exempt[disp_cmd(r.cmd)] then  -- and the held list
+          local qty = math.floor(math.min(have, cap, best.qty))
+          if qty >= MK_UNITS_MIN then
+            cand[#cand + 1] = {
+              side = "sell", qty = qty, cmd = disp_cmd(r.cmd), town = best.town,
+              value = qty * best.price,
+              label = string.format("%d %s>%s", qty, r.res, best.town:sub(1, 10)),
+            }
+          end
+        end
+      end
+    end
+    table.sort(cand, function(a, b) return a.value > b.value end)
+    while #cand > 4 do table.remove(cand) end   -- a buttonrow lays out on one line
+    dispatch_opts = cand
+    for _, c in ipairs(cand) do labels[#labels + 1] = c.label end
+  end)
+  if not ok then dispatch_opts = {}; labels = {} end
+  scrye.setState(P .. "dispatchopts", table.concat(labels, "\n"))
+end
+
+local function dispatch_option(label, index)
+  -- index is the fast path; fall back to the label in case the list moved under the click
+  local c = dispatch_opts[index]
+  if not c or c.label ~= label then
+    c = nil
+    for _, o in ipairs(dispatch_opts) do if o.label == label then c = o; break end end
+  end
+  if not c then mnote("that cart is no longer on offer - hit Refresh"); return end
+  local escort = math.max(1, math.min(20, at.escort or 5))
+  scrye.send(string.format("vtrade dispatch %s %d %s %s escort %d",
+    c.side, c.qty, c.cmd, town_cmd(c.town), escort))
+  mnote(string.format("dispatch %s %d %s to %s (~%dd, escort %d)",
+    c.side, c.qty, c.cmd, c.town, c.value, escort))
+  local line = string.format("[%s] MAN  %-4s %4d %-11s %-4s %-14s ~%dd",
+    os.date("%Y-%m-%d %H:%M:%S"), c.side:upper(), c.qty, c.cmd, "to", c.town, c.value)
+  scrye.log(line)
+  local rec = at.stats.recent
+  rec[#rec + 1] = line
+  while #rec > 40 do table.remove(rec, 1) end
+  mk_last_dispatch = os.time()
+  publish_dispatch()          -- the stock just changed; refresh the offers
+  if at_draw then at_draw() end
+end
+
+local MK_USAGE = "usage: mkdispatch buy|sell [qty] <good> <town>   (qty defaults to the Units setting)"
+
+local function mk_dispatch(rest)
+  local side, tail = trim(rest or ""):match("^(%a+)%s+(.+)$")
+  side = side and side:lower()
+  if side ~= "buy" and side ~= "sell" then mnote(MK_USAGE); return end
+
+  local qty = mk_units
+  local n, remainder = tail:match("^(%d+)%s+(.+)$")
+  if n then qty = tonumber(n); tail = remainder end
+  qty = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, math.floor(qty)))
+
+  local cmd, townstr = split_good_town(tail)
+  if not cmd then mnote("don\'t recognise a good in: " .. tail); mnote(MK_USAGE); return end
+  if townstr == "" then mnote("no town given. " .. MK_USAGE); return end
+
+  -- fall back to the word as typed when there is no scan data to match against
+  local town = resolve_town(townstr) or townstr
+  local escort = math.max(1, math.min(20, at.escort or 5))
+
+  scrye.send(string.format("vtrade dispatch %s %d %s %s escort %d",
+    side, qty, disp_cmd(cmd), town_cmd(town), escort))
+  mnote(string.format("dispatch %s %d %s %s %s (escort %d)",
+    side, qty, DISPLAY[cmd] or cmd, (side == "buy") and "from" or "to", town, escort))
+
+  -- record it in the Log tab, but keep it out of the auto-trader's counters
+  local line = string.format("[%s] MAN  %-4s %4d %-11s %-4s %-14s",
+    os.date("%Y-%m-%d %H:%M:%S"), side:upper(), qty, disp_cmd(cmd),
+    (side == "buy") and "from" or "to", town)
+  scrye.log(line)
+  local rec = at.stats.recent
+  rec[#rec + 1] = line
+  while #rec > 40 do table.remove(rec, 1) end
+
+  mk_last_dispatch = os.time()   -- don't let our own echo trigger a rescan
+  if at_draw then at_draw() end
+end
+
 -- ====================== aliases ======================
--- (markwin dropped: the HUD manages panel visibility)
 scrye.addAlias{
   pattern = "^mkref$", regex = true,
   run = function() mk_refresh(false) end,
+}
+
+-- manual dispatch:  mkdispatch buy 200 mead lodbrok   /   mkdispatch sell bread eirik
+scrye.addAlias{
+  pattern = "^mkdispatch$", regex = true,
+  run = function() mnote(MK_USAGE) end,
+}
+scrye.addAlias{
+  pattern = "^mkdispatch (.+)$", regex = true,
+  run = function(rest) mk_dispatch(rest) end,
+}
+-- default cart size for manual dispatch
+scrye.addAlias{
+  pattern = "^mkunits$", regex = true,
+  run = function() mnote(string.format("manual dispatch units = %d (range %d-%d)",
+    mk_units, MK_UNITS_MIN, MK_UNITS_MAX)) end,
+}
+scrye.addAlias{
+  pattern = "^mkunits (.+)$", regex = true,
+  run = function(v) mk_setunits(v) end,
+}
+
+-- consumed, not passed to the MUD: the HUD owns panel visibility
+scrye.addAlias{
+  pattern = "^markwin$", regex = true,
+  run = function() mnote("the Market panel is managed by Scrye - show or hide it from the HUD.") end,
 }
 
 -- auto-trader command:  atrade | atrade <setting> <value> | atrade on|off | ...
@@ -902,6 +1126,14 @@ scrye.addPanel{
         { type = "button", text = "Refresh", action = function() mk_refresh(false) end },
         { type = "label",  bind = P .. "status", color = "#E0A830" },   -- status line in gold
         { type = "text",   bind = P .. "report" },
+        { type = "label",  text = "Quick dispatch - best sells you can fill:", color = "#8FA0B0" },
+        { type = "buttonrow", bind = P .. "dispatchopts",
+          onClick = function(label, index) dispatch_option(label, index) end },
+        { type = "label",  text = "or:  mkdispatch buy|sell [qty] <good> <town>", color = "#8FA0B0" },
+        { type = "input",  text = "Units (20-350) ", bind = P .. "v_units",
+          onSubmit = function(t) mk_setunits(t) end },
+        { type = "input",  text = "Escort (1-20) ",  bind = P .. "v_escort",
+          onSubmit = function(t) at_setnum("escort", t) end },
     } },
     { title = "Auto", widgets = {
         { type = "text", bind = P .. "atstatus" },
@@ -955,6 +1187,9 @@ scrye.onConnect(function() connected = true; at_driver() end)
 scrye.onDisconnect(function() connected = false end)
 
 -- react to live warehouse/cart changes: only dispatch on a real edge (goods gained / cart freed)
-scrye.watch("vik", function() at_on_feed() end)
+scrye.watch("vik", function() at_on_feed(); publish_dispatch() end)
 
 at_draw()   -- seed the Auto / Log tab state
+
+-- a (re)load mid-session gets no onConnect, so start the driver here as well
+if at.on then at_driver() end

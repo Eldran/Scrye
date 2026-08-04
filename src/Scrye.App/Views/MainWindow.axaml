@@ -98,6 +98,9 @@
                                                       ToolTip.Tip="Capture panes: output routed by triggers (capture to pane)" />
                                         <ToggleButton DockPanel.Dock="Right" Content="Plugins"
                                                       IsChecked="{Binding Plugins.IsOpen}" Margin="4,0,0,0" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="📱 Companion"
+                                                      IsChecked="{Binding CompanionPanel.IsOpen}" Margin="4,0,0,0"
+                                                      ToolTip.Tip="Mobile companion: serve this session to your phone, and see what can notify you" />
                                         <ToggleButton DockPanel.Dock="Right" Content="State"
                                                       IsChecked="{Binding StateInspector.IsOpen}" Margin="4,0,0,0"
                                                       ToolTip.Tip="Game-state inspector: live GMCP/MIP data as watchable paths" />
@@ -300,16 +303,28 @@
                                                             </Grid>
                                                         </DockPanel>
                                                     </DataTemplate>
+                                                    <!-- StyledTextView, not TextBlock: the text may carry plugin colour
+                                                         markup, so runs are coloured individually. Plain text renders
+                                                         exactly as it did before. -->
                                                     <DataTemplate DataType="vm:TextWidgetViewModel">
-                                                        <TextBlock Text="{Binding Text}" FontSize="10.5" Foreground="{Binding Foreground}"
-                                                                   FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="NoWrap" Margin="0,2" />
+                                                        <controls:StyledTextView Text="{Binding Text}" Foreground="{Binding Foreground}"
+                                                                                 Margin="0,2" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ColorGridWidgetViewModel">
                                                         <controls:ColorGridView GridText="{Binding GridText}" Palette="{Binding Palette}"
-                                                                                CellCommand="{Binding CellCommand}" Margin="0,3" />
+                                                                                CellCommand="{Binding CellCommand}"
+                                                                                LabelChars="{Binding LabelChars}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:BarListWidgetViewModel">
                                                         <controls:BarListView Rows="{Binding Rows}" Margin="0,3" />
+                                                    </DataTemplate>
+                                                    <!-- list and table widgets: one control, distinguished by the
+                                                         VM's Columns/Align/DimTrailing. -->
+                                                    <DataTemplate DataType="vm:TableWidgetViewModel">
+                                                        <controls:DataTableView Rows="{Binding Rows}" Separator="{Binding Separator}"
+                                                                                Columns="{Binding Columns}" Align="{Binding Align}"
+                                                                                Foreground="{Binding ColorBrush}"
+                                                                                DimTrailing="{Binding DimTrailing}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
@@ -400,12 +415,158 @@
                                                                 <StackPanel>
                                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" FontSize="11" />
                                                                     <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource ScryeTextDim}" FontSize="10" />
+                                                                    <!-- Why a plugin is not running, when the reason is structural
+                                                                         (wrong API range) rather than the user's choice. -->
+                                                                    <TextBlock Text="{Binding IncompatibleReason}" IsVisible="{Binding HasIncompatibility}"
+                                                                               Foreground="{DynamicResource ScryeError}" FontSize="10"
+                                                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                                    <!-- Cost/failure summary; hidden entirely when a plugin is behaving. -->
+                                                                    <TextBlock Text="{Binding HealthSummary}" IsVisible="{Binding HasHealthWarning}"
+                                                                               Foreground="{DynamicResource ScryeWarning}" FontSize="10"
+                                                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                                    <!-- Declared capabilities. Informational: see PluginPermissions. -->
+                                                                    <TextBlock Text="{Binding PermissionSummary}" IsVisible="{Binding HasPermissions}"
+                                                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="10"
+                                                                               TextWrapping="Wrap" Margin="0,2,0,0"
+                                                                               ToolTip.Tip="{Binding PermissionDetail}" />
                                                                 </StackPanel>
                                                             </DockPanel>
                                                         </Border>
                                                     </DataTemplate>
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
+                                        </ScrollViewer>
+                                    </DockPanel>
+                                </Border>
+
+                                <!-- companion: phone server status, how to reach it, and what notifies.
+                                     Replaces printing the access token into scrollback, which session
+                                     logging would otherwise write to disk. -->
+                                <Border IsVisible="{Binding CompanionPanel.IsOpen}" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                        Width="330" MaxHeight="560" Margin="12,10,0,0" Padding="10"
+                                        Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
+                                        BorderThickness="1" CornerRadius="6">
+                                    <DockPanel>
+                                        <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                                            <Button DockPanel.Dock="Right" Content="✕" Command="{Binding CompanionPanel.CloseCommand}" Padding="6,1" />
+                                            <Button DockPanel.Dock="Right" Content="↻" Command="{Binding CompanionPanel.RefreshCommand}" Padding="6,1" Margin="0,0,4,0"
+                                                    ToolTip.Tip="Re-check the server, Tailscale and the notify list" />
+                                            <TextBlock Text="COMPANION" FontWeight="SemiBold" FontSize="11"
+                                                       Foreground="{DynamicResource ScryeAccent}" VerticalAlignment="Center" />
+                                        </DockPanel>
+
+                                        <TextBlock DockPanel.Dock="Bottom" Text="{Binding CompanionPanel.Notice}" FontSize="10"
+                                                   Foreground="{DynamicResource ScryeAccent}" TextWrapping="Wrap" Margin="0,6,0,0"
+                                                   IsVisible="{Binding CompanionPanel.Notice, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                            <StackPanel Spacing="6">
+
+                                                <!-- server -->
+                                                <DockPanel>
+                                                    <Button DockPanel.Dock="Right" Content="Start" Command="{Binding CompanionPanel.StartCommand}"
+                                                            IsVisible="{Binding CompanionPanel.IsStopped}" Padding="10,2" FontSize="10" />
+                                                    <Button DockPanel.Dock="Right" Content="Stop" Command="{Binding CompanionPanel.StopCommand}"
+                                                            IsVisible="{Binding CompanionPanel.IsRunning}" Padding="10,2" FontSize="10" />
+                                                    <TextBlock Text="{Binding CompanionPanel.StatusText}" VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ScryeText}" FontSize="11" />
+                                                </DockPanel>
+
+                                                <TextBlock Text="{Binding CompanionPanel.LocalUrl}" FontSize="10" TextWrapping="Wrap"
+                                                           Foreground="{DynamicResource ScryeTextDim}"
+                                                           IsVisible="{Binding CompanionPanel.IsRunning}" />
+
+                                                <!-- reaching it from a phone -->
+                                                <Border Background="{DynamicResource ScryePanelAlt}" CornerRadius="4" Padding="8"
+                                                        IsVisible="{Binding CompanionPanel.IsRunning}">
+                                                    <StackPanel Spacing="5">
+                                                        <TextBlock Text="ON YOUR PHONE" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource ScryeAccent}" />
+
+                                                        <controls:QrCodeView Text="{Binding CompanionPanel.QrPayload}"
+                                                                             Height="200" HorizontalAlignment="Center"
+                                                                             IsVisible="{Binding CompanionPanel.HasPhoneUrl}" />
+
+                                                        <TextBlock Text="{Binding CompanionPanel.PhoneUrl}" FontSize="10" TextWrapping="Wrap"
+                                                                   Foreground="{DynamicResource ScryeText}"
+                                                                   IsVisible="{Binding CompanionPanel.HasPhoneUrl}" />
+
+                                                        <TextBlock Text="{Binding CompanionPanel.TailscaleStatusText}" FontSize="10" TextWrapping="Wrap"
+                                                                   Foreground="{DynamicResource ScryeTextDim}"
+                                                                   IsVisible="{Binding !CompanionPanel.HasPhoneUrl}" />
+
+                                                        <StackPanel Orientation="Horizontal" Spacing="4"
+                                                                    IsVisible="{Binding CompanionPanel.HasPhoneUrl}">
+                                                            <Button Content="Copy address" Command="{Binding CompanionPanel.CopyUrlCommand}"
+                                                                    Padding="8,2" FontSize="10" />
+                                                        </StackPanel>
+
+                                                        <TextBlock Text="Tailscale is not serving yet — run this in a terminal:"
+                                                                   FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ScryeTextDim}"
+                                                                   IsVisible="{Binding CompanionPanel.HasServeCommand}" />
+                                                        <TextBox Text="{Binding CompanionPanel.ServeCommandText, Mode=OneWay}" IsReadOnly="True"
+                                                                 FontSize="10" FontFamily="Consolas, monospace" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding CompanionPanel.HasServeCommand}" />
+                                                        <Button Content="Copy command" Command="{Binding CompanionPanel.CopyServeCommand}"
+                                                                Padding="8,2" FontSize="10" HorizontalAlignment="Left"
+                                                                IsVisible="{Binding CompanionPanel.HasServeCommand}" />
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- how the phone authenticates -->
+                                                <Border Background="{DynamicResource ScryePanelAlt}" CornerRadius="4" Padding="8"
+                                                        IsVisible="{Binding CompanionPanel.IsRunning}">
+                                                    <StackPanel Spacing="5">
+                                                        <TextBlock Text="ACCESS" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource ScryeAccent}" />
+                                                        <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ScryeText}"
+                                                                   IsVisible="{Binding CompanionPanel.HasTrustedLogin}"
+                                                                   Text="{Binding CompanionPanel.TrustedLogin, StringFormat='{}{0} connects without a token.'}" />
+                                                        <TextBlock Text="Token — only needed off-tailnet. Changes every start."
+                                                                   FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <TextBox Text="{Binding CompanionPanel.Token, Mode=OneWay}" IsReadOnly="True"
+                                                                 FontSize="10" FontFamily="Consolas, monospace" TextWrapping="Wrap"
+                                                                 IsVisible="{Binding CompanionPanel.HasToken}" />
+                                                        <Button Content="Copy token" Command="{Binding CompanionPanel.CopyTokenCommand}"
+                                                                Padding="8,2" FontSize="10" HorizontalAlignment="Left"
+                                                                IsVisible="{Binding CompanionPanel.HasToken}" />
+                                                        <TextBlock FontSize="10" TextWrapping="Wrap" Foreground="{DynamicResource ScryeTextDim}"
+                                                                   Text="{Binding CompanionPanel.SessionIdText, StringFormat='This tab is session: {0}'}" />
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- notifications -->
+                                                <Border Background="{DynamicResource ScryePanelAlt}" CornerRadius="4" Padding="8">
+                                                    <StackPanel Spacing="5">
+                                                        <TextBlock Text="NOTIFICATIONS" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource ScryeAccent}" />
+                                                        <TextBlock Text="{Binding CompanionPanel.PushDevicesText}" FontSize="10"
+                                                                   TextWrapping="Wrap" Foreground="{DynamicResource ScryeText}" />
+                                                        <Button Content="Send a test notification" Command="{Binding CompanionPanel.TestNotifyCommand}"
+                                                                IsEnabled="{Binding CompanionPanel.CanTestNotify}"
+                                                                Padding="8,2" FontSize="10" HorizontalAlignment="Left" />
+                                                        <TextBlock Text="{Binding CompanionPanel.NotifySummary}" FontSize="10"
+                                                                   TextWrapping="Wrap" Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <ItemsControl ItemsSource="{Binding CompanionPanel.NotifySources}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:NotifySourceRow">
+                                                                    <DockPanel Margin="0,2,0,0">
+                                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding StateLabel}" FontSize="9"
+                                                                                   Foreground="#C08A5A" VerticalAlignment="Center" Margin="4,0,0,0" />
+                                                                        <StackPanel>
+                                                                            <TextBlock Text="{Binding Name}" FontSize="10"
+                                                                                       Foreground="{DynamicResource ScryeText}" />
+                                                                            <TextBlock Text="{Binding Detail}" FontSize="9" TextTrimming="CharacterEllipsis"
+                                                                                       Foreground="{DynamicResource ScryeTextDim}" />
+                                                                        </StackPanel>
+                                                                    </DockPanel>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </Border>
+
+                                            </StackPanel>
                                         </ScrollViewer>
                                     </DockPanel>
                                 </Border>

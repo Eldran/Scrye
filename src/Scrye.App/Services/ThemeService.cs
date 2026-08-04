@@ -23,6 +23,21 @@ public sealed record ThemeScheme(
     Color TextDim,
     Color InsetBg)
 {
+    // Semantic status colours. Derived rather than declared per-scheme on purpose: they must mean
+    // the same thing in every scheme (green is "fine", red is "bad"), so letting each scheme
+    // restyle them would break the contract plugins rely on. Only the light/dark split matters,
+    // because the dark-surface variants are too pale to read on white.
+    // These back the ThemeToken.Success/Warning/Error/Info names in the plugin API.
+
+    /// <summary>Good / healthy / complete.</summary>
+    public Color Success => IsDark ? Color.FromRgb(0x4C, 0xBB, 0x6C) : Color.FromRgb(0x1B, 0x7F, 0x3C);
+    /// <summary>Caution — worth a look, not broken.</summary>
+    public Color Warning => IsDark ? Color.FromRgb(0xE0, 0xA8, 0x30) : Color.FromRgb(0x9A, 0x6B, 0x00);
+    /// <summary>Bad / failed / critical.</summary>
+    public Color Error => IsDark ? Color.FromRgb(0xE0, 0x50, 0x50) : Color.FromRgb(0xB3, 0x25, 0x2B);
+    /// <summary>Neutral informational highlight.</summary>
+    public Color Info => IsDark ? Color.FromRgb(0x5A, 0xA8, 0xE0) : Color.FromRgb(0x1C, 0x6C, 0xA8);
+
     public override string ToString() => DisplayName;
 }
 
@@ -54,9 +69,25 @@ public static class ThemeService
         new ThemeScheme("forest",   "Forest (green)",        true,  C("#4CBB6C"), C("#121A14"), C("#18241B"), C("#1F2E23"), C("#2C4032"), C("#D5E2D8"), C("#8CA394"), C("#0D140F")),
         new ThemeScheme("amber",    "Amber (warm)",          true,  C("#E0A030"), C("#1C1712"), C("#251E17"), C("#2F261C"), C("#443627"), C("#E8DECF"), C("#A8977E"), C("#14100C")),
         new ThemeScheme("crimson",  "Crimson (red)",         true,  C("#E04858"), C("#1B1215"), C("#251A1E"), C("#2F2127"), C("#452E35"), C("#E6D9DC"), C("#A88F96"), C("#140D10")),
+        // Outrun: hot magenta on deep indigo. The surfaces stay violet rather than neutral grey
+        // so the accent reads as neon rather than merely bright, and the line colour is lifted
+        // well above the panel so borders glow instead of disappearing.
+        new ThemeScheme("neon",     "Neon (80s)",            true,  C("#FF2E88"), C("#0B0420"), C("#17093A"), C("#221052"), C("#3B1D6E"), C("#E8DFFF"), C("#9A7FC7"), C("#080218")),
     };
 
     public static ThemeScheme Default => Schemes[0];
+
+    /// <summary>
+    /// The scheme currently applied. Read by the HUD when it resolves a plugin's semantic colour
+    /// tokens (see <c>ThemeToken</c>) into concrete brushes.
+    ///
+    /// <para>Plugin widget brushes are immutable and resolved once, at panel-build time, because
+    /// panels are built on the session loop thread and Avalonia 12 faults if the compositor
+    /// touches a mutable brush created elsewhere. So this is a snapshot, not a binding: switching
+    /// scheme re-colours the app immediately but re-colours plugin panels on the next plugin
+    /// reload or reconnect.</para>
+    /// </summary>
+    public static ThemeScheme Current { get; private set; } = Schemes[0];
 
     /// <summary>Look a scheme up by its persisted key; unknown/null falls back to the default.</summary>
     public static ThemeScheme Find(string? key)
@@ -106,6 +137,12 @@ public static class ThemeService
         r["ScryeText"] = new SolidColorBrush(s.Text);
         r["ScryeTextDim"] = new SolidColorBrush(s.TextDim);
         r["ScryeAccent"] = new SolidColorBrush(s.Accent);
+        r["ScryeSuccess"] = new SolidColorBrush(s.Success);
+        r["ScryeWarning"] = new SolidColorBrush(s.Warning);
+        r["ScryeError"] = new SolidColorBrush(s.Error);
+        r["ScryeInfo"] = new SolidColorBrush(s.Info);
+
+        Current = s;
     }
 
     private static Color C(string hex) => Color.Parse(hex);

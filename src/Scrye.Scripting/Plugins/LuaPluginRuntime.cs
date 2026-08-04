@@ -24,6 +24,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
 
     private readonly PluginDescriptor _descriptor;
     private readonly IPluginHost _host;
+    private readonly PluginDiagnostics? _diagnostics;
     private readonly Script _script;
 
     private readonly List<DynValue> _lineHooks = new();
@@ -42,10 +43,14 @@ public sealed class LuaPluginRuntime : IPluginRuntime
 
     public string Id => _descriptor.Manifest.Id;
 
-    public LuaPluginRuntime(PluginDescriptor descriptor, IPluginHost host)
+    /// <param name="diagnostics">Failure/cost accounting. Optional so a headless host or a test
+    /// can construct a runtime without one; when supplied, every swallowed callback exception is
+    /// reported to it, which is what makes repeated-failure quarantine possible.</param>
+    public LuaPluginRuntime(PluginDescriptor descriptor, IPluginHost host, PluginDiagnostics? diagnostics = null)
     {
         _descriptor = descriptor;
         _host = host;
+        _diagnostics = diagnostics;
         // Soft sandbox: adds pcall/xpcall/error handling, metatables, coroutines and
         // os.time/os.date/os.clock over the hard sandbox — still NO io, no os.execute,
         // no load/dofile. (Hard sandbox lacks pcall, which every real plugin wants.)
@@ -145,6 +150,13 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     }
 
     /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
+    /// <summary>A bound buttonrow's callback: <c>onClick(label, index)</c>.</summary>
+    public void InvokeChoice(string actionId, string label, int index)
+    {
+        if (_actions.TryGetValue(actionId, out DynValue? fn))
+            Safe("choice", () => _script.Call(fn!, label, index));
+    }
+
     public void InvokeSubmit(string actionId, string text)
     {
         if (_actions.TryGetValue(actionId, out DynValue? fn))
@@ -410,6 +422,16 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         DynValue btns = w.Get("buttons");
         List<WidgetSpec>? children = btns.Type == DataType.Table ? ToWidgetList(btns) : null;
 
+        // table columns: columns = { "Item", "Qty", "Price" }
+        List<string>? columns = null;
+        DynValue cols = w.Get("columns");
+        if (cols.Type == DataType.Table)
+        {
+            columns = new List<string>();
+            Table arr = cols.Table;
+            for (int i = 1; i <= arr.Length; i++) columns.Add(arr.Get(i).CastToString() ?? "");
+        }
+
         return new WidgetSpec
         {
             Type = Field(w, "type") ?? "label",
@@ -420,6 +442,10 @@ public sealed class LuaPluginRuntime : IPluginRuntime
             Color = Field(w, "color"),
             Dim = w.Get("dim").Type == DataType.Boolean && w.Get("dim").Boolean,
             Palette = palette,
+            Columns = columns,
+            Separator = Field(w, "separator"),
+            Labels = Field(w, "labels"),
+            Align = Field(w, "align"),
             Action = actionId,
             Children = children,
         };
@@ -444,15 +470,37 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         return double.TryParse(a[i].CastToString(), out double d) ? d : 0;
     }
 
+    // Every plugin callback goes through one of these two. They swallow the exception (one bad
+    // plugin must never take down line processing) but no longer swallow the *fact* of it:
+    // diagnostics counts consecutive failures and the manager quarantines a plugin that is
+    // failing on every line rather than letting it print the same error forever.
     private void Safe(string what, Action action)
     {
-        try { action(); }
-        catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); }
+        try
+        {
+            action();
+            _diagnostics?.RecordSuccess(Id);
+        }
+        catch (Exception ex)
+        {
+            _host.Print(Id, $"{what} error: {ex.Message}");
+            _diagnostics?.RecordFailure(Id, what, ex.Message);
+        }
     }
 
     private DynValue? SafeCall(string what, DynValue fn, params object[] args)
     {
-        try { return _script.Call(fn, args); }
-        catch (Exception ex) { _host.Print(Id, $"{what} error: {ex.Message}"); return null; }
+        try
+        {
+            DynValue result = _script.Call(fn, args);
+            _diagnostics?.RecordSuccess(Id);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _host.Print(Id, $"{what} error: {ex.Message}");
+            _diagnostics?.RecordFailure(Id, what, ex.Message);
+            return null;
+        }
     }
 }

@@ -21,6 +21,7 @@ public sealed class HudViewModel : IDisposable
     private readonly Action<string, string>? _invokeAction;   // (pluginId, actionId) → run on loop
     private readonly Action<string, string, int, int, string>? _invokeCellAction;  // (pluginId, actionId, col, row, char)
     private readonly Action<string, string, string>? _invokeSubmit;  // (pluginId, actionId, text) → input widget submit
+    private readonly Action<string, string, string, int>? _invokeChoice;  // (pluginId, actionId, label, index) → bound buttonrow
     // State-watch subscriptions per plugin, so a reload/disable can dispose exactly its watches.
     // Only mutated on the construction thread (pre-loop) or the loop thread — never concurrently.
     private readonly Dictionary<string, List<IDisposable>> _pluginSubs = new();
@@ -52,12 +53,14 @@ public sealed class HudViewModel : IDisposable
 
     public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
                         Action<string, string, int, int, string>? invokeCellAction = null,
-                        Action<string, string, string>? invokeSubmit = null)
+                        Action<string, string, string>? invokeSubmit = null,
+                        Action<string, string, string, int>? invokeChoice = null)
     {
         _state = state;
         _invokeAction = invokeAction;
         _invokeCellAction = invokeCellAction;
         _invokeSubmit = invokeSubmit;
+        _invokeChoice = invokeChoice;
     }
 
     /// <summary>Add a panel from a spec. Called during plugin load — on the UI thread at
@@ -143,6 +146,16 @@ public sealed class HudViewModel : IDisposable
             case "buttonrow":
             {
                 var row = new ButtonRowWidgetViewModel();
+                // Bound form: the labels come from state rather than the spec, so a plugin can
+                // offer choices it could not know at load time (voyage resolve options, a town
+                // list that arrives with the feed). One callback serves the whole row and gets
+                // the clicked label plus its 1-based index.
+                if (!string.IsNullOrEmpty(w.Bind) && !string.IsNullOrEmpty(w.Action))
+                {
+                    string actionId = w.Action;
+                    BindText(w.Bind, s => RebuildChoices(row, s, pluginId, actionId), subs);
+                    return row;
+                }
                 if (w.Children is not null)
                     foreach (WidgetSpec child in w.Children)
                     {
@@ -184,6 +197,24 @@ public sealed class HudViewModel : IDisposable
                 BindText(w.Bind, s => vm.Rows = s, subs);
                 return vm;
             }
+            // list and table share one view-model and one control: a list IS a two-column,
+            // headerless table whose trailing column is dimmed and right-aligned. Keeping them
+            // one implementation means they can never drift apart visually.
+            case "list":
+            {
+                var vm = new TableWidgetViewModel(textColor, w.Separator, columns: null,
+                                                  align: w.Align ?? "lr", dimTrailing: true);
+                BindText(w.Bind, s => vm.Rows = s, subs);
+                return vm;
+            }
+            case "table":
+            {
+                var vm = new TableWidgetViewModel(textColor, w.Separator,
+                                                  w.Columns is null ? null : System.Linq.Enumerable.ToArray(w.Columns),
+                                                  w.Align, dimTrailing: false);
+                BindText(w.Bind, s => vm.Rows = s, subs);
+                return vm;
+            }
             case "input":
             {
                 string? actionId = w.Action;
@@ -194,7 +225,7 @@ public sealed class HudViewModel : IDisposable
             }
             case "colorgrid":
             {
-                var vm = new ColorGridWidgetViewModel(w.Palette);
+                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels);
                 if (!string.IsNullOrEmpty(w.Action))
                 {
                     string actionId = w.Action;
@@ -210,6 +241,25 @@ public sealed class HudViewModel : IDisposable
                 if (!string.IsNullOrEmpty(w.Bind)) BindText(w.Bind, s => vm.Text = s, subs);
                 return vm;
             }
+        }
+    }
+
+    /// <summary>Repopulate a bound buttonrow from a newline-separated list of labels. Blank
+    /// lines are skipped, and an empty value clears the row — which is how a plugin says
+    /// "nothing to choose right now" without leaving stale buttons on screen.</summary>
+    private void RebuildChoices(ButtonRowWidgetViewModel row, string labels, string pluginId, string actionId)
+    {
+        row.Buttons.Clear();
+        if (string.IsNullOrWhiteSpace(labels)) return;
+        int index = 0;
+        foreach (string raw in labels.Split('\n'))
+        {
+            string label = raw.Trim();
+            if (label.Length == 0) continue;
+            index++;
+            int captured = index;                       // capture per iteration, not by reference
+            row.Buttons.Add(new ButtonWidgetViewModel(label,
+                () => _invokeChoice?.Invoke(pluginId, actionId, label, captured)));
         }
     }
 
@@ -340,20 +390,68 @@ public sealed class InputWidgetViewModel : ViewModelBase
     public void SetValue(string v) => Text = v ?? "";
 }
 
-/// <summary>Parses "#RRGGBB" into a brush; null for empty/invalid (so the theme colour shows).</summary>
+/// <summary>
+/// Resolves a plugin colour string — either a "#RRGGBB" literal or a semantic
+/// <see cref="ThemeToken"/> name — into a brush. Null for empty/unrecognised, so the widget
+/// falls back to the theme default rather than rendering in some arbitrary colour.
+///
+/// <para>Tokens are looked up in <see cref="Services.ThemeService.Current"/> at the moment the
+/// panel is built. That is a deliberate snapshot, not a binding: see the remarks on
+/// <see cref="Services.ThemeService.Current"/> for why plugin brushes must be immutable.</para>
+/// </summary>
 internal static class HudColor
 {
     // IMMUTABLE brush: HUD widgets are built on the session-loop thread (scrye.addPanel
     // runs there), but rendered on the UI thread. A mutable SolidColorBrush has thread
     // affinity and Avalonia 12 throws a cross-thread error when the compositor touches it;
     // immutable brushes are frozen and safe to use from any thread.
-    public static Avalonia.Media.IBrush? Brush(string? hex)
+    public static Avalonia.Media.IBrush? Brush(string? colour)
     {
-        if (hex is { Length: 7 } && hex[0] == '#' &&
-            uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint v))
-            return new Avalonia.Media.Immutable.ImmutableSolidColorBrush(
-                Avalonia.Media.Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v));
-        return null;
+        Avalonia.Media.Color? c = Resolve(colour);
+        return c is null ? null : new Avalonia.Media.Immutable.ImmutableSolidColorBrush(c.Value);
+    }
+
+    /// <summary>The resolved colour, or null when the string names nothing we know.</summary>
+    public static Avalonia.Media.Color? Resolve(string? colour)
+    {
+        if (string.IsNullOrWhiteSpace(colour)) return null;
+        string v = colour.Trim();
+
+        if (v[0] == '#')
+            return v.Length == 7 &&
+                   uint.TryParse(v.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint hex)
+                ? Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex)
+                : null;
+
+        Services.ThemeScheme s = Services.ThemeService.Current;
+        return v.ToLowerInvariant() switch
+        {
+            ThemeToken.Accent => s.Accent,
+            ThemeToken.Text => s.Text,
+            ThemeToken.Dim => s.TextDim,
+            ThemeToken.Bg => s.Bg,
+            ThemeToken.Panel => s.Panel,
+            ThemeToken.PanelAlt => s.PanelAlt,
+            ThemeToken.Inset => s.InsetBg,
+            ThemeToken.Line => s.Line,
+            ThemeToken.Success => s.Success,
+            ThemeToken.Warning => s.Warning,
+            ThemeToken.Error => s.Error,
+            ThemeToken.Info => s.Info,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The same lookup as <see cref="Resolve"/>, in the engine's <see cref="Scrye.Core.Text.Rgb"/>
+    /// form. This is what <c>Scrye.Core.Text.Markup</c> is handed so a plugin's inline colour
+    /// markup resolves theme tokens through exactly the table the HUD widgets use — one place
+    /// where "accent" is defined, whether it appears in a widget spec or mid-sentence.
+    /// </summary>
+    public static Scrye.Core.Text.Rgb? ResolveRgb(string? colour)
+    {
+        Avalonia.Media.Color? c = Resolve(colour);
+        return c is null ? null : new Scrye.Core.Text.Rgb(c.Value.R, c.Value.G, c.Value.B);
     }
 }
 
@@ -401,11 +499,7 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
         _custom = dim ? null : HudColor.Brush(colorHex);   // fixed colour only when not dimming
     }
 
-    private static Avalonia.Media.Color? ParseColor(string? hex) =>
-        hex is { Length: 7 } && hex[0] == '#' &&
-        uint.TryParse(hex[1..], System.Globalization.NumberStyles.HexNumber, null, out uint v)
-            ? Avalonia.Media.Color.FromRgb((byte)(v >> 16), (byte)(v >> 8), (byte)v)
-            : (Avalonia.Media.Color?)null;
+    private static Avalonia.Media.Color? ParseColor(string? colour) => HudColor.Resolve(colour);
 
     private double _value;
     public double Value
@@ -450,12 +544,11 @@ public sealed class TextWidgetViewModel : ViewModelBase
 {
     public Avalonia.Media.IBrush Foreground { get; }
 
-    public TextWidgetViewModel(string? colorHex)
+    public TextWidgetViewModel(string? colour)
     {
-        Avalonia.Media.Color c = Avalonia.Media.Color.FromRgb(0xD6, 0xDE, 0xE8);
-        if (colorHex is { Length: 7 } && colorHex[0] == '#' &&
-            uint.TryParse(colorHex[1..], System.Globalization.NumberStyles.HexNumber, null, out uint hex))
-            c = Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
+        // Falls back to the scheme's body text rather than a hard-coded light grey, so a plugin
+        // that sets no colour reads correctly in the Light scheme too.
+        Avalonia.Media.Color c = HudColor.Resolve(colour) ?? Services.ThemeService.Current.Text;
         Foreground = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(c);   // immutable: built off the UI thread
     }
 
@@ -472,6 +565,36 @@ public sealed class BarListWidgetViewModel : ViewModelBase
     public string Rows { get => _rows; set => SetField(ref _rows, value); }
 }
 
+/// <summary>
+/// The <c>list</c> and <c>table</c> widgets: <see cref="Rows"/> is newline-separated, each line
+/// split into cells by <see cref="Separator"/>. Rendered by <c>Controls.DataTableView</c>.
+///
+/// <para>Unlike every other widget, the number of rows shown here follows the bound state value
+/// rather than the panel spec — which is the point. The widget <i>set</i> is still fixed at
+/// build time; what varies is the content of this one widget.</para>
+/// </summary>
+public sealed class TableWidgetViewModel : ViewModelBase
+{
+    public Avalonia.Media.IBrush? ColorBrush { get; }
+    public string Separator { get; }
+    public string[]? Columns { get; }
+    public string? Align { get; }
+    public bool DimTrailing { get; }
+
+    public TableWidgetViewModel(string? colour, string? separator, string[]? columns,
+                                string? align, bool dimTrailing)
+    {
+        ColorBrush = HudColor.Brush(colour);
+        Separator = string.IsNullOrEmpty(separator) ? "\t" : separator;
+        Columns = columns is { Length: > 0 } ? columns : null;
+        Align = align;
+        DimTrailing = dimTrailing;
+    }
+
+    private string _rows = "";
+    public string Rows { get => _rows; set => SetField(ref _rows, value); }
+}
+
 /// <summary>A grid of coloured cells: newline-separated rows of characters, coloured
 /// via the palette (char → colour). Rendered by <c>Controls.ColorGridView</c>.</summary>
 public sealed class ColorGridWidgetViewModel : ViewModelBase
@@ -481,14 +604,17 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
     /// <summary>Set when the colorgrid is clickable — bound to ColorGridView.CellCommand.</summary>
     public System.Windows.Input.ICommand? CellCommand { get; set; }
 
-    public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette)
+    /// <summary>Characters drawn as a letter on top of their tile; see WidgetSpec.Labels.</summary>
+    public string LabelChars { get; }
+
+    public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette, string? labels = null)
     {
         Palette = new Dictionary<char, Avalonia.Media.Color>();
         if (palette is not null)
             foreach ((string key, string val) in palette)
-                if (key.Length >= 1 && val is { Length: 7 } && val[0] == '#' &&
-                    uint.TryParse(val[1..], System.Globalization.NumberStyles.HexNumber, null, out uint hex))
-                    Palette[key[0]] = Avalonia.Media.Color.FromRgb((byte)(hex >> 16), (byte)(hex >> 8), (byte)hex);
+                if (key.Length >= 1 && HudColor.Resolve(val) is { } c)
+                    Palette[key[0]] = c;
+        LabelChars = labels ?? "";
     }
 
     private string _gridText = "";

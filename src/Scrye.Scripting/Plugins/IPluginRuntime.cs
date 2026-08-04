@@ -37,4 +37,8 @@ public interface IPluginRuntime : IDisposable
 
     /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
     void InvokeSubmit(string actionId, string text) { }
+
+    /// <summary>Invoke a bound buttonrow's callback with the clicked label and its 1-based
+    /// index. Default no-op so a runtime that predates dynamic buttonrows still compiles.</summary>
+    void InvokeChoice(string actionId, string label, int index) { }
 }

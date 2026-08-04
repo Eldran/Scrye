@@ -27,7 +27,8 @@ A strict engine/UI split, a staged receive pipeline (bytes → telnet → decode
 
 | Project | What it is |
 |---|---|
-| `Scrye.Core` | The UI-free engine: connection, telnet, MCCP, ANSI/MXP parsing, automation, state store, profiles, plugins host, logging, replay. Depends only on the base framework — **no NuGet references**. |
+| `Scrye.PluginContracts` | The plugin-facing contract: the `IPluginHost` API surface, declarative `PanelSpec` widgets, the semantic theme-token vocabulary, the manifest schema, and the plugin API version. No NuGet, no engine — a plugin can reference this alone. |
+| `Scrye.Core` | The UI-free engine: connection, telnet, MCCP, ANSI/MXP parsing, automation, state store, profiles, plugins host, logging, replay. Depends only on the base framework and `Scrye.PluginContracts` — **no NuGet references**. |
 | `Scrye.Scripting` | The Lua host (MoonSharp) and JavaScript host (Jint), the `world.*` facade, and the plugin manager. |
 | `Scrye.App` | The Avalonia MVVM UI: world tabs, output view, HUD panels, settings, profile tree, debugger. |
 | `Scrye.Cli` | A dependency-free harness; `--selftest` runs canned bytes through the telnet + ANSI pipeline and prints the parsed lines. |
@@ -36,6 +37,13 @@ A strict engine/UI split, a staged receive pipeline (bytes → telnet → decode
 | `Scrye.Core.Tests` | xUnit tests over the engine — parser, telnet, automation, highlights, profiles, state store, MIP, plugins, sequences, replay, logging, reconnect. |
 
 `Scrye.Core` staying NuGet-free is deliberate: it keeps the engine portable and makes it cheap to host somewhere other than the desktop app.
+
+`Scrye.PluginContracts` is split out for a related reason: the plugin API should be referenceable
+without dragging in the engine. Today nothing needs that — script plugins are text files and
+reference no assembly at all — but the boundary is what keeps the API honest. If a type can't
+live in an assembly that knows nothing about disk, sessions or Avalonia, it isn't part of the
+contract. The namespace stays `Scrye.Core.Plugins`: this is an assembly boundary, not a rename,
+so nothing else in the solution had to change.
 
 ## Build & run
 
@@ -72,9 +80,16 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
   "mudIds": ["*"],
   "entry": "main.lua",
   "lang": "lua",
-  "enabled": true
+  "enabled": true,
+  "requires": { "scryeApi": ">=1.1 <2.0" },
+  "permissions": ["output.read", "state.write", "ui.panels"]
 }
 ```
+
+The **plugin API is versioned independently of the client** (currently 1.1, and versioned as the
+`Scrye.PluginContracts` assembly), so a plugin declares what it needs and an incompatible build
+refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
+plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
 Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Several 3Scapes plugins ship bundled (`3s-build`, `3s-chaossea`, `3s-chat`, `3s-market`, `3s-raid`, `3s-viking-status`).
 
@@ -82,16 +97,26 @@ HUD panels are **declarative** — a plugin describes widgets and binds them to 
 
 ```lua
 scrye.addPanel{
-  title = "Viking Status", accent = "#46B45A",
+  title = "Viking Status", accent = "accent",
   widgets = {
-    { type = "gauge",     text = "Health", value = "char.vitals.hp", max = "char.vitals.maxhp" },
-    { type = "barlist",   bind = "vik.refinery" },
+    { type = "gauge", text = "Health", value = "char.vitals.hp", max = "char.vitals.maxhp" },
+    { type = "barlist", bind = "vik.refinery" },
+    { type = "table",  bind = "vik.cargo", columns = { "Good", "Qty", "Price" }, align = "lrr" },
     { type = "buttonrow", children = { { type = "button", text = "Raid", action = onRaid } } },
   },
 }
 ```
 
+Colours accept a `#RRGGBB` literal or a **semantic token** (`accent`, `warning`, `dim`, `success`, …)
+that each host resolves against its own palette, so one spec follows the user's colour scheme on
+the desktop and the phone's palette on mobile. `list` and `table` widgets size themselves to their
+bound data, so a variable-length collection no longer has to be composed into a pre-padded text blob.
+
 Because a panel is data rather than drawing code, the same spec can be rendered by something other than the desktop UI — which is what the mobile companion below is built on.
+
+Plugins are also **measured**: everything a plugin does on an output line runs on the session loop,
+so Scrye reports callbacks slower than 50 ms and unloads a plugin that fails ten times in a row,
+rather than letting one bad script quietly degrade a world.
 
 See **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** for the user guide and the full `scrye.*` plugin API.
 

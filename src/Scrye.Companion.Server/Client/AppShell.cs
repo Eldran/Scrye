@@ -29,6 +29,10 @@ internal static class AppShell
     color-scheme: dark;
     --bg:#0d0f12; --panel:#151920; --line:#222833; --dim:#6c7686;
     --fg:#c8ccd2; --accent:#46b45a; --warn:#f0c040; --bad:#ff6b6b;
+    /* Semantic plugin theme tokens (Scrye.Core.Plugins.ThemeToken). A plugin that writes
+       color = "warning" resolves here on the phone and against the desktop ThemeScheme on
+       the desktop, so one spec reads correctly in both. Names must match ThemeToken. */
+    --tok-panelalt:#1b212b; --tok-inset:#11151b; --tok-ok:#4cbb6c; --tok-info:#5aa8e0;
     /* Safe-area insets matter in standalone mode: without them the pad sits under
        the home indicator and the header under the notch. */
     --top: env(safe-area-inset-top, 0px);
@@ -143,6 +147,18 @@ internal static class AppShell
   .barrow .track i { display:block; height:100%; }
   .grid { font-size:11px; line-height:1.05; white-space:pre; overflow-x:auto; }
   .grid span { display:inline-block; min-width:0.62em; }
+
+  /* list / table widgets. A real <table> rather than the desktop's drawn columns: the browser
+     already does column measurement, and on a narrow phone letting it wrap beats the desktop's
+     fixed grid. Same data, layout appropriate to the device. */
+  .w-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .w-table th { text-align:left; font-weight:600; color:var(--dim); font-size:11px;
+                padding:0 8px 3px 0; border-bottom:1px solid var(--line); }
+  .w-table td { padding:2px 8px 2px 0; vertical-align:top; word-break:break-word; }
+  .w-table td:last-child, .w-table th:last-child { padding-right:0; }
+  .w-table .a-r { text-align:right; }
+  .w-table .a-c { text-align:center; }
+  .w-table.dimtrail td:not(:first-child) { color:var(--dim); }
   .w-inputrow { display:flex; gap:6px; margin-top:4px; }
   .w-inputrow input { flex:1; min-width:0; font:inherit; font-size:13px; padding:7px 8px;
                       border-radius:7px; background:var(--bg); color:var(--fg);

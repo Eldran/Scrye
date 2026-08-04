@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The plugin-facing contract, split out of Scrye.Core so a plugin author can reference the
+    API without referencing the engine. Everything here is what a plugin *declares*
+    (PluginManifest, permissions) or what the host *promises* (IPluginHost, PanelSpec,
+    ThemeToken, ScryeApi). Nothing here knows about disk, sessions, sockets or Avalonia —
+    if a type needs a file path or a live session, it belongs in Scrye.Core instead.
+
+    Like Scrye.Core, this has NO NuGet references: the whole point of a contracts package is
+    that taking a dependency on it costs the consumer nothing.
+
+    The namespace stays Scrye.Core.Plugins even though the assembly is Scrye.PluginContracts.
+    That is deliberate — the split is an assembly boundary, not a rename, so no existing
+    using-statement anywhere in the solution or in any published plugin had to change.
+  -->
+
+  <PropertyGroup>
+    <AssemblyName>Scrye.PluginContracts</AssemblyName>
+    <RootNamespace>Scrye.Core.Plugins</RootNamespace>
+
+    <!-- XML docs ship with the assembly: for a contracts package the doc comments ARE the
+         reference material a plugin author reads in IntelliSense. CS1591 is silenced because
+         self-evident members (PanelSpec.Title) don't need prose, and a wall of warnings would
+         only train people to ignore the ones that matter. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!--
+    Package metadata, ready but not wired to any publish step. Version tracks the plugin API
+    version in ScryeApi.Current, NOT the Scrye application version — that separation is the
+    entire reason this assembly exists, and a package version that drifted from it would
+    undo it. When you bump ScryeApi.Current, bump this to match.
+  -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Scrye.PluginContracts</PackageId>
+    <Version>1.1.0</Version>
+    <Authors>Joakim</Authors>
+    <Description>
+      The Scrye MUD client's plugin contract: the host API surface, declarative HUD panel
+      specs, the semantic theme-token vocabulary, the manifest schema, and the plugin API
+      version. Reference this to build a Scrye plugin without referencing the client.
+    </Description>
+    <PackageTags>scrye;mud;plugin;mud-client</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/eldran/Scrye</PackageProjectUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+</Project>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Scrye.Core.Plugins;
 using Scrye.Core.Text;
 
@@ -8,6 +9,12 @@ namespace Scrye.Scripting.Plugins;
 /// Discovery is the caller's job (<see cref="PluginCatalog"/>); this owns the loaded
 /// <see cref="IPluginRuntime"/>s (Lua or JS, chosen per-manifest) and their lifecycle. A plugin that throws on load is
 /// reported and skipped — one bad plugin never blocks the others.
+///
+/// <para>Two gates sit in front of a load: the plugin's declared <c>requires.scryeApi</c> range
+/// must admit <see cref="ScryeApi.Current"/>, and a plugin quarantined by
+/// <see cref="PluginDiagnostics"/> for repeated failures stays unloaded until the user explicitly
+/// reloads or re-enables it. Both refuse loudly rather than silently — a plugin that isn't
+/// running should never be a mystery.</para>
 /// </summary>
 public sealed class PluginManager : IDisposable
 {
@@ -19,6 +26,7 @@ public sealed class PluginManager : IDisposable
     private readonly string? _userRoot;                     // plugins under here are removable (deletable)
     private readonly Action<string, bool>? _persistEnable;  // (pluginId, enabled) → save the choice to the profile
     private readonly List<IPluginRuntime> _runtimes = new();
+    private readonly PluginDiagnostics _diagnostics;
     // Authoritative opt-in set: the plugins this world should load. Seeded from the
     // character's profile; Enable/Disable mutate it and persist via _persistEnable.
     private readonly HashSet<string> _enabled;
@@ -30,6 +38,10 @@ public sealed class PluginManager : IDisposable
 
     public IReadOnlyList<string> LoadedIds => _loadedIds;
     public int Count => _runtimes.Count;
+
+    /// <summary>Per-plugin cost and failure accounting. Mutated on the loop; read via
+    /// <see cref="PluginDiagnostics.Snapshot"/> from the UI.</summary>
+    public PluginDiagnostics Diagnostics => _diagnostics;
 
     /// <param name="plugins">Descriptors to load (already filtered by MUD/enabled).</param>
     /// <param name="host">Session bridge the plugins act through.</param>
@@ -56,6 +68,7 @@ public sealed class PluginManager : IDisposable
         _rediscover = rediscover;
         _userRoot = string.IsNullOrEmpty(userRoot) ? null : Path.GetFullPath(userRoot);
         _persistEnable = persistEnable;
+        _diagnostics = new PluginDiagnostics(report);
         // Load only the opted-in plugins (that are actually present in the catalogue).
         foreach (PluginDescriptor d in _descriptors)
             if (_enabled.Contains(d.Manifest.Id)) LoadOne(d);
@@ -64,11 +77,27 @@ public sealed class PluginManager : IDisposable
 
     private void LoadOne(PluginDescriptor d)
     {
+        // API gate first: refusing here turns "my plugin does nothing and prints a weird Lua
+        // error" into one sentence naming the actual problem.
+        if (!d.IsApiCompatible(out string why))
+        {
+            _report($"plugin '{d.Manifest.Id}' was not loaded because {why}");
+            Republish();
+            return;
+        }
+        // A plugin quarantined this session stays down until the user asks for it back.
+        if (_diagnostics.IsQuarantined(d.Manifest.Id))
+        {
+            _report($"plugin '{d.Manifest.Id}' is quarantined after repeated errors — press Reload to try again");
+            Republish();
+            return;
+        }
+
         try
         {
             IPluginRuntime runtime = d.Manifest.Lang.Equals("js", StringComparison.OrdinalIgnoreCase)
-                ? new JsPluginRuntime(d, _host)
-                : new LuaPluginRuntime(d, _host);
+                ? new JsPluginRuntime(d, _host, _diagnostics)
+                : new LuaPluginRuntime(d, _host, _diagnostics);
             runtime.Load();
             _runtimes.Add(runtime);
             _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
@@ -98,9 +127,12 @@ public sealed class PluginManager : IDisposable
     {
         _loadedIds = _runtimes.Select(r => r.Id).ToArray();
         var loaded = new HashSet<string>(_loadedIds, StringComparer.Ordinal);
+        _diagnostics.Publish();
         _info = _descriptors
             .Select(d => new PluginInfo(d.Manifest.Id, d.Manifest.Name, d.Manifest.Version,
-                                        loaded.Contains(d.Manifest.Id), IsRemovable(d)))
+                                        loaded.Contains(d.Manifest.Id), IsRemovable(d),
+                                        d.Permissions, d.Manifest.Requires?.ScryeApi,
+                                        d.IsApiCompatible(out string why) ? null : why))
             .ToArray();
     }
 
@@ -111,8 +143,14 @@ public sealed class PluginManager : IDisposable
     public void Reload(string id)
     {
         PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
-        if (d is null || _runtimes.All(r => r.Id != id)) return;
+        if (d is null) return;
+        // A quarantined plugin has no runtime, so the old "not loaded → do nothing" guard would
+        // make Reload the one button that cannot rescue it. Explicit reload is the user saying
+        // "I fixed the script", so wipe its history and give it a clean run.
+        bool quarantined = _diagnostics.IsQuarantined(id);
+        if (!quarantined && _runtimes.All(r => r.Id != id)) return;
         UnloadRuntime(id);
+        _diagnostics.Reset(id);
         LoadOne(d);
     }
 
@@ -130,6 +168,7 @@ public sealed class PluginManager : IDisposable
     public void Enable(string id)
     {
         bool changed = _enabled.Add(id);
+        _diagnostics.Reset(id);   // enabling is an explicit request; clear any quarantine
         if (_runtimes.All(r => r.Id != id))
         {
             PluginDescriptor? d = _descriptors.FirstOrDefault(x => x.Manifest.Id == id);
@@ -202,12 +241,30 @@ public sealed class PluginManager : IDisposable
         string? rewrite = null;
         for (int i = 0; i < _runtimes.Count; i++)
         {
+            // This is the hot path — every plugin, every line, on the session loop. Timing is a
+            // Stopwatch timestamp pair (no allocation, no syscall on the platforms we ship), and
+            // the accounting itself only does real work on the rare slow/failed call.
+            long t0 = Stopwatch.GetTimestamp();
             (bool g, string? rw) = _runtimes[i].ProcessLine(text);
+            _diagnostics.RecordCall(_runtimes[i].Id, Stopwatch.GetTimestamp() - t0);
             if (g) gag = true;
             if (rw is not null) rewrite = rw;
         }
+        DrainQuarantine();
         if (gag) return null;
         return rewrite is not null ? Line.FromText(rewrite) : line;
+    }
+
+    /// <summary>
+    /// Unload anything the diagnostics quarantined during a dispatch. Called <b>after</b> a
+    /// dispatch loop, never inside one: unloading mutates <see cref="_runtimes"/>, which the loop
+    /// is indexing, and a plugin failing its tenth time mid-line would otherwise shift every
+    /// later plugin's index and skip one.
+    /// </summary>
+    private void DrainQuarantine()
+    {
+        IReadOnlyList<string> ids = _diagnostics.TakeQuarantined();
+        for (int i = 0; i < ids.Count; i++) UnloadRuntime(ids[i]);
     }
 
     /// <summary>Run user input through every plugin's aliases: returns the command to
@@ -216,34 +273,41 @@ public sealed class PluginManager : IDisposable
     public string? ProcessInput(string text)
     {
         string current = text;
+        bool consumedByPlugin = false;
         for (int i = 0; i < _runtimes.Count; i++)
         {
+            long t0 = Stopwatch.GetTimestamp();
             (bool consumed, string? rewrite) = _runtimes[i].ProcessInput(current);
-            if (consumed) return null;
+            _diagnostics.RecordCall(_runtimes[i].Id, Stopwatch.GetTimestamp() - t0);
+            if (consumed) { consumedByPlugin = true; break; }
             if (rewrite is not null) current = rewrite;
         }
-        return current;
+        DrainQuarantine();
+        return consumedByPlugin ? null : current;
     }
 
     public void DispatchChannel(string channel, string message)
     {
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchChannel(channel, message);
+        DrainQuarantine();
     }
 
     public void DispatchGmcp(string package, string json)
     {
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchGmcp(package, json);
+        DrainQuarantine();
     }
 
     /// <summary>Advance every plugin's timers (fed from the session's per-second tick).</summary>
     public void Tick(double dtSeconds)
     {
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].Tick(dtSeconds);
+        DrainQuarantine();
     }
 
-    public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchConnect(); }
-    public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); }
-    public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); }
+    public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchConnect(); DrainQuarantine(); }
+    public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); DrainQuarantine(); }
+    public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); DrainQuarantine(); }
 
     /// <summary>Fire a panel-button callback owned by <paramref name="pluginId"/>. Runs on the loop thread.</summary>
     /// <summary>Fire a colorgrid cell-click callback with the clicked cell. Loop-thread only.</summary>
@@ -266,6 +330,14 @@ public sealed class PluginManager : IDisposable
         rt?.InvokeSubmit(actionId, text);
     }
 
+    /// <summary>Fire a bound buttonrow's callback with the clicked label and its 1-based index.
+    /// Loop-thread only.</summary>
+    public void InvokeChoice(string pluginId, string actionId, string label, int index)
+    {
+        IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
+        rt?.InvokeChoice(actionId, label, index);
+    }
+
     public void Dispose()
     {
         foreach (IPluginRuntime r in _runtimes) r.Dispose();
@@ -274,5 +346,19 @@ public sealed class PluginManager : IDisposable
     }
 }
 
-/// <summary>A discovered plugin's identity + loaded/removable state, for the plugins-manager UI.</summary>
-public readonly record struct PluginInfo(string Id, string Name, string Version, bool Loaded, bool Removable);
+/// <summary>
+/// A discovered plugin's identity, state and declarations, for the plugins-manager UI.
+/// <paramref name="Permissions"/> is what the manifest says it intends to do (declarative only —
+/// see <see cref="PluginPermissions"/>), and <paramref name="IncompatibleReason"/> is non-null
+/// when the plugin cannot load on this build at all, so the manager can explain itself instead of
+/// just showing a plugin that never turns on.
+/// </summary>
+public readonly record struct PluginInfo(
+    string Id,
+    string Name,
+    string Version,
+    bool Loaded,
+    bool Removable,
+    IReadOnlyList<string> Permissions,
+    string? RequiresApi,
+    string? IncompatibleReason);

@@ -83,11 +83,15 @@ Scrye can serve a small web app to your phone so you can read output, send comma
 
 ### Turning it on
 
-In the world's command line:
+Click **📱 Companion** in the bottom bar. The panel shows whether the server is running, a **QR code** to point your phone's camera at, the access token, and a list of everything in this world that can raise a notification. Start and stop it from there.
+
+The token is deliberately only shown in the panel. It used to be printed into the output pane, which meant session logging wrote a live credential to disk — the panel avoids that entirely.
+
+The same things are available from the command line, which is quicker mid-fight:
 
 | Command | What it does |
 |---|---|
-| `.companion` | Start the server. Prints the URL, the access token, and this world's session id. |
+| `.companion` | Start the server and open the panel. Prints the URL and this world's session id. |
 | `.companion status` | Is it running, where, how many phones are registered for notifications. |
 | `.companion tailscale` | How to reach it from outside the house — prints the exact `tailscale serve` command to run. |
 | `.companion notify` | List everything in this world that can raise a notification. |
@@ -96,7 +100,7 @@ In the world's command line:
 
 The server binds to **loopback only**. On the same machine that's `http://127.0.0.1:4747`; to reach it from a phone you need [Tailscale](https://tailscale.com) in front of it, which also gives you HTTPS (iOS won't allow notifications or home‑screen install without it). `.companion tailscale` prints the one command you need; the full walkthrough — including the login and consent steps that aren't obvious — is in **`docs/Scrye-Companion-Setup.md`**.
 
-Once Tailscale is serving, the phone URL looks like `https://desktop-xxxx.your-tailnet.ts.net/`. If the phone is signed into the same tailnet, Scrye recognises it by its Tailscale login and **you never type the token**. The token is the fallback for anything off the tailnet, and it changes every time the server starts.
+Once Tailscale is serving, the phone URL looks like `https://desktop-xxxx.your-tailnet.ts.net/` — scan the panel's QR code rather than typing it. If the phone is signed into the same tailnet, Scrye recognises it by its Tailscale login and **you never type the token either**. The token is the fallback for anything off the tailnet, and it changes every time the server starts.
 
 ### Putting it on the home screen
 
@@ -187,7 +191,9 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
   "mudIds": ["*"],
   "entry": "main.lua",
   "lang": "lua",
-  "enabled": true
+  "enabled": true,
+  "requires": { "scryeApi": ">=1.1 <2.0" },
+  "permissions": ["output.read", "commands.send", "ui.panels"]
 }
 ```
 
@@ -195,11 +201,83 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
 |---|---|
 | `id` | Unique id. Used for storage, logs, and its state namespace. Keep it stable. |
 | `name` | Display name in the Plugins panel. |
-| `version`, `author`, `description` | Metadata. |
+| `version`, `author`, `description` | Metadata. `version` is *your* version, unrelated to the API version. |
 | `mudIds` | Which worlds it applies to. `["*"]` (or empty) = all worlds; otherwise a list of MUD ids. |
 | `entry` | Entry script relative to the folder. Default `main.lua`. |
 | `lang` | `"lua"` (MoonSharp) or `"js"` (Jint). Default `lua`. |
 | `enabled` | Whether it's a candidate to load. Users still opt in per character. |
+| `requires` | Compatibility constraints. See below. Optional. |
+| `permissions` | What the plugin intends to do, shown to the user. See below. Optional. |
+
+## The plugin API version
+
+Scrye versions the plugin contract — the `scrye.*` functions, the widget vocabulary, the manifest
+schema — **separately from the application**. Scrye 2.4 and Scrye 3.1 might both speak plugin API
+1.1. Declare what you need:
+
+```json
+"requires": { "scryeApi": ">=1.1 <2.0" }
+```
+
+A client that can't satisfy the range refuses the plugin at load and says so in the world output
+and the Plugins panel, rather than letting your script die on a missing function forty lines in.
+
+**The grammar** is space-separated constraints, all of which must hold. Each is an operator
+(`>=`, `>`, `<=`, `<`, `=`) plus a version, or a bare version meaning `>=`. Versions are `major`
+or `major.minor`.
+
+| Spec | Means |
+|---|---|
+| `">=1.1 <2.0"` | The usual shape: needs a 1.1 feature, expects 2.0 to break it. |
+| `"1.1"` | 1.1 or newer, including 2.x. Fine if you only use long-stable calls. |
+| `"=1.1"` | Exactly 1.1. Rarely what you want. |
+
+**Semantics.** A **minor** bump only adds — new functions, new widget types, new optional manifest
+fields — so everything that worked keeps working. A **major** bump removes or changes meaning, and
+plugins written for the previous major are expected to break.
+
+Omitting `requires` entirely means "load me anywhere", which is what every plugin written before
+this field existed does. That's fine for simple plugins; declare a range once you depend on
+something specific.
+
+**Current API version: 1.1.** Version 1.1 added theme tokens, the `list`/`table` widgets, and the
+`requires`/`permissions` fields themselves.
+
+## Permissions
+
+```json
+"permissions": ["output.read", "commands.send", "ui.panels"]
+```
+
+These are shown to the user in the Plugins panel before they enable your plugin. Declaring them is
+good manners and will matter more later.
+
+**Be clear about what this is.** Today these are *declarations, not enforcement* — nothing stops a
+plugin that didn't declare `commands.send` from calling `scrye.send`. The real sandbox is the
+scripting engine: no `io`, no `os.execute`, no filesystem, no CLR access, and that part is
+enforced. What is **not** bounded is the thing that matters most on a MUD — `scrye.send` can issue
+any command your character can type. A plugin can't read your files; it can drop your inventory.
+That's why `commands.send`, `output.modify`, `aliases.manage` and `variables.write` are flagged as
+sensitive in the manager.
+
+| Permission | What it means |
+|---|---|
+| `commands.send` | Send commands to the MUD as you |
+| `output.modify` | Hide or rewrite lines before you see them |
+| `output.read` | Read everything the MUD sends |
+| `triggers.manage` / `aliases.manage` | Add its own triggers / aliases |
+| `variables.read` / `variables.write` | Read / change world variables shared with your triggers |
+| `state.read` / `state.write` | Read character state / publish into the state tree |
+| `timers.manage` | Run code on a timer |
+| `storage.private` | Save data between sessions |
+| `notifications.show` | Show notifications (and push to your phone) |
+| `sound.play` | Play sounds |
+| `capture.write` | Route lines into capture panes |
+| `log.write` | Write to its own log file |
+| `ui.panels` | Add HUD panels |
+
+Unknown names are shown verbatim rather than hidden, so a plugin written for a newer Scrye still
+communicates its intent on an older one.
 
 ## The scripting environment
 
@@ -304,13 +382,71 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
 | `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end` |
+| `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
+| `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
 
 Notes:
 
-- **Dynamic content** flows through `bind` + `setState`: the *set* of widgets is fixed when the panel is built, but their bound text updates live. You can't add or remove widgets at runtime, so for a variable‑length list either use a single `text` widget or a `colorgrid`.
+- **Dynamic content** flows through `bind` + `setState`: the *set* of widgets is fixed when the panel is built, but their bound content updates live. You still can't add or remove *widgets* at runtime — but `list` and `table` are single widgets whose **row count follows the bound value**, so a variable‑length collection no longer needs a `text` blob or a `colorgrid`.
+- **If you're reaching for `string.format` and padding, use `table`.** Composing aligned columns in Lua is what `text` widgets forced; the host measures columns for you, and the mobile companion renders a real table rather than pre‑padded text that wraps badly on a phone.
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
 - `colorgrid` `onClick` gives you the clicked cell's `col`, `row`, and character — map that back to your data.
 - `input` seeds its field from `bind`; refresh it by `setState`‑ing that key.
+- `table` sizes each column to its widest cell. `align` takes one character per column — `l`, `r`, `c` — and right‑aligning numeric columns is worth doing; without it a table of quantities reads worse than the blob it replaced.
+- Rows with too few cells render blank in the missing columns, so a "nothing here" row can just be one cell.
+
+### Example — a `table` widget
+
+```lua
+local P = "plugin." .. scrye.id .. "."
+
+scrye.setState(P .. "cargo", table.concat({
+  "Iron\t120\t18g",
+  "Timber\t80\t7g",
+  "Silk\t12\t240g",
+}, "\n"))
+
+scrye.addPanel{
+  title = "Cargo",
+  widgets = {
+    { type = "table", bind = P .. "cargo",
+      columns = { "Good", "Qty", "Price" }, align = "lrr" },
+  },
+}
+```
+
+## Colours and theme tokens
+
+Everywhere a colour is accepted — a widget's `color`, a panel's `accent` / `background` / `color`,
+and `colorgrid` palette values — you can pass either a `#RRGGBB` literal **or a semantic token**:
+
+```lua
+{ type = "label", text = "Low fuel", color = "warning" }
+```
+
+| Token | Meaning |
+|---|---|
+| `accent` | The scheme's accent — headings, emphasis |
+| `text` | Primary body text |
+| `dim` | Secondary text, captions, units |
+| `bg`, `panel`, `panelalt`, `inset` | Surfaces, increasingly recessed |
+| `line` | Borders and separators |
+| `success` | Good / healthy / complete |
+| `warning` | Caution — worth a look, not broken |
+| `error` | Bad / failed / critical |
+| `info` | Neutral informational highlight |
+
+**Prefer tokens over literals.** A literal like `"#202020"` hard‑codes one colour scheme into a
+client that ships six including a light one, and the mobile companion has its own palette — the
+same token resolves correctly in all of them, a literal doesn't. Tokens are part of the API and
+won't be renamed without a major version bump.
+
+Tokens are resolved **when the panel is built**, not bound live: plugin panel brushes have to be
+immutable because panels are constructed on the session loop thread. Switching colour scheme
+re‑colours the app immediately and re‑colours plugin panels on the next **Reload** or reconnect.
+
+An unrecognised colour name falls back to the theme default rather than rendering something
+arbitrary — so a typo shows as "unstyled", not as an invisible widget.
 
 ## State namespaces you'll see
 
@@ -318,6 +454,27 @@ Notes:
 - `character.*` — vitals etc. (e.g. `character.health.current`, `character.health.max`).
 - `enemy.name`, `enemy.health` — current target.
 - Game‑specific feeds — e.g. on 3Scapes the viking MIP feed lands under `vik.*` (`vik.daler`, `vik.wstock`, `vik.carts`, `vik.buildings`, …), readable by any plugin via `scrye.getState("vik.<key>")` and watchable with `scrye.watch("vik", fn)`.
+
+## When a plugin misbehaves
+
+Scrye watches what plugins cost and whether they work, because everything a plugin does on an
+output line runs **synchronously on the session loop** — a slow plugin is not slow in isolation,
+it delays that world's output.
+
+- **Slow callbacks.** A single call over 50 ms is reported in the world output with the plugin's
+  name and its running average, then rate‑limited to one message per plugin per 30 s so a slow
+  plugin can't flood the output it's already slowing down. The Plugins panel shows a running
+  count and the worst case.
+- **Repeated failures.** Errors in a callback are caught and printed (one bad plugin never takes
+  down line processing), but they're also counted. **Ten consecutive failures unloads the
+  plugin** and says why. Consecutive, not total — a plugin that throws on one odd line a day
+  isn't broken; one that throws on every line is. Any success resets the streak.
+- **Getting it back.** Quarantine isn't persisted, so reconnecting clears it. Pressing **Reload**
+  wipes the plugin's error history and gives it a clean run — that's the button to press after
+  you've fixed the script.
+
+If the Plugins panel shows a plugin that simply won't turn on, check the row: an API‑range
+mismatch is reported there explicitly rather than looking like a plugin that quietly does nothing.
 
 ## Installing, reloading, packaging
 

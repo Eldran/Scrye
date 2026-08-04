@@ -6,6 +6,14 @@
 --     bound to plugin.3s-raid.* state. The HUD's visibility is app-managed.
 --   * GRUDGES parsing + grudge cooldown formatting were only used for window
 --     tooltips — dropped with the window.
+--   * Clicking a town to target it IS reproduced: the target list is a bound buttonrow
+--     fed from the live RTARGETS feed (plugin API 1.3), replacing the miniwindow's
+--     per-town hotspots. The row renders on one line, so it is capped at 6 towns; the
+--     full list with heat values is in the text table below it and in 'araid targets'.
+--   * The per-town heat table IS reproduced: the original colour-coded it in the
+--     miniwindow, here it is a text block bound to plugin.3s-raid.heat (also
+--     printable with 'araid heat'). Calm towns — those within AR_MARGIN of the
+--     lowest heat, i.e. the auto-target pool — are marked, as is the live target.
 --   * math.randomseed(os.time()) dropped (no os.* in sandbox); math.random is
 --     used unseeded for the auto-target tie-break pool.
 --   * Elapsed time (30 s pass throttle, auto-target hold) is counted with a
@@ -24,7 +32,8 @@ local SP = "plugin." .. scrye.id .. "."
 
 -- ---------- helpers ----------
 
-local function note(s) scrye.print(s) end
+-- "[raid]" tag, restoring the original's orange ColourNote tag
+local function note(s) scrye.print("@{#FF2E88,bold}[raid]@{} " .. s) end
 
 local function split(s, sep)
   local t = {}
@@ -139,6 +148,43 @@ local function publish()
       "ships %s | keep %d | auto %s | convoy %s | hold %ds | reserve %s",
       tostring(ar.ships), ar.keep, ar.auto_target and "on" or "off",
       ar.convoy and "on" or "off", ar.hold or 60, ar.reserve ~= "" and ar.reserve or "none"))
+    -- per-town heat table: the miniwindow drew this colour-coded (green = calm /
+    -- auto pick, cyan = manual target); a text widget marks the same two cases.
+    local map, order = heat_of()
+    local hl = {}
+    if #order == 0 then
+      hl[1] = "no heat data yet (waiting on the vik.heat feed)"
+    else
+      local minh
+      for _, t in ipairs(order) do
+        local h = map[t] or 0
+        if not minh or h < minh then minh = h end
+      end
+      local cur
+      if ar.auto_target then
+        cur = (ar.locked_target and ar.locked_target ~= "") and ar.locked_target or lowest_heat_town()
+      elseif ar.target ~= "" then
+        cur = ar.target
+      end
+      hl[#hl + 1] = string.format("%-18s %5s  %s", "Town", "Heat", "")
+      for _, t in ipairs(order) do
+        local h = map[t] or 0
+        local mark = ""
+        if cur and t:lower() == tostring(cur):lower() then mark = "<- target"
+        elseif h <= minh + AR_MARGIN then mark = "calm" end
+        hl[#hl + 1] = string.format("%-18s %5d  %s", t, h, mark)
+      end
+    end
+    scrye.setState(SP .. "heat", table.concat(hl, "\n"))
+
+    -- clickable target list: the home towns, calmest first, so the button you want is
+    -- usually the leftmost one. Capped because a buttonrow lays out on a single line.
+    local picks = {}
+    for _, t in ipairs(order) do picks[#picks + 1] = t end
+    table.sort(picks, function(x, y) return (map[x] or 0) < (map[y] or 0) end)
+    while #picks > 6 do table.remove(picks) end
+    scrye.setState(SP .. "towns", table.concat(picks, "\n"))
+
     -- seed the panel's input fields with the current settings
     scrye.setState(SP .. "v_target",  ar.target)
     scrye.setState(SP .. "v_ships",   tostring(ar.ships))
@@ -236,8 +282,15 @@ end
 local function ar_config(rest)
   local low = trim(rest or ""):lower()
   if low == "targets" then ar_list_targets() return end
-  if low == "on" then ar.on = true; scrye.store.set("on", "1")
-  elseif low == "off" then ar.on = false; scrye.store.set("on", "0")
+  if low == "heat" then
+    publish()
+    for line in scrye.getState(SP .. "heat"):gmatch("[^\n]+") do note(line) end
+    return
+  end
+  -- NB: the armed flag is deliberately NOT persisted -- the plugin always loads
+  -- disarmed (see `ar.on` above), so writing it to the store would be a dead write.
+  if low == "on" then ar.on = true
+  elseif low == "off" then ar.on = false
   elseif low == "convoy on" then ar.convoy = true; scrye.store.set("convoy", "1")
   elseif low == "convoy off" then ar.convoy = false; scrye.store.set("convoy", "0")
   elseif low == "all" or low == "ships all" then ar.ships = "all"; scrye.store.set("ships", "all")
@@ -258,7 +311,7 @@ local function ar_config(rest)
       if ship:lower() == "none" or ship:lower() == "off" then ship = "" end
       ar.reserve = ship; scrye.store.set("reserve", ship)
     elseif low ~= "" then
-      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets")
+      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat")
       return
     end
   end
@@ -290,13 +343,22 @@ scrye.addPanel{
     { type = "input", text = "Hold secs ",    bind = SP .. "v_hold",    onSubmit = function(t) ar_config("hold " .. t) end },
     { type = "input", text = "Reserve ship ", bind = SP .. "v_reserve", onSubmit = function(t) ar_config("reserve " .. t) end },
     { type = "text", bind = SP .. "status" },
+    { type = "label", text = "Set target (calmest first):", color = "#8FA0B0" },
+    { type = "buttonrow", bind = SP .. "towns",
+      onClick = function(town) ar_config("target " .. town) end },
+    { type = "label", text = "Town heat (calm = in the auto-target pool):", color = "#8FA0B0" },
+    { type = "text", bind = SP .. "heat" },
   },
 }
 
 scrye.addAlias{ pattern = "^araid$",         regex = true, run = function() ar_status() end }
 scrye.addAlias{ pattern = "^araid targets$", regex = true, run = function() ar_list_targets() end }
 scrye.addAlias{ pattern = "^araid (.+)$",    regex = true, run = function(rest) ar_config(rest) end }
--- 'araidwin' dropped: the HUD panel replaces the miniwindow and its visibility is app-managed.
+-- 'araidwin' is consumed rather than passed to the MUD: the HUD panel replaces the
+-- miniwindow and its visibility is app-managed.
+scrye.addAlias{ pattern = "^araidwin$", regex = true, run = function()
+  note("the Auto-Raid panel is managed by Scrye - show or hide it from the HUD. ('araid heat' prints the town heat table.)")
+end }
 
 -- ---------- timers / feed hooks ----------
 

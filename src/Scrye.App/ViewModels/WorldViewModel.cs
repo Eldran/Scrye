@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.IO;
 using Avalonia.Controls;
+using Avalonia.Input.Platform;   // Avalonia 12: SetTextAsync is an extension method (ClipboardExtensions)
 using Avalonia.Threading;
 using Scrye.App.Companion;
 using Scrye.Companion.Protocol;
@@ -310,6 +311,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Game-state inspector: live filterable view of the StateStore (idea #9).</summary>
     public StateViewModel StateInspector { get; }
 
+    /// <summary>Companion panel: start/stop the phone server, show how to reach it, and list
+    /// what can notify. Named <c>CompanionPanel</c> rather than <c>Companion</c> because that
+    /// name is already the protocol fan-out hub on this class.</summary>
+    public CompanionViewModel CompanionPanel { get; }
+
     private string _input = "";
     public string Input { get => _input; set => SetField(ref _input, value); }
 
@@ -523,7 +529,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (pluginId, actionId, col, row, ch) =>
                 _session.Post(() => _plugins!.InvokeCellAction(pluginId, actionId, col, row, ch)),
             (pluginId, actionId, text) =>
-                _session.Post(() => _plugins!.InvokeSubmit(pluginId, actionId, text)));
+                _session.Post(() => _plugins!.InvokeSubmit(pluginId, actionId, text)),
+            (pluginId, actionId, label, index) =>
+                _session.Post(() => _plugins!.InvokeChoice(pluginId, actionId, label, index)));
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.
@@ -556,10 +564,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         var pluginData = new PluginDataStore(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "plugin-data"),
             profile.Name, AppendSystem);
+        // The host renders the line itself: it applies the plugin's inline colour markup and
+        // prepends the "[id] " tag in PluginColour, so uncoloured plugins look exactly as before
+        // and coloured ones arrive ready to enqueue. Token names resolve through HudColor, the
+        // same table the HUD widget specs use.
         var host = new SessionPluginHost(_session,
-            (id, text) => _pending.Enqueue(Line.FromText($"[{id}] {text}", PluginColour)),
+            (id, line) => _pending.Enqueue(line),
             (id, spec) => Hud.AddPanel(id, spec),
-            pluginData);
+            pluginData,
+            HudColor.ResolveRgb,
+            PluginColour);
         string userPluginRoot = pluginRoots[1];   // %APPDATA%/Scrye/plugins — writable, removable
         // Plugins are opt-in per character: the manager offers everything discovered for this
         // MUD but loads only what this character enabled (empty for quick-connect). Toggling in
@@ -583,7 +597,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (id, done) => _session.Post(() => { _plugins.Remove(id); Dispatcher.UIThread.Post(done); }),
             done => _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }),
             done => { ScaffoldNewPlugin(userPluginRoot); _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }); },
-            () => OpenPluginsFolder(userPluginRoot));
+            () => OpenPluginsFolder(userPluginRoot),
+            () => _plugins.Diagnostics.Snapshot());   // immutable snapshot — safe to read from the UI thread
+
+        CompanionPanel = new CompanionViewModel(
+            () => CompanionControl,
+            () => SessionId,
+            () => _session.Automation.NotifyingTriggers,
+            CopyToClipboard);
         // Plugins process each server line (onLine gag/rewrite + triggers) and user input
         // (aliases) via the session's filter hooks — so gagging actually suppresses display.
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook
@@ -930,14 +951,37 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             for (int n = 2; Directory.Exists(Path.Combine(userRoot, id)); n++) id = "my-plugin-" + n;
             string dir = Path.Combine(userRoot, id);
             Directory.CreateDirectory(dir);
+            // The scaffold is the documentation most authors actually read, so it declares an API
+            // range and its permissions rather than leaving both to be discovered later.
             File.WriteAllText(Path.Combine(dir, "plugin.json"),
-                "{\n  \"id\": \"" + id + "\",\n  \"name\": \"" + id + "\",\n  \"version\": \"0.1.0\",\n  \"mudIds\": [\"*\"]\n}\n");
+                "{\n" +
+                "  \"id\": \"" + id + "\",\n" +
+                "  \"name\": \"" + id + "\",\n" +
+                "  \"version\": \"0.1.0\",\n" +
+                "  \"mudIds\": [\"*\"],\n" +
+                "  \"requires\": { \"scryeApi\": \">=" + Scrye.Core.Plugins.ScryeApi.CurrentText + " <2.0\" },\n" +
+                "  \"permissions\": [\"output.read\", \"ui.panels\", \"state.write\"]\n" +
+                "}\n");
             File.WriteAllText(Path.Combine(dir, "main.lua"),
                 "-- New Scrye plugin. Edit this file, then click Reload in the Plugins panel.\n" +
                 "scrye.print(\"" + id + " loaded\")\n\n" +
                 "scrye.onLine(function(line)\n" +
                 "    -- react to output here; return false to gag a line, a string to rewrite it\n" +
-                "end)\n");
+                "end)\n\n" +
+                "-- A panel is data, not drawing: describe widgets and bind them to state paths.\n" +
+                "-- Colours accept a #RRGGBB literal or a theme token (accent, dim, success,\n" +
+                "-- warning, error, info, ...) -- prefer the token so your panel follows the\n" +
+                "-- user's colour scheme and renders correctly on the mobile companion.\n" +
+                "local P = \"plugin.\" .. scrye.id .. \".\"\n\n" +
+                "scrye.setState(P .. \"rows\", \"Example\\tready\")\n\n" +
+                "scrye.addPanel{\n" +
+                "    title = \"" + id + "\", accent = \"accent\",\n" +
+                "    widgets = {\n" +
+                "        { type = \"label\", text = \"Hello from " + id + "\", color = \"dim\" },\n" +
+                "        -- a list grows and shrinks with its bound value, unlike the fixed widget set\n" +
+                "        { type = \"list\", bind = P .. \"rows\" },\n" +
+                "    },\n" +
+                "}\n");
             AppendSystem($"created plugin '{id}' — edit {Path.Combine(dir, "main.lua")}, then Reload");
         }
         catch (Exception ex) { AppendSystem("could not create plugin: " + ex.Message); }
@@ -985,17 +1029,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// compiled out.</summary>
     public CompanionController? CompanionControl { get; set; }
 
-    /// <summary><c>.companion [on|off|status]</c> — start or stop the mobile companion
-    /// server and print its address and token.
+    /// <summary><c>.companion [on|off|status|tailscale|notify]</c> — start or stop the mobile
+    /// companion server and report its address.
     ///
-    /// <para>A client command rather than a menu item for now: it needs no XAML, follows the
-    /// same shape as <c>.log</c> and <c>.tts</c>, and prints the credential straight into the
-    /// output pane where it can be copied. A proper panel replaces it once the protocol has
-    /// been proven from a browser (companion design §10 step 3).</para>
+    /// <para>The Companion panel in the bottom bar is now the main way in; this stays for
+    /// muscle memory and because a keyboard-only path is genuinely quicker mid-session.</para>
     ///
-    /// <para>Note the token is echoed into scrollback, which means session logging can
-    /// capture it. That is acceptable for a loopback-only bring-up credential that is
-    /// regenerated on every start, and is another reason this is temporary.</para></summary>
+    /// <para>It no longer prints the access token. It used to, and that was a real problem:
+    /// scrollback is what session logging writes to disk, so every <c>.companion</c> put a
+    /// live credential in a log file. The panel can show it without it ever entering
+    /// scrollback, so the command points there instead.</para></summary>
     private void HandleCompanionCommand(string arg)
     {
         if (CompanionControl is not CompanionController c)
@@ -1020,7 +1063,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 : "companion server stopped");
             if (c.IsRunning && c.TrustedLogin is { } who)
                 AppendSystem($"  tailnet login {who} connects without a token");
-            if (c.IsRunning) AppendSystem($"  token (only needed off-tailnet): {c.Token}");
+            if (c.IsRunning) AppendSystem("  token: see the Companion panel (bottom bar)");
             if (c.IsRunning) AppendSystem($"  push devices registered: {c.PushSubscriberCount}");
             AppendSystem($"  this world's sessionId: {SessionId}");
             _ = ReportTailscaleAsync(c);
@@ -1056,8 +1099,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (c.IsRunning)
         {
             AppendSystem($"companion server already running at {c.Url}");
-            AppendSystem($"  token: {c.Token}");
             AppendSystem($"  this world's sessionId: {SessionId}");
+            CompanionPanel.Open();
             return;
         }
 
@@ -1072,9 +1115,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             AppendSystem($"companion server started at {c.Url}");
             if (c.TrustedLogin is { } login)
                 AppendSystem($"  tailnet login {login} may connect WITHOUT a token");
-            AppendSystem($"  token (only needed off-tailnet): {c.Token}");
             AppendSystem($"  this world's sessionId: {SessionId}");
+            AppendSystem("  token and QR code: the Companion panel, opening now");
             AppendSystem("  usage: .companion status | tailscale | notify | notify test | off");
+            CompanionPanel.Open();
         }
         catch (Exception ex)
         {
@@ -1140,12 +1184,36 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
+    /// <summary>Put text on the system clipboard.
+    ///
+    /// <para>Reached through the application lifetime rather than a visual, because a view
+    /// model has no control to walk up from. Failures are swallowed: a clipboard that is
+    /// locked by another process is a normal Windows occurrence and not worth an error
+    /// dialog over a copy button.</para></summary>
+    private static void CopyToClipboard(string text)
+    {
+        try
+        {
+            if (Avalonia.Application.Current?.ApplicationLifetime
+                is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                && desktop.MainWindow?.Clipboard is { } clipboard)
+            {
+                _ = clipboard.SetTextAsync(text);
+            }
+        }
+        catch
+        {
+            // Nothing useful to do; the value is still visible in the panel to copy by hand.
+        }
+    }
+
     private async Task StopCompanionAsync(CompanionController c)
     {
         try
         {
             await c.StopAsync();
             AppendSystem("companion server stopped");
+            CompanionPanel.NotifyStateChanged();
         }
         catch (Exception ex)
         {

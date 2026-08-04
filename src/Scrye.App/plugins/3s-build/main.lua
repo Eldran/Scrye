@@ -1,10 +1,12 @@
 -- 3S Build Planner -- Scrye port of MUSHclient ThreeS_Build
 --
 -- NOTE: dropped / simplified vs the original:
---   * miniwindow -> HUD panel with a monospace text report; colour-per-token is not
---     available, so short items are prefixed with "!" and each row carries a status
---     marker ("OK " affordable / " ! " short / "req" prereq unmet / "wip" building /
---     "max" tier 5). Tier palette colours are gone (plain "T3>4" text).
+--   * miniwindow -> HUD panel with a monospace text report. Colour per token IS back
+--     (plugin API 1.2 inline markup): affordable cost tokens are green, short ones red
+--     and "!"-prefixed, and the tier column keeps the original's per-tier palette in an
+--     80s repaint. Each row still carries a status marker ("OK " affordable / " ! "
+--     short / "req" prereq unmet / "wip" building / "max" tier 5) so the report is
+--     still readable with colour off.
 --   * "build" show/hide is dropped (panels are HUD-managed); "build" now PRINTS the
 --     report to the output window instead.
 --   * click-a-row-to-start is not possible; replaced with alias "build start <name>"
@@ -22,7 +24,8 @@
 local STATE_REPORT  = "plugin." .. scrye.id .. ".report"
 local STATE_SUMMARY = "plugin." .. scrye.id .. ".summary"
 
-local function note(s) scrye.print(s) end
+-- "[build]" tag in the theme accent, restoring the original's orange ColourNote tag
+local function note(s) scrye.print("@{accent,bold}[build]@{} " .. s) end
 
 -- ---------------- helpers ----------------
 local function split(s, sep)
@@ -307,6 +310,29 @@ local function compute(vmip)
 end
 
 -- ---------------- report (replaces the miniwindow) ----------------
+-- Colour. Status uses theme tokens, so "affordable" stays green and "short" stays red in
+-- every scheme -- those are semantics, not decoration. The tier palette is literal: a tier
+-- number's colour is identity (the original picked one colour per tier), so it should not
+-- drift when the app theme changes.
+local TIERCOL = {
+  [1] = "#E8DFFF",   -- T1 pale violet-white
+  [2] = "#21E6FF",   -- T2 electric cyan
+  [3] = "#B6FF3C",   -- T3 neon lime
+  [4] = "#FFD028",   -- T4 gold
+  [5] = "#FF2E88",   -- T5 hot magenta
+}
+
+-- Building and resource names come off the MUD, so escape them before they are embedded
+-- in markup -- otherwise a name containing "@" would be read as styling.
+local function esc(s) return (tostring(s or ""):gsub("@", "@@")) end
+
+-- Pad BEFORE escaping and BEFORE wrapping in markup: "#" counts characters, and markup
+-- characters are not drawn, so padding a decorated string would break the columns.
+local function padesc(s, n)
+  s = tostring(s or "")
+  return esc(s .. string.rep(" ", math.max(0, n - #s)))
+end
+
 local function cost_str(c)
   local parts = { comma(c.d) .. "d" }
   for _, res in ipairs(res_keys(c.r)) do
@@ -326,29 +352,38 @@ local function bp_draw()
   for _, r in ipairs(rows) do if show_max or r.cat ~= 4 then shown[#shown + 1] = r end end
 
   local lines = {}
-  lines[#lines + 1] = "Daler " .. comma(daler) .. (show_max and "   [all]" or "   [+max]") .. "   (! = short)"
+  lines[#lines + 1] = string.format(
+    "@{dim}Daler@{} @{accent,bold}%s@{}   @{dim}%s   (@{}@{error}!@{}@{dim} = short)@{}",
+    esc(comma(daler)), show_max and "[all]" or "[+max]")
   for _, r in ipairs(shown) do
     local mark, body
     if r.cat == 4 then
-      mark, body = "max", r.locked
+      mark, body = "@{accent,bold}max@{}", "@{dim}" .. esc(r.locked) .. "@{}"
     elseif r.cat == 3 then
-      mark, body = "wip", r.locked
+      mark, body = "@{info,bold}wip@{}", "@{dim}" .. esc(r.locked) .. "@{}"
     elseif r.cat == 2 then
-      mark, body = "req", r.locked
+      mark, body = "@{dim}req@{}", "@{dim}" .. esc(r.locked) .. "@{}"
     else
-      mark = r.buildable and "OK " or " ! "
+      mark = r.buildable and "@{success,bold}OK @{}" or "@{error,bold} ! @{}"
       local toks = {}
-      for _, t in ipairs(r.toks) do toks[#toks + 1] = (t.ok and "" or "!") .. t.text end
+      for _, t in ipairs(r.toks) do
+        -- the original coloured every cost token: green when you can afford it, red when short
+        toks[#toks + 1] = t.ok
+          and ("@{success}" .. esc(t.text) .. "@{}")
+          or  ("@{error,bold}!" .. esc(t.text) .. "@{}")
+      end
       body = table.concat(toks, "  ")
     end
     local tierstr = (r.nextt <= 5) and string.format("T%d>%d", r.cur, r.nextt) or ("T" .. r.cur)
-    lines[#lines + 1] = string.format("%s %-15s %-5s %s", mark, r.b.name, tierstr, body)
+    local tiercol = TIERCOL[r.nextt <= 5 and r.nextt or r.cur] or "text"
+    lines[#lines + 1] = string.format("%s %s @{%s}%s@{} %s",
+      mark, padesc(r.b.name, 15), tiercol, padesc(tierstr, 5), body)
   end
   report_lines = lines
 
   -- colored summary: how many buildings are affordable right now
   local ready = 0
-  for _, r in ipairs(shown) do if r.cat == 1 and r.buildable then ready = ready + 1 end end
+  for _, r in ipairs(shown) do if r.cat == 0 and r.buildable then ready = ready + 1 end end
   scrye.setState(STATE_SUMMARY, string.format("%d ready  |  %s daler", ready, comma(daler)))
 
   scrye.setState(STATE_REPORT, table.concat(lines, "\n"))
