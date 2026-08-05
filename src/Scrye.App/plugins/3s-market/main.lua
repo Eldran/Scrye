@@ -82,6 +82,8 @@ local RAWBUILD = { timber = true, iron = true, furs = true, grain = true, mead =
                    fish = true, sunstone = true, spoils = true }
 
 local function trim(s) return (s or ""):gsub("^%s+", ""):gsub("%s+$", "") end
+-- escape MUD-sourced text before embedding it in colour markup
+local function esc(x) return (tostring(x or ""):gsub("@", "@@")) end
 local function titlecase(s)
   return (s:gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b:lower() end))
 end
@@ -965,10 +967,12 @@ end
 -- buttonrow is the equivalent: the options are recomputed from the live feed, and the
 -- click carries the index back so we dispatch the exact cart the label described rather
 -- than re-parsing it.
-local dispatch_opts = {}
-
+-- The carts are clickable TEXT, not buttons. That matters for more than looks: a text widget
+-- is driven by bound state, so refreshing the list never rebuilds the panel -- which is what
+-- used to threaten the twelve settings fields and forced the carts into a panel of their own.
+-- Clicking sends "mkdispatch ...", the plugin's own alias, so it goes through mk_dispatch and
+-- gets the same clamping, logging and rescan-guard as a typed command.
 publish_dispatch = function()
-  dispatch_opts = {}
   local labels = {}
   local ok = pcall(function()
     local v = at_getvars()
@@ -1004,36 +1008,21 @@ publish_dispatch = function()
       end
     end
     table.sort(cand, function(a, b) return a.value > b.value end)
-    while #cand > 4 do table.remove(cand) end   -- a buttonrow lays out on one line
-    dispatch_opts = cand
-    for _, c in ipairs(cand) do labels[#labels + 1] = c.label end
+    while #cand > 8 do table.remove(cand) end   -- keep the panel a sensible height
+    for _, c in ipairs(cand) do
+      -- the click runs the plugin's own alias; disp_cmd/town_cmd give the words vtrade wants
+      labels[#labels + 1] = string.format(
+        "@{success,click=mkdispatch sell %d %s %s}%4d %-12s %s %-12s@{} @{dim}~%sd@{}",
+        c.qty, c.cmd, town_cmd(c.town),
+        c.qty, esc(DISPLAY[c.cmd] or c.cmd), ">", esc(c.town:sub(1, 12)), esc(comma(c.value)))
+    end
   end)
-  if not ok then dispatch_opts = {}; labels = {} end
-  scrye.setState(P .. "dispatchopts", table.concat(labels, "\n"))
-end
+  if not ok then labels = {} end
 
-local function dispatch_option(label, index)
-  -- index is the fast path; fall back to the label in case the list moved under the click
-  local c = dispatch_opts[index]
-  if not c or c.label ~= label then
-    c = nil
-    for _, o in ipairs(dispatch_opts) do if o.label == label then c = o; break end end
+  if #labels == 0 then
+    labels[1] = "@{dim}nothing worth sending - Refresh to update@{}"
   end
-  if not c then mnote("that cart is no longer on offer - hit Refresh"); return end
-  local escort = math.max(1, math.min(20, at.escort or 5))
-  scrye.send(string.format("vtrade dispatch %s %d %s %s escort %d",
-    c.side, c.qty, c.cmd, town_cmd(c.town), escort))
-  mnote(string.format("dispatch %s %d %s to %s (~%dd, escort %d)",
-    c.side, c.qty, c.cmd, c.town, c.value, escort))
-  local line = string.format("[%s] MAN  %-4s %4d %-11s %-4s %-14s ~%dd",
-    os.date("%Y-%m-%d %H:%M:%S"), c.side:upper(), c.qty, c.cmd, "to", c.town, c.value)
-  scrye.log(line)
-  local rec = at.stats.recent
-  rec[#rec + 1] = line
-  while #rec > 40 do table.remove(rec, 1) end
-  mk_last_dispatch = os.time()
-  publish_dispatch()          -- the stock just changed; refresh the offers
-  if at_draw then at_draw() end
+  scrye.setState(P .. "carts", table.concat(labels, "\n"))
 end
 
 local MK_USAGE = "usage: mkdispatch buy|sell [qty] <good> <town>   (qty defaults to the Units setting)"
@@ -1126,10 +1115,8 @@ scrye.addPanel{
         { type = "button", text = "Refresh", action = function() mk_refresh(false) end },
         { type = "label",  bind = P .. "status", color = "#E0A830" },   -- status line in gold
         { type = "text",   bind = P .. "report" },
-        { type = "label",  text = "Quick dispatch - best sells you can fill:", color = "#8FA0B0" },
-        { type = "buttonrow", bind = P .. "dispatchopts",
-          onClick = function(label, index) dispatch_option(label, index) end },
-        { type = "label",  text = "or:  mkdispatch buy|sell [qty] <good> <town>", color = "#8FA0B0" },
+        { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "#8FA0B0" },
+        { type = "text",   bind = P .. "carts" },
         { type = "input",  text = "Units (20-350) ", bind = P .. "v_units",
           onSubmit = function(t) mk_setunits(t) end },
         { type = "input",  text = "Escort (1-20) ",  bind = P .. "v_escort",

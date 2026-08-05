@@ -420,28 +420,29 @@ local function resolve_town(s)
   return nil
 end
 
--- 2-column clickable town buttons, sorted by name (shared by the Travel tab and the Map tab).
-local function town_button_rows()
-  local rows, pending = {}, nil
+-- The settlement list is clickable TEXT rather than fourteen buttons: three names per line
+-- instead of seven button rows, and it reads as a list instead of a control panel. The click
+-- runs "vgo <town>", the plugin's own alias, so keyboard and mouse take the same path.
+-- TRAVEL_TOWNS is fixed at load, so this is published once and never needs a rebuild.
+local function publish_town_list()
+  local lines, row = {}, {}
   for _, code in ipairs(TRAVEL_TOWNS) do
-    local b = { text = town_label(code), action = function() travel_to(code) end }
-    if pending then
-      rows[#rows + 1] = { type = "buttonrow", buttons = { pending, b } }; pending = nil
-    else
-      pending = b
-    end
+    local name = town_label(code)
+    row[#row + 1] = string.format("@{accent,click=vgo %s}%s@{}%s",
+      name, esc(name), string.rep(" ", math.max(1, 18 - #name)))
+    if #row == 3 then lines[#lines + 1] = table.concat(row); row = {} end
   end
-  if pending then rows[#rows + 1] = { type = "button", text = pending.text, action = pending.action } end
-  return rows
+  if #row > 0 then lines[#lines + 1] = table.concat(row) end
+  scrye.setState(P .. "towns", table.concat(lines, "\n"))
 end
+publish_town_list()   -- TRAVEL_TOWNS is static, so once is enough
 
--- Travel tab widget list (clickable town buttons, two per row).
+-- Travel tab: one clickable list.
 local travel_widgets = {
   { type = "label", text = "Walk to a settlement (uses the built-in route from where you are):" },
+  { type = "text",  bind = P .. "towns" },
+  { type = "label", text = "Walks from the wrong place? Set where you are:  vhere <town>" },
 }
-for _, w in ipairs(town_button_rows()) do travel_widgets[#travel_widgets + 1] = w end
-travel_widgets[#travel_widgets + 1] =
-  { type = "label", text = "Walks from the wrong place? Set where you are:  vhere <town>" }
 
 -- Map tab widgets: the rendered map (also clickable) + a clickable town list + the full location list.
 local map_widgets = {
@@ -463,8 +464,8 @@ local map_widgets = {
     end },
   { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
   { type = "label", text = "Click a town to travel there:", color = "#E0C040" },
+  { type = "text",  bind = P .. "towns" },
 }
-for _, w in ipairs(town_button_rows()) do map_widgets[#map_widgets + 1] = w end
 map_widgets[#map_widgets + 1] = { type = "text", bind = P .. "maplocs" }   -- full location list w/ coords
 
 -- ---------------------------------------------------- seconds counter
@@ -1472,19 +1473,24 @@ local function build_sea()
     scrye.setState(P .. "seachart", "")
   end
   -- Pending resolve options. VOFFERS is the richer list when the MUD sends one; the same
-  -- preference the auto-resolver uses. Published newline-separated to drive the bound
-  -- buttonrow on the Sea tab -- an empty value clears the buttons, which is how the panel
-  -- knows there is nothing to resolve right now.
+  -- preference the auto-resolver uses.
   local resolves = {}
   local optsrc = (gv("VOFFERS") ~= "") and gv("VOFFERS") or gv("VRESOLVE")
   for a in (optsrc or ""):gmatch("[^,]+") do
     local t = a:gsub("^%s+", ""):gsub("%s+$", "")
     if t ~= "" then resolves[#resolves + 1] = t end
   end
-  scrye.setState(P .. "resolveopts", table.concat(resolves, "\n"))
+  -- clickable text rather than a bound buttonrow: the options are few but their names vary,
+  -- and a row of buttons reads as chrome where a sentence reads as a choice
+  local opts = {}
+  for _, t in ipairs(resolves) do
+    opts[#opts + 1] = string.format("@{warning,bold,click=vvoyage resolve %s}%s@{}", t, esc(t))
+  end
+  scrye.setState(P .. "resolveopts",
+    #opts > 0 and ("  " .. table.concat(opts, "    ")) or col("dim", "(no resolve pending)"))
   if #resolves > 0 then
     add(col("warning", "Resolve pending: " .. table.concat(resolves, ", "))
-        .. col("dim", "   (click a button below, or: vvoyage resolve <opt>)"))
+        .. col("dim", "   (click one below, or: vvoyage resolve <opt>)"))
   else
     add(col("dim", "(no resolve pending)"))
   end
@@ -1799,7 +1805,18 @@ scrye.addAlias{
   end,
 }
 
--- "I am here" correction: set the remembered current town (matches abbrev or full name).
+-- Walk to a settlement by name or abbreviation. The clickable Travel/Map lists route through
+-- this alias rather than calling travel_to directly, so mouse and keyboard take the same path
+-- and a hand-typed name gets the same fuzzy matching the lists get for free.
+scrye.addAlias{
+  pattern = [[^vgo (.+)$]], regex = true,
+  run = function(name)
+    local code = resolve_town(name)
+    if not code then scrye.print("[viking] no settlement matching '" .. tostring(name) .. "'"); return end
+    travel_to(code)
+  end,
+}
+
 scrye.addAlias{
   pattern = [[^vhere (.+)$]], regex = true,
   run = function(arg)
@@ -1894,11 +1911,7 @@ scrye.addPanel{
               .. (SEA_NAME[ch] and ("  (" .. SEA_NAME[ch] .. ")") or ""))
           end },
         { type = "label", text = "Resolve:", color = "dim" },
-        { type = "buttonrow", bind = P .. "resolveopts",
-          onClick = function(label)
-            scrye.send("vvoyage resolve " .. label)
-            scrye.print("[viking] resolving node with '" .. label .. "'")
-          end },
+        { type = "text",  bind = P .. "resolveopts" },
         { type = "label", text = "S ship  X objective  H harbor  W wreck  T storm  I island  F fog  # unrevealed  O open sea  * resolved  B stormbelt  + path  > destination" },
         { type = "button", text = "Clear voyage queue", action = function() scrye.send("vvoyage clear") end },
     } },
