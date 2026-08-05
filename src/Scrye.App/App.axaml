@@ -34,6 +34,19 @@
         <SolidColorBrush x:Key="ScryeWarning" Color="#E0A830" />
         <SolidColorBrush x:Key="ScryeError" Color="#E05050" />
         <SolidColorBrush x:Key="ScryeInfo" Color="#5AA8E0" />
+
+        <!-- Chrome colours that used to be written inline in MainWindow.axaml. Named so a
+             theme can reach them, and so the next person can tell "deliberately fixed" from
+             "someone forgot". ScryeBadgeBg follows the scheme accent (ThemeService.Apply
+             recomputes it); the other two are intentionally constant in every scheme. -->
+        <SolidColorBrush x:Key="ScryeBadgeBg" Color="#D035C4D6" />
+        <!-- Modal scrim: dims whatever is behind an overlay. Black in every scheme, including
+             Light, because its job is to darken the background, not to match the palette. -->
+        <SolidColorBrush x:Key="ScryeScrim" Color="#B0000000" />
+        <!-- Text drawn on top of a filled gauge/progress bar. The fill is a saturated accent
+             in every scheme, so this stays white rather than following the body text colour
+             (which would vanish on the bar in the Light scheme). -->
+        <SolidColorBrush x:Key="ScryeOnBar" Color="#FFFFFF" />
     </Application.Resources>
 
     <Application.Styles>

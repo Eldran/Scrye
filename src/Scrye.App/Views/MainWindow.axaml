@@ -67,7 +67,7 @@
                         <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="{Binding StatusTip}">
                             <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
-                            <Border Background="#D03A86C8" CornerRadius="8" Padding="6,0"
+                            <Border Background="{DynamicResource ScryeBadgeBg}" CornerRadius="8" Padding="6,0"
                                     IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding UnreadText}" FontSize="11" Foreground="White" />
                             </Border>
@@ -184,7 +184,7 @@
                                                     <DataTemplate x:DataType="vm:CapturePaneViewModel">
                                                         <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
                                                             <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-                                                            <Border Background="#D03A86C8" CornerRadius="8" Padding="6,0"
+                                                            <Border Background="{DynamicResource ScryeBadgeBg}" CornerRadius="8" Padding="6,0"
                                                                     IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
                                                                 <TextBlock Text="{Binding Unread}" FontSize="11" Foreground="White" />
                                                             </Border>
@@ -197,7 +197,8 @@
                                                                                Source="{Binding Buffer}"
                                                                                FontFamily="{Binding FontFamily}"
                                                                                FontSize="{Binding FontSize}"
-                                                                               ShowTimestamps="{Binding ShowTimestamps}" />
+                                                                               ShowTimestamps="{Binding ShowTimestamps}"
+                                                                           CommandLinkClicked="OnCommandLinkClicked" />
                                                     </DataTemplate>
                                                 </TabControl.ContentTemplate>
                                             </TabControl>
@@ -213,7 +214,7 @@
                                                 <DataTemplate x:DataType="vm:CapturePaneViewModel">
                                                     <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
                                                         <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
-                                                        <Border Background="#D03A86C8" CornerRadius="8" Padding="6,0"
+                                                        <Border Background="{DynamicResource ScryeBadgeBg}" CornerRadius="8" Padding="6,0"
                                                                 IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
                                                             <TextBlock Text="{Binding Unread}" FontSize="11" Foreground="White" />
                                                         </Border>
@@ -226,7 +227,8 @@
                                                                            Source="{Binding Buffer}"
                                                                            FontFamily="{Binding FontFamily}"
                                                                            FontSize="{Binding FontSize}"
-                                                                           ShowTimestamps="{Binding ShowTimestamps}" />
+                                                                           ShowTimestamps="{Binding ShowTimestamps}"
+                                                                           CommandLinkClicked="OnCommandLinkClicked" />
                                                 </DataTemplate>
                                             </TabControl.ContentTemplate>
                                         </TabControl>
@@ -286,7 +288,7 @@
                                                                 <ProgressBar Minimum="0" Maximum="{Binding Maximum}"
                                                                              Value="{Binding Value}" Height="15"
                                                                              Classes.wc="{Binding HasColor}" />
-                                                                <TextBlock Text="{Binding Caption}" FontSize="10" Foreground="#FFFFFF"
+                                                                <TextBlock Text="{Binding Caption}" FontSize="10" Foreground="{DynamicResource ScryeOnBar}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                             </Grid>
                                                         </StackPanel>
@@ -298,7 +300,7 @@
                                                             <Grid>
                                                                 <ProgressBar Minimum="0" Maximum="{Binding Maximum}" Value="{Binding Value}"
                                                                              Height="14" Foreground="{Binding BarBrush}" />
-                                                                <TextBlock Text="{Binding Caption}" FontSize="9.5" Foreground="#FFFFFF"
+                                                                <TextBlock Text="{Binding Caption}" FontSize="9.5" Foreground="{DynamicResource ScryeOnBar}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                                                             </Grid>
                                                         </DockPanel>
@@ -308,7 +310,7 @@
                                                          exactly as it did before. -->
                                                     <DataTemplate DataType="vm:TextWidgetViewModel">
                                                         <controls:StyledTextView Text="{Binding Text}" Foreground="{Binding Foreground}"
-                                                                                 Margin="0,2" />
+                                                                                 LinkCommand="{Binding LinkCommand}" Margin="0,2" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ColorGridWidgetViewModel">
                                                         <controls:ColorGridView GridText="{Binding GridText}" Palette="{Binding Palette}"
@@ -551,6 +553,7 @@
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate x:DataType="vm:NotifySourceRow">
                                                                     <DockPanel Margin="0,2,0,0">
+                                                                        <!-- TODO(theme): bespoke colour below, intent unclear. Left as-is pending a decision on whether it should be a semantic token. -->
                                                                         <TextBlock DockPanel.Dock="Right" Text="{Binding StateLabel}" FontSize="9"
                                                                                    Foreground="#C08A5A" VerticalAlignment="Center" Margin="4,0,0,0" />
                                                                         <StackPanel>
@@ -709,6 +712,7 @@
                                                     <ItemsControl ItemsSource="{Binding Replay.DiffLines}" x:CompileBindings="False">
                                                         <ItemsControl.ItemTemplate>
                                                             <DataTemplate>
+                                                                <!-- TODO(theme): bespoke colour for replay diff text; no semantic token fits yet. -->
                                                                 <TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="#E0B0FF"
                                                                            FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11" />
                                                             </DataTemplate>
@@ -749,7 +753,7 @@
 
         <!-- settings form overlay -->
         <Border IsVisible="{Binding Editor, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                Background="#B0000000">
+                Background="{DynamicResource ScryeScrim}">
             <Border Width="700" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
                     BorderThickness="1" CornerRadius="8" Padding="18">
@@ -870,6 +874,7 @@
                                             <Grid ColumnDefinitions="*,*,Auto" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
                                                     <TextBlock Text="Highlight colour (#RRGGBB; empty = off)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <!-- The hex below is example text shown to the user, not a UI colour: it tells them what format this field expects. Deliberately not themed. -->
                                                     <TextBox Text="{Binding HighlightColor}" PlaceholderText="#FFD040" />
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="1" Margin="0,0,6,0">
@@ -1088,7 +1093,7 @@
 
         <!-- global settings overlay -->
         <Border IsVisible="{Binding Settings, Converter={x:Static conv:ObjectConverters.IsNotNull}}"
-                Background="#B0000000">
+                Background="{DynamicResource ScryeScrim}">
             <Border Width="700" MaxHeight="640" HorizontalAlignment="Center" VerticalAlignment="Center"
                     Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
                     BorderThickness="1" CornerRadius="8" Padding="18">
@@ -1117,9 +1122,10 @@
                                 <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
                                 <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
                                           HorizontalAlignment="Left" MinWidth="260" />
-                                <Border Background="#080A0C" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
+                                <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
                                         CornerRadius="3" Padding="8,6" Margin="0,4,0,0">
                                     <StackPanel Spacing="1">
+                                        <!-- The preview mimics the terminal, so it uses the MUD's own default colours rather than the app palette: #C0C0C0 is exactly Rgb.DefaultFore. Deliberately not themed. -->
                                         <TextBlock Text="The quick brown fox jumps over the lazy dog" Foreground="#C0C0C0"
                                                    FontFamily="{Binding Settings.PreviewFontFamily}"
                                                    FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
@@ -1222,6 +1228,7 @@
                                             <Grid ColumnDefinitions="*,*,Auto" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
                                                     <TextBlock Text="Highlight colour (#RRGGBB; empty = off)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <!-- The hex below is example text shown to the user, not a UI colour: it tells them what format this field expects. Deliberately not themed. -->
                                                     <TextBox Text="{Binding HighlightColor}" PlaceholderText="#FFD040" />
                                                 </StackPanel>
                                                 <StackPanel Grid.Column="1" Margin="0,0,6,0">

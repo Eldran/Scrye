@@ -174,11 +174,21 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>An MXP command link was clicked in a world's output.</summary>
+    /// <summary>
+    /// A command link was clicked — an MXP link from the MUD, or a <c>click=</c> run a plugin
+    /// wrote with the colour markup. Either way it runs the way typing it would, so a plugin's
+    /// own aliases get first refusal.
+    /// </summary>
     private void OnCommandLinkClicked(object? sender, Controls.CommandLinkClickedEventArgs e)
     {
-        if (sender is not Control c || c.DataContext is not WorldViewModel vm) return;
-        vm.HandleCommandLink(e.Command, e.Prompt);
+        if (sender is not Control c) return;
+        // The main output sits on the world, but a capture pane's DataContext is the pane —
+        // so walk up until a world turns up rather than silently doing nothing there.
+        WorldViewModel? vm = c.DataContext as WorldViewModel;
+        if (vm is null)
+            foreach (Control anc in c.GetVisualAncestors().OfType<Control>())
+                if (anc.DataContext is WorldViewModel found) { vm = found; break; }
+        vm?.HandleCommandLink(e.Command, e.Prompt);
     }
 
     private void OnFindKeyDown(object? sender, KeyEventArgs e)

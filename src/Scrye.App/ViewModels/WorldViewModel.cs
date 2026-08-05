@@ -531,7 +531,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (pluginId, actionId, text) =>
                 _session.Post(() => _plugins!.InvokeSubmit(pluginId, actionId, text)),
             (pluginId, actionId, label, index) =>
-                _session.Post(() => _plugins!.InvokeChoice(pluginId, actionId, label, index)));
+                _session.Post(() => _plugins!.InvokeChoice(pluginId, actionId, label, index)),
+            // click= in widget text lands on the same handler as an MXP link from the MUD
+            (command, prompt) => HandleCommandLink(command, prompt));
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.

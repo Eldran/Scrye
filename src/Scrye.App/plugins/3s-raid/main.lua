@@ -6,10 +6,11 @@
 --     bound to plugin.3s-raid.* state. The HUD's visibility is app-managed.
 --   * GRUDGES parsing + grudge cooldown formatting were only used for window
 --     tooltips — dropped with the window.
---   * Clicking a town to target it IS reproduced: the target list is a bound buttonrow
---     fed from the live RTARGETS feed (plugin API 1.3), replacing the miniwindow's
---     per-town hotspots. The row renders on one line, so it is capped at 6 towns; the
---     full list with heat values is in the text table below it and in 'araid targets'.
+--   * Clicking a town to target it IS reproduced, and no longer capped: the panel is
+--     rebuilt from the live RTARGETS feed with a real button grid (4 per row), which
+--     needs addPanel to be re-callable. The rebuild is guarded on a signature of the
+--     town list, so it happens once when the feed first arrives and then effectively
+--     never -- which matters because rebuilding also re-seeds the input fields.
 --   * The per-town heat table IS reproduced: the original colour-coded it in the
 --     miniwindow, here it is a text block bound to plugin.3s-raid.heat (also
 --     printable with 'araid heat'). Calm towns — those within AR_MARGIN of the
@@ -130,6 +131,10 @@ local function raid_town(t) return RAIDTOWN[(t or ""):lower()] or t end
 
 -- ---------- published state / panel ----------
 
+-- Rebuilt whenever the town list changes; see build_panel at the end of the file.
+local build_panel
+local towns_sig = nil        -- signature of the town list the panel was last built from
+
 local function publish()
   local ok = pcall(function()
     local avail, maxs = fleet()
@@ -177,13 +182,19 @@ local function publish()
     end
     scrye.setState(SP .. "heat", table.concat(hl, "\n"))
 
-    -- clickable target list: the home towns, calmest first, so the button you want is
-    -- usually the leftmost one. Capped because a buttonrow lays out on a single line.
+    -- clickable target list: every home town, calmest first, so the button you want is
+    -- usually the top-left one. No cap -- the panel lays them out in rows of four.
     local picks = {}
     for _, t in ipairs(order) do picks[#picks + 1] = t end
     table.sort(picks, function(x, y) return (map[x] or 0) < (map[y] or 0) end)
-    while #picks > 6 do table.remove(picks) end
-    scrye.setState(SP .. "towns", table.concat(picks, "\n"))
+
+    -- Rebuild only when the set of towns changes, not on every heat tick: a rebuild
+    -- re-creates the input widgets, which would wipe whatever you were typing.
+    local sig = table.concat(picks, "\n")
+    if sig ~= towns_sig then
+      towns_sig = sig
+      if build_panel then build_panel(picks) end
+    end
 
     -- seed the panel's input fields with the current settings
     scrye.setState(SP .. "v_target",  ar.target)
@@ -320,11 +331,11 @@ local function ar_config(rest)
 end
 
 -- ---------- HUD panel (status + controls) ----------
-scrye.addPanel{
-  title = "Auto-Raid",
-  width = 320,
-  accent = "#D6524E",          -- signature: raid red
-  widgets = {
+-- A function, not a one-off call: calling scrye.addPanel again with the same title
+-- rebuilds this panel in place (position and drag survive), which is how the town
+-- buttons can follow a feed that only arrives after load.
+build_panel = function(towns)
+  local w = {
     { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "#E08A3C" },  -- amber: the arm switch
     { type = "value", text = "Target: ", bind = SP .. "target", color = "#6FB7E0" },  -- blue: destination
     { type = "value", text = "Docked: ", bind = SP .. "docked", color = "#4FB05A" },  -- green: ships ready
@@ -343,13 +354,35 @@ scrye.addPanel{
     { type = "input", text = "Hold secs ",    bind = SP .. "v_hold",    onSubmit = function(t) ar_config("hold " .. t) end },
     { type = "input", text = "Reserve ship ", bind = SP .. "v_reserve", onSubmit = function(t) ar_config("reserve " .. t) end },
     { type = "text", bind = SP .. "status" },
-    { type = "label", text = "Set target (calmest first):", color = "#8FA0B0" },
-    { type = "buttonrow", bind = SP .. "towns",
-      onClick = function(town) ar_config("target " .. town) end },
-    { type = "label", text = "Town heat (calm = in the auto-target pool):", color = "#8FA0B0" },
-    { type = "text", bind = SP .. "heat" },
-  },
-}
+  }
+
+  -- target buttons, four per row; each closes over its own town name
+  towns = towns or {}
+  if #towns > 0 then
+    w[#w + 1] = { type = "label", text = "Set target (calmest first):", color = "#8FA0B0" }
+    local row = {}
+    for i, town in ipairs(towns) do
+      local name = town                      -- capture per iteration, not by reference
+      row[#row + 1] = { text = name, action = function() ar_config("target " .. name) end }
+      if #row == 4 or i == #towns then
+        w[#w + 1] = { type = "buttonrow", buttons = row }
+        row = {}
+      end
+    end
+  end
+
+  w[#w + 1] = { type = "label", text = "Town heat (calm = in the auto-target pool):", color = "#8FA0B0" }
+  w[#w + 1] = { type = "text", bind = SP .. "heat" }
+
+  scrye.addPanel{
+    title = "Auto-Raid",
+    width = 320,
+    accent = "#D6524E",        -- signature: raid red
+    widgets = w,
+  }
+end
+
+build_panel(nil)   -- initial build; publish() rebuilds it once the town feed arrives
 
 scrye.addAlias{ pattern = "^araid$",         regex = true, run = function() ar_status() end }
 scrye.addAlias{ pattern = "^araid targets$", regex = true, run = function() ar_list_targets() end }

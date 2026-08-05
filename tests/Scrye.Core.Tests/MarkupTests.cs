@@ -123,4 +123,59 @@ public class MarkupTests
         Assert.False(Markup.HasMarkup(null));
         Assert.True(Markup.HasMarkup("a@{accent}b"));
     }
+
+    // ---- clickable runs -------------------------------------------------------
+    // click= carries a whole command, so it is taken verbatim to the closing brace. That is the
+    // only part of the grammar where commas and spaces are content rather than separators.
+
+    private static LinkInfo? LinkOf(string s) => Parse(s).SingleOrDefault(r => r.Link is not null).Link;
+
+    [Theory]
+    [InlineData("@{click=look}Look@{}", "look")]
+    [InlineData("@{accent,click=score}Score@{}", "score")]
+    [InlineData("@{click=vbuild start warehouse}W@{}", "vbuild start warehouse")]
+    [InlineData("@{click=say hello, friend}Hi@{}", "say hello, friend")]
+    [InlineData("@{accent,bold,click=north}N@{}", "north")]
+    public void ParsesAClickCommandVerbatim(string input, string expected) =>
+        Assert.Equal(expected, LinkOf(input)?.Action);
+
+    [Fact]
+    public void CarriesALongCommandPastTheStyleSpecLengthGuard()
+    {
+        const string cmd = "vtrade dispatch sell 65 bread uppsala escort 5";
+        Assert.Equal(cmd, LinkOf($"@{{success,click={cmd}}}65 Bread>Uppsala@{{}}")?.Action);
+    }
+
+    [Fact]
+    public void PromptVariantSetsPromptRatherThanRunning()
+    {
+        LinkInfo? link = LinkOf("@{prompt=vbuild start dock}Dock@{}");
+        Assert.Equal("vbuild start dock", link?.Action);
+        Assert.True(link?.Prompt);
+        Assert.False(link?.IsUrl);
+    }
+
+    [Theory]
+    [InlineData("@{accent}plain@{}")]
+    [InlineData("@{accent,click=}x@{}")]     // empty command is not a link
+    public void LeavesRunsUnlinkedWhenThereIsNoCommand(string input) =>
+        Assert.All(Parse(input), r => Assert.Null(r.Link));
+
+    [Fact]
+    public void AdjacentLinksAreNotMergedIntoOneRun()
+    {
+        IReadOnlyList<StyledRun> runs = Parse("@{click=a}A@{}@{click=b}B@{}plain");
+        Assert.Equal(3, runs.Count);
+        Assert.Equal("a", runs[0].Link?.Action);
+        Assert.Equal("b", runs[1].Link?.Action);
+        Assert.Null(runs[2].Link);
+    }
+
+    [Fact]
+    public void TheCommandNeverLeaksIntoTheVisibleText()
+    {
+        const string input = "@{click=vbuild start warehouse}Warehouse@{}";
+        Assert.Equal("Warehouse", string.Concat(Parse(input).Select(r => r.Text)));
+        Assert.Equal("Warehouse", Markup.Strip(input));
+    }
 }

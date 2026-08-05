@@ -22,9 +22,17 @@ public sealed class HudViewModel : IDisposable
     private readonly Action<string, string, int, int, string>? _invokeCellAction;  // (pluginId, actionId, col, row, char)
     private readonly Action<string, string, string>? _invokeSubmit;  // (pluginId, actionId, text) → input widget submit
     private readonly Action<string, string, string, int>? _invokeChoice;  // (pluginId, actionId, label, index) → bound buttonrow
-    // State-watch subscriptions per plugin, so a reload/disable can dispose exactly its watches.
+    private readonly Action<string, bool>? _runCommand;   // (command, prompt) → a click= run in widget text
+    // State-watch subscriptions per PANEL (keyed pluginId|title), not per plugin: rebuilding one
+    // panel must drop exactly that panel's watches and leave its siblings alone. RemovePanels
+    // still disposes a whole plugin's worth by matching the key prefix.
     // Only mutated on the construction thread (pre-loop) or the loop thread — never concurrently.
-    private readonly Dictionary<string, List<IDisposable>> _pluginSubs = new();
+    private readonly Dictionary<string, List<IDisposable>> _panelSubs = new(StringComparer.Ordinal);
+
+    // Panel view models by key, mutated on the same thread as _specs. The Panels collection is
+    // only touched on the UI thread, so a rebuild cannot safely search it — this index is how the
+    // loop thread finds the panel it is replacing.
+    private readonly Dictionary<string, HudPanelViewModel> _panelsByKey = new(StringComparer.Ordinal);
 
     public ObservableCollection<HudPanelViewModel> Panels { get; } = new();
 
@@ -34,7 +42,7 @@ public sealed class HudViewModel : IDisposable
     private readonly Dictionary<string, PanelSpec> _specs = new(StringComparer.Ordinal);
 
     /// <summary>Live panel specs by panel key (<c>pluginId|title</c>), for companion
-    /// snapshots. Mutated on the same threads as <see cref="_pluginSubs"/>.</summary>
+    /// snapshots. Mutated on the same threads as <see cref="_panelSubs"/>.</summary>
     public IReadOnlyDictionary<string, PanelSpec> PanelSpecs => _specs;
 
     /// <summary>Raised with (panelKey, spec) when a panel is built, so a companion server can
@@ -54,64 +62,118 @@ public sealed class HudViewModel : IDisposable
     public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
                         Action<string, string, int, int, string>? invokeCellAction = null,
                         Action<string, string, string>? invokeSubmit = null,
-                        Action<string, string, string, int>? invokeChoice = null)
+                        Action<string, string, string, int>? invokeChoice = null,
+                        Action<string, bool>? runCommand = null)
     {
         _state = state;
         _invokeAction = invokeAction;
         _invokeCellAction = invokeCellAction;
         _invokeSubmit = invokeSubmit;
         _invokeChoice = invokeChoice;
+        _runCommand = runCommand;
     }
 
-    /// <summary>Add a panel from a spec. Called during plugin load — on the UI thread at
-    /// construction (pre-connect), or on the loop thread during a hot-reload. State watches
-    /// register on the calling thread (safe: pre-loop or on-loop); only the <see cref="Panels"/>
-    /// edit is marshalled to the UI.</summary>
+    /// <summary>
+    /// Add a panel from a spec, or replace one that already exists under the same key.
+    ///
+    /// <para><b>Replacing is the point.</b> A panel's widget set is fixed at build time, so a
+    /// plugin that needs to offer something it could not know at load — a town list that arrives
+    /// with the feed, the resolve options for the node you are standing on — used to have no way
+    /// to say so. Calling <c>scrye.addPanel</c> again with the same title now rebuilds that panel
+    /// in place: same view model, so the canvas position and any drag survive, and the companion
+    /// gets the new spec under the same id (its client replaces by key already).</para>
+    ///
+    /// <para>Called during plugin load on the UI thread (pre-connect) or on the loop thread during
+    /// a hot-reload or a live rebuild. State watches register on the calling thread; only the
+    /// collection edits are marshalled to the UI.</para>
+    /// </summary>
     public void AddPanel(string pluginId, PanelSpec spec)
     {
-        var panel = new HudPanelViewModel(string.IsNullOrWhiteSpace(spec.Title) ? pluginId : spec.Title, pluginId)
+        string title = string.IsNullOrWhiteSpace(spec.Title) ? pluginId : spec.Title;
+        string key = pluginId + "|" + title;
+        bool rebuild = _panelsByKey.TryGetValue(key, out HudPanelViewModel? existing);
+        HudPanelViewModel panel;
+
+        if (rebuild)
         {
-            Width = spec.Width > 0 ? spec.Width : 220,
-            BackgroundBrush = HudColor.Brush(spec.Background),
-            AccentBrush = HudColor.Brush(spec.Accent),
-        };
-        if (LoadPosition?.Invoke(panel.Key) is (double px, double py)) { panel.X = px; panel.Y = py; }
-        panel.Moved = _ => PanelMoved?.Invoke();
+            panel = existing!;
+            // Drop the old panel's watches first: BuildWidget below seeds each bound widget with
+            // the current value, and leaving the previous subscriptions alive would keep writing
+            // into view models that are about to be thrown away.
+            DisposeSubs(key);
+        }
+        else
+        {
+            panel = new HudPanelViewModel(title, pluginId);
+            if (LoadPosition?.Invoke(key) is (double px, double py)) { panel.X = px; panel.Y = py; }
+            panel.Moved = _ => PanelMoved?.Invoke();
+        }
+
+        // Brushes are built here (immutable, so they cross threads safely) but ASSIGNED on the UI
+        // thread below: on a rebuild the panel is already bound, and raising PropertyChanged off
+        // the UI thread would violate Avalonia's thread affinity.
+        double width = spec.Width > 0 ? spec.Width : 220;
+        Avalonia.Media.IBrush? bgBrush = HudColor.Brush(spec.Background);
+        Avalonia.Media.IBrush? acBrush = HudColor.Brush(spec.Accent);
+
         string? panelFg = spec.Foreground;   // default text colour for widgets that don't set their own
         var subs = new List<IDisposable>();
+        var widgets = new List<object>();
+        var tabs = new List<HudTabViewModel>();
         if (spec.Tabs.Count > 0)
         {
             foreach (PanelTabSpec tab in spec.Tabs)
             {
                 var tabVm = new HudTabViewModel(tab.Title);
                 foreach (WidgetSpec w in tab.Widgets) tabVm.Widgets.Add(BuildWidget(pluginId, w, subs, panelFg));
-                panel.Tabs.Add(tabVm);
+                tabs.Add(tabVm);
             }
         }
         else
         {
-            foreach (WidgetSpec w in spec.Widgets) panel.Widgets.Add(BuildWidget(pluginId, w, subs, panelFg));
+            foreach (WidgetSpec w in spec.Widgets) widgets.Add(BuildWidget(pluginId, w, subs, panelFg));
         }
-        if (subs.Count > 0)
+        if (subs.Count > 0) _panelSubs[key] = subs;
+
+        _panelsByKey[key] = panel;
+        _specs[key] = spec;
+        // The companion protocol has no separate "updated" message and needs none: the client
+        // stores panels in a map by id, so re-sending the spec replaces it (and keeps the
+        // selected tab, which is tracked separately).
+        PanelAdded?.Invoke(key, spec);
+
+        Post(() =>
         {
-            if (!_pluginSubs.TryGetValue(pluginId, out List<IDisposable>? list)) _pluginSubs[pluginId] = list = new();
-            list.AddRange(subs);
-        }
-        _specs[panel.Key] = spec;
-        PanelAdded?.Invoke(panel.Key, spec);
-        Post(() => Panels.Add(panel));
+            // Chrome is re-applied on every build so a rebuild can change width or accent.
+            panel.Width = width;
+            panel.BackgroundBrush = bgBrush;
+            panel.AccentBrush = acBrush;
+
+            // Refill in place rather than swapping the panel object: the HUD surface places a
+            // panel when it first appears, and replacing the instance would make it jump back to
+            // the default position on every rebuild.
+            panel.Widgets.Clear();
+            foreach (object w in widgets) panel.Widgets.Add(w);
+            panel.Tabs.Clear();
+            foreach (HudTabViewModel t in tabs) panel.Tabs.Add(t);
+            panel.RaiseHasTabsChanged();
+            if (!rebuild) Panels.Add(panel);
+        });
+    }
+
+    /// <summary>Dispose and forget one panel's state watches.</summary>
+    private void DisposeSubs(string key)
+    {
+        if (!_panelSubs.TryGetValue(key, out List<IDisposable>? subs)) return;
+        foreach (IDisposable s in subs) s.Dispose();
+        _panelSubs.Remove(key);
     }
 
     /// <summary>Remove a plugin's panels + state-watches (on reload/disable). Subscription
     /// disposal runs on the caller's (loop) thread; the collection edit is marshalled to the UI.</summary>
     public void RemovePanels(string pluginId)
     {
-        if (_pluginSubs.TryGetValue(pluginId, out List<IDisposable>? subs))
-        {
-            foreach (IDisposable s in subs) s.Dispose();
-            _pluginSubs.Remove(pluginId);
-        }
-        // Drop the retained specs on the caller's thread (same as the subscriptions above),
+        // Drop the retained specs on the caller's thread (same as the subscriptions below),
         // not inside the marshalled UI edit — otherwise a companion snapshot taken between
         // the two would still advertise panels that are already gone.
         string prefix = pluginId + "|";
@@ -120,6 +182,8 @@ public sealed class HudViewModel : IDisposable
             if (key.StartsWith(prefix, StringComparison.Ordinal)) doomed.Add(key);
         foreach (string key in doomed)
         {
+            DisposeSubs(key);
+            _panelsByKey.Remove(key);
             _specs.Remove(key);
             PanelRemoved?.Invoke(key);
         }
@@ -188,6 +252,11 @@ public sealed class HudViewModel : IDisposable
             case "text":
             {
                 var vm = new TextWidgetViewModel(textColor);
+                // click= runs in the text go through the same path as typing the command, so a
+                // plugin's own aliases get first refusal — no per-widget callback needed.
+                if (_runCommand is not null)
+                    vm.LinkCommand = new RelayCommand<Scrye.Core.Text.LinkInfo>(
+                        link => _runCommand(link.Action, link.Prompt));
                 BindText(w.Bind, s => vm.Text = s, subs);
                 return vm;
             }
@@ -298,9 +367,10 @@ public sealed class HudViewModel : IDisposable
 
     public void Dispose()
     {
-        foreach (List<IDisposable> subs in _pluginSubs.Values)
+        foreach (List<IDisposable> subs in _panelSubs.Values)
             foreach (IDisposable s in subs) s.Dispose();
-        _pluginSubs.Clear();
+        _panelSubs.Clear();
+        _panelsByKey.Clear();
         Panels.Clear();
     }
 }
@@ -309,20 +379,38 @@ public sealed class HudViewModel : IDisposable
 /// (rendered by type via DataTemplates) — or a set of <see cref="Tabs"/> when the
 /// spec is tabbed. <see cref="PluginId"/> lets the host drop a plugin's panels on
 /// reload/disable.</summary>
-public sealed class HudPanelViewModel
+public sealed class HudPanelViewModel : ViewModelBase
 {
     public string Title { get; }
     public string PluginId { get; }
     public ObservableCollection<object> Widgets { get; } = new();
     public ObservableCollection<HudTabViewModel> Tabs { get; } = new();
     public bool HasTabs => Tabs.Count > 0;
-    public double Width { get; init; } = 220;
+
+    /// <summary>Tabs is observable, but HasTabs is derived from its Count and so has to be
+    /// raised by hand after a rebuild swaps a tabbed panel for a flat one or back.</summary>
+    internal void RaiseHasTabsChanged() => OnPropertyChanged(nameof(HasTabs));
+
+    private double _width = 220;
+    public double Width { get => _width; set => SetField(ref _width, value); }
 
     /// <summary>Plugin-chosen panel background / accent (border + title). Null = follow the theme.
-    /// Set from PanelSpec.Background / .Accent; the XAML overrides the themed defaults when present.</summary>
-    public Avalonia.Media.IBrush? BackgroundBrush { get; init; }
+    /// Set from PanelSpec.Background / .Accent; the XAML overrides the themed defaults when present.
+    /// Settable and notifying because AddPanel re-applies them when a panel is rebuilt.</summary>
+    private Avalonia.Media.IBrush? _backgroundBrush;
+    public Avalonia.Media.IBrush? BackgroundBrush
+    {
+        get => _backgroundBrush;
+        set { if (SetField(ref _backgroundBrush, value)) OnPropertyChanged(nameof(HasBackground)); }
+    }
     public bool HasBackground => BackgroundBrush is not null;
-    public Avalonia.Media.IBrush? AccentBrush { get; init; }
+
+    private Avalonia.Media.IBrush? _accentBrush;
+    public Avalonia.Media.IBrush? AccentBrush
+    {
+        get => _accentBrush;
+        set { if (SetField(ref _accentBrush, value)) OnPropertyChanged(nameof(HasAccent)); }
+    }
     public bool HasAccent => AccentBrush is not null;
 
     /// <summary>Stable key for saved-position lookup across reloads/restarts.</summary>
@@ -543,6 +631,10 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
 public sealed class TextWidgetViewModel : ViewModelBase
 {
     public Avalonia.Media.IBrush Foreground { get; }
+
+    /// <summary>Set when the host can run a command — bound to StyledTextView.LinkCommand so
+    /// <c>click=</c> runs in the text become clickable. Null leaves the text inert.</summary>
+    public System.Windows.Input.ICommand? LinkCommand { get; set; }
 
     public TextWidgetViewModel(string? colour)
     {

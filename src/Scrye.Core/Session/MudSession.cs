@@ -22,7 +22,6 @@ namespace Scrye.Core.Session;
 /// </summary>
 public sealed class MudSession : IAsyncDisposable, IWorldActions
 {
-    private static readonly Rgb MipColour = new(0x80, 0xC0, 0xF0);
     private static readonly Rgb SysColour = new(0xF0, 0xC0, 0x40);
     private static readonly Rgb InputColour = new(0x60, 0xC0, 0xF0);
 
@@ -194,16 +193,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // the raw viking (BBE) feed becomes watchable state: vik.<key>
         _mipProc.VikingData += (k, v) => _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
         _mipProc.Notice += text => Echo(text);
-        _mipProc.Tell += text =>
-        {
-            RaiseLine(Line.FromText(text, MipColour));
-            ChannelMessage?.Invoke("Tell", text);
-        };
-        _mipProc.Channel += (ch, msg) =>
-        {
-            RaiseLine(Line.FromText($"[{ch}] {msg}", MipColour));
-            ChannelMessage?.Invoke(ch, msg);
-        };
+        // These used to also RaiseLine a "[Channel] text" copy into the output pane. They no
+        // longer do: 3Scapes prints every tell and channel message to the screen itself, so
+        // the echo was a second copy of a line the player had already read — with the MIP
+        // banner still embedded in it, so it did not even read as tidier than the original.
+        //
+        // The events stay. They are what feeds scrye.onChannel, and so the Chats capture
+        // pane, the companion's chat tab and notifications — none of which depend on the
+        // line ever having been drawn in the main pane. If a MUD is ever found that reports
+        // a channel over MIP without printing it, the fix is to route it to a pane from a
+        // plugin, not to reinstate a blanket duplicate for everyone.
+        _mipProc.Tell += text => ChannelMessage?.Invoke("Tell", text);
+        _mipProc.Channel += (ch, msg) => ChannelMessage?.Invoke(ch, msg);
     }
 
     private void OnAutomationHit(AutomationHit hit)

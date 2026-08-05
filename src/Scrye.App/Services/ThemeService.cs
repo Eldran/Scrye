@@ -69,10 +69,6 @@ public static class ThemeService
         new ThemeScheme("forest",   "Forest (green)",        true,  C("#4CBB6C"), C("#121A14"), C("#18241B"), C("#1F2E23"), C("#2C4032"), C("#D5E2D8"), C("#8CA394"), C("#0D140F")),
         new ThemeScheme("amber",    "Amber (warm)",          true,  C("#E0A030"), C("#1C1712"), C("#251E17"), C("#2F261C"), C("#443627"), C("#E8DECF"), C("#A8977E"), C("#14100C")),
         new ThemeScheme("crimson",  "Crimson (red)",         true,  C("#E04858"), C("#1B1215"), C("#251A1E"), C("#2F2127"), C("#452E35"), C("#E6D9DC"), C("#A88F96"), C("#140D10")),
-        // Outrun: hot magenta on deep indigo. The surfaces stay violet rather than neutral grey
-        // so the accent reads as neon rather than merely bright, and the line colour is lifted
-        // well above the panel so borders glow instead of disappearing.
-        new ThemeScheme("neon",     "Neon (80s)",            true,  C("#FF2E88"), C("#0B0420"), C("#17093A"), C("#221052"), C("#3B1D6E"), C("#E8DFFF"), C("#9A7FC7"), C("#080218")),
     };
 
     public static ThemeScheme Default => Schemes[0];
@@ -137,6 +133,10 @@ public static class ThemeService
         r["ScryeText"] = new SolidColorBrush(s.Text);
         r["ScryeTextDim"] = new SolidColorBrush(s.TextDim);
         r["ScryeAccent"] = new SolidColorBrush(s.Accent);
+        // Unread-count pill: the scheme accent at ~82% alpha, so it reads as a badge rather
+        // than a solid block. ScryeScrim and ScryeOnBar are deliberately not set here — they
+        // are constant across schemes and live only in App.axaml.
+        r["ScryeBadgeBg"] = new SolidColorBrush(Color.FromArgb(0xD0, s.Accent.R, s.Accent.G, s.Accent.B));
         r["ScryeSuccess"] = new SolidColorBrush(s.Success);
         r["ScryeWarning"] = new SolidColorBrush(s.Warning);
         r["ScryeError"] = new SolidColorBrush(s.Error);

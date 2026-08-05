@@ -14,6 +14,13 @@ namespace Scrye.Core.Text;
 /// follow after '/' (<c>@{#FF2E88/#0B0420}</c>). Flags: <c>bold</c>, <c>underline</c>,
 /// <c>italic</c>, <c>inverse</c>.</para>
 ///
+/// <para><b>Clickable runs.</b> <c>click=</c> makes the run a link that runs its text the way
+/// typing it would — so it hits the plugin's own aliases first and the MUD only after, which is
+/// why a plugin needs no callback to make text clickable. <c>prompt=</c> puts the text in the
+/// input box instead of running it. Everything after <c>click=</c>/<c>prompt=</c> to the closing
+/// brace is the command verbatim, commas and spaces included, so it must come last in the spec:
+/// <c>@{accent,click=vbuild start warehouse}Warehouse@{}</c>.</para>
+///
 /// <para><b>It never throws and never eats text.</b> Malformed markup renders literally rather
 /// than vanishing: an unterminated <c>@{</c>, a stray <c>@</c>, or an unmatched <c>@{}</c> all
 /// pass through as characters. An unknown colour name keeps the current colour (matching
@@ -25,8 +32,13 @@ namespace Scrye.Core.Text;
 /// </summary>
 public static class Markup
 {
-    /// <summary>Longest theme-token name; guards the token scan against pathological input.</summary>
-    private const int MaxSpecLength = 64;
+    /// <summary>
+    /// Longest accepted spec. Guards the token scan against pathological input: without a cap a
+    /// stray "@{" would pair with a '}' far down the line and swallow everything between them.
+    /// Generous rather than tight because a click= action carries a whole command
+    /// ("click=vtrade dispatch sell 65 bread uppsala escort 5"), not just a colour name.
+    /// </summary>
+    private const int MaxSpecLength = 256;
 
     /// <summary>True if <paramref name="text"/> contains anything the parser would act on.
     /// Lets callers skip the parse (and the allocation) for the overwhelmingly common
@@ -89,14 +101,15 @@ public static class Markup
             if (runs.Count > 0)
             {
                 StyledRun p = runs[^1];
-                if (p.Fore == cur.Fore && p.Back == cur.Back && p.Flags == cur.Flags && p.Link is null)
+                if (p.Fore == cur.Fore && p.Back == cur.Back && p.Flags == cur.Flags
+                    && p.Link is null && cur.Link is null)
                 {
                     runs[^1] = p with { Text = p.Text + buf };
                     buf.Clear();
                     return;
                 }
             }
-            runs.Add(new StyledRun(buf.ToString(), cur.Fore, cur.Back, cur.Flags));
+            runs.Add(new StyledRun(buf.ToString(), cur.Fore, cur.Back, cur.Flags, cur.Link));
             buf.Clear();
         }
 
@@ -141,7 +154,7 @@ public static class Markup
 
     // ---- internals ---------------------------------------------------------
 
-    private readonly record struct Style(Rgb Fore, Rgb Back, RunFlags Flags);
+    private readonly record struct Style(Rgb Fore, Rgb Back, RunFlags Flags, LinkInfo? Link = null);
 
     /// <summary>True when position <paramref name="i"/> starts an escaped literal "@@".</summary>
     private static bool IsEscapedAt(string s, int i) => s[i] == '@' && i + 1 < s.Length && s[i + 1] == '@';
@@ -163,10 +176,23 @@ public static class Markup
         return true;
     }
 
-    /// <summary>Apply one spec ("colour", "colour,flag,...", ",flag", "fg/bg") to the current style.</summary>
+    /// <summary>Apply one spec ("colour", "colour,flag,...", ",flag", "fg/bg", "...,click=cmd")
+    /// to the current style.</summary>
     private static Style Apply(Style cur, string spec, Func<string, Rgb?>? resolve)
     {
         Style s = cur;
+
+        // Split off a trailing click=/prompt= FIRST: its value is taken verbatim to the end of the
+        // spec, because a command legitimately contains spaces and commas ("vtrade dispatch sell
+        // 65 bread uppsala"). Everything before it is the ordinary comma-separated style spec.
+        int cut = ActionStart(spec, out bool isPrompt, out int verbLen);
+        if (cut >= 0)
+        {
+            string cmd = spec[(cut + verbLen)..].Trim();
+            if (cmd.Length > 0) s = s with { Link = new LinkInfo(cmd, IsUrl: false, Prompt: isPrompt) };
+            spec = cut == 0 ? "" : spec[..cut].TrimEnd(',');
+        }
+
         string[] parts = spec.Split(',');
 
         string colour = parts[0].Trim();
@@ -192,6 +218,23 @@ public static class Markup
             s = s with { Flags = s.Flags | add };
         }
         return s;
+    }
+
+    /// <summary>
+    /// Index of a <c>click=</c> or <c>prompt=</c> verb in <paramref name="spec"/>, or -1. Only
+    /// matches at the start or just after a comma, so a colour named "onclick=" (there is no such
+    /// thing, but the parser should not care) cannot be mistaken for one.
+    /// </summary>
+    private static int ActionStart(string spec, out bool isPrompt, out int verbLen)
+    {
+        isPrompt = false; verbLen = 0;
+        for (int i = 0; i < spec.Length; i++)
+        {
+            if (i != 0 && spec[i - 1] != ',') continue;
+            if (string.CompareOrdinal(spec, i, "click=", 0, 6) == 0) { verbLen = 6; return i; }
+            if (string.CompareOrdinal(spec, i, "prompt=", 0, 7) == 0) { isPrompt = true; verbLen = 7; return i; }
+        }
+        return -1;
     }
 
     /// <summary>A '#RRGGBB' literal, else whatever <paramref name="resolve"/> makes of the name.</summary>

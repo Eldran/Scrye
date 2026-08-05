@@ -36,6 +36,11 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     private readonly List<PluginRule> _triggers = new();   // match output lines
     private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly Dictionary<string, DynValue> _actions = new();   // panel-button callbacks by id
+    // Action ids created while building each panel, by panel title. A plugin may rebuild a panel
+    // any number of times (that is how dynamic widget sets work), and without this the callbacks
+    // from every previous build would stay in _actions forever, holding Lua closures alive.
+    private readonly Dictionary<string, List<string>> _panelActions = new(StringComparer.Ordinal);
+    private List<string>? _buildingActions;   // non-null only while ToPanelSpec is running
     private readonly List<IDisposable> _subscriptions = new();
     private readonly TimerWheel _timers = new();
     private readonly VariableStore _vars = new();          // for %-expansion in rule 'send'
@@ -183,6 +188,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         _triggers.Clear();
         _aliases.Clear();
         _actions.Clear();
+        _panelActions.Clear();
     }
 
     // ---- the scrye.* table ---------------------------------------------------
@@ -286,10 +292,26 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         t["store"] = store;
 
         // scrye.addPanel({ title=..., widgets={ {type=...,...}, ... } })
+        // scrye.addPanel{...} — calling it again with the same title REBUILDS that panel, which
+        // is how a plugin offers widgets it could not know about at load time.
         t["addPanel"] = Fn(a =>
         {
             if (a.Count >= 1 && a[0].Type == DataType.Table)
-                _host.AddPanel(Id, ToPanelSpec(a[0].Table));
+            {
+                var created = new List<string>();
+                _buildingActions = created;
+                PanelSpec spec;
+                try { spec = ToPanelSpec(a[0].Table); }
+                finally { _buildingActions = null; }
+
+                string title = string.IsNullOrWhiteSpace(spec.Title) ? Id : spec.Title;
+                // retire the previous build's callbacks before adopting this one's
+                if (_panelActions.TryGetValue(title, out List<string>? old))
+                    foreach (string id in old) _actions.Remove(id);
+                _panelActions[title] = created;
+
+                _host.AddPanel(Id, spec);
+            }
             return DynValue.Nil;
         });
 
@@ -402,6 +424,7 @@ public sealed class LuaPluginRuntime : IPluginRuntime
         {
             actionId = "a" + _nextActionId++;
             _actions[actionId] = action;
+            _buildingActions?.Add(actionId);
         }
         // colorgrid palette: { ["char"] = "#RRGGBB", ... }
         Dictionary<string, string>? palette = null;
