@@ -4,11 +4,18 @@
   "version": "1.0.0",
   "author": "Joakim",
   "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper.",
-  "mudIds": ["*"],
+  "mudIds": [
+    "*"
+  ],
   "entry": "main.lua",
   "lang": "lua",
+  "data": {
+    "areas": "areas.json"
+  },
   "enabled": true,
-  "requires": { "scryeApi": ">=1.3 <2.0" },
+  "requires": {
+    "scryeApi": ">=1.4 <2.0"
+  },
   "permissions": [
     "commands.send",
     "output.read",
