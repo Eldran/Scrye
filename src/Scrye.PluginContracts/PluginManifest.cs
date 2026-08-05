@@ -37,8 +37,9 @@ public sealed record PluginManifest
     /// <summary>
     /// Data files this plugin ships, as script key → file name (<c>"areas": "areas.json"</c>).
     /// The host reads them from the plugin's folder at load and publishes them as
-    /// <c>scrye.data.&lt;key&gt;</c>; see <see cref="PluginAssets"/> for the parsing rules and the
-    /// (deliberately strict) name check. Declaring a file is the only way a plugin reaches the
+    /// <c>scrye.data.&lt;key&gt;</c>; <c>Scrye.Core.Plugins.PluginAssets</c> has the parsing rules
+    /// and the (deliberately strict) name check — named rather than cref'd because the engine is
+    /// deliberately not referenced from the contracts package. Declaring a file is the only way a plugin reaches the
     /// filesystem — it names files here, never a path at run time.
     ///
     /// <para>This is for a plugin's own source data: a word list, a route table, a map, a

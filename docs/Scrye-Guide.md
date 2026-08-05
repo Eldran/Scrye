@@ -191,6 +191,7 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
   "mudIds": ["*"],
   "entry": "main.lua",
   "lang": "lua",
+  "data": { "areas": "areas.json", "badwords": "badwords.txt" },
   "enabled": true,
   "requires": { "scryeApi": ">=1.1 <2.0" },
   "permissions": ["output.read", "commands.send", "ui.panels"]
@@ -205,9 +206,50 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
 | `mudIds` | Which worlds it applies to. `["*"]` (or empty) = all worlds; otherwise a list of MUD ids. |
 | `entry` | Entry script relative to the folder. Default `main.lua`. |
 | `lang` | `"lua"` (MoonSharp) or `"js"` (Jint). Default `lua`. |
+| `data` | Data files the plugin ships, as script key → file name. See below. Optional. |
 | `enabled` | Whether it's a candidate to load. Users still opt in per character. |
 | `requires` | Compatibility constraints. See below. Optional. |
 | `permissions` | What the plugin intends to do, shown to the user. See below. Optional. |
+
+## Shipping data with a plugin — `data`
+
+A plugin has no filesystem. What it has instead is a `data` map in the manifest: name the files
+your plugin ships, and the host reads them from your plugin folder at load and hands them over as
+`scrye.data.<key>`. A word list, a route table, a room map, a colour palette — anything that is
+your plugin's *source* rather than its state belongs here, instead of being pasted into the script
+as a giant literal.
+
+```json
+"data": { "areas": "areas.json", "badwords": "badwords.txt" }
+```
+
+```lua
+local AREAS = scrye.data and scrye.data.areas
+for _, word in ipairs(scrye.data.badwords or {}) do ... end
+```
+
+**The file extension picks the shape:**
+
+| Extension | You get |
+|---|---|
+| `.json` | A nested table — objects become tables, arrays become 1-based lists, numbers are Lua numbers. |
+| `.txt` `.list` `.lines` `.words` | A list of the non-blank lines, trimmed, with `#` comment lines dropped. |
+| anything else | The raw text, for a format your plugin parses itself. |
+
+JSON rather than Lua for structured data: the sandbox has no `load`/`dofile`, so a `.lua` data
+file could only ever reach you as a string.
+
+**Rules.** Plain file names only — no folders, no `..`, no absolute paths; the file must sit
+directly in your plugin folder. Files are read-only and capped at 4 MB each, 32 entries per
+manifest. A key must be a valid identifier so `scrye.data.areas` works with dot access.
+
+**Failure is per-entry.** A missing file, malformed JSON or an oversized file drops *that key*,
+prints why to the world output, and lets the plugin load anyway. So check before you use it —
+`scrye.data.areas` being nil is the case where the author (you) shipped a broken file, and saying
+so beats behaving as if the data were empty.
+
+This is not storage. Nothing writes here; `scrye.store` is still where state between sessions
+goes.
 
 ## The plugin API version
 

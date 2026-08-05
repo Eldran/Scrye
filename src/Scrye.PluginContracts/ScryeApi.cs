@@ -45,7 +45,7 @@ public static class ScryeApi
     //       a plugin that declares none gets an empty scrye.data table.
     public static readonly Version Current = new(1, 4);
 
-    /// <summary>The API version as it appears in manifests and diagnostics ("1.1").</summary>
+    /// <summary>The API version as it appears in manifests and diagnostics ("1.4").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";
 
     /// <summary>

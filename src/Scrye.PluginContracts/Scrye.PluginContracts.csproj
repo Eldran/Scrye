@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <!--
     The plugin-facing contract, split out of Scrye.Core so a plugin author can reference the
@@ -36,7 +36,7 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackageId>Scrye.PluginContracts</PackageId>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Authors>Joakim</Authors>
     <Description>
       The Scrye MUD client's plugin contract: the host API surface, declarative HUD panel
