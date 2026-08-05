@@ -1,4 +1,4 @@
-namespace Scrye.Core.Plugins;
+﻿namespace Scrye.Core.Plugins;
 
 /// <summary>
 /// The capability vocabulary a plugin declares in its manifest's <c>permissions</c> array.
@@ -10,10 +10,12 @@ namespace Scrye.Core.Plugins;
 /// Presenting them as a security boundary today would be a lie.</para>
 ///
 /// <para><b>The actual sandbox.</b> Script plugins run in MoonSharp's soft sandbox / Jint with no
-/// <c>io</c>, no <c>os.execute</c>, no filesystem and no CLR access — that part is real and
+/// <c>io</c>, no <c>os.execute</c> and no CLR access — that part is real and
 /// enforced by the engine, not by this list. What is <i>not</i> bounded is what matters most on a
 /// MUD: <c>scrye.send</c> can issue any command your character can type. A plugin cannot read
-/// your files; it can drop your inventory. That asymmetry is why <c>commands.send</c> is the
+/// your files — the only thing it reads from disk is the data files it ships in its own folder,
+/// which the host resolves for it (see <see cref="PluginManifest.Data"/>) — but it can drop your
+/// inventory. That asymmetry is why <c>commands.send</c> is the
 /// permission worth reading carefully.</para>
 ///
 /// <para>Unknown permission strings are preserved and shown verbatim rather than dropped — a

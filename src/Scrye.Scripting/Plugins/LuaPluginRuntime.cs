@@ -1,4 +1,4 @@
-using MoonSharp.Interpreter;
+﻿using MoonSharp.Interpreter;
 using Scrye.Core.Automation;
 using Scrye.Core.Plugins;
 
@@ -197,6 +197,11 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     {
         var t = new Table(_script);
         t["id"] = Id;
+
+        // scrye.data.<key> — the files declared in the manifest's "data" map, already parsed.
+        // Built once here rather than lazily: the plugin folder is read-only to the plugin, so
+        // there is nothing to re-read, and a script can use it at the top of its own body.
+        t["data"] = BuildData();
 
         t["print"] = Fn(a => { _host.Print(Id, Arg(a, 0)); return DynValue.Nil; });
         t["send"]  = Fn(a => { _host.Send(Arg(a, 0)); return DynValue.Nil; });
@@ -478,6 +483,44 @@ public sealed class LuaPluginRuntime : IPluginRuntime
     {
         DynValue v = t.Get(key);
         return v.IsNil() ? null : v.CastToString();
+    }
+
+    /// <summary>The manifest's declared data files as a Lua table. Problems are printed to the
+    /// world rather than thrown: a plugin whose word list is malformed should still load and be
+    /// able to say so, and the author needs to see which entry failed.</summary>
+    private Table BuildData()
+    {
+        var t = new Table(_script);
+        foreach (KeyValuePair<string, object?> kv in PluginAssets.Load(
+                     _descriptor.FolderPath, _descriptor.Manifest.Data, msg => _host.Print(Id, msg)))
+        {
+            t[kv.Key] = ToLua(kv.Value);
+        }
+        return t;
+    }
+
+    /// <summary>Object graph (dictionary / list / string / double / bool / null) to something the
+    /// Table indexer will convert. Lists become 1-based arrays, which is what a Lua author expects
+    /// from a JSON array.</summary>
+    private object? ToLua(object? v)
+    {
+        switch (v)
+        {
+            case IReadOnlyList<object?> list:
+            {
+                var t = new Table(_script);
+                for (int i = 0; i < list.Count; i++) t[i + 1] = ToLua(list[i]);
+                return t;
+            }
+            case IReadOnlyDictionary<string, object?> map:
+            {
+                var t = new Table(_script);
+                foreach (KeyValuePair<string, object?> kv in map) t[kv.Key] = ToLua(kv.Value);
+                return t;
+            }
+            default:
+                return v;   // string / double / bool / null convert directly
+        }
     }
 
     private static DynValue Fn(Func<CallbackArguments, DynValue> f) =>

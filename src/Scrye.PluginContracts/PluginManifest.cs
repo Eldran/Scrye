@@ -1,4 +1,4 @@
-namespace Scrye.Core.Plugins;
+﻿namespace Scrye.Core.Plugins;
 
 /// <summary>Compatibility requirements a plugin declares. Absent means "no constraint".</summary>
 public sealed record PluginRequires
@@ -33,6 +33,18 @@ public sealed record PluginManifest
     /// <summary>Scripting language of the entry script: <c>"lua"</c> (default, MoonSharp) or
     /// <c>"js"</c> (Jint). The host picks the matching runtime.</summary>
     public string Lang { get; init; } = "lua";
+
+    /// <summary>
+    /// Data files this plugin ships, as script key → file name (<c>"areas": "areas.json"</c>).
+    /// The host reads them from the plugin's folder at load and publishes them as
+    /// <c>scrye.data.&lt;key&gt;</c>; see <see cref="PluginAssets"/> for the parsing rules and the
+    /// (deliberately strict) name check. Declaring a file is the only way a plugin reaches the
+    /// filesystem — it names files here, never a path at run time.
+    ///
+    /// <para>This is for a plugin's own source data: a word list, a route table, a map, a
+    /// palette. Read-only. Saving state between sessions is still <c>scrye.store</c>.</para>
+    /// </summary>
+    public Dictionary<string, string>? Data { get; init; }
 
     /// <summary>Whether the plugin loads. A disabled plugin stays on disk but is skipped.</summary>
     public bool Enabled { get; init; } = true;

@@ -1,4 +1,4 @@
-using Jint;
+﻿using Jint;
 using Jint.Native;
 using Scrye.Core.Automation;
 using Scrye.Core.Plugins;
@@ -188,6 +188,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
     {
         id = Id,
 
+        // scrye.data.<key> — the manifest's declared data files, already parsed
+        data = BuildData(),
+
         print = (Action<string>)(s => _host.Print(Id, s ?? "")),
         send  = (Action<string>)(s => _host.Send(s ?? "")),
         log   = (Action<string>)(s => _host.Log(Id, s ?? "")),
@@ -342,6 +345,25 @@ public sealed class JsPluginRuntime : IPluginRuntime
             }
         }
         return widgets;
+    }
+
+    /// <summary>The manifest's declared data files as a native JS value. Goes in through the
+    /// engine's own JSON.parse — the mirror of <see cref="ToPalette"/>'s trick — so the script
+    /// gets real objects and arrays rather than wrapped CLR collections. A failure here yields an
+    /// empty object: a plugin whose data is broken should still load and be able to say so.</summary>
+    private JsValue BuildData()
+    {
+        try
+        {
+            string json = System.Text.Json.JsonSerializer.Serialize(PluginAssets.Load(
+                _descriptor.FolderPath, _descriptor.Manifest.Data, msg => _host.Print(Id, msg)));
+            JsValue parse = _engine.Evaluate("JSON.parse");
+            return _engine.Invoke(parse, json);
+        }
+        catch
+        {
+            return _engine.Evaluate("({})");
+        }
     }
 
     /// <summary>Read a JS palette object as char→"#RRGGBB". Round-trips through the

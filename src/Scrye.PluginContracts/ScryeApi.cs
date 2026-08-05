@@ -1,4 +1,4 @@
-namespace Scrye.Core.Plugins;
+﻿namespace Scrye.Core.Plugins;
 
 /// <summary>
 /// The version of the plugin-facing contract — the <c>scrye.*</c> script surface, the
@@ -40,7 +40,10 @@ public static class ScryeApi
     // 1.3 — text widgets honour the same markup; colorgrid gains `labels` (draw these chars
     //       on their tiles); buttonrow gains a bound form (`bind` + `onClick(label, index)`)
     //       whose buttons come from state. All additive.
-    public static readonly Version Current = new(1, 3);
+    // 1.4 — a plugin may declare data files in its manifest ("data": { key: file }); the host
+    //       reads them from the plugin folder and publishes them as scrye.data.<key>. Additive:
+    //       a plugin that declares none gets an empty scrye.data table.
+    public static readonly Version Current = new(1, 4);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.1").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";
