@@ -59,6 +59,8 @@ local seanum = 1
 local sea_time = nil           -- `now` value when the current sea was entered
 local sea_started_here = false -- true only if THIS session started the sea (see cs_new_sea)
 local now = 0                  -- seconds since plugin load (1 s ticker)
+local map_serial = 1           -- bumped on every GRAPH change (rooms/exits), not moves —
+                               -- the wasm pathfinder caches the graph keyed on this
 
 local cs_flags = { item = false, gold = false, player = false }
 
@@ -66,7 +68,7 @@ local cs_flags = { item = false, gold = false, player = false }
 local cs_draw, cs_step, cs_advance, mark_dirty
 
 -- the original drew ":: CSS ::" in red/grey/red before every message
-local function note(s) scrye.print("@{#FF2E88,bold}::@{} @{#21E6FF}CSS@{} @{#FF2E88,bold}::@{} " .. s) end
+local function note(s) scrye.print("@{#FD2083,bold}::@{} @{#4BE4FF}CSS@{} @{#FD2083,bold}::@{} " .. s) end
 
 local function parse_goals()
   goals = {}
@@ -103,6 +105,7 @@ local function add_room(p)
   rooms[p.z][p.x] = rooms[p.z][p.x] or {}
   if not rooms[p.z][p.x][p.y] then
     rooms[p.z][p.x][p.y] = { exits = {} }
+    map_serial = map_serial + 1
   end
   return rooms[p.z][p.x][p.y]
 end
@@ -121,6 +124,7 @@ local function add_exit(p, dir)
   local room = get_room(p) or add_room(p)
   if not room.exits[dir] then
     room.exits[dir] = true
+    map_serial = map_serial + 1
     local target = moved(p, dir)
     if target and not get_room(target) then
       frontier[#frontier + 1] = { x = p.x, y = p.y, z = p.z, dir = dir }
@@ -246,6 +250,65 @@ local function in_party(name)
     end
   end
   return false
+end
+
+-- ---------- wasm pathfinder delegation ----------
+-- Same protocol 3s-map speaks (see sdk/rust/plugins/3s-pathfinder): searches are
+-- delegated over synchronous inter-plugin events, the graph ships only when our
+-- map_serial says the pathfinder's per-area cache is stale, and no reply at all means
+-- no pathfinder is loaded — callers fall back to the local bfs below.
+local SHORT_DIR = {
+  n="n", s="s", e="e", w="w", u="u", d="d", ne="ne", nw="nw", se="se", sw="sw",
+  north="n", south="s", east="e", west="w", up="u", down="d",
+  northeast="ne", northwest="nw", southeast="se", southwest="sw",
+}
+
+local function rooms_to_list()
+  local list = {}
+  for z, zt in pairs(rooms) do
+    for x, xt in pairs(zt) do
+      for y, r in pairs(xt) do
+        local seen, ex = {}, {}
+        for d in pairs(r.exits) do
+          local c = SHORT_DIR[d]
+          if c and not seen[c] then seen[c] = true; ex[#ex + 1] = c end
+        end
+        list[#list + 1] = { x = x, y = y, z = z, exits = ex }
+      end
+    end
+  end
+  return list
+end
+
+local path_req_id = 0
+local path_reply = nil
+scrye.on("map.path.result", function(data)
+  local t = scrye.json.decode(data)
+  if type(t) == "table" then path_reply = t end
+end)
+
+-- One synchronous exchange. opts = { to = {x,y,z} } or { targets = { {x,y,z}, ... } }
+-- (targets in PRIORITY order — the reply's index is the first reachable one).
+-- Returns the reply table, or nil when no pathfinder answered.
+local function ask_pathfinder(opts, allow_up)
+  path_req_id = path_req_id + 1
+  local req = {
+    id = path_req_id, area = "chaos-sea", serial = map_serial,
+    allowUp = allow_up and true or false,
+    from = { x = pos.x, y = pos.y, z = pos.z },
+    to = opts.to, targets = opts.targets,
+  }
+  path_reply = nil
+  scrye.emit("map.path.find", scrye.json.encode(req))
+  if type(path_reply) == "table" and path_reply.id == path_req_id and path_reply.needArea then
+    req.rooms = rooms_to_list()
+    path_reply = nil
+    scrye.emit("map.path.find", scrye.json.encode(req))
+  end
+  local r = path_reply
+  path_reply = nil
+  if type(r) ~= "table" or r.id ~= path_req_id or r.needArea then return nil end
+  return r
 end
 
 -- ---------- BFS through known rooms, returns dir list ----------
@@ -545,8 +608,6 @@ local function cs_on_prompt()
 end
 
 -- ---------- frontier selection: DOWN exits always win ----------
-local function frontier_remove(i) table.remove(frontier, i) end
-
 local function valid_entry(e)
   local from_room = get_room({ x = e.x, y = e.y, z = e.z })
   local t = moved({ x = e.x, y = e.y, z = e.z }, e.dir)
@@ -556,43 +617,49 @@ local function valid_entry(e)
   return nil
 end
 
-local function pop_frontier()
-  -- 1. unexplored down exit in the CURRENT room: dive immediately
+-- One pass over the pile, newest first, validating each entry once. Returns the
+-- candidate list in pop priority order: an unexplored down exit in the CURRENT room
+-- first, then queued down exits newest-first, then the rest newest-first. Consumes
+-- the frontier -- stale entries are pruned, valid ones become candidates, and
+-- cs_step's stash/restore puts the losers back.
+--
+-- The dive candidate is synthesized from the room's own exits, NOT taken from the
+-- pile -- which is why this is one pass and not a pop-until-empty loop: popping
+-- repeatedly re-synthesized the same dive forever (the instruction budget caught
+-- exactly that as "script exceeded its execution budget" mid-exploration).
+local function collect_candidates()
+  local dive = nil
   local cur = get_room(pos)
   if cur then
     for _, dd in ipairs({ "d", "down" }) do
-      if cur.exits[dd] then
+      if not dive and cur.exits[dd] then
         local t = moved(pos, dd)
         if t and not get_room(t) then
-          for i = #frontier, 1, -1 do
-            local e = frontier[i]
-            if e.x == pos.x and e.y == pos.y and e.z == pos.z
-               and (e.dir == "d" or e.dir == "down") then
-              frontier_remove(i)
-            end
-          end
-          return { x = pos.x, y = pos.y, z = pos.z, dir = dd }, t
+          dive = { entry = { x = pos.x, y = pos.y, z = pos.z, dir = dd }, target = t }
         end
       end
     end
   end
-  -- 2. newest queued down exit anywhere on the map
+  local downs, rest = {}, {}
   for i = #frontier, 1, -1 do
     local e = frontier[i]
-    if e.dir == "d" or e.dir == "down" then
+    -- entries duplicating the dive are consumed with it, like the old step 1 did
+    local dup = dive and e.x == pos.x and e.y == pos.y and e.z == pos.z
+                and (e.dir == "d" or e.dir == "down")
+    if not dup then
       local t = valid_entry(e)
-      frontier_remove(i)
-      if t then return e, t end
+      if t then
+        local list = (e.dir == "d" or e.dir == "down") and downs or rest
+        list[#list + 1] = { entry = e, target = t }
+      end
     end
+    frontier[i] = nil
   end
-  -- 3. normal: newest unexplored exit
-  while #frontier > 0 do
-    local e = frontier[#frontier]
-    frontier[#frontier] = nil
-    local t = valid_entry(e)
-    if t then return e, t end
-  end
-  return nil
+  local out = {}
+  if dive then out[#out + 1] = dive end
+  for _, c in ipairs(downs) do out[#out + 1] = c end
+  for _, c in ipairs(rest) do out[#out + 1] = c end
+  return out
 end
 
 -- ---------- pause / stepping ----------
@@ -627,15 +694,42 @@ cs_step = function()
     return
   end
   if plan then cs_advance() return end
+  -- Candidates in pop-priority order (collect_candidates prunes stale entries).
+  -- With the wasm pathfinder loaded, ONE delegated sweep answers the whole list — the
+  -- reply's index is the first reachable candidate, exactly what the old
+  -- one-bfs-per-candidate loop computed. Without it, the same loop runs locally.
+  local candidates = collect_candidates()
+  local chosen, path = nil, nil
+  if #candidates > 0 then
+    local tgts = {}
+    for i, c in ipairs(candidates) do
+      tgts[i] = { x = c.entry.x, y = c.entry.y, z = c.entry.z }
+    end
+    local r = ask_pathfinder({ targets = tgts }, false)
+    if r then
+      if r.found and r.index then chosen, path = r.index, r.dirs or {} end
+    else
+      -- Local fallback: BFS per candidate until one is reachable, as before the wasm
+      -- pathfinder existed -- but bounded, so a pile of unreachable exits degrades to
+      -- the blind-step recovery below instead of tripping the instruction budget.
+      for i = 1, math.min(#candidates, 40) do
+        local c = candidates[i]
+        local p = bfs(pos, { x = c.entry.x, y = c.entry.y, z = c.entry.z })
+        if p then chosen, path = i, p break end
+      end
+    end
+  end
+  local entry, target
   local stash = {}
-  local entry, target, path
-  while true do
-    entry, target = pop_frontier()
-    if not entry then break end
-    path = bfs(pos, { x = entry.x, y = entry.y, z = entry.z })
-    if path then break end
-    stash[#stash + 1] = entry
-    entry, target = nil, nil
+  if chosen and candidates[chosen] then
+    entry = candidates[chosen].entry
+    target = candidates[chosen].target
+    for i = 1, chosen - 1 do stash[#stash + 1] = candidates[i].entry end
+    -- candidates past the winner were never really "popped": restore them so the
+    -- next pop sees them in the same order
+    for i = #candidates, chosen + 1, -1 do frontier[#frontier + 1] = candidates[i].entry end
+  else
+    for i = 1, #candidates do stash[#stash + 1] = candidates[i].entry end
   end
   -- unreachable exits go back at the BOTTOM of the pile, never lost
   for i = #stash, 1, -1 do table.insert(frontier, 1, stash[i]) end
@@ -694,7 +788,10 @@ local function cs_leave()
   if plan and plan.entry then table.insert(frontier, 1, plan.entry) end
   plan = nil
   auto = false
-  local path = bfs(pos, { x = 0, y = 0, z = 0 }, true)   -- going home may need to climb up
+  local path
+  local r = ask_pathfinder({ to = { x = 0, y = 0, z = 0 } }, true)
+  if r then path = r.found and (r.dirs or {}) or nil
+  else path = bfs(pos, { x = 0, y = 0, z = 0 }, true) end   -- going home may need to climb up
   if not path then note("no path back to start!") return end
   if #path == 0 then note("already at start") return end
   note("returning to 0 0 0 (" .. #path .. " steps)")
@@ -704,6 +801,7 @@ end
 
 local function reset()
   rooms = {}; frontier = {}
+  map_serial = map_serial + 1
   pos = { x = 0, y = 0, z = 0 }
   plan = nil; fighting = false; steps_done = 0
   goal_found = false; paused = false
@@ -839,8 +937,8 @@ cs_draw = function()
   scrye.setState(P .. "seanum", tostring(seanum))
 
   -- map of current level, centered on player, north = up
-  local x0 = pos.x - math.floor(COLS / 2)
-  local y0 = pos.y + math.floor(ROWS / 2)
+  local x0 = pos.x - COLS // 2
+  local y0 = pos.y + ROWS // 2
   local zt = rooms[pos.z] or {}
   -- frontier targets on this level
   local fronts = {}
@@ -874,25 +972,28 @@ end
 scrye.addPanel{
   title = "3S Chaos Sea",
   width = 300,
-  accent = "#2CB5C4",          -- signature: chaos-sea teal
+  accent = "#0B9DB3",          -- signature: chaos-sea teal (validated accent set)
   widgets = {
-    { type = "value", text = "", bind = P .. "status", color = "#6FB7E0" },   -- info blue
+    { type = "value", text = "", bind = P .. "status", color = "info" },      -- semantic: status line
     { type = "value", text = "pos ",   bind = P .. "stats" },
-    { type = "colorgrid", bind = P .. "map", palette = {
+    -- Marker colours are OKLCH-stepped and validated all-pairs on the map surface
+    -- (worst pair ΔE 13.0 under simulated colour-blindness); labels draws the marker
+    -- letters on their tiles, so the markers never rely on colour alone.
+    { type = "colorgrid", bind = P .. "map", labels = "@fvS", palette = {
         ["."] = "#080A0C",   -- unknown / wall (map background)
-        ["#"] = "#806040",   -- explored room
-        ["v"] = "#30C0F0",   -- room with a down exit (blue dot)
-        ["f"] = "#3070FF",   -- frontier target
-        ["S"] = "#40C0FF",   -- start room 0 0 0
-        ["@"] = "#60FF60",   -- you
+        ["#"] = "#856D52",   -- explored room (soft tan)
+        ["v"] = "#3BAECE",   -- room with a down exit (cyan)
+        ["f"] = "#DA950B",   -- frontier target (amber: still to explore)
+        ["S"] = "#FFFFFF",   -- start room 0 0 0
+        ["@"] = "#6BEF75",   -- you (neon green)
       } },
     -- legend, each entry in its own map color
-    { type = "label", text = "@ you",       color = "#60FF60" },
-    { type = "label", text = "f frontier",  color = "#3070FF" },
-    { type = "label", text = "v down exit", color = "#30C0F0" },
-    { type = "label", text = "S start",     color = "#40C0FF" },
-    { type = "value", text = "kills: ", bind = P .. "hunt", color = "#E0524D" },   -- red: kills
-    { type = "value", text = "sea ",    bind = P .. "sea",  color = "#2CB5C4" },   -- teal: sea id
+    { type = "label", text = "@ you",       color = "#6BEF75" },
+    { type = "label", text = "f frontier",  color = "#DA950B" },
+    { type = "label", text = "v down exit", color = "#3BAECE" },
+    { type = "label", text = "S start",     color = "#FFFFFF" },
+    { type = "value", text = "kills: ", bind = P .. "hunt", color = "error" },     -- semantic: kills
+    { type = "value", text = "sea ",    bind = P .. "sea",  color = "#0B9DB3" },   -- sea id echoes the panel accent
     -- controls laid out two per row (Delay +/- dropped; use "cs delay <n>" if needed)
     { type = "buttonrow", buttons = {
         { text = "On/Off", action = function() cs_interface(enabled and "disable" or "enable") end },
@@ -906,7 +1007,7 @@ scrye.addPanel{
         { text = "Leave", action = function() cs_leave() end },
         { text = "Reset", action = function() cs_interface("reset") end },
     } },
-    { type = "value", text = "Sea #: ", bind = P .. "seanum", color = "#6FB7E0" },
+    { type = "value", text = "Sea #: ", bind = P .. "seanum", color = "info" },
     { type = "buttonrow", buttons = {
         { text = "Sea# -", action = function() cs_set_seanum(seanum - 1) end },
         { text = "Sea# +", action = function() cs_set_seanum(seanum + 1) end },
@@ -985,7 +1086,11 @@ function cs_interface(args)
       add_room(pos)
       note(string.format("position set to %d %d %d", pos.x, pos.y, pos.z))
     elseif parts[1] == "find" then
-      local path = bfs(pos, { x = tonumber(parts[2]) or 0, y = tonumber(parts[3]) or 0, z = tonumber(parts[4]) or 0 }, true)
+      local dst = { x = tonumber(parts[2]) or 0, y = tonumber(parts[3]) or 0, z = tonumber(parts[4]) or 0 }
+      local path
+      local rr = ask_pathfinder({ to = dst }, true)
+      if rr then path = rr.found and (rr.dirs or {}) or nil
+      else path = bfs(pos, dst, true) end
       note("Result is: " .. (path and table.concat(path, " ") or "no path"))
     elseif parts[1] == "kill" then
       killname = parts[2] or "mutant"; note("kill target: " .. killname)
@@ -1078,6 +1183,17 @@ scrye.every(5, cs_watchdog)
 scrye.onDisconnect(function()
   if dirty_timer then scrye.cancel(dirty_timer); dirty_timer = nil end
   save_state()
+end)
+
+-- The client's idle guard fired: nobody is at the keyboard. The MUSHclient deadman switch
+-- did exactly this by reaching in from the area-bot plugin ("cs auto off"); now the client
+-- owns the clock and simply tells us. Mapping state is kept, so 'cs auto on' picks it up.
+scrye.onIdle(function()
+  if auto then
+    auto = false
+    note("idle guard fired - auto off. 'cs auto on' when you are back.")
+    cs_draw()
+  end
 end)
 
 -- ---------- startup (was OnPluginInstall) ----------

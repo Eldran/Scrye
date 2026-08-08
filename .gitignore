@@ -24,3 +24,6 @@ _to_delete/
 
 # local build output (self-contained zips)
 dist/
+
+# Rust SDK build output
+sdk/rust/target/

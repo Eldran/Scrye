@@ -11,6 +11,10 @@
     <ProjectReference Include="..\..\src\Scrye.Core\Scrye.Core.csproj" />
     <ProjectReference Include="..\..\src\Scrye.Companion.Protocol\Scrye.Companion.Protocol.csproj" />
     <ProjectReference Include="..\..\src\Scrye.Companion.Server\Scrye.Companion.Server.csproj" />
+    <!-- The scripting layer joined the test surface with plugin API 1.6: onCommand, scrye.json,
+         setMany, emit/on and sub-second timers are runtime behaviours, not just contract shapes,
+         so they are exercised through real Lua/JS runtimes rather than fakes. -->
+    <ProjectReference Include="..\..\src\Scrye.Scripting\Scrye.Scripting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,10 +9,12 @@ using Scrye.App.ViewModels;
 namespace Scrye.App.Behaviors;
 
 /// <summary>
-/// Makes a HUD panel draggable on the HUD canvas. Attach with
+/// Makes a HUD panel draggable and resizable on the HUD canvas. Attach with
 /// <c>behaviors:HudDrag.Enabled="True"</c> on the panel's root Border (inside an
 /// ItemsControl whose ItemsPanel is a Canvas). Dragging the panel's title strip
-/// (top ~22 px) moves it; the position is written back to the
+/// (top ~22 px) moves it; dragging the bottom-right corner resizes it (the panel's
+/// ScrollViewer scrolls whatever no longer fits), and double-clicking that corner
+/// resets the panel to auto-size. Position and size are written back to the
 /// <see cref="HudPanelViewModel"/> and reported for persistence on release.
 ///
 /// The canvas child is found through the VISUAL tree (item containers are logical
@@ -30,6 +32,9 @@ public static class HudDrag
 
     private const double HandleHeight = 22;   // the title strip acts as the drag handle
     private const double Margin = 8;          // clamp margin + stacking gap
+    private const double GripSize = 18;       // bottom-right resize corner, in from each edge
+    private const double MinWidth = 140;      // resize floors: title + a usable widget column…
+    private const double MinHeight = 64;      // …and the title strip + one row of content
     private static int _topZ = 1;             // bring-to-front counter
 
     static HudDrag()
@@ -45,6 +50,12 @@ public static class HudDrag
         bool placed = false;
         Point grabOffset = default;
         bool dragging = false;
+        bool resizing = false;
+        Point resizeAnchor = default;         // pointer position (canvas coords) at grab
+        Size resizeStart = default;           // panel size at grab
+
+        bool InGrip(Point p) => p.X >= control.Bounds.Width - GripSize &&
+                                p.Y >= control.Bounds.Height - GripSize;
 
         // ---- initial placement (first layout pass, when bounds are known) ----
         void OnLayoutUpdated(object? s, EventArgs e)
@@ -86,6 +97,30 @@ public static class HudDrag
         control.AddHandler(InputElement.PointerPressedEvent, (s, e) =>
         {
             if (Find(control) is not (Control item, Canvas canvas)) return;
+
+            // ---- resize grip (bottom-right corner) ----
+            if (InGrip(e.GetPosition(control)))
+            {
+                item.ZIndex = ++_topZ;
+                if (control.DataContext is not HudPanelViewModel rvm) return;
+                if (e.ClickCount >= 2)
+                {
+                    // double-click the grip: back to auto-size (spec width, content height)
+                    rvm.UserWidth = double.NaN;
+                    rvm.UserHeight = double.NaN;
+                    rvm.ReportMoved();
+                }
+                else
+                {
+                    resizing = true;
+                    resizeAnchor = e.GetPosition(canvas);
+                    resizeStart = control.Bounds.Size;
+                    e.Pointer.Capture(control);
+                }
+                e.Handled = true;
+                return;
+            }
+
             if (e.GetPosition(control).Y > HandleHeight) return;   // below the title strip
             if (e.Source is Control src && IsInteractive(src, control)) return;
 
@@ -107,11 +142,24 @@ public static class HudDrag
         control.PointerMoved += (s, e) =>
         {
             if (Find(control) is not (Control item, Canvas canvas)) return;
+            if (resizing)
+            {
+                if (control.DataContext is HudPanelViewModel rvm)
+                {
+                    Point delta = e.GetPosition(canvas) - resizeAnchor;
+                    rvm.UserWidth = Math.Max(MinWidth, resizeStart.Width + delta.X);
+                    rvm.UserHeight = Math.Max(MinHeight, resizeStart.Height + delta.Y);
+                }
+                e.Handled = true;
+                return;
+            }
             if (!dragging)
             {
-                // hand cursor over the drag handle as an affordance
-                control.Cursor = e.GetPosition(control).Y <= HandleHeight
-                    ? new Cursor(StandardCursorType.Hand) : Cursor.Default;
+                // cursor affordances: diagonal arrow over the grip, hand over the title strip
+                Point p = e.GetPosition(control);
+                control.Cursor = InGrip(p) ? new Cursor(StandardCursorType.BottomRightCorner)
+                    : p.Y <= HandleHeight ? new Cursor(StandardCursorType.Hand)
+                    : Cursor.Default;
                 return;
             }
             Point pos = e.GetPosition(canvas) - grabOffset;
@@ -123,6 +171,14 @@ public static class HudDrag
 
         control.PointerReleased += (s, e) =>
         {
+            if (resizing)
+            {
+                resizing = false;
+                e.Pointer.Capture(null);
+                if (control.DataContext is HudPanelViewModel rvm) rvm.ReportMoved();   // persist
+                e.Handled = true;
+                return;
+            }
             if (!dragging) return;
             dragging = false;
             e.Pointer.Capture(null);

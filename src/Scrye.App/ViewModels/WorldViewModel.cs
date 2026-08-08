@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.IO;
 using Avalonia.Controls;
@@ -274,7 +274,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (Hud is not null)
             foreach (HudPanelViewModel hp in Hud.Panels)
                 if (!double.IsNaN(hp.X) && !double.IsNaN(hp.Y))
-                    layout.HudPanels.Add(new Services.HudPanelLayout { Name = hp.Key, X = hp.X, Y = hp.Y });
+                    layout.HudPanels.Add(new Services.HudPanelLayout
+                    {
+                        Name = hp.Key, X = hp.X, Y = hp.Y,
+                        W = double.IsNaN(hp.UserWidth) ? 0 : hp.UserWidth,
+                        H = double.IsNaN(hp.UserHeight) ? 0 : hp.UserHeight,
+                    });
         Services.PaneLayoutStore.Save(Title, layout);
     }
 
@@ -537,11 +542,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.
-        var savedHud = new System.Collections.Generic.Dictionary<string, (double, double)>(StringComparer.Ordinal);
+        var savedHud = new System.Collections.Generic.Dictionary<string, (double, double, double, double)>(StringComparer.Ordinal);
         if (Services.PaneLayoutStore.Load(profile.Name) is { } savedLayout)
             foreach (Services.HudPanelLayout h in savedLayout.HudPanels)
-                if (!string.IsNullOrEmpty(h.Name)) savedHud[h.Name] = (h.X, h.Y);
-        Hud.LoadPosition = key => savedHud.TryGetValue(key, out (double, double) p) ? p : null;
+                if (!string.IsNullOrEmpty(h.Name)) savedHud[h.Name] = (h.X, h.Y, h.W, h.H);
+        Hud.LoadPosition = key => savedHud.TryGetValue(key, out (double, double, double, double) p) ? p : null;
         Hud.PanelMoved = SaveLayout;
 
         // find-in-scrollback: searches the rendered output buffer.
@@ -614,10 +619,32 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
         _session.ChannelMessage += (ch, msg) => _plugins.DispatchChannel(ch, msg);   // MIP chat → scrye.onChannel
         _session.Ticked += _plugins.Tick;                     // plugin timers (scrye.after/every)
+        _session.CommandSent += _plugins.DispatchCommand;     // every outgoing command → scrye.onCommand (1.6)
+        // scrye.emit lands back on the manager, which fans it out to every plugin's scrye.on
+        // handlers (1.6). Set after the manager exists; both run on the session loop.
+        host.PluginEventSink = _plugins.DispatchPluginEvent;
         _session.StateChanged += s =>                          // plugin lifecycle hooks
         {
             if (s == ConnectionState.Connected) _plugins.DispatchConnect();
             else if (s == ConnectionState.Disconnected) _plugins.DispatchDisconnect();
+        };
+
+        // The idle guard. The session has already suspended its own timers and sequence by the
+        // time this runs; all that is left is to say so where the user will see it and to hand
+        // the news to plugins, which stop whatever they are driving.
+        _session.IdleSignal += signal =>
+        {
+            if (signal == IdleGuardSignal.Warning)
+            {
+                AppendSystem($"idle guard: nothing from you for {IdleGuard.Describe(_session.IdleGuard.IdleSeconds)}"
+                    + $" — automation stops in {IdleGuard.Describe(_session.IdleGuard.SecondsRemaining)}."
+                    + " Type anything to reset.");
+                return;
+            }
+            AppendSystem($"idle guard: idle {IdleGuard.Describe(_session.IdleGuard.IdleSeconds)}"
+                + " — automation stopped. Timers restart when you type; anything a plugin was"
+                + " driving needs starting again yourself.");
+            _plugins.DispatchIdle();
         };
 
         SubmitCommand = new RelayCommand(Submit);
@@ -932,6 +959,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 if (Broadcast is null) { AppendSystem("broadcast unavailable"); return true; }
                 Broadcast(arg);
                 return true;
+            case ".idle": HandleIdleCommand(arg); return true;
             case ".tts": HandleTtsCommand(arg); return true;
             case ".companion": HandleCompanionCommand(arg); return true;
             case ".ts" or ".timestamps":
@@ -940,6 +968,51 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 return true;
             default: return false;
         }
+    }
+
+    /// <summary>
+    /// <c>.idle</c> — read or change the dead-man's switch for this session. Takes effect at
+    /// once; the profile's <c>idleGuard</c>/<c>idleGuardSeconds</c> supply the value it starts
+    /// with, so this is the knob you reach for mid-session rather than the place it is stored.
+    /// </summary>
+    private void HandleIdleCommand(string arg)
+    {
+        IdleGuard guard = _session.IdleGuard;
+        arg = arg.Trim().ToLowerInvariant();
+
+        if (arg.Length == 0)
+        {
+            AppendSystem(guard.Enabled
+                ? $"idle guard on, limit {IdleGuard.Describe(guard.Seconds)}"
+                  + (guard.HasFired
+                      ? " — fired; automation is stopped until you send something"
+                      : $", {IdleGuard.Describe(guard.SecondsRemaining)} left")
+                : $"idle guard off (limit would be {IdleGuard.Describe(guard.Seconds)})");
+            return;
+        }
+
+        if (arg is "on" or "off")
+        {
+            guard.Enabled = arg == "on";
+            AppendSystem(guard.Enabled
+                ? $"idle guard on — automation stops after {IdleGuard.Describe(guard.Seconds)} with nothing from you"
+                : "idle guard off");
+            return;
+        }
+
+        // "10m" and "600" both read naturally for a limit of this size
+        int mult = arg.EndsWith('m') ? 60 : 1;
+        if (int.TryParse(arg.TrimEnd('m', 's'), out int n) && n > 0)
+        {
+            guard.Seconds = n * mult;
+            guard.Enabled = true;
+            AppendSystem($"idle guard on, limit {IdleGuard.Describe(guard.Seconds)}"
+                + (n * mult != guard.Seconds
+                    ? $" (clamped to {IdleGuard.MinSeconds}-{IdleGuard.MaxSeconds}s)" : ""));
+            return;
+        }
+
+        AppendSystem("usage: .idle | .idle on | .idle off | .idle <seconds> | .idle <n>m");
     }
 
     /// <summary>Scaffold a new, editable plugin (plugin.json + starter main.lua) under the user
@@ -1290,6 +1363,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         foreach (Window w in floats) { try { w.Close(); } catch { } }
         Replay.Stop();
         _plugins.Dispose();
+        _scriptHost.Dispose();   // frees the world-script Lua state (native since Phase 5)
         Hud.Dispose();
         _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();

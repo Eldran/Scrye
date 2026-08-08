@@ -1,0 +1,13 @@
+{
+  "id": "hp-watch-rs",
+  "name": "HP Watch (Rust)",
+  "version": "1.0.0",
+  "author": "You",
+  "description": "Low-HP warning + a gauge, as a Rust wasm plugin",
+  "mudIds": ["*"],
+  "entry": "hp_watch.wasm",
+  "lang": "wasm",
+  "requires": { "scryeApi": ">=1.6 <2.0" },
+  "permissions": ["state.read", "state.write", "commands.send", "notifications.show",
+                  "aliases.manage", "ui.panels", "timers.manage"]
+}

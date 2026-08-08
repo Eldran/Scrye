@@ -52,11 +52,12 @@ public sealed class HudViewModel : IDisposable
     /// <summary>Raised with the panel key when a panel goes away (plugin disabled or reloaded).</summary>
     public Action<string>? PanelRemoved { get; set; }
 
-    /// <summary>Saved canvas position for a panel key (pluginId|title), or null. Set by the
-    /// world before plugins load so restored panels come back where the user dragged them.</summary>
-    public Func<string, (double X, double Y)?>? LoadPosition { get; set; }
+    /// <summary>Saved canvas placement for a panel key (pluginId|title), or null. Set by the
+    /// world before plugins load so restored panels come back where the user dragged them.
+    /// W/H are the user-resized size; 0 = never resized (the panel auto-sizes).</summary>
+    public Func<string, (double X, double Y, double W, double H)?>? LoadPosition { get; set; }
 
-    /// <summary>Raised after the user drags a panel (persist the layout).</summary>
+    /// <summary>Raised after the user drags or resizes a panel (persist the layout).</summary>
     public Action? PanelMoved { get; set; }
 
     public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
@@ -105,7 +106,12 @@ public sealed class HudViewModel : IDisposable
         else
         {
             panel = new HudPanelViewModel(title, pluginId);
-            if (LoadPosition?.Invoke(key) is (double px, double py)) { panel.X = px; panel.Y = py; }
+            if (LoadPosition?.Invoke(key) is (double px, double py, double pw, double ph))
+            {
+                panel.X = px; panel.Y = py;
+                if (pw > 0) panel.UserWidth = pw;
+                if (ph > 0) panel.UserHeight = ph;
+            }
             panel.Moved = _ => PanelMoved?.Invoke();
         }
 
@@ -294,12 +300,21 @@ public sealed class HudViewModel : IDisposable
             }
             case "colorgrid":
             {
-                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels);
+                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels, w.Weave);
                 if (!string.IsNullOrEmpty(w.Action))
                 {
                     string actionId = w.Action;
                     vm.CellCommand = new RelayCommand<Controls.GridCell>(cell =>
                         _invokeCellAction?.Invoke(pluginId, actionId, cell.Col, cell.Row, cell.Ch.ToString()));
+                }
+                if (!string.IsNullOrEmpty(w.HoverAction))
+                {
+                    // onHover (1.6): same (col,row,char) path as onClick; the control fires it
+                    // only when the hovered CELL changes, and once with (-1,-1,"") on exit.
+                    string hoverId = w.HoverAction;
+                    vm.HoverCommand = new RelayCommand<Controls.GridCell>(cell =>
+                        _invokeCellAction?.Invoke(pluginId, hoverId, cell.Col, cell.Row,
+                            cell.Ch == '\0' ? "" : cell.Ch.ToString()));
                 }
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
@@ -392,7 +407,39 @@ public sealed class HudPanelViewModel : ViewModelBase
     internal void RaiseHasTabsChanged() => OnPropertyChanged(nameof(HasTabs));
 
     private double _width = 220;
-    public double Width { get => _width; set => SetField(ref _width, value); }
+    public double Width
+    {
+        get => _width;
+        set { if (SetField(ref _width, value)) OnPropertyChanged(nameof(EffectiveWidth)); }
+    }
+
+    /// <summary>User-resized width, NaN = never resized. Overrides the spec's
+    /// <see cref="Width"/> in <see cref="EffectiveWidth"/> and survives rebuilds
+    /// (a rebuild re-applies the spec width, which must not undo a user resize).</summary>
+    private double _userWidth = double.NaN;
+    public double UserWidth
+    {
+        get => _userWidth;
+        set { if (SetField(ref _userWidth, value)) OnPropertyChanged(nameof(EffectiveWidth)); }
+    }
+
+    /// <summary>What the panel Border binds: the user's width when they resized, else the spec's.</summary>
+    public double EffectiveWidth => double.IsNaN(_userWidth) ? _width : _userWidth;
+
+    /// <summary>User-resized height, NaN = auto-size to content (bound straight to
+    /// Border.Height, where NaN means "unset"). When fixed and the content is taller,
+    /// the panel's ScrollViewer takes over.</summary>
+    private double _userHeight = double.NaN;
+    public double UserHeight
+    {
+        get => _userHeight;
+        set { if (SetField(ref _userHeight, value)) OnPropertyChanged(nameof(TabMaxHeight)); }
+    }
+
+    /// <summary>Cap for a tabbed panel's per-tab ScrollViewer: 460 while auto-sizing (the
+    /// long tabs would otherwise grow the panel unbounded), uncapped once the user fixed
+    /// the height — the panel itself is the constraint then.</summary>
+    public double TabMaxHeight => double.IsNaN(_userHeight) ? 460 : double.PositiveInfinity;
 
     /// <summary>Plugin-chosen panel background / accent (border + title). Null = follow the theme.
     /// Set from PanelSpec.Background / .Accent; the XAML overrides the themed defaults when present.
@@ -696,10 +743,19 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
     /// <summary>Set when the colorgrid is clickable — bound to ColorGridView.CellCommand.</summary>
     public System.Windows.Input.ICommand? CellCommand { get; set; }
 
+    /// <summary>Set when the colorgrid has an onHover callback (API 1.6) — bound to
+    /// ColorGridView.HoverCommand. Fired per cell-change, and with (-1,-1,'\0') on exit.</summary>
+    public System.Windows.Input.ICommand? HoverCommand { get; set; }
+
     /// <summary>Characters drawn as a letter on top of their tile; see WidgetSpec.Labels.</summary>
     public string LabelChars { get; }
 
-    public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette, string? labels = null)
+    /// <summary>Weave mode (API 1.7) — even cells tiles, odd cells thin connector lines;
+    /// see WidgetSpec.Weave. Bound to ColorGridView.Weave.</summary>
+    public bool Weave { get; }
+
+    public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette, string? labels = null,
+        bool weave = false)
     {
         Palette = new Dictionary<char, Avalonia.Media.Color>();
         if (palette is not null)
@@ -707,6 +763,7 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
                 if (key.Length >= 1 && HudColor.Resolve(val) is { } c)
                     Palette[key[0]] = c;
         LabelChars = labels ?? "";
+        Weave = weave;
     }
 
     private string _gridText = "";

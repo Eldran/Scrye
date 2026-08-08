@@ -46,7 +46,8 @@ local function colb(c, s) return "@{" .. c .. ",bold}" .. esc(s) .. "@{}" end
 
 -- Tier palette, carried over from the original's TIERCOL and repainted for the neon scheme.
 -- Literals rather than theme tokens: a tier's colour is identity, not semantics.
-local TIERCOL = { [1] = "#E8DFFF", [2] = "#21E6FF", [3] = "#B6FF3C", [4] = "#FFD028", [5] = "#FF2E88" }
+-- OKLCH-stepped, colour-blind-validated; shared with 3s-build (see the note there).
+local TIERCOL = { [1] = "#B99EE9", [2] = "#4BE4FF", [3] = "#93F64E", [4] = "#DEB218", [5] = "#FD2083" }
 local function tiercol(t) return TIERCOL[tonumber(t) or 0] or "text" end
 
 -- Percentage -> status token. Used for warehouse quality, mood, water, voyage bars, so one
@@ -159,17 +160,17 @@ end
 local MAP_PAL = {
   ["."] = "#101010",                                       -- void / walls
   ["t"] = "#606060", ["T"] = "#707070",                    -- tundra grey
-  ["h"] = "#C0C020", ["H"] = "#C0C020",                    -- hills yellow
+  ["h"] = "#BAB245", ["H"] = "#BAB245",                    -- hills yellow
   ["A"] = "#D03030",                                       -- mountains red
   ["f"] = "#208020", ["F"] = "#30A030",                    -- forest
   ["p"] = "#60C060",                                       -- plains
-  ["W"] = "#00A0D0", ["w"] = "#00A0D0", ["~"] = "#00A0D0", -- water
-  ["r"] = "#181818", ["="] = "#303030",                    -- road / bridge
+  ["W"] = "#3991B7", ["w"] = "#3991B7", ["~"] = "#3991B7", -- water
+  ["r"] = "#232323", ["="] = "#303030",                    -- road / bridge (road lifted off the void)
   ["P"] = "#909090",                                       -- gate / passage
-  ["L"] = "#E08020",                                       -- lin hold
-  ["S"] = "#E0C040",                                       -- settlement
+  ["L"] = "#D76F04",                                       -- lin hold
+  ["S"] = "#DEC358",                                       -- settlement
   ["C"] = "#C02020",                                       -- capital
-  ["R"] = "#C060C0",                                       -- ruins
+  ["R"] = "#9256A0",                                       -- ruins (deep purple, apart from the POI magenta)
   ["M"] = "#C02020",                                       -- Midgard (capital)
   ["*"] = "#E060E0",                                       -- point of interest
   ["X"] = "#FFFFFF",                                       -- you (feed marker)
@@ -180,21 +181,21 @@ local MAP_PAL = {
 -- voyage chart char -> colour
 local SEA_PAL = {
   ["#"] = "#303030",                      -- unrevealed
-  ["O"] = "#00A0D0", ["~"] = "#00A0D0",   -- open sea
+  ["O"] = "#3991B7", ["~"] = "#3991B7",   -- open sea (same water as the land map)
   ["F"] = "#909090",                      -- fog
   ["?"] = "#505050",                      -- unknown
-  ["I"] = "#C0C020",                      -- island
-  ["H"] = "#40C040",                      -- harbor
+  ["I"] = "#BAB245",                      -- island (same yellow as the land hills)
+  ["H"] = "#4CA563",                      -- harbor
   ["W"] = "#E04040",                      -- wreck
   ["T"] = "#F05050",                      -- storm
   ["X"] = "#E060E0",                      -- objective
   ["S"] = "#FFFFFF",                      -- your ship
-  ["+"] = "#60E060", [">"] = "#E0E060",   -- queued path / destination
-  ["="] = "#0060D0",                      -- crosscurrent
-  ["^"] = "#606040",                      -- deadwater
-  ["B"] = "#C04080",                      -- stormbelt
-  ["*"] = "#408030",                      -- resolved node
-  [" "] = "#302820",                      -- sea
+  ["+"] = "#79D963", [">"] = "#D18E24",   -- queued path (lime) / destination (amber)
+  ["="] = "#3D73B6",                      -- crosscurrent
+  ["^"] = "#57583A",                      -- deadwater
+  ["B"] = "#A84E7C",                      -- stormbelt
+  ["*"] = "#456F4E",                      -- resolved node
+  [" "] = "#19232A",                      -- sea (cool deep surface; specials validated against it)
 }
 
 -- city plan: terrain char -> tile colour; placed buildings become role digits 1-7
@@ -202,7 +203,7 @@ local PLAN_PAL = {
   ["."] = "#484848",  -- plain
   ["f"] = "#246E24",  -- woods
   ["H"] = "#8C7050",  -- hill
-  ["w"] = "#1C5C9A",  -- river
+  ["w"] = "#2E64A6",  -- river
   ["c"] = "#206A6A",  -- coast
   ["M"] = "#585858",  -- wall
   ["W"] = "#4E4E4E",  -- wall
@@ -210,7 +211,7 @@ local PLAN_PAL = {
   ["B"] = "#886C46",  -- gate
   ["1"] = "#40E040",  -- producers  (green)
   ["2"] = "#E04030",  -- industry   (red)
-  ["3"] = "#A02828",  -- grim       (maroon)
+  ["3"] = "#742D31",  -- grim       (maroon, darkened away from industry red)
   ["4"] = "#40D0E0",  -- trade      (cyan)
   ["5"] = "#E060E0",  -- culture    (magenta)
   ["6"] = "#E0E0E0",  -- homes      (white)
@@ -446,7 +447,7 @@ local travel_widgets = {
 
 -- Map tab widgets: the rendered map (also clickable) + a clickable town list + the full location list.
 local map_widgets = {
-  { type = "value", text = "", bind = P .. "maphdr", color = "#5A93D4" },   -- section header
+  { type = "value", text = "", bind = P .. "maphdr", color = "#6288E1" },   -- section header echoes the accent
   { type = "colorgrid", bind = P .. "map", palette = MAP_PAL,
     onClick = function(col, row, ch)
       local key = col .. "|" .. row
@@ -463,7 +464,7 @@ local map_widgets = {
       end
     end },
   { type = "label", text = "grey tundra  yellow hills  red mtn/capital  green forest/plains  blue water  dark road  orange lin  gold settlement  white you  black unexplored" },
-  { type = "label", text = "Click a town to travel there:", color = "#E0C040" },
+  { type = "label", text = "Click a town to travel there:", color = "dim" },
   { type = "text",  bind = P .. "towns" },
 }
 map_widgets[#map_widgets + 1] = { type = "text", bind = P .. "maplocs" }   -- full location list w/ coords
@@ -1240,7 +1241,7 @@ local SEANAV_TARGETS = { I = true, W = true, X = true }
 
 -- The chars worth a letter on the chart -- the original's SEALETTER set. Everything else
 -- (fog, open sea, unrevealed) stays a plain tile so the map still reads as a map.
-local SEALETTERS = "SXHWTI>*B"
+local SEALETTERS = "SXHWTI>*B="
 
 -- Chart cells are labelled A01..P16: row letter, then 1-based column.
 local function sea_coord(cl, rw) return string.char(65 + rw) .. string.format("%02d", cl + 1) end
@@ -1861,7 +1862,7 @@ end
 scrye.addPanel{
   title = "Viking Status",
   width = 560,
-  accent = "#5A93D4",          -- signature: viking steel-blue
+  accent = "#6288E1",          -- signature: viking steel-blue (validated accent set)
   tabs = {
     { title = "Stats", widgets = {
         -- dim = true: the bar darkens as the value drops (green base for stats)
@@ -1869,15 +1870,15 @@ scrye.addPanel{
         { type = "gauge", text = "Seid", value = "vik.seid", max = "vik.mseid", dim = true },
         { type = "gauge", text = "Vig",  value = "vik.vig",  max = "vik.mvig",  dim = true },
         { type = "gauge", text = "Rad",  value = "vik.rad",  max = "vik.mrad",  dim = true },
-        { type = "value", text = "Enemy: ", bind = "enemy.name", color = "#E0524D" },              -- red: enemy
-        { type = "gauge", text = "Enemy", value = "enemy.health", max = 100, dim = true, color = "#E0524D" },
-        { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn", color = "#6FB7E0" },         -- info blue
+        { type = "value", text = "Enemy: ", bind = "enemy.name", color = "error" },                -- semantic: enemy
+        { type = "gauge", text = "Enemy", value = "enemy.health", max = 100, dim = true, color = "error" },
+        { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn", color = "info" },            -- semantic
         { type = "text", bind = P .. "stats" },
         { type = "button", text = "Commit patrol (last count)", action = patrol_commit },
     } },
     { title = "City", widgets = {
         { type = "text", bind = P .. "city" },
-        { type = "label", text = "-- Refinery --   bar = fill x quality (amber raw -> green refined)", color = "#8FA0B0" },
+        { type = "label", text = "-- Refinery --   bar = fill x quality (amber raw -> green refined)", color = "dim" },
         { type = "barlist", bind = P .. "refinery" },
     } },
     { title = "Builds", widgets = {
@@ -1896,7 +1897,7 @@ scrye.addPanel{
         { type = "text", bind = P .. "holds" },
     } },
     { title = "Sea", widgets = {
-        { type = "value", text = "", bind = P .. "seanav", color = "#5A93D4" },   -- section header
+        { type = "value", text = "", bind = P .. "seanav", color = "#6288E1" },   -- section header echoes the accent
         { type = "text", bind = P .. "sea" },
         -- Letters on the notable cells (the original's SEALETTER set) so the chart is
         -- readable without cross-referencing the legend; plain terrain stays a colour tile.
@@ -1921,7 +1922,7 @@ scrye.addPanel{
     { title = "Map", widgets = map_widgets },
     { title = "Travel", widgets = travel_widgets },
     { title = "Plan", widgets = {
-        { type = "value", text = "", bind = P .. "planhdr", color = "#5A93D4" },   -- section header
+        { type = "value", text = "", bind = P .. "planhdr", color = "#6288E1" },   -- section header echoes the accent
         { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL },
         { type = "text", bind = P .. "planlist" },
     } },

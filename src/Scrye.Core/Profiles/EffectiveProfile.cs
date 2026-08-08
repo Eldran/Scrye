@@ -1,4 +1,4 @@
-using Scrye.Core.Automation;
+﻿using Scrye.Core.Automation;
 using Scrye.Core.Model;
 
 namespace Scrye.Core.Profiles;
@@ -23,6 +23,12 @@ public sealed class EffectiveProfile
     public string? FontFamily { get; init; }
     public double? FontSize { get; init; }
     public string? Theme { get; init; }
+
+    /// <summary>Whether the idle guard runs. See <see cref="Scrye.Core.Session.IdleGuard"/>.</summary>
+    public bool IdleGuardEnabled { get; init; }
+
+    /// <summary>Idle limit in seconds; the guard clamps it to its own bounds.</summary>
+    public int IdleGuardSeconds { get; init; } = Scrye.Core.Session.IdleGuard.DefaultSeconds;
     public string? Username { get; init; }
     public string? PasswordRef { get; init; }
 }

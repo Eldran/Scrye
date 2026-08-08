@@ -1,0 +1,16 @@
+[package]
+name = "scrye-pathfinder"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+scrye-plugin = { path = "../../scrye-plugin" }
+serde_json = "1"
+
+[lib]
+crate-type = ["cdylib", "rlib"]   # rlib so `cargo test` can exercise the BFS natively
+
+[profile.release]
+opt-level = 3      # this one exists to be fast
+lto = true
+debug = true

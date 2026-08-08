@@ -9,7 +9,7 @@
 /// before enabling it, and so the enforcement point later has a vocabulary to enforce against.
 /// Presenting them as a security boundary today would be a lie.</para>
 ///
-/// <para><b>The actual sandbox.</b> Script plugins run in MoonSharp's soft sandbox / Jint with no
+/// <para><b>The actual sandbox.</b> Script plugins run in the host's Lua sandbox / Jint with no
 /// <c>io</c>, no <c>os.execute</c> and no CLR access — that part is real and
 /// enforced by the engine, not by this list. What is <i>not</i> bounded is what matters most on a
 /// MUD: <c>scrye.send</c> can issue any command your character can type. A plugin cannot read

@@ -1,4 +1,4 @@
-using Scrye.Core.Text;
+﻿using Scrye.Core.Text;
 
 namespace Scrye.Core.Automation;
 
@@ -164,8 +164,17 @@ public sealed class AutomationEngine
     }
 
     /// <summary>Advance timers by <paramref name="dtSeconds"/>, firing any that come due.</summary>
+    /// <summary>
+    /// Stop every timer firing without touching any timer's own Enabled flag, so the state a
+    /// user configured survives the suspension and comes back with it. Set by the idle guard when
+    /// it decides nobody is at the keyboard; cleared when someone proves otherwise.
+    /// </summary>
+    public bool TimersSuspended { get; set; }
+
     public void Tick(double dtSeconds, IWorldActions ctx)
     {
+        if (TimersSuspended) return;
+
         for (int i = 0; i < _timers.Count; i++)
         {
             Tmr t = _timers[i];

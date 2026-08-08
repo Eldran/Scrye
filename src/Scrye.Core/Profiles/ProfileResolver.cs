@@ -1,4 +1,4 @@
-using Scrye.Core.Automation;
+﻿using Scrye.Core.Automation;
 using Scrye.Core.Model;
 
 namespace Scrye.Core.Profiles;
@@ -17,6 +17,8 @@ public static class ProfileResolver
         var world = new WorldProfile();
         string? font = null, theme = null, user = null, passwordRef = null;
         double? fontSize = null;
+        bool idleGuard = false;                                       // off unless a layer asks
+        int idleSeconds = Scrye.Core.Session.IdleGuard.DefaultSeconds;
         string displayName = "";
 
         var triggers = new Dictionary<string, TriggerDef>(StringComparer.Ordinal);
@@ -45,6 +47,9 @@ public static class ProfileResolver
             if (layer.MipClientId is not null) world.MipClientId = layer.MipClientId;
             if (layer.EnableMxp is not null) world.EnableMxp = layer.EnableMxp.Value;
             if (layer.EnableMsp is not null) world.EnableMsp = layer.EnableMsp.Value;
+
+            if (layer.IdleGuard is not null) idleGuard = layer.IdleGuard.Value;
+            if (layer.IdleGuardSeconds is not null) idleSeconds = layer.IdleGuardSeconds.Value;
 
             if (layer.FontFamily is not null) font = layer.FontFamily;
             if (layer.FontSize is not null) fontSize = layer.FontSize;
@@ -83,6 +88,8 @@ public static class ProfileResolver
             Macros = macros.Values.ToArray(),
             EnabledPlugins = plugins.ToArray(),
             Variables = variables,
+            IdleGuardEnabled = idleGuard,
+            IdleGuardSeconds = idleSeconds,
             FontFamily = font,
             FontSize = fontSize,
             Theme = theme,

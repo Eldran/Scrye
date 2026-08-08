@@ -4,8 +4,22 @@
   "version": "1.0.0",
   "author": "Joakim",
   "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy)",
-  "mudIds": ["*"],
+  "mudIds": [
+    "*"
+  ],
   "entry": "main.lua",
   "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.2 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "storage.private",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
   "enabled": true
 }

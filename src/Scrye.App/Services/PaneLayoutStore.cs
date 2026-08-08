@@ -12,12 +12,15 @@ public sealed class PaneLayoutEntry
     public string Dock { get; set; } = "Bottom";   // Bottom | Right | Floating
 }
 
-/// <summary>A dragged HUD panel's saved position (canvas coordinates).</summary>
+/// <summary>A dragged HUD panel's saved placement (canvas coordinates, plus the
+/// user-resized size — 0 means never resized, i.e. the panel auto-sizes).</summary>
 public sealed class HudPanelLayout
 {
     public string Name { get; set; } = "";   // pluginId + "|" + panel title
     public double X { get; set; }
     public double Y { get; set; }
+    public double W { get; set; }            // absent in pre-resize layout files -> 0
+    public double H { get; set; }
 }
 
 /// <summary>A world's saved pane setup (plus the timestamp toggle).</summary>

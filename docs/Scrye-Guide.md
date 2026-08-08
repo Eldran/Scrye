@@ -63,7 +63,7 @@ Scrye also lifts any near‑black text the MUD sends so it stays legible on the 
 
 ## HUD panels
 
-Plugins can contribute **HUD panels** — small floating widgets (status bars, gauges, maps, buttons) that sit over the output and stay in sync with game state. You can **drag panels** by their title to reposition them so they don't overlap; positions are remembered.
+Plugins can contribute **HUD panels** — small floating widgets (status bars, gauges, maps, buttons) that sit over the output and stay in sync with game state. You can **drag panels** by their title to reposition them so they don't overlap, and **resize** them by dragging the grip in the bottom-right corner — a panel smaller than its content scrolls, and **double-clicking the grip** snaps it back to auto-size. Positions and sizes are remembered per world.
 
 ## Capture panes
 
@@ -205,7 +205,7 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
 | `version`, `author`, `description` | Metadata. `version` is *your* version, unrelated to the API version. |
 | `mudIds` | Which worlds it applies to. `["*"]` (or empty) = all worlds; otherwise a list of MUD ids. |
 | `entry` | Entry script relative to the folder. Default `main.lua`. |
-| `lang` | `"lua"` (MoonSharp) or `"js"` (Jint). Default `lua`. |
+| `lang` | `"lua"` (native Lua 5.4), `"js"` (Jint), or `"wasm"` (compiled WebAssembly — see below). Default `lua`. |
 | `data` | Data files the plugin ships, as script key → file name. See below. Optional. |
 | `enabled` | Whether it's a candidate to load. Users still opt in per character. |
 | `requires` | Compatibility constraints. See below. Optional. |
@@ -251,6 +251,49 @@ so beats behaving as if the data were empty.
 This is not storage. Nothing writes here; `scrye.store` is still where state between sessions
 goes.
 
+## The idle guard (dead-man's switch)
+
+Automation that runs while nobody is watching is the thing most likely to get you in trouble —
+a bot that keeps walking an area for six hours after you fell asleep, a heal timer firing into an
+empty room. Scrye watches for that and stops.
+
+```
+.idle              show the current setting
+.idle on / off     turn it on or off for this session
+.idle 600          limit in seconds
+.idle 10m          the same, in minutes
+```
+
+Or set it in a profile layer, where it inherits Global → MUD → Account → Character like everything
+else:
+
+```json
+{ "idleGuard": true, "idleGuardSeconds": 600 }
+```
+
+**What counts as you being here** is anything *you* send: typed commands, macro keys, and clicks on
+a plugin's panel links — they all arrive through the same path. What deliberately does **not** count
+is output from the MUD, or anything a trigger, timer or plugin sends. A bot producing output all
+night must never look like someone at the keyboard; that is the whole point.
+
+**What happens.** At 80% of the limit you get one warning — type anything to reset it. At the limit,
+Scrye suspends its own profile timers and pauses a running sequence, and fires `scrye.onIdle` in
+every plugin so each one stops what it is driving. Your next command resumes the timers and the
+sequence automatically, because the hazard was being away and you are back. Plugins stay stopped
+until you restart them deliberately — `.resume` for the stepper, `cs auto on` for the chaos sea —
+since a bot silently resuming because you typed `look` is exactly the surprise this feature exists
+to prevent.
+
+Off by default, limit 600s, clamped to 60–7200s.
+
+**In a plugin:**
+
+```lua
+scrye.onIdle(function()
+  if running then stop() ; scrye.print("idle guard fired - stopped") end
+end)
+```
+
 ## The plugin API version
 
 Scrye versions the plugin contract — the `scrye.*` functions, the widget vocabulary, the manifest
@@ -282,8 +325,16 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.1.** Version 1.1 added theme tokens, the `list`/`table` widgets, and the
-`requires`/`permissions` fields themselves.
+**Current API version: 1.7.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+`scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
+manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
+additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
+`scrye.store.setMany` (N keys, one disk write), `scrye.emit`/`scrye.on` (inter-plugin events),
+colorgrid `onHover`, and sub-second timers (250 ms resolution). **1.7 adds colorgrid
+`weave = true`**: even cells render as full tiles and odd cells as thin connector lines
+(`-` `|` `/` `\` `x` in their palette colour), so a map can draw rooms on even cells and the
+exits between them on the odd cells they share; click/hover coordinates stay raw (halve the
+even ones), and the companion simply shows the same characters as an ASCII map.
 
 ## Permissions
 
@@ -323,9 +374,36 @@ communicates its intent on an older one.
 
 ## The scripting environment
 
-Lua plugins run on **MoonSharp** (a managed Lua 5.2‑ish engine) in a **soft sandbox**: you get the standard library — `string`, `table`, `math`, `os.time`/`os.date`/`os.clock`, `pcall`, `tonumber`, etc. — but **no `io`, no `os.execute`, no filesystem, no `require`**. For durable data use `scrye.store` (key/value) and `scrye.log` (a log file); the host handles the file I/O for you.
+Lua plugins run on **native Lua 5.4** (the reference implementation, via KeraLua) in a **sandbox**: you get the standard library — `string`, `table`, `math`, `utf8`, `coroutine`, `os.time`/`os.date`/`os.clock`, `pcall`, `tonumber`, etc. — but **no `io`, no `os.execute`, no filesystem, no `require`, no `load`**. 5.3/5.4 language features are available: integer division `//`, bitwise operators, `goto`, and the integer subtype. For durable data use `scrye.store` (key/value) and `scrye.log` (a log file); the host handles the file I/O for you.
 
 JavaScript plugins run on **Jint** and see the same `scrye.*` API (with JS idioms: arrays instead of Lua tables, `onSubmit`/`onClick` as functions, etc.).
+
+WebAssembly plugins (`"lang": "wasm"`) are **compiled modules** speaking the
+[scrye-wasm-abi](scrye-wasm-abi.md). Choose wasm when a plugin outgrows scripting:
+pathfinding over big graphs, heavy text crunching, or when you want to ship a binary.
+Three things are different about wasm plugins:
+
+- **Permissions are enforced**, not just declared: an API call whose permission isn't in
+  your manifest traps with a message naming it. (Lua/JS permissions remain declarations.)
+- **Runaway protection is real**: every callback runs under a ~100 ms deadline and a
+  64 MB memory cap. An infinite loop traps and counts toward quarantine instead of
+  freezing the client.
+- **No ambient anything**: no clocks, no filesystem, no randomness — only the `scrye`
+  API surface exists.
+
+The supported authoring path is Rust, via the `scrye-plugin` SDK in `sdk/rust/`
+(closure-based API that feels like the Lua one — see `sdk/rust/examples/hp-watch`, and
+`sdk/rust/plugins/3s-pathfinder` for the real thing: BFS path search that 3s-map
+delegates its `map goto` to over inter-plugin events, with automatic fallback to the
+Lua search when the pathfinder isn't loaded):
+
+```
+rustup target add wasm32-unknown-unknown
+cargo build --release --target wasm32-unknown-unknown
+```
+
+Copy the built `.wasm` next to your `plugin.json` and set `entry` to it. Any language
+that emits a core wasm module can target the ABI; the spec document is authoritative.
 
 Everything runs on the session's loop thread, so your script never re‑enters concurrently — you don't need locks.
 
@@ -353,9 +431,11 @@ The **state tree** is a shared key/value space the whole app reads from. Game fe
 |---|---|
 | `scrye.onLine(function(line) ... end)` | Each output line. **Return `false` to gag** the line, or **return a string to rewrite** it. |
 | `scrye.onPrompt(function() ... end)` | The MUD shows a prompt. |
+| `scrye.onIdle(function() ... end)` | The idle guard fired — nobody is at the keyboard. Stop whatever you are driving. |
 | `scrye.onConnect(fn)` / `scrye.onDisconnect(fn)` | Connection opens / closes. |
 | `scrye.onGmcp(function(json, package) ... end)` or `scrye.onGmcp("Char.Vitals", fn)` | A GMCP message (optionally filtered by package). |
 | `scrye.onChannel(function(channel, message) ... end)` or `scrye.onChannel("Party", fn)` | A MIP chat message. Tells arrive with channel `"Tell"`. |
+| `scrye.onCommand(function(command) ... end)` | *(1.6)* A command went out to the MUD — **any** origin: typed input (after aliases), macros, sequences, triggers, other plugins. Observe-only; the send already happened, nothing you return changes it. **Never `scrye.send` from inside the handler** — that send re-fires every onCommand hook, including yours. This is the hook that makes an automapper possible: it sees moves it didn't originate. |
 
 ### Timers
 | Call | Description |
@@ -364,7 +444,35 @@ The **state tree** is a shared key/value space the whole app reads from. Game fe
 | `scrye.every(seconds, fn)` → id | Run repeatedly. |
 | `scrye.cancel(id)` | Cancel a timer. |
 
-Timer granularity is ~1 second.
+Since API 1.6, `seconds` honours fractions: the scheduler ticks at **250 ms**, so that is the
+effective resolution and floor — `scrye.after(0.25, fn)` works, `scrye.after(0.01, fn)` fires on
+the next tick anyway. Profile timers (the ones in Settings) still tick in whole seconds.
+
+### Inter-plugin events *(1.6)*
+
+| Call | Description |
+|---|---|
+| `scrye.emit(name, data)` | Broadcast an event to **every** loaded plugin — including yourself. `data` is a string; use `scrye.json` for structured payloads. |
+| `scrye.on(name, function(data, name, source) ... end)` | Handle an event. `name` matches case-insensitively; `source` is the emitting plugin's id. |
+
+This replaces the world-variable side-channels plugins used to coordinate through (`party`,
+`cs_auto`, …). Emit chains are capped at depth 8 — an A-emits→B-emits→A cycle is cut with a
+report, not a hang. An emit from your load script (before the session finishes wiring) is
+dropped: register handlers at load, emit from hooks.
+
+### JSON *(1.6)*
+
+| Call | Description |
+|---|---|
+| `scrye.json.encode(value)` → `json` or `nil, err` | Any nil/boolean/number/string/table to JSON text. |
+| `scrye.json.decode(json)` → `value` or `nil, err` | JSON text back to Lua values, same shapes as `scrye.data` files. |
+
+Shape rules worth knowing: a table whose keys are exactly `1..n` encodes as an array, anything
+else as an object; an **empty table encodes as `{}`**; integral numbers encode without a decimal
+point (`42`, not `42.0`). Functions aren't data — encoding one gets you `nil, err`, as does
+decoding malformed text; check the error instead of trusting the input. This is the intended way
+to keep structured state in `scrye.store` — stop hand-rolling `z|x|y|...` line formats unless you
+really want them.
 
 ### Rules
 | Call | Description |
@@ -382,9 +490,13 @@ scrye.store.set("key", "value")
 local v = scrye.store.get("key")   -- string or nil
 scrye.store.delete("key")
 local keys = scrye.store.keys()    -- { "k1", "k2", ... }
+scrye.store.setMany{ a = "1", b = "2" }   -- (1.6) N keys, ONE disk write
 ```
 
-Values are strings — serialize tables yourself (e.g. join with a delimiter).
+Values are strings — serialize tables with `scrye.json.encode` (1.6). Every `set()` rewrites the
+plugin's whole store file, which is fine for a counter and quadratic for a mapper flushing forty
+area keys; that is what `setMany` is for. Unchanged values in a batch are skipped, and a batch
+that changes nothing writes nothing.
 
 ### Alerts & routing
 | Call | Description |
@@ -423,7 +535,7 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `button` | A clickable button. | `text`, `action = function() ... end` |
 | `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
-| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end` |
+| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
 
@@ -433,6 +545,7 @@ Notes:
 - **If you're reaching for `string.format` and padding, use `table`.** Composing aligned columns in Lua is what `text` widgets forced; the host measures columns for you, and the mobile companion renders a real table rather than pre‑padded text that wraps badly on a phone.
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
 - `colorgrid` `onClick` gives you the clicked cell's `col`, `row`, and character — map that back to your data.
+- `colorgrid` `onHover` *(1.6)* fires when the pointer moves onto a **different** cell (never per pixel), and once with `(-1, -1, "")` when it leaves the grid so you can clear whatever you were previewing. Hover is desktop-only — the companion's touch screen never fires it — so use it to *enrich* (a room-name readout beside the map), never for anything `onClick` can't also reach.
 - `input` seeds its field from `bind`; refresh it by `setState`‑ing that key.
 - `table` sizes each column to its widest cell. `align` takes one character per column — `l`, `r`, `c` — and right‑aligning numeric columns is worth doing; without it a table of quantities reads worse than the blob it replaced.
 - Rows with too few cells render blank in the missing columns, so a "nothing here" row can just be one cell.
@@ -524,13 +637,13 @@ mismatch is reported there explicitly rather than looking like a plugin that qui
 - **Reload:** after editing the script, click **Reload** — it re‑reads from disk live.
 - **Share:** zip the plugin folder (the `plugin.json` must be at the archive root or in a single top folder). The recipient unzips it into their plugins folder.
 
-## MoonSharp gotchas (worth knowing)
+## Lua gotchas (worth knowing)
 
-MoonSharp is a managed reimplementation of Lua, and a couple of its quirks have bitten real plugins. None are hard to avoid:
+Scrye runs real Lua 5.4 (it used the managed MoonSharp engine before; that engine's quirks — stale uninitialized locals, "pattern too complex" aborts — are gone). What's left is ordinary Lua-and-Scrye knowledge:
 
-- **Initialize your locals.** An *uninitialized* `local x` inside a busy function with nested loops/closures can, in rare cases, come back as a stale value instead of `nil`. Write `local x = nil` (or `= 0`, `= false`) explicitly. Explicitly‑initialized locals are always fine.
-- **Keep patterns simple / gate them.** A Lua pattern that has to backtrack heavily (e.g. `town + two numbers + keyword` run against a line that doesn't fit) can abort with **"pattern too complex."** Gate an expensive `:match` behind a cheap `:find` of a keyword first, and prefer simple, well‑anchored patterns.
-- **Timers tick at ~1s.** Don't rely on sub‑second `scrye.after`.
+- **Integers are real (5.4).** `math.floor` returns an integer, `7 // 2` is `3`, and `string.format("%d", x)` **errors** if `x` has a fractional part — `math.floor` it first (this was silently truncated on the old engine).
+- **Runaway loops abort.** Every callback runs under an instruction budget (~200M VM instructions, a few hundred ms). An accidental `while true do end` raises "exceeded its execution budget" instead of freezing the client, and repeated offenders quarantine like any erroring plugin.
+- **Timers tick at 250 ms** (since API 1.6). Fractional seconds work down to 0.25; don't rely on anything finer.
 - **Colors are `#RRGGBB` strings.** The host builds thread‑safe brushes for you; just pass hex.
 - **State is strings.** Numbers come back as text — `tonumber(...)` them.
 

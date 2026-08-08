@@ -97,6 +97,31 @@ public sealed record WidgetSpec
     /// <summary>For a <c>buttonrow</c> widget: the child button specs, rendered side by side as
     /// equal-width columns. Each child is an ordinary button spec (text + action).</summary>
     public IReadOnlyList<WidgetSpec>? Children { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.7): render the grid as a <b>weave</b> — cells at even
+    /// column/row indices draw as full-size tiles, and the odd cells between them are narrow,
+    /// with the connector characters <c>-</c> <c>|</c> <c>/</c> <c>\</c> <c>x</c> drawn as thin
+    /// lines in their palette colour (<c>x</c> = both diagonals crossing). This is how a map
+    /// shows the exits BETWEEN rooms: double the character grid (rooms on even cells, exits on
+    /// the odd cells they share) and the weave renders rooms at nearly full tile size with the
+    /// connections visible. Click/hover coordinates report the raw doubled (col, row); the
+    /// plugin halves the even ones to get back to its own grid. Hosts that render characters
+    /// as text (the companion) ignore this flag — the same connector characters read as an
+    /// ASCII map there, which is the fallback by design.
+    /// </summary>
+    public bool Weave { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.6): an opaque action id the host calls back with when the
+    /// pointer moves onto a different cell — <c>(col, row, char)</c>, and <c>(-1, -1, "")</c>
+    /// once when the pointer leaves the grid, so a plugin can clear whatever it was showing.
+    /// Set by the runtime from the widget's <c>onHover</c> function, not by authors. Hover is a
+    /// pointer affordance: touch devices (the mobile companion) never fire it, so it must only
+    /// ever *enrich* the grid — a room name preview, a coordinate readout — never gate anything
+    /// <c>onClick</c> can't reach.
+    /// </summary>
+    public string? HoverAction { get; init; }
 }
 
 /// <summary>One tab in a tabbed panel: a title and its widgets.</summary>

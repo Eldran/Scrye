@@ -1,0 +1,3 @@
+[workspace]
+members = ["scrye-plugin", "examples/hp-watch", "plugins/3s-pathfinder"]
+resolver = "2"

@@ -314,12 +314,15 @@ end
 -- every scheme -- those are semantics, not decoration. The tier palette is literal: a tier
 -- number's colour is identity (the original picked one colour per tier), so it should not
 -- drift when the app theme changes.
+-- OKLCH-stepped so adjacent tiers stay apart under colour-blindness (validated:
+-- worst adjacent pair ΔE 9.5 deutan / 18.4 normal on the output surface); the tier
+-- number printed beside each name is the letter fallback. Shared with 3s-viking-status.
 local TIERCOL = {
-  [1] = "#E8DFFF",   -- T1 pale violet-white
-  [2] = "#21E6FF",   -- T2 electric cyan
-  [3] = "#B6FF3C",   -- T3 neon lime
-  [4] = "#FFD028",   -- T4 gold
-  [5] = "#FF2E88",   -- T5 hot magenta
+  [1] = "#B99EE9",   -- T1 lavender (common)
+  [2] = "#4BE4FF",   -- T2 electric cyan
+  [3] = "#93F64E",   -- T3 neon lime
+  [4] = "#DEB218",   -- T4 gold
+  [5] = "#FD2083",   -- T5 hot magenta
 }
 
 -- Building and resource names come off the MUD, so escape them before they are embedded
@@ -556,9 +559,9 @@ scrye.addAlias{ pattern = [[^build start (.+)$]], regex = true, run = function(w
 scrye.addPanel{
   title = "Build Planner",
   width = 480,
-  accent = "#4FB05A",          -- signature: build green
+  accent = "#5AAC47",          -- signature: build green (validated accent set)
   widgets = {
-    { type = "value", text = "",  bind = STATE_SUMMARY, color = "#4FB05A" },  -- green: buildable-now count
+    { type = "value", text = "",  bind = STATE_SUMMARY, color = "success" },  -- semantic: buildable-now count
     { type = "text",   bind = STATE_REPORT },
     { type = "button", text = "Refresh", action = function() bp_draw() end },
     { type = "button", text = "Scan",    action = function() bp_scan() end },

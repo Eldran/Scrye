@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using Scrye.Core.Plugins;
 using Scrye.Core.Text;
 
@@ -7,7 +7,7 @@ namespace Scrye.Scripting.Plugins;
 /// <summary>
 /// Loads a set of plugins for a session and fans session events out to all of them.
 /// Discovery is the caller's job (<see cref="PluginCatalog"/>); this owns the loaded
-/// <see cref="IPluginRuntime"/>s (Lua or JS, chosen per-manifest) and their lifecycle. A plugin that throws on load is
+/// <see cref="IPluginRuntime"/>s (native Lua 5.4 or JS, chosen per-manifest) and their lifecycle. A plugin that throws on load is
 /// reported and skipped — one bad plugin never blocks the others.
 ///
 /// <para>Two gates sit in front of a load: the plugin's declared <c>requires.scryeApi</c> range
@@ -95,9 +95,7 @@ public sealed class PluginManager : IDisposable
 
         try
         {
-            IPluginRuntime runtime = d.Manifest.Lang.Equals("js", StringComparison.OrdinalIgnoreCase)
-                ? new JsPluginRuntime(d, _host, _diagnostics)
-                : new LuaPluginRuntime(d, _host, _diagnostics);
+            IPluginRuntime runtime = PluginRuntimeFactory.Create(d, _host, _diagnostics);
             runtime.Load();
             _runtimes.Add(runtime);
             _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
@@ -132,7 +130,8 @@ public sealed class PluginManager : IDisposable
             .Select(d => new PluginInfo(d.Manifest.Id, d.Manifest.Name, d.Manifest.Version,
                                         loaded.Contains(d.Manifest.Id), IsRemovable(d),
                                         d.Permissions, d.Manifest.Requires?.ScryeApi,
-                                        d.IsApiCompatible(out string why) ? null : why))
+                                        d.IsApiCompatible(out string why) ? null : why,
+                                        _runtimes.FirstOrDefault(r => r.Id == d.Manifest.Id)?.EngineName))
             .ToArray();
     }
 
@@ -308,6 +307,50 @@ public sealed class PluginManager : IDisposable
     public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchConnect(); DrainQuarantine(); }
     public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); DrainQuarantine(); }
     public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); DrainQuarantine(); }
+    public void DispatchIdle()       { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchIdle(); DrainQuarantine(); }
+
+    /// <summary>A command went to the MUD (any origin): fire every plugin's <c>scrye.onCommand</c>
+    /// hooks. Observe-only by construction — the send has already happened. Wire the session's
+    /// <c>CommandSent</c> event here (API 1.6).</summary>
+    public void DispatchCommand(string text)
+    {
+        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchCommand(text);
+        DrainQuarantine();
+    }
+
+    // Inter-plugin event dispatch nesting. Emits can nest (a handler may emit), and an
+    // A-emits→B-emits→A cycle would otherwise recurse forever; past this depth the emit is
+    // dropped with a report. Modest on purpose — a legitimate chain deeper than 8 is a design
+    // smell, and each level is a full fan-out.
+    private const int MaxEventDepth = 8;
+    private int _eventDepth;
+
+    /// <summary>
+    /// Broadcast an inter-plugin event (<c>scrye.emit</c>) to EVERY loaded plugin's matching
+    /// <c>scrye.on</c> handlers — including the emitter's own, so a plugin can use its own
+    /// events without special-casing. Wire the session host's event sink here (API 1.6).
+    ///
+    /// <para>Deliberately does NOT drain quarantine: an emit can fire from inside a
+    /// ProcessLine/Tick dispatch loop that is still indexing <see cref="_runtimes"/>, and
+    /// unloading mid-loop is exactly the bug <see cref="DrainQuarantine"/>'s call sites are
+    /// arranged to avoid. Anything quarantined here is drained by the next line or tick,
+    /// which is at most 250 ms away.</para>
+    /// </summary>
+    public void DispatchPluginEvent(string sourceId, string name, string data)
+    {
+        if (string.IsNullOrEmpty(name)) return;
+        if (_eventDepth >= MaxEventDepth)
+        {
+            _report($"plugin event '{name}' from '{sourceId}' dropped: emit chains nested deeper than {MaxEventDepth} (cycle?)");
+            return;
+        }
+        _eventDepth++;
+        try
+        {
+            for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPluginEvent(name, data, sourceId);
+        }
+        finally { _eventDepth--; }
+    }
 
     /// <summary>Fire a panel-button callback owned by <paramref name="pluginId"/>. Runs on the loop thread.</summary>
     /// <summary>Fire a colorgrid cell-click callback with the clicked cell. Loop-thread only.</summary>
@@ -351,7 +394,9 @@ public sealed class PluginManager : IDisposable
 /// <paramref name="Permissions"/> is what the manifest says it intends to do (declarative only —
 /// see <see cref="PluginPermissions"/>), and <paramref name="IncompatibleReason"/> is non-null
 /// when the plugin cannot load on this build at all, so the manager can explain itself instead of
-/// just showing a plugin that never turns on.
+/// just showing a plugin that never turns on. <paramref name="Engine"/> is the loaded runtime's
+/// engine label (null when not loaded) — surfaced during the KeraLua soak so which engine a
+/// plugin runs on is never a mystery.
 /// </summary>
 public readonly record struct PluginInfo(
     string Id,
@@ -361,4 +406,5 @@ public readonly record struct PluginInfo(
     bool Removable,
     IReadOnlyList<string> Permissions,
     string? RequiresApi,
-    string? IncompatibleReason);
+    string? IncompatibleReason,
+    string? Engine = null);

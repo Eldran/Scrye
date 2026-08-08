@@ -43,9 +43,34 @@ public static class ScryeApi
     // 1.4 — a plugin may declare data files in its manifest ("data": { key: file }); the host
     //       reads them from the plugin folder and publishes them as scrye.data.<key>. Additive:
     //       a plugin that declares none gets an empty scrye.data table.
-    public static readonly Version Current = new(1, 4);
+    // 1.5 — scrye.onIdle(fn): the client's idle guard fired, so stop whatever this plugin is
+    //       driving. The guard is off unless the profile turns it on, so a plugin that never
+    //       registers a handler is unaffected.
+    // 1.6 — the automapper batch (all additive):
+    //       * scrye.onCommand(fn) — observe (never veto) every command sent to the MUD,
+    //         whatever sent it: typed input, macros, sequences, triggers, plugins.
+    //       * scrye.json.encode/decode — a host-provided JSON codec, so plugins stop
+    //         hand-rolling serialization for scrye.store and data interchange.
+    //       * scrye.store.setMany{...} — N keys, one disk write.
+    //       * scrye.emit(name, data) / scrye.on(name, fn) — inter-plugin events.
+    //       * colorgrid onHover(col, row, ch) — pointer-over cell callbacks (desktop only;
+    //         touch devices never fire it).
+    //       * sub-second timers: scrye.after/every now honour fractional seconds; the
+    //         scheduler ticks at 250 ms, so that is the effective resolution and floor.
+    // 1.7 — colorgrid `weave = true`: even cells render as full tiles, odd cells as thin
+    //       connector lines ('-', '|', '/', '\', 'x' in their palette colour) — a map draws
+    //       rooms on even cells and the exits between them on the odd cells they share.
+    //       Additive: an unwoven grid renders exactly as before, and text-rendering hosts
+    //       (the companion) ignore the flag and show the same characters as an ASCII map.
+    // ---- engine note (no version bump): between 1.7 builds the Lua ENGINE changed from
+    //      MoonSharp (Lua 5.2-ish, managed) to native Lua 5.4 via KeraLua
+    //      (docs/Plan-KeraLua-Migration.md). The scrye.* surface is identical, which is why
+    //      Current did not move — but scripts may now use 5.3/5.4 language features
+    //      (integer division //, bitwise operators, goto, utf8, integer subtype), and
+    //      string.format("%d", x) now errors when x has a fractional part.
+    public static readonly Version Current = new(1, 7);
 
-    /// <summary>The API version as it appears in manifests and diagnostics ("1.4").</summary>
+    /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";
 
     /// <summary>

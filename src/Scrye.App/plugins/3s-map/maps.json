@@ -1,0 +1,6 @@
+{
+  // Starter maps for 3s-map (plugin API 1.4+ data file; comments are allowed here).
+  // Each entry is exactly what `map export` prints — paste an export in to share a map.
+  // An area you have mapped yourself (its map:<name> store key) always wins over its seed.
+  "areas": []
+}

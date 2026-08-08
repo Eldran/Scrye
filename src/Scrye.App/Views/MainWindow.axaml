@@ -246,10 +246,12 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:HudPanelViewModel">
+                                            <!-- Width: the spec width until the user resizes (EffectiveWidth). Height: NaN
+                                                 (auto) until the user resizes; fixed after, with scrolling inside. -->
                                             <Border behaviors:HudDrag.Enabled="True"
                                                     Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
                                                     BorderThickness="1" CornerRadius="6" Padding="10"
-                                                    Width="{Binding Width}"
+                                                    Width="{Binding EffectiveWidth}" Height="{Binding UserHeight}"
                                                     Classes.hasbg="{Binding HasBackground}" Classes.hasac="{Binding HasAccent}">
                                                 <!-- Plugin colour overrides. Each style only applies when the plugin set that
                                                      colour (via a toggled class), so panels without custom colours keep
@@ -273,6 +275,14 @@
                                                     </Style>
                                                     <Style Selector="ProgressBar.wc">
                                                         <Setter Property="Foreground" Value="{ReflectionBinding ColorBrush}" />
+                                                    </Style>
+                                                    <!-- resize grip: invisible until the pointer is over the panel (these
+                                                         styles are scoped to this Border, so plain selectors are enough) -->
+                                                    <Style Selector="Path.grip">
+                                                        <Setter Property="Opacity" Value="0" />
+                                                    </Style>
+                                                    <Style Selector="Border:pointerover Path.grip">
+                                                        <Setter Property="Opacity" Value="0.55" />
                                                     </Style>
                                                 </Border.Styles>
                                                 <!-- widget templates live on the Border so both the flat list and tab contents share them -->
@@ -315,7 +325,9 @@
                                                     <DataTemplate DataType="vm:ColorGridWidgetViewModel">
                                                         <controls:ColorGridView GridText="{Binding GridText}" Palette="{Binding Palette}"
                                                                                 CellCommand="{Binding CellCommand}"
-                                                                                LabelChars="{Binding LabelChars}" Margin="0,3" />
+                                                                                HoverCommand="{Binding HoverCommand}"
+                                                                                LabelChars="{Binding LabelChars}"
+                                                                                Weave="{Binding Weave}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:BarListWidgetViewModel">
                                                         <controls:BarListView Rows="{Binding Rows}" Margin="0,3" />
@@ -359,12 +371,20 @@
                                                         </ItemsControl>
                                                     </DataTemplate>
                                                 </Border.DataTemplates>
-                                                <StackPanel Spacing="4">
-                                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"
+                                                <!-- Grid, not StackPanel: the content row must be CONSTRAINED when the
+                                                     user fixed the panel height, or the ScrollViewers below would be
+                                                     measured with infinity and never scroll. With auto height the star
+                                                     row simply takes the content's size, exactly like the old stack. -->
+                                                <Grid RowDefinitions="Auto,*">
+                                                    <TextBlock Grid.Row="0" Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"
+                                                               Margin="0,0,0,4"
                                                                Foreground="{DynamicResource ScryeAccent}"
                                                                Classes.hasac="{Binding HasAccent}" />
-                                                    <ItemsControl ItemsSource="{Binding Widgets}" IsVisible="{Binding !HasTabs}" />
-                                                    <TabControl ItemsSource="{Binding Tabs}" IsVisible="{Binding HasTabs}" Padding="0,4,0,0">
+                                                    <ScrollViewer Grid.Row="1" IsVisible="{Binding !HasTabs}"
+                                                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                                        <ItemsControl ItemsSource="{Binding Widgets}" />
+                                                    </ScrollViewer>
+                                                    <TabControl Grid.Row="1" ItemsSource="{Binding Tabs}" IsVisible="{Binding HasTabs}" Padding="0,4,0,0">
                                                         <TabControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:HudTabViewModel">
                                                                 <TextBlock Text="{Binding Title}" FontSize="11" />
@@ -372,13 +392,22 @@
                                                         </TabControl.ItemTemplate>
                                                         <TabControl.ContentTemplate>
                                                             <DataTemplate x:DataType="vm:HudTabViewModel">
-                                                                <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="460">
+                                                                <!-- Cap while the panel auto-sizes; uncapped once the user fixed the
+                                                                     height (TabMaxHeight) — the panel is the constraint then. -->
+                                                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                                              MaxHeight="{ReflectionBinding $parent[TabControl].DataContext.TabMaxHeight}">
                                                                     <ItemsControl ItemsSource="{Binding Widgets}" Margin="0,2,0,0" />
                                                                 </ScrollViewer>
                                                             </DataTemplate>
                                                         </TabControl.ContentTemplate>
                                                     </TabControl>
-                                                </StackPanel>
+                                                    <!-- resize grip glyph (hit-testing lives in HudDrag, by position) -->
+                                                    <Path Grid.Row="1" Classes="grip" IsHitTestVisible="False"
+                                                          HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                          Margin="0,0,-6,-6"
+                                                          Data="M 0,9 L 9,0 M 3.5,9 L 9,3.5 M 7,9 L 9,7"
+                                                          Stroke="{DynamicResource ScryeTextDim}" StrokeThickness="1.2" />
+                                                </Grid>
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>

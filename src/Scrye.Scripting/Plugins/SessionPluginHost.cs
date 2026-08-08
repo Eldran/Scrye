@@ -106,4 +106,22 @@ public sealed class SessionPluginHost : IPluginHost
     public void StoreSet(string pluginId, string key, string value) => _data?.Set(pluginId, key, value);
     public void StoreDelete(string pluginId, string key) => _data?.Delete(pluginId, key);
     public string[] StoreKeys(string pluginId) => _data?.Keys(pluginId) ?? Array.Empty<string>();
+
+    /// <summary>Batched store write: one file save for the whole batch (API 1.6).</summary>
+    public void StoreSetMany(string pluginId, IReadOnlyDictionary<string, string> values) =>
+        _data?.SetMany(pluginId, values);
+
+    // ---- inter-plugin events (scrye.emit / scrye.on, API 1.6) ------------------
+
+    /// <summary>
+    /// Where <c>scrye.emit</c> lands: the App points this at
+    /// <c>PluginManager.DispatchPluginEvent</c> once the manager exists (the host is
+    /// constructed first, so the property is settable rather than a ctor argument).
+    /// An emit while the sink is unset — i.e. from a plugin's own load script, before the
+    /// manager finishes constructing — is dropped; register handlers at load, emit from hooks.
+    /// </summary>
+    public Action<string, string, string>? PluginEventSink { get; set; }
+
+    public void EmitEvent(string sourceId, string name, string data) =>
+        PluginEventSink?.Invoke(sourceId, name, data);
 }

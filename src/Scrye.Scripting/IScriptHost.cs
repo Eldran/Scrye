@@ -1,7 +1,7 @@
 namespace Scrye.Scripting;
 
 /// <summary>Abstraction over the scripting engine so the implementation
-/// (MoonSharp now, possibly NLua later) stays swappable.</summary>
+/// (native Lua 5.4 via KeraLua) stays swappable.</summary>
 public interface IScriptHost
 {
     /// <summary>Execute a chunk of script (e.g. a plugin body or a trigger action).</summary>

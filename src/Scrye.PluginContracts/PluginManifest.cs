@@ -30,8 +30,10 @@ public sealed record PluginManifest
     /// <summary>Entry script, relative to the plugin folder.</summary>
     public string Entry { get; init; } = "main.lua";
 
-    /// <summary>Scripting language of the entry script: <c>"lua"</c> (default, MoonSharp) or
-    /// <c>"js"</c> (Jint). The host picks the matching runtime.</summary>
+    /// <summary>Language/format of the entry: <c>"lua"</c> (default, native Lua 5.4),
+    /// <c>"js"</c> (Jint), or <c>"wasm"</c> (a compiled WebAssembly module speaking
+    /// scrye-wasm-abi — see docs/scrye-wasm-abi.md; permissions are enforced for wasm).
+    /// The host picks the matching runtime.</summary>
     public string Lang { get; init; } = "lua";
 
     /// <summary>

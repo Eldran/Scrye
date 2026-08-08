@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 using System.Threading.Channels;
 using Scrye.Core.Automation;
@@ -37,6 +37,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private readonly VariableStore _variables = new();
     private readonly AutomationEngine _automation;
     private readonly SequenceEngine _sequences = new();
+    private bool _idlePausedSequence;      // did the idle guard pause the sequence, or the user?
 
     private readonly EventBus _events = new();
     private readonly EventLog _log = new();
@@ -129,9 +130,32 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public event Action<string, string>? ChannelMessage;
     /// <summary>Raised as a running command sequence progresses (drive the status strip).</summary>
     public event Action<SequenceStatus>? SequenceStatusChanged;
-    /// <summary>Fires once per scheduler tick (1s), on the loop thread, with the delta seconds.
-    /// Drives plugin timers.</summary>
+    /// <summary>Fires once per scheduler tick, on the loop thread, with the delta seconds
+    /// (currently 0.25 — see <see cref="TickIntervalSeconds"/>). Drives plugin timers, which is
+    /// why it ticks faster than the 1s automation clock: plugin API 1.6 honours fractional
+    /// <c>scrye.after</c>/<c>scrye.every</c> intervals down to this resolution.</summary>
     public event Action<double>? Ticked;
+
+    /// <summary>
+    /// A command line was sent to the MUD — observe-only, raised on the loop thread just before
+    /// the bytes go out. This fires for EVERY <c>SendText</c> regardless of origin: typed input
+    /// (after alias processing), macros, sequences, triggers, and other plugins' <c>scrye.send</c>.
+    /// That completeness is the point (plugin API 1.6's <c>scrye.onCommand</c> exists so an
+    /// automapper can see moves it didn't originate); the flip side is that a handler which
+    /// itself sends can ping-pong forever — handlers observe, they don't react by sending.
+    /// Auto-login credential replies go out as raw bytes, not <c>SendText</c>, so they never
+    /// pass through here.
+    /// </summary>
+    public event Action<string>? CommandSent;
+
+    /// <summary>The idle guard crossed a threshold. <see cref="IdleGuardSignal.Warning"/> is a
+    /// nudge; <see cref="IdleGuardSignal.Fired"/> means automation has just been suspended and
+    /// plugins should be told.</summary>
+    public event Action<IdleGuardSignal>? IdleSignal;
+
+    /// <summary>The dead-man's switch. Settings come from the profile; the session drives it from
+    /// the same one-second tick that runs timers.</summary>
+    public IdleGuard IdleGuard { get; } = new();
 
     public MudSession(WorldProfile profile)
     {
@@ -355,10 +379,49 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public void PauseSequence() => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("pause", ""));
     public void ResumeSequence() => _mailbox.Writer.TryWrite(new SessionMessage.SequenceControl("resume", ""));
 
+    /// <summary>
+    /// Advance the guard and act on what it decided. Firing suspends what the session owns --
+    /// profile timers and any running sequence -- and raises <see cref="IdleSignal"/> so the host
+    /// can warn the user and hand the news to plugins, which stop what they own.
+    /// </summary>
+    private void TickIdleGuard()
+    {
+        IdleGuardSignal signal = IdleGuard.Tick(1.0);
+        if (signal == IdleGuardSignal.None) return;
+        if (signal == IdleGuardSignal.Fired)
+        {
+            _automation.TimersSuspended = true;
+            // Only pause a sequence that was actually running, and remember that we did, so
+            // coming back does not silently un-pause one the user had paused on purpose.
+            _idlePausedSequence = _sequences.State
+                is SequenceState.Waiting or SequenceState.WaitingForPrompt;
+            if (_idlePausedSequence) _sequences.Pause();
+        }
+        IdleSignal?.Invoke(signal);
+    }
+
+    /// <summary>
+    /// Undo what firing suspended, because the hazard was being away and you are back. Only the
+    /// session's own automation resumes: a plugin told to stop stays stopped until you restart it
+    /// deliberately, which is what the MUSHclient original did and what you want from a thing that
+    /// walks your character around.
+    /// </summary>
+    private void ResumeAfterIdle()
+    {
+        _automation.TimersSuspended = false;
+        if (_idlePausedSequence)
+        {
+            _idlePausedSequence = false;
+            _sequences.Resume();
+        }
+    }
+
     /// <summary>Load a resolved profile's triggers/aliases/timers/variables into the
     /// engine. Call before ConnectAsync.</summary>
     public void LoadProfileData(EffectiveProfile eff)
     {
+        IdleGuard.Seconds = eff.IdleGuardSeconds;
+        IdleGuard.Enabled = eff.IdleGuardEnabled;
         foreach (var t in eff.Triggers) _automation.AddTrigger(t);
         foreach (var a in eff.Aliases) _automation.AddAlias(a);
         foreach (var tm in eff.Timers) _automation.AddTimer(tm);
@@ -469,6 +532,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         break;
                     case SessionMessage.SendText s:
                         _events.Emit(SessionEventKind.Sent, s.Text);
+                        CommandSent?.Invoke(s.Text);
                         await SendRawAsync(_encoding.GetBytes(s.Text + "\r\n"), ct).ConfigureAwait(false);
                         break;
                     case SessionMessage.ConnectionStateChanged cs:
@@ -478,10 +542,21 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         await SendRawAsync(sb.Bytes, ct).ConfigureAwait(false);
                         break;
                     case SessionMessage.Tick:
-                        _automation.Tick(1.0, this);
-                        _sequences.Tick(1.0);
-                        MipTick();
-                        Ticked?.Invoke(1.0);
+                        // The scheduler ticks at 250 ms so PLUGIN timers get sub-second
+                        // resolution (API 1.6), but everything that always thought in whole
+                        // seconds — the idle guard, profile automation timers, sequences, the
+                        // MIP keepalive — still runs on an accumulated 1s clock. Their
+                        // semantics (and their tests) are unchanged.
+                        _tickCarry += TickIntervalSeconds;
+                        if (_tickCarry >= 0.999)
+                        {
+                            _tickCarry -= 1.0;
+                            TickIdleGuard();
+                            _automation.Tick(1.0, this);
+                            _sequences.Tick(1.0);
+                            MipTick();
+                        }
+                        Ticked?.Invoke(TickIntervalSeconds);
                         break;
                     case SessionMessage.SequenceControl sc:
                         HandleSequenceControl(sc.Kind, sc.Arg);
@@ -525,11 +600,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>Scheduler tick length. 250 ms is the plugin-timer resolution (API 1.6);
+    /// the 1s consumers accumulate four of these — see the Tick case in the loop.</summary>
+    private const double TickIntervalSeconds = 0.25;
+    private double _tickCarry;
+
     private async Task RunTickerAsync(CancellationToken ct)
     {
         try
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(TickIntervalSeconds));
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
                 _mailbox.Writer.TryWrite(new SessionMessage.Tick());
         }
@@ -667,6 +747,14 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private void HandleInput(string text)
     {
+        // Presence, and the only evidence of it. This is reached by typing, by a macro key and by
+        // a click on a plugin's panel link, because all three arrive through Submit. What does NOT
+        // reach it is anything a trigger, a timer or a plugin sends -- those go out through
+        // IWorldActions.Send. That asymmetry is the whole point: a bot walking an area all night
+        // must never look like someone at the keyboard.
+        if (IdleGuard.HasFired) ResumeAfterIdle();
+        IdleGuard.Poke();
+
         _events.Emit(SessionEventKind.InputSubmitted, text);
         _logger?.Log("> " + text, InputColour);   // transcript records what the user typed
         if (InputFilter is not null)

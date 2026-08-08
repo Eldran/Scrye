@@ -1,9 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\Scrye.Core\Scrye.Core.csproj" />
-    <!-- Pure-managed Lua (no native dependency). Swap for NLua later if perf demands. -->
-    <PackageReference Include="MoonSharp" Version="2.0.0" />
+    <!-- Native Lua 5.4 P/Invoke binding. Ships lua54 native binaries for win/linux/osx
+         under runtimes/. The sandbox is ours: see Lua/LuaSandbox.cs. -->
+    <PackageReference Include="KeraLua" Version="1.4.9" />
     <!-- Pure-managed JavaScript engine for JS plugins (sandboxed by default, no CLR access). -->
     <PackageReference Include="Jint" Version="[3.0.0,4.0.0)" />
+    <!-- Wasmtime for lang:"wasm" plugins (scrye-wasm-abi — docs/scrye-wasm-abi.md).
+         Official Bytecode Alliance bindings; ships the native wasmtime library per RID. -->
+    <PackageReference Include="Wasmtime" Version="44.0.0" />
   </ItemGroup>
 </Project>

@@ -4,8 +4,25 @@
   "version": "1.0.0",
   "author": "Joakim",
   "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way.",
-  "mudIds": ["*"],
+  "mudIds": [
+    "*"
+  ],
   "entry": "main.lua",
   "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.6 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "variables.read",
+    "variables.write",
+    "storage.private",
+    "timers.manage",
+    "triggers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
   "enabled": true
 }

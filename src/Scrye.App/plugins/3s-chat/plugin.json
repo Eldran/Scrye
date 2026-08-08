@@ -4,8 +4,23 @@
   "version": "1.0.0",
   "author": "Joakim",
   "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep).",
-  "mudIds": ["*"],
+  "mudIds": [
+    "*"
+  ],
   "entry": "main.lua",
   "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.2 <2.0"
+  },
+  "permissions": [
+    "output.read",
+    "capture.write",
+    "notifications.show",
+    "sound.play",
+    "log.write",
+    "storage.private",
+    "timers.manage",
+    "aliases.manage"
+  ],
   "enabled": true
 }

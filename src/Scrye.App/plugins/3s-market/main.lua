@@ -189,11 +189,7 @@ local function mk_compute()
           if a.price ~= b.price then return a.price < b.price end return a.qty > b.qty end)
         profit = sells[1].price - buys[1].price
       end
-      -- Normalize to number-or-nil. A MoonSharp codegen quirk in this nested-loop +
-      -- closures function can leave the unassigned `profit` aliasing a table for
-      -- sell-only goods, which then blows up "a.profit > b.profit" (sort) and
-      -- "r.profit >= 0" (render) with "compare number with table". Force it clean.
-      if type(profit) ~= "number" then profit = nil end
+      -- profit is nil for sell-only goods (no buys), a number otherwise.
       results[#results + 1] = {
         res = DISPLAY[res] or titlecase(res), cmd = res, buys = buys, sells = sells, profit = profit,
       }
@@ -403,11 +399,11 @@ end
 -- match a market row on frame-stripped text: town, price, qty, then the keyword
 -- ("avail"/"wants") on a word boundary, then the affinity remainder.
 --
--- IMPORTANT: MoonSharp (Scrye's Lua engine) aborts with "pattern too complex" when
--- a pattern has to backtrack a lot -- e.g. a monolithic "town + two numbers + word"
--- pattern run against a "sold out" row (one number, no keyword) or a column-header
--- line. So we (1) gate on a cheap plain-text find of the keyword, then (2) use small,
--- lightly-backtracking patterns for the numbers and the town separately.
+-- Structure: a cheap plain-text find gates out the lines that can't match (most of the
+-- block), then small separate patterns pick the pieces apart — faster and easier to
+-- reason about than one monolithic backtracking pattern. (Originally split to dodge a
+-- MoonSharp "pattern too complex" abort; kept on native Lua 5.4 because it's simply
+-- the better shape.)
 local function rowmatch(line, word)
   if not line:find(word, 1, true) then return nil end             -- cheap gate: keyword must be present
   local price, qty, tail = line:match("(%d+)%s+(%d+)%s+" .. word .. "(.*)$")
@@ -427,9 +423,8 @@ scrye.onLine(function(line)
   -- only touch the framed vtrade block; leave everything else (tells, etc.) alone
   if not line:match("^%s*%-~%*") then return end
   local clean = strip_frame(line)
-  -- "<Good> - Market Overview" header (gate on a plain find first: the header pattern
-  -- would otherwise backtrack over long all-letter column-header lines and MoonSharp
-  -- would abort with "pattern too complex")
+  -- "<Good> - Market Overview" header (plain-find gate first: skips the backtracking
+  -- pattern on the long all-letter column-header lines it can never match)
   if clean:find("Market Overview", 1, true) then
     local res = clean:match("^([%a][%a ]*)%s*%-%s*Market Overview")
     if res then
@@ -483,7 +478,7 @@ scrye.addTrigger{
 }
 
 -- ====================== auto-trader ======================
-local function note(s) scrye.print("@{#FFD028,bold}[auto]@{} " .. s) end
+local function note(s) scrye.print("@{#DEB218,bold}[auto]@{} " .. s) end
 
 -- read the shared viking feed (daler / warehouse / carts / buildings) from vik.* state
 local function feed(k) return scrye.getState("vik." .. k) end
@@ -599,8 +594,6 @@ auto_trade_tick = function()
       local avail = have - reserve
       if isref and not at.refined then avail = 0 end
       if avail > 0 and math.min(avail, cap) >= need then
-        -- explicit nil init: MoonSharp leaves an UNinitialised local aliasing a stale
-        -- table (same codegen quirk as mk_compute's profit), which breaks val > best.value
         local best, bestq = nil, nil
         for _, s in ipairs(r.sells) do
           local dem = tonumber(s.qty)
@@ -910,7 +903,7 @@ end
 --   vtrade dispatch <side> <units> <good> <town> escort <n>
 -- Here it is a command instead, since panel widgets are built once at load and the
 -- ranked town list changes on every refresh.
-local function mnote(t) scrye.print("@{#FFD028,bold}[market]@{} " .. t) end
+local function mnote(t) scrye.print("@{#DEB218,bold}[market]@{} " .. t) end
 
 -- every town name present in the current market data
 local function known_towns()
@@ -1109,13 +1102,13 @@ scrye.addAlias{
 scrye.addPanel{
   title = "3S Market",
   width = 520,
-  accent = "#D9A521",          -- signature: market gold
+  accent = "#AC811E",          -- signature: market gold (validated accent set)
   tabs = {
     { title = "Market", widgets = {
         { type = "button", text = "Refresh", action = function() mk_refresh(false) end },
-        { type = "label",  bind = P .. "status", color = "#E0A830" },   -- status line in gold
+        { type = "label",  bind = P .. "status", color = "#AC811E" },   -- status line echoes the panel accent
         { type = "text",   bind = P .. "report" },
-        { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "#8FA0B0" },
+        { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "dim" },
         { type = "text",   bind = P .. "carts" },
         { type = "input",  text = "Units (20-350) ", bind = P .. "v_units",
           onSubmit = function(t) mk_setunits(t) end },
@@ -1132,7 +1125,7 @@ scrye.addPanel{
             { text = "Restock On/Off", action = function() at_toggle_restock() end },
             { text = "Refined On/Off", action = function() at_toggle_refined() end },
         } },
-        { type = "label", text = "Settings (type a value, Enter):", color = "#8FA0B0" },
+        { type = "label", text = "Settings (type a value, Enter):", color = "dim" },
         { type = "input", text = "Keep (every good) ",  bind = P .. "v_keep",    onSubmit = function(t) at_setnum("keep", t) end },
         { type = "input", text = "Raw> buffer ",        bind = P .. "v_stock",   onSubmit = function(t) at_setnum("stock", t) end },
         { type = "input", text = "Daler reserve ",      bind = P .. "v_reserve", onSubmit = function(t) at_setnum("reserve", t) end },
@@ -1145,7 +1138,7 @@ scrye.addPanel{
         { type = "input", text = "Clearing % ",         bind = P .. "v_full",    onSubmit = function(t) at_setnum("full", t) end },
         { type = "input", text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) at_setnum("clear", t) end },
         { type = "input", text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) at_setnum("escort", t) end },
-        { type = "label", text = "Hold a good: type  atrade exempt <good>", color = "#8FA0B0" },
+        { type = "label", text = "Hold a good: type  atrade exempt <good>", color = "dim" },
     } },
     { title = "Log", widgets = {
         { type = "text", bind = P .. "atlog" },

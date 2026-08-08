@@ -8,7 +8,7 @@ namespace Scrye.Scripting.Plugins;
 /// <summary>
 /// Runs one plugin whose entry script is JavaScript, using a sandboxed Jint
 /// <see cref="Engine"/> with a bound <c>scrye.*</c> API object backed by an
-/// <see cref="IPluginHost"/>. This mirrors <see cref="LuaPluginRuntime"/> feature-for-feature
+/// <see cref="IPluginHost"/>. This mirrors <c>KeraLuaPluginRuntime</c> feature-for-feature
 /// (hooks, timers, rules, panels) so a plugin author picks Lua or JS by the manifest's
 /// <c>lang</c> field with no change in capabilities. Plugin rules live HERE (not in the
 /// shared automation engine), so a live rule-reload can't wipe them. All execution is on the
@@ -34,6 +34,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private readonly List<JsValue> _connectHooks = new();
     private readonly List<JsValue> _disconnectHooks = new();
     private readonly List<JsValue> _promptHooks = new();
+    private readonly List<JsValue> _idleHooks = new();
+    private readonly List<JsValue> _commandHooks = new();                 // scrye.onCommand (1.6)
+    private readonly List<(string name, JsValue fn)> _eventHooks = new(); // scrye.on (1.6)
     private readonly List<PluginRule> _triggers = new();   // match output lines
     private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly Dictionary<string, JsValue> _actions = new();   // panel-button callbacks by id
@@ -43,6 +46,8 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private int _nextActionId = 1;
 
     public string Id => _descriptor.Manifest.Id;
+
+    public string EngineName => "JS (Jint)";
 
     /// <param name="diagnostics">Failure/cost accounting. Optional so a headless host or a test
     /// can construct a runtime without one; when supplied, every swallowed callback exception is
@@ -136,6 +141,28 @@ public sealed class JsPluginRuntime : IPluginRuntime
     public void DispatchConnect() => FireAll(_connectHooks, "onConnect");
     public void DispatchDisconnect() => FireAll(_disconnectHooks, "onDisconnect");
     public void DispatchPrompt() => FireAll(_promptHooks, "onPrompt");
+    public void DispatchIdle() => FireAll(_idleHooks, "onIdle");
+
+    /// <summary>Fire <c>scrye.onCommand</c> hooks for a command that went to the MUD (observe-only).</summary>
+    public void DispatchCommand(string text)
+    {
+        for (int i = 0; i < _commandHooks.Count; i++)
+        {
+            JsValue fn = _commandHooks[i];
+            Safe("onCommand", () => _engine.Invoke(fn, text));
+        }
+    }
+
+    /// <summary>Fire matching <c>scrye.on(name, fn)</c> handlers for an inter-plugin event.</summary>
+    public void DispatchPluginEvent(string name, string data, string sourceId)
+    {
+        for (int i = 0; i < _eventHooks.Count; i++)
+        {
+            (string hookName, JsValue fn) = _eventHooks[i];
+            if (string.Equals(hookName, name, StringComparison.OrdinalIgnoreCase))
+                Safe("on:" + name, () => _engine.Invoke(fn, data, name, sourceId));
+        }
+    }
 
     /// <summary>Invoke a panel-button callback by its action id (called on the loop thread).</summary>
     public void InvokeAction(string actionId)
@@ -175,6 +202,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
         _connectHooks.Clear();
         _disconnectHooks.Clear();
         _promptHooks.Clear();
+        _idleHooks.Clear();
+        _commandHooks.Clear();
+        _eventHooks.Clear();
         _triggers.Clear();
         _aliases.Clear();
         _actions.Clear();
@@ -222,6 +252,36 @@ public sealed class JsPluginRuntime : IPluginRuntime
         onConnect    = (Action<JsValue>)(fn => AddHook(fn, _connectHooks)),
         onDisconnect = (Action<JsValue>)(fn => AddHook(fn, _disconnectHooks)),
         onPrompt     = (Action<JsValue>)(fn => AddHook(fn, _promptHooks)),
+        // scrye.onIdle(fn) — the client decided nobody is here. Stop what you are driving.
+        onIdle       = (Action<JsValue>)(fn => AddHook(fn, _idleHooks)),
+        // scrye.onCommand(fn) — observe every command sent to the MUD, whatever sent it (1.6).
+        // Observe-only; do not scrye.send from inside a handler (it re-fires every hook).
+        onCommand    = (Action<JsValue>)(fn => AddHook(fn, _commandHooks)),
+
+        // inter-plugin events (1.6): scrye.emit(name, data) / scrye.on(name, (data, name, source) => {})
+        emit = (Action<string, string>)((name, data) => _host.EmitEvent(Id, name ?? "", data ?? "")),
+        on = (Action<JsValue, JsValue>)((name, fn) =>
+        {
+            if (name.IsString() && IsFn(fn)) _eventHooks.Add((name.AsString(), fn));
+        }),
+
+        // scrye.json (1.6): parity with the Lua runtime so cross-language snippets translate
+        // one-for-one. JS plugins can equally use the global JSON object — these are the same
+        // engine functions. decode returns null (not a throw) on malformed input, matching
+        // Lua's nil,err convention as closely as JS return values allow.
+        json = (object)new
+        {
+            encode = (Func<JsValue, JsValue>)(v =>
+            {
+                try { return _engine.Invoke(_engine.Evaluate("JSON.stringify"), v); }
+                catch { return JsValue.Null; }
+            }),
+            decode = (Func<string, JsValue>)(s =>
+            {
+                try { return _engine.Invoke(_engine.Evaluate("JSON.parse"), s ?? ""); }
+                catch { return JsValue.Null; }
+            }),
+        },
 
         // scrye.onLine(function(line) { ... })  — return false to gag, a string to rewrite
         onLine = (Action<JsValue>)(fn => AddHook(fn, _lineHooks)),
@@ -259,6 +319,28 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             get = (Func<string, object?>)(key => _host.StoreGet(Id, key ?? "")),
             set = (Action<string, string>)((key, value) => _host.StoreSet(Id, key ?? "", value ?? "")),
+            // scrye.store.setMany({ k1: v1, ... }) — N keys, ONE disk write (1.6). Values are
+            // stringified. Round-trips through the engine's JSON.stringify, the same
+            // enumeration trick ToPalette uses.
+            setMany = (Action<JsValue>)(obj =>
+            {
+                if (obj is null || !obj.IsObject()) return;
+                try
+                {
+                    JsValue stringify = _engine.Evaluate("JSON.stringify");
+                    JsValue json = _engine.Invoke(stringify, obj);
+                    if (!json.IsString()) return;
+                    var raw = System.Text.Json.JsonSerializer
+                        .Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json.AsString());
+                    if (raw is null || raw.Count == 0) return;
+                    var batch = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach ((string k, System.Text.Json.JsonElement v) in raw)
+                        batch[k] = v.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? v.GetString() ?? "" : v.GetRawText();
+                    _host.StoreSetMany(Id, batch);
+                }
+                catch (Exception ex) { _host.Print(Id, "store.setMany: " + ex.Message); }
+            }),
             @delete = (Action<string>)(key => _host.StoreDelete(Id, key ?? "")),
             keys = (Func<string[]>)(() => _host.StoreKeys(Id)),
         },
@@ -393,6 +475,15 @@ public sealed class JsPluginRuntime : IPluginRuntime
             actionId = "a" + _nextActionId++;
             _actions[actionId] = action;
         }
+        // 'onHover' (colorgrid, 1.6): a second callback on the same widget, own id — a grid
+        // can be both clickable and hoverable. Same (col, row, char) invoke path as onClick.
+        string? hoverId = null;
+        JsValue hover = Get(w, "onHover");
+        if (IsFn(hover))
+        {
+            hoverId = "a" + _nextActionId++;
+            _actions[hoverId] = hover;
+        }
         // buttonrow children: buttons = [ {text, action}, ... ]
         JsValue btns = Get(w, "buttons");
         List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns) : null;
@@ -405,11 +496,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Max = Str(w, "max"),
             Color = Str(w, "color"),
             Dim = Get(w, "dim") is { } dv && dv.IsBoolean() && dv.AsBoolean(),
+            Weave = Get(w, "weave") is { } wv && wv.IsBoolean() && wv.AsBoolean(),
             Palette = ToPalette(Get(w, "palette")),
             Columns = ToStringList(Get(w, "columns")),
             Separator = Str(w, "separator"),
+            Labels = Str(w, "labels"),
             Align = Str(w, "align"),
             Action = actionId,
+            HoverAction = hoverId,
             Children = children,
         };
     }

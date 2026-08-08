@@ -2,7 +2,7 @@ namespace Scrye.Core.Plugins;
 
 /// <summary>
 /// A tiny scheduler for plugin timers (<c>scrye.after</c>/<c>scrye.every</c>). Pure and
-/// engine-agnostic — callbacks are plain <see cref="Action"/>s, so the MoonSharp/JS
+/// engine-agnostic — callbacks are plain <see cref="Action"/>s, so the Lua/JS
 /// binding is thin and this logic is unit-testable without a script host. Advanced by
 /// <see cref="Tick"/> on the session loop (1s granularity today). A callback may add or
 /// cancel timers re-entrantly: newly-added timers do not fire in the same tick, and a

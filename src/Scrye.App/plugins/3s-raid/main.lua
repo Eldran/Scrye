@@ -34,7 +34,7 @@ local SP = "plugin." .. scrye.id .. "."
 -- ---------- helpers ----------
 
 -- "[raid]" tag, restoring the original's orange ColourNote tag
-local function note(s) scrye.print("@{#FF2E88,bold}[raid]@{} " .. s) end
+local function note(s) scrye.print("@{#FD2083,bold}[raid]@{} " .. s) end
 
 local function split(s, sep)
   local t = {}
@@ -336,9 +336,9 @@ end
 -- buttons can follow a feed that only arrives after load.
 build_panel = function(towns)
   local w = {
-    { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "#E08A3C" },  -- amber: the arm switch
-    { type = "value", text = "Target: ", bind = SP .. "target", color = "#6FB7E0" },  -- blue: destination
-    { type = "value", text = "Docked: ", bind = SP .. "docked", color = "#4FB05A" },  -- green: ships ready
+    { type = "value", text = "Armed: ",  bind = SP .. "armed",  color = "warning" },  -- semantic: the arm switch
+    { type = "value", text = "Target: ", bind = SP .. "target", color = "info" },     -- semantic: destination
+    { type = "value", text = "Docked: ", bind = SP .. "docked", color = "success" },  -- semantic: ships ready
     { type = "buttonrow", buttons = {
         { text = "Arm On/Off",  action = function() ar_config(ar.on and "off" or "on") end },
         { text = "Targets",     action = function() ar_list_targets() end },
@@ -347,7 +347,7 @@ build_panel = function(towns)
         { text = "Auto-tgt On/Off", action = function() ar_config(ar.auto_target and "auto off" or "auto on") end },
         { text = "Convoy On/Off",   action = function() ar_config(ar.convoy and "convoy off" or "convoy on") end },
     } },
-    { type = "label", text = "Settings (type a value, Enter):", color = "#8FA0B0" },
+    { type = "label", text = "Settings (type a value, Enter):", color = "dim" },
     { type = "input", text = "Target town ",  bind = SP .. "v_target",  onSubmit = function(t) ar_config("target " .. t) end },
     { type = "input", text = "Ships (n/all) ", bind = SP .. "v_ships",   onSubmit = function(t) ar_config("ships " .. t) end },
     { type = "input", text = "Keep docked ",  bind = SP .. "v_keep",    onSubmit = function(t) ar_config("keep " .. t) end },
@@ -359,7 +359,7 @@ build_panel = function(towns)
   -- target buttons, four per row; each closes over its own town name
   towns = towns or {}
   if #towns > 0 then
-    w[#w + 1] = { type = "label", text = "Set target (calmest first):", color = "#8FA0B0" }
+    w[#w + 1] = { type = "label", text = "Set target (calmest first):", color = "dim" }
     local row = {}
     for i, town in ipairs(towns) do
       local name = town                      -- capture per iteration, not by reference
@@ -371,13 +371,13 @@ build_panel = function(towns)
     end
   end
 
-  w[#w + 1] = { type = "label", text = "Town heat (calm = in the auto-target pool):", color = "#8FA0B0" }
+  w[#w + 1] = { type = "label", text = "Town heat (calm = in the auto-target pool):", color = "dim" }
   w[#w + 1] = { type = "text", bind = SP .. "heat" }
 
   scrye.addPanel{
     title = "Auto-Raid",
     width = 320,
-    accent = "#D6524E",        -- signature: raid red
+    accent = "#E7574E",        -- signature: raid red (validated accent set)
     widgets = w,
   }
 end

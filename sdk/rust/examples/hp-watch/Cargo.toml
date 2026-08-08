@@ -1,0 +1,17 @@
+[package]
+name = "hp-watch"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+scrye-plugin = { path = "../../scrye-plugin" }
+
+[lib]
+crate-type = ["cdylib"]
+
+# Small, fast plugin binaries. `debug = true` keeps the names section so trap
+# backtraces stay readable; strip it if size matters more than diagnostics.
+[profile.release]
+opt-level = "s"
+lto = true
+debug = true

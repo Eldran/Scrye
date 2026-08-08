@@ -239,7 +239,7 @@ public static class PluginAssets
             case JsonValueKind.String:
                 return e.GetString();
             case JsonValueKind.Number:
-                // one numeric type, because the scripting side has one: MoonSharp's Lua is 5.2,
+                // one numeric type, because the scripting side is happiest with one: Lua and
                 // where every number is a double, and Jint's is a JS number
                 return e.GetDouble();
             case JsonValueKind.True:  return true;

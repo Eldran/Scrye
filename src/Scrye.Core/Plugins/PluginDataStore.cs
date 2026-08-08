@@ -43,6 +43,25 @@ public sealed class PluginDataStore
         Save(pluginId, map);
     }
 
+    /// <summary>
+    /// Persist several key/value pairs with ONE file write (the <c>scrye.store.setMany</c>
+    /// backing, plugin API 1.6). Per-key <see cref="Set"/> rewrites the plugin's whole JSON
+    /// file each call — fine for a counter, quadratic for a mapper flushing an area's rooms.
+    /// Unchanged values are skipped; if nothing actually changed, nothing is written.
+    /// </summary>
+    public void SetMany(string pluginId, IReadOnlyDictionary<string, string> values)
+    {
+        Dictionary<string, string> map = Map(pluginId);
+        bool dirty = false;
+        foreach (KeyValuePair<string, string> kv in values)
+        {
+            if (map.TryGetValue(kv.Key, out string? existing) && existing == kv.Value) continue;
+            map[kv.Key] = kv.Value;
+            dirty = true;
+        }
+        if (dirty) Save(pluginId, map);
+    }
+
     /// <summary>Remove a key; true if it existed.</summary>
     public bool Delete(string pluginId, string key)
     {

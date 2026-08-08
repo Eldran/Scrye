@@ -1,4 +1,4 @@
-using Scrye.Core.Automation;
+﻿using Scrye.Core.Automation;
 
 namespace Scrye.Core.Profiles;
 
@@ -42,6 +42,14 @@ public sealed class ProfileLayer
     public string? Theme { get; set; }
     /// <summary>ANSI 16-colour palette: "modern" (xterm/VGA, default) or "classic" (MUSHclient).</summary>
     public string? AnsiPalette { get; set; }
+
+    /// <summary>Dead-man's switch for unattended automation: stop when nobody has done anything
+    /// for <see cref="IdleGuardSeconds"/>. Null inherits; see
+    /// <see cref="Scrye.Core.Session.IdleGuard"/>. Off unless asked for.</summary>
+    public bool? IdleGuard { get; set; }
+
+    /// <summary>Idle limit in seconds, clamped to 60..7200. Null inherits, then defaults to 600.</summary>
+    public int? IdleGuardSeconds { get; set; }
 
     // ---- collections, merged by name ----
     public List<TriggerDef> Triggers { get; set; } = new();

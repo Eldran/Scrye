@@ -1,0 +1,12 @@
+{
+  "id": "3s-pathfinder",
+  "name": "3S Pathfinder (Rust)",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "BFS path search for 3s-map, compiled to WebAssembly. Loads next to 3s-map and answers its map.path.find events; 3s-map falls back to its own Lua search when this isn't loaded.",
+  "mudIds": ["*"],
+  "entry": "scrye_pathfinder.wasm",
+  "lang": "wasm",
+  "requires": { "scryeApi": ">=1.6 <2.0" },
+  "permissions": []
+}

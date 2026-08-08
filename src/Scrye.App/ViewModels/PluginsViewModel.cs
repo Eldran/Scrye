@@ -121,9 +121,12 @@ public sealed class PluginRowViewModel : ViewModelBase
         Removable = info.Removable;
 
         string state = info.Loaded ? "loaded" : info.IncompatibleReason is not null ? "unavailable" : "disabled";
+        // Engine label (only when loaded): during the KeraLua soak, which engine a plugin
+        // runs on should be visible at a glance, not inferred.
+        string engine = string.IsNullOrEmpty(info.Engine) ? "" : $" · {info.Engine}";
         Detail = info.RequiresApi is { Length: > 0 }
-            ? $"v{info.Version} · {state} · needs API {info.RequiresApi}"
-            : $"v{info.Version} · {state}";
+            ? $"v{info.Version} · {state}{engine} · needs API {info.RequiresApi}"
+            : $"v{info.Version} · {state}{engine}";
 
         IncompatibleReason = info.IncompatibleReason is null ? null : "Not loaded: " + info.IncompatibleReason;
         HealthSummary = health?.Summary;

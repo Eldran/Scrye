@@ -39,19 +39,25 @@ local PANE = "Chats"
 -- Per-channel colours, restoring the original's CHANCOL map in an 80s palette.
 -- These are literals rather than theme tokens on purpose: a channel's colour is
 -- identity, not semantics -- "Party is green" should not change with the app theme.
+--
+-- The hues are OKLCH-stepped around the wheel and validated on the output surface
+-- (#080A0C): every colour reads at >= 4.5:1 text contrast, and neighbouring hues are
+-- separated by lightness as well as hue (worst adjacent pair ΔE 9.5 under simulated
+-- colour-blindness, 16.3 with normal vision). The [channel] prefix on every line is
+-- the identity fallback, so colour is never the only signal.
 local CHANCOL = {
-  tell    = "#21E6FF",   -- electric cyan  (the one you must not miss)
-  main    = "#FF2E88",   -- hot magenta
-  party   = "#B6FF3C",   -- neon lime
-  newbie  = "#2EE6C5",   -- aqua
+  tell    = "#4BE4FF",   -- electric cyan  (the one you must not miss)
+  main    = "#FD2083",   -- hot magenta
+  party   = "#93F64E",   -- neon lime
+  newbie  = "#2EB88F",   -- deep aqua
   shout   = "#FFFFFF",   -- white
-  admin   = "#C77DFF",   -- violet
-  events  = "#FFD028",   -- gold
-  viking  = "#FF8A3D",   -- neon orange
-  whine   = "#7B5CFF",   -- indigo
-  gamers  = "#FF5CA8",   -- rose
-  lottery = "#A0A8C0",   -- grey
-  poll    = "#A0A8C0",   -- grey
+  admin   = "#CA90FB",   -- violet
+  events  = "#DEB218",   -- gold
+  viking  = "#DF6E1B",   -- deep orange
+  whine   = "#7263FD",   -- indigo
+  gamers  = "#F2A3C1",   -- soft pink (clearly apart from main's hot magenta)
+  lottery = "#A0A7BB",   -- grey
+  poll    = "#A0A7BB",   -- grey
 }
 
 -- the original's fallback: anything Viking-ish takes the Viking colour, else grey

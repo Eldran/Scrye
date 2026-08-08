@@ -827,3 +827,15 @@ draw()
 scrye.onDisconnect(function()
   if bot.active then save_position() end
 end)
+
+-- The client's idle guard says nobody is at the keyboard. This is the deadman switch the
+-- MUSHclient version implemented itself and reached into the chaos-sea plugin to enforce;
+-- now the client owns the clock and every plugin gets told. Stop, keep the position: coming
+-- back should be '.resume', not a bot that quietly kept walking while you were gone.
+scrye.onIdle(function()
+  if rec then return end
+  if bot.active and not bot.paused_on_mob then
+    scrye.print("[bot] idle guard fired - stopping. '.resume' when you are back.")
+    bot_stop()
+  end
+end)

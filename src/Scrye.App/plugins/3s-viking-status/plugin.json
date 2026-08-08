@@ -4,8 +4,23 @@
   "version": "1.0.0",
   "author": "Joakim",
   "description": "Tabbed Viking status HUD panel fed by the BBE viking feed: Stats / City / Builds / Production / People / Settlers / Holds / Sea / Voyage / Map / Plan / Mission / Feeds",
-  "mudIds": ["*"],
+  "mudIds": [
+    "*"
+  ],
   "entry": "main.lua",
   "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.3 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "storage.private",
+    "timers.manage",
+    "triggers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
   "enabled": true
 }
