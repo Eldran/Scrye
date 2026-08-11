@@ -149,6 +149,23 @@ All of these persist per character. The sound toggle exists because the beep and
 notification serve different moments: sitting at the PC you may want quiet, while the phone
 should still buzz when you walk away.
 
+**The Companion panel is the overview.** Its NOTIFICATIONS section lists the notify-flagged
+triggers, and a PLUGIN SOURCES section below it shows what each reporting plugin will buzz
+the phone about — with a live **on/off button per row** that runs the plugin's own toggle
+command, so you flip sources without remembering any syntax. The bundled sources:
+
+| Plugin | Source | Default | Command |
+|---|---|---|---|
+| 3s-chat | Tells / sound / channels / watched names | tells on | `chat notify …` (table below) |
+| 3s-raid | Fleet returns; each auto-dispatch | off | `araid notify fleet\|send on\|off` |
+| 3s-chaossea | Bot pauses: goal found, wimpy, out of rooms, idle guard | on | `cs notify on\|off` |
+| 3s-stepper | Route done / arrived home / idle guard | on | `.set notify on\|off` |
+| 3s-market | Each cart the auto-trader sends | off | `atrade notify on\|off` |
+
+The bot plugins default **on** because their notifies fire exactly when the bot has stopped
+and is waiting for you; the raid and market ones default **off** because they fire during
+routine operation.
+
 **If nothing arrives**, debug in this order:
 
 1. `.companion status` — if it says **0 devices registered**, the phone was never subscribed.
@@ -539,9 +556,28 @@ that changes nothing writes nothing.
 ### Alerts & routing
 | Call | Description |
 |---|---|
-| `scrye.notify(text)` | Toast notification (+ taskbar flash when unfocused). |
+| `scrye.notify(text)` | Toast notification (+ taskbar flash when unfocused; pushed to registered phones). |
 | `scrye.sound("beep")` | Play `"beep"`, a path, or a file in the sounds folder. |
 | `scrye.capture(pane, text)` | Route a line into a named capture pane. |
+
+**Reporting notification sources — the `plugin.<id>.notify` convention.** A plugin that
+calls `scrye.notify()` should also *say so*, so the Companion panel can show the user what
+will buzz their phone and let them toggle it. This is plain state, not an API call: publish
+newline-joined rows to exactly `plugin.<id>.notify`, one source per row, four tab-separated
+fields:
+
+```
+label \t detail \t on|off \t toggle-command
+```
+
+The panel renders a state of literally `on`/`off` (with a command) as a **live toggle
+button** — clicking it runs the command through the normal input pipeline, so your own
+alias handles it; any other state text makes the row informational (the chat plugin lists
+its watched names this way). Re-publish the rows from every place the settings change and
+once at load, and persist the flag in `scrye.store` — whether a phone buzzes is a
+preference about the player, not about one session. Needs `state.write` (and
+`notifications.show` for the notifying itself). The convention is voluntary, which is why
+the panel still admits that non-reporting plugins may notify on their own.
 
 ### HUD panels
 `scrye.addPanel{ ... }` contributes a declarative panel. The host renders it and keeps bound widgets in sync with state.
@@ -635,9 +671,11 @@ client that ships six including a light one, and the mobile companion has its ow
 same token resolves correctly in all of them, a literal doesn't. Tokens are part of the API and
 won't be renamed without a major version bump.
 
-Tokens are resolved **when the panel is built**, not bound live: plugin panel brushes have to be
-immutable because panels are constructed on the session loop thread. Switching colour scheme
-re‑colours the app immediately and re‑colours plugin panels on the next **Reload** or reconnect.
+Tokens follow the scheme **live**: switching colour scheme re‑resolves every token‑derived
+brush in place — panel accents, widget colours, colorgrid palettes, and the `@{...}` markup
+inside text widgets all repaint immediately, no reload needed. (Brushes are still immutable
+under the hood — the theme change swaps in freshly resolved ones on the UI thread.) Hex
+literals are, of course, unaffected — which is one more reason to prefer tokens.
 
 An unrecognised colour name falls back to the theme default rather than rendering something
 arbitrary — so a typo shows as "unstyled", not as an invisible widget.

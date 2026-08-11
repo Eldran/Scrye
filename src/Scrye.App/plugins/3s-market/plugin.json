@@ -18,6 +18,7 @@
     "output.modify",
     "state.read",
     "state.write",
+    "notifications.show",
     "variables.write",
     "log.write",
     "storage.private",

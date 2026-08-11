@@ -14,6 +14,7 @@
   },
   "permissions": [
     "output.read",
+    "state.write",
     "capture.write",
     "notifications.show",
     "sound.play",

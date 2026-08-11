@@ -16,6 +16,7 @@
     "commands.send",
     "state.read",
     "state.write",
+    "notifications.show",
     "variables.read",
     "variables.write",
     "storage.private",

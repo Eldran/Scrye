@@ -70,6 +70,19 @@ local cs_draw, cs_step, cs_advance, mark_dirty
 -- the original drew ":: CSS ::" in red/grey/red before every message
 local function note(s) scrye.print("@{#FD2083,bold}::@{} @{#4BE4FF}CSS@{} @{#FD2083,bold}::@{} " .. s) end
 
+-- ---------- phone notifications (plugin.<id>.notify convention) ----------
+-- Default ON: this is an AFK bot, and every notify below is a moment it has STOPPED
+-- and is waiting on you — the goal in the room, a wimpy retreat, the sea explored out.
+local notify_on = scrye.store.get("notify") ~= "0"
+
+local function publish_notify_state()
+  scrye.setState(P .. "notify",
+    string.format("Bot pauses & finds\tgoal found / wimpy pause / out of rooms\t%s\tcs notify %s",
+      notify_on and "on" or "off", notify_on and "off" or "on"))
+end
+
+local function pnotify(s) if notify_on then scrye.notify(s) end end
+
 local function parse_goals()
   goals = {}
   for w in goal:lower():gmatch("[%w_]+") do goals[#goals + 1] = w end
@@ -461,6 +474,7 @@ local function cs_on_room(short)
     paused = true
     note("WIMPY! Moved during combat - bot PAUSED. Walk back to the fight room,")
     note("then 'cs pause' to continue (or 'cs set x y z' if unsure where you are).")
+    pnotify("Chaos sea: WIMPY - bot paused mid-fight")
     cs_draw()
     return
   end
@@ -481,6 +495,7 @@ local function cs_reach_goal(gw)
   pending_mob = nil
   room_goal_idx = nil; room_goal_word = nil   -- handled; don't re-pause on unpause
   note(string.upper(gw) .. " found - bot PAUSED ('cs pause' / Pause button to continue).")
+  pnotify("Chaos sea: " .. string.upper(gw) .. " found - bot paused")
   cs_draw()
 end
 
@@ -764,8 +779,10 @@ cs_step = function()
     if #stash > 0 then
       note(string.format("%d unexplored exits but no path and no exit to blind-step from [%d %d %d] - stopping",
         #stash, pos.x, pos.y, pos.z))
+      pnotify("Chaos sea: stuck - unexplored exits but no path (bot stopped)")
     else
       note("Out of rooms!")
+      pnotify("Chaos sea: out of rooms - sea fully explored (bot stopped)")
     end
     auto = false
     blind_steps = 0
@@ -1034,6 +1051,13 @@ function cs_interface(args)
     note("  cs seanum <n>         set the sea number (1-120) for New Sea")
     note("  cs party <names>      group members to ignore (comma separated; 'clear' to reset)")
     note("  cs pause              hold everything / continue (also the Pause button)")
+    note("  cs notify on|off      buzz the phone when the bot pauses or runs out (now: "
+      .. (notify_on and "on" or "off") .. ")")
+  elseif args == "notify on" or args == "notify off" then
+    notify_on = (args == "notify on")
+    scrye.store.set("notify", notify_on and "1" or "0")
+    note("phone notify: " .. (notify_on and "on" or "off"))
+    publish_notify_state()
   elseif args == "enable" then
     enabled = true
     goal_found = false
@@ -1198,6 +1222,8 @@ scrye.onIdle(function()
   if auto then
     auto = false
     note("idle guard fired - auto off. 'cs auto on' when you are back.")
+    -- the one notify aimed squarely at the phone: the guard firing MEANS you are away
+    pnotify("Chaos sea: idle guard stopped the bot")
     cs_draw()
   end
 end)
@@ -1205,3 +1231,4 @@ end)
 -- ---------- startup (was OnPluginInstall) ----------
 load_state()
 cs_draw()
+publish_notify_state()

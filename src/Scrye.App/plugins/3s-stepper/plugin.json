@@ -26,6 +26,7 @@
     "state.write",
     "storage.private",
     "ui.panels",
-    "sound.play"
+    "sound.play",
+    "notifications.show"
   ]
 }

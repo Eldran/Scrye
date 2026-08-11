@@ -16,6 +16,7 @@
     "commands.send",
     "state.read",
     "state.write",
+    "notifications.show",
     "storage.private",
     "timers.manage",
     "aliases.manage",

@@ -118,6 +118,38 @@ do
   if s == "0" then sound_on = false end
 end
 
+-- ---------------- companion notify report -----------------------------------
+-- The plugin.<id>.notify convention: the Companion panel renders these rows with live
+-- toggles, so "what will buzz my phone" is a UI instead of a memorised command. Format
+-- per row: label \t detail \t on|off \t toggle-command. A state that is not literally
+-- on/off makes the row informational (no button), which is what the channel and watch
+-- lists want — they are collections, not switches.
+local function publish_notify_state()
+  local rows = {}
+  rows[#rows + 1] = string.format("Tells\tsomeone addresses you directly\t%s\t%s",
+    notify_tells and "on" or "off",
+    "chat notify tells " .. (notify_tells and "off" or "on"))
+  rows[#rows + 1] = string.format("Sound\tthe PC beep - the phone buzz is unaffected\t%s\t%s",
+    sound_on and "on" or "off",
+    "chat sound " .. (sound_on and "off" or "on"))
+
+  local chans = {}
+  for c in pairs(notify_chans) do chans[#chans + 1] = c end
+  table.sort(chans)
+  rows[#rows + 1] = string.format("Channels\t%s\t%s\t",
+    #chans > 0 and table.concat(chans, ", ") or "none - add with: chat notify <channel>",
+    #chans > 0 and (#chans .. " notifying") or "-")
+
+  local w = {}
+  for n in pairs(watches) do w[#w + 1] = n end
+  table.sort(w)
+  rows[#rows + 1] = string.format("Watched names\t%s\t%s\t",
+    #w > 0 and table.concat(w, ", ") or "nobody - add with: chat watch <name>",
+    #w > 0 and (#w .. " watched") or "-")
+
+  scrye.setState("plugin.3s-chat.notify", table.concat(rows, "\n"))
+end
+
 -- A tell is the case notifications exist for: someone addressed you personally.
 -- The MIP feed names the channel "Tell"; be lenient about exact spelling.
 local function is_tell(chan)
@@ -262,6 +294,7 @@ end
 local function chat_watch(name, on)
   if on then watches[name] = true else watches[name] = nil end
   note_watching(save_watches())
+  publish_notify_state()
 end
 
 scrye.addAlias{
@@ -315,6 +348,7 @@ scrye.addAlias{
     notify_tells = (state:lower() == "on")
     scrye.store.set("notify_tells", notify_tells and "1" or "0")
     note_notifying()
+    publish_notify_state()
   end,
 }
 
@@ -331,6 +365,7 @@ scrye.addAlias{
     sound_on = (state:lower() == "on")
     scrye.store.set("sound", sound_on and "1" or "0")
     note_notifying()
+    publish_notify_state()
   end,
 }
 
@@ -340,6 +375,7 @@ scrye.addAlias{
     notify_chans[chan:lower()] = true
     save_notify_chans()
     note_notifying()
+    publish_notify_state()
   end,
 }
 
@@ -349,6 +385,7 @@ scrye.addAlias{
     notify_chans[chan:lower()] = nil
     save_notify_chans()
     note_notifying()
+    publish_notify_state()
   end,
 }
 
@@ -377,3 +414,6 @@ for _, c in ipairs(WINDOW_CMDS) do
   local msg = c[2]
   scrye.addAlias{ pattern = c[1], regex = true, run = function() scrye.print(msg) end }
 end
+
+-- seed the Companion panel's report with whatever the store restored
+publish_notify_state()

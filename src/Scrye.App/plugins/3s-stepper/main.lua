@@ -56,6 +56,19 @@ local function col(c, s) return "@{" .. c .. "}" .. esc(s) .. "@{}" end
 local function note(s)  scrye.print("[bot] " .. s) end
 local function dnote(s) scrye.print("[bot] " .. s) end
 
+-- ---------- phone notifications (plugin.<id>.notify convention) ----------
+-- Default ON: the two moments below already ding the PC speaker because the route is
+-- DONE and the bot is waiting on you — the phone deserves the same courtesy.
+local notify_on = scrye.store.get("notify") ~= "0"
+
+local function publish_notify_state()
+  scrye.setState(P .. "notify",
+    string.format("Route done / waiting\tend of path and arrived-home pauses\t%s\t.set notify %s",
+      notify_on and "on" or "off", notify_on and "off" or "on"))
+end
+
+local function pnotify(s) if notify_on then scrye.notify(s) end end
+
 local dbg_on = false
 local function dbg(s) if dbg_on then scrye.print("[bot dbg] " .. s) end end
 
@@ -297,6 +310,7 @@ local function end_of_path()
   else
     note("end of path - stopping" .. (bot.nohome and "" or ", heading home"))
     scrye.sound("beep")   -- the original's ding.wav: the route is done, you're wanted
+    pnotify("Stepper: end of path - route done" .. (bot.nohome and "" or ", heading home"))
     bot_kill()
     if not bot.nohome then scrye.send("go home") end
   end
@@ -339,6 +353,7 @@ local function bot_advance_return()
     bot.user_paused = true
     note("arrived at start - paused ('..' or Resume to run again)")
     scrye.sound("beep")   -- waiting on you
+    pnotify("Stepper: arrived at start - paused, waiting on you")
     draw()
   end
 end
@@ -751,7 +766,13 @@ scrye.addAlias{ pattern = [[^\.set (\w+) (on|off)$]], regex = true, run = functi
   if     opt == "hardmode"   then bot.hardmode = on
   elseif opt == "autoresume" then bot.autoresume = on
   elseif opt == "loop"       then bot.loop = on
-  else note("unknown option '" .. opt .. "' (autoresume hardmode loop)") return end
+  elseif opt == "notify"     then
+    -- persisted, unlike the per-run flags above: whether your phone buzzes is a
+    -- preference about you, not about this route
+    notify_on = on
+    scrye.store.set("notify", on and "1" or "0")
+    publish_notify_state()
+  else note("unknown option '" .. opt .. "' (autoresume hardmode loop notify)") return end
   note(opt .. ": " .. val)
   draw()
 end }
@@ -839,6 +860,11 @@ scrye.onIdle(function()
   if rec then return end
   if bot.active and not bot.paused_on_mob then
     scrye.print("[bot] idle guard fired - stopping. '.resume' when you are back.")
+    -- the guard firing means you are away, which is exactly what the phone is for
+    pnotify("Stepper: idle guard stopped the bot")
     bot_stop()
   end
 end)
+
+-- seed the Companion panel's report
+publish_notify_state()

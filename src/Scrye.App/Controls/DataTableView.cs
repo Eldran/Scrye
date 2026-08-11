@@ -81,6 +81,21 @@ public class DataTableView : Control
 
     private IImmutableBrush DimBrush => new ImmutableSolidColorBrush(Services.ThemeService.Current.TextDim);
 
+    // A widget with a CUSTOM colour repaints when ReTheme swaps its Foreground binding; a
+    // theme-following one (Foreground null → BodyBrush/DimBrush above) has no property change
+    // to ride, so a scheme switch must invalidate it explicitly — same pattern as OutputView.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        Services.ThemeService.Changed += InvalidateVisual;
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        Services.ThemeService.Changed -= InvalidateVisual;
+        base.OnDetachedFromVisualTree(e);
+    }
+
     private string Sep => string.IsNullOrEmpty(Separator) ? "\t" : Separator;
 
     /// <summary>The parsed grid: one string[] per row. Empty trailing lines are dropped so a

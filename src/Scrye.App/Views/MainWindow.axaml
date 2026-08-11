@@ -606,6 +606,62 @@
                                                     </StackPanel>
                                                 </Border>
 
+                                                <!-- plugin-reported notification sources (plugin.<id>.notify convention):
+                                                     each on/off row IS the switch — the button runs the plugin's own
+                                                     toggle alias through the input pipeline and re-reads the state. -->
+                                                <Border Background="{DynamicResource ScryePanelAlt}" CornerRadius="4" Padding="8"
+                                                        IsVisible="{Binding CompanionPanel.HasPluginSources}">
+                                                    <StackPanel Spacing="5">
+                                                        <TextBlock Text="PLUGIN SOURCES" FontSize="10" FontWeight="SemiBold"
+                                                                   Foreground="{DynamicResource ScryeAccent}" />
+                                                        <ItemsControl ItemsSource="{Binding CompanionPanel.PluginSources}">
+                                                            <ItemsControl.ItemTemplate>
+                                                                <DataTemplate x:DataType="vm:PluginNotifyGroup">
+                                                                    <StackPanel Margin="0,0,0,4">
+                                                                        <TextBlock Text="{Binding PluginId}" FontSize="9" FontWeight="SemiBold"
+                                                                                   Foreground="{DynamicResource ScryeTextDim}" Margin="0,2,0,1" />
+                                                                        <ItemsControl ItemsSource="{Binding Rows}">
+                                                                            <ItemsControl.ItemTemplate>
+                                                                                <DataTemplate x:DataType="vm:PluginNotifyRow">
+                                                                                    <DockPanel Margin="0,1,0,0">
+                                                                                        <Button DockPanel.Dock="Right" Content="on"
+                                                                                                Command="{Binding Toggle}"
+                                                                                                IsVisible="{Binding IsOn}"
+                                                                                                Foreground="{DynamicResource ScryeSuccess}"
+                                                                                                FontSize="9" Padding="8,1" MinWidth="34"
+                                                                                                HorizontalContentAlignment="Center"
+                                                                                                VerticalAlignment="Center" Margin="4,0,0,0"
+                                                                                                ToolTip.Tip="Tap to turn off" />
+                                                                                        <Button DockPanel.Dock="Right" Content="off"
+                                                                                                Command="{Binding Toggle}"
+                                                                                                IsVisible="{Binding IsOff}"
+                                                                                                Foreground="{DynamicResource ScryeTextDim}"
+                                                                                                FontSize="9" Padding="8,1" MinWidth="34"
+                                                                                                HorizontalContentAlignment="Center"
+                                                                                                VerticalAlignment="Center" Margin="4,0,0,0"
+                                                                                                ToolTip.Tip="Tap to turn on" />
+                                                                                        <TextBlock DockPanel.Dock="Right" Text="{Binding State}" FontSize="9"
+                                                                                                   Foreground="{DynamicResource ScryeTextDim}"
+                                                                                                   IsVisible="{Binding !CanToggle}"
+                                                                                                   VerticalAlignment="Center" Margin="4,0,0,0" />
+                                                                                        <StackPanel>
+                                                                                            <TextBlock Text="{Binding Label}" FontSize="10"
+                                                                                                       Foreground="{DynamicResource ScryeText}" />
+                                                                                            <TextBlock Text="{Binding Detail}" FontSize="9" TextWrapping="Wrap"
+                                                                                                       Foreground="{DynamicResource ScryeTextDim}"
+                                                                                                       IsVisible="{Binding HasDetail}" />
+                                                                                        </StackPanel>
+                                                                                    </DockPanel>
+                                                                                </DataTemplate>
+                                                                            </ItemsControl.ItemTemplate>
+                                                                        </ItemsControl>
+                                                                    </StackPanel>
+                                                                </DataTemplate>
+                                                            </ItemsControl.ItemTemplate>
+                                                        </ItemsControl>
+                                                    </StackPanel>
+                                                </Border>
+
                                             </StackPanel>
                                         </ScrollViewer>
                                     </DockPanel>

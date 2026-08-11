@@ -102,9 +102,21 @@ public class TerminalPane : Grid
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden,
             Content = _tail,
         };
-        // the tail is a live feed, not a second scroll surface — swallow wheel input
+        // The tail is a live feed, not a second scroll surface — but its wheel input is
+        // FORWARDED to the history, not swallowed. In a short pane (a bottom-docked chat
+        // tab) the split appears directly under the cursor, so swallowing here dead-ended
+        // scrollback after the first notch: you could scroll two lines and then every
+        // further wheel event landed on the tail and vanished. Forwarding also makes
+        // wheel-down over the tail walk the history back to the bottom, where following
+        // resumes and the split folds away — symmetric and unsurprising.
         _tailScroll.AddHandler(PointerWheelChangedEvent,
-            (object? _, PointerWheelEventArgs e) => e.Handled = true,
+            (object? _, PointerWheelEventArgs e) =>
+            {
+                e.Handled = true;
+                double lineH = Math.Ceiling(FontSize * 1.4);
+                _historyScroll.Offset = new Vector(_historyScroll.Offset.X,
+                    Math.Max(0, _historyScroll.Offset.Y - e.Delta.Y * lineH * 3));
+            },
             RoutingStrategies.Tunnel);
         _tailBorder = new Border
         {
@@ -177,12 +189,34 @@ public class TerminalPane : Grid
         }
     }
 
-    private void UpdateTailHeight() =>
-        _tailScroll.Height = Math.Ceiling(FontSize * 1.4) * Math.Max(2, TailLines) + 4;
+    /// <summary>False when the pane is too short for a useful split: the tail would eat
+    /// most of the reading area, so scrollback runs full-height instead (the chip still
+    /// offers the way back down).</summary>
+    private bool _tailUsable = true;
+
+    private void UpdateTailHeight()
+    {
+        double lineH = Math.Ceiling(FontSize * 1.4);
+        int lines = Math.Max(2, TailLines);
+        // Cap the tail at ~40% of the pane so a short bottom-docked chat tab keeps the
+        // majority of its height for reading. Below two usable lines a tail is noise —
+        // drop the split entirely rather than show a two-line letterbox.
+        if (Bounds.Height > 0)
+            lines = Math.Min(lines, (int)(Bounds.Height * 0.4 / lineH));
+        _tailUsable = lines >= 2;
+        _tailScroll.Height = _tailUsable ? lineH * lines + 4 : 0;
+        UpdateSplit();
+    }
+
+    protected override void OnSizeChanged(SizeChangedEventArgs e)
+    {
+        base.OnSizeChanged(e);
+        UpdateTailHeight();   // the 40% cap moves with the pane (dock resize, window resize)
+    }
 
     private void UpdateSplit()
     {
-        bool split = !_history.IsFollowingTail;
+        bool split = !_history.IsFollowingTail && _tailUsable;
         if (_tailBorder.IsVisible != split)
         {
             _tailBorder.IsVisible = split;
@@ -194,7 +228,10 @@ public class TerminalPane : Grid
         }
 
         int pending = _history.PendingLines;
-        _chip.IsVisible = split;
+        // The chip follows the SCROLL state, not the split: a pane too short for a tail
+        // still needs its way back down (and the new-lines count matters MORE there,
+        // because without a tail nothing else shows what streamed past).
+        _chip.IsVisible = !_history.IsFollowingTail;
         _chip.Content = pending > 0
             ? $"▼ {pending} new line{(pending == 1 ? "" : "s")}"
             : "▼ back to bottom";

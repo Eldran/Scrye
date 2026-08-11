@@ -15,6 +15,22 @@ namespace Scrye.App.ViewModels;
 /// <see cref="StateStore"/>. State fires on the session loop thread, so updates are
 /// marshalled to the UI thread. Watches are disposed with the world.
 /// </summary>
+/// <summary>
+/// Widget view-models whose colours were resolved from the theme at panel-build time
+/// implement this so a scheme change can re-resolve them in place. The alternative —
+/// replaying <see cref="HudViewModel.AddPanel"/> from the retained specs — would re-register
+/// state watches, which is only legal on the session-loop thread, and that thread only runs
+/// while connected. Swapping brushes touches no state at all, so it is safe on the UI thread
+/// where the theme change happens, works on disconnected tabs, and preserves input drafts
+/// and tab selection that a rebuild would reset.
+/// </summary>
+public interface IReThemable
+{
+    /// <summary>Re-resolve this widget's colours against <see cref="Services.ThemeService.Current"/>.
+    /// Called on the UI thread only.</summary>
+    void ReTheme();
+}
+
 public sealed class HudViewModel : IDisposable
 {
     private readonly StateStore _state;
@@ -72,6 +88,22 @@ public sealed class HudViewModel : IDisposable
         _invokeSubmit = invokeSubmit;
         _invokeChoice = invokeChoice;
         _runCommand = runCommand;
+        // Live re-theme: scheme changes re-resolve every token-derived brush in place.
+        Services.ThemeService.Changed += OnThemeChanged;
+    }
+
+    /// <summary>Walk every panel and re-resolve theme-derived colours. Brush swaps only —
+    /// no state watches, no widget churn — so this is UI-thread work (see <see cref="IReThemable"/>).</summary>
+    private void OnThemeChanged()
+    {
+        if (!Dispatcher.UIThread.CheckAccess()) { Dispatcher.UIThread.Post(OnThemeChanged); return; }
+        foreach (HudPanelViewModel panel in Panels)
+        {
+            panel.ReTheme();
+            foreach (object w in panel.Widgets) (w as IReThemable)?.ReTheme();
+            foreach (HudTabViewModel tab in panel.Tabs)
+                foreach (object w in tab.Widgets) (w as IReThemable)?.ReTheme();
+        }
     }
 
     /// <summary>
@@ -154,6 +186,9 @@ public sealed class HudViewModel : IDisposable
             panel.Width = width;
             panel.BackgroundBrush = bgBrush;
             panel.AccentBrush = acBrush;
+            // the original colour specs, kept so a theme change can re-resolve token names
+            panel.BackgroundSpec = spec.Background;
+            panel.AccentSpec = spec.Accent;
 
             // Refill in place rather than swapping the panel object: the HUD surface places a
             // panel when it first appears, and replacing the instance would make it jump back to
@@ -392,6 +427,7 @@ public sealed class HudViewModel : IDisposable
 
     public void Dispose()
     {
+        Services.ThemeService.Changed -= OnThemeChanged;   // static event: detach or leak the world
         foreach (List<IDisposable> subs in _panelSubs.Values)
             foreach (IDisposable s in subs) s.Dispose();
         _panelSubs.Clear();
@@ -470,6 +506,21 @@ public sealed class HudPanelViewModel : ViewModelBase
     }
     public bool HasAccent => AccentBrush is not null;
 
+    /// <summary>The spec's colour strings, kept verbatim so <see cref="ReTheme"/> can
+    /// re-resolve token names ("accent", "panel") against the new scheme. Assigned on the
+    /// UI thread in AddPanel's marshalled block, read on the UI thread here.</summary>
+    public string? BackgroundSpec { get; set; }
+    public string? AccentSpec { get; set; }
+
+    /// <summary>Re-resolve the panel chrome after a scheme change (UI thread). Hex literals
+    /// resolve to the same colour and cost one fresh immutable brush; token names follow
+    /// the new scheme — the whole point.</summary>
+    public void ReTheme()
+    {
+        BackgroundBrush = HudColor.Brush(BackgroundSpec);
+        AccentBrush = HudColor.Brush(AccentSpec);
+    }
+
     /// <summary>Stable key for saved-position lookup across reloads/restarts.</summary>
     public string Key => PluginId + "|" + Title;
 
@@ -508,9 +559,14 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
 /// <summary>Widgets laid out side by side (the "row" container, API 1.8). Children are
 /// ordinary widget view-models rendered by the same DataTemplates as stacked widgets;
 /// each takes its measured width — a chart on the left, its notes on the right.</summary>
-public sealed class RowWidgetViewModel : ViewModelBase
+public sealed class RowWidgetViewModel : ViewModelBase, IReThemable
 {
     public System.Collections.ObjectModel.ObservableCollection<object> Children { get; } = new();
+
+    public void ReTheme()
+    {
+        foreach (object c in Children) (c as IReThemable)?.ReTheme();
+    }
 }
 
 /// <summary>A row of buttons rendered side by side as equal-width columns (a "buttonrow" widget).</summary>
@@ -549,8 +605,9 @@ public sealed class InputWidgetViewModel : ViewModelBase
 /// falls back to the theme default rather than rendering in some arbitrary colour.
 ///
 /// <para>Tokens are looked up in <see cref="Services.ThemeService.Current"/> at the moment the
-/// panel is built. That is a deliberate snapshot, not a binding: see the remarks on
-/// <see cref="Services.ThemeService.Current"/> for why plugin brushes must be immutable.</para>
+/// panel is built — brushes stay immutable for thread safety — and re-resolved in place on
+/// every scheme change via <see cref="IReThemable"/>, so token-coloured panels follow the
+/// theme live while hex literals stay exactly what the plugin asked for.</para>
 /// </summary>
 internal static class HudColor
 {
@@ -610,15 +667,27 @@ internal static class HudColor
 
 /// <summary>A text widget: static text, or a prefix + a live bound value. An optional
 /// "#RRGGBB" colour overrides the theme foreground (see <see cref="HasColor"/>).</summary>
-public sealed class LabelWidgetViewModel : ViewModelBase
+public sealed class LabelWidgetViewModel : ViewModelBase, IReThemable
 {
     public string Prefix { get; set; } = "";
+    private readonly string? _colour;   // the spec string, for re-resolving on theme change
 
     /// <summary>Custom foreground brush, or null to follow the theme.</summary>
-    public Avalonia.Media.IBrush? ColorBrush { get; }
+    private Avalonia.Media.IBrush? _colorBrush;
+    public Avalonia.Media.IBrush? ColorBrush
+    {
+        get => _colorBrush;
+        private set { if (SetField(ref _colorBrush, value)) OnPropertyChanged(nameof(HasColor)); }
+    }
     public bool HasColor => ColorBrush is not null;
 
-    public LabelWidgetViewModel(string? colorHex = null) => ColorBrush = HudColor.Brush(colorHex);
+    public LabelWidgetViewModel(string? colorHex = null)
+    {
+        _colour = colorHex;
+        _colorBrush = HudColor.Brush(colorHex);
+    }
+
+    public void ReTheme() => ColorBrush = HudColor.Brush(_colour);
 
     private string _text = "";
     public string Text { get => _text; set => SetField(ref _text, value); }
@@ -629,7 +698,7 @@ public sealed class LabelWidgetViewModel : ViewModelBase
 
 /// <summary>A labelled gauge: current/max readout inside the bar, fill colour shifting
 /// with the percentage (cyan healthy → amber warning → red critical).</summary>
-public sealed class GaugeWidgetViewModel : ViewModelBase
+public sealed class GaugeWidgetViewModel : ViewModelBase, IReThemable
 {
     // immutable (thread-safe) — built off the UI thread during plugin load
     private static readonly Avalonia.Media.IBrush Healthy =
@@ -640,19 +709,30 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
         new Avalonia.Media.Immutable.ImmutableSolidColorBrush(Avalonia.Media.Color.FromRgb(0xE0, 0x50, 0x50));
 
     public string Label { get; }
-    private readonly Avalonia.Media.IBrush? _custom;   // plugin-chosen bar colour (overrides the gradient)
+    private readonly string? _colour;                   // the spec string, for re-resolving on theme change
+    private Avalonia.Media.IBrush? _custom;             // plugin-chosen bar colour (overrides the gradient)
     private readonly bool _dim;                         // dim mode: bar darkens as the value drops
-    private readonly Avalonia.Media.Color _base;        // base hue for dim mode
+    private Avalonia.Media.Color _base;                 // base hue for dim mode
 
     public GaugeWidgetViewModel(string label, string? colorHex = null, bool dim = false)
     {
         Label = label;
+        _colour = colorHex;
         _dim = dim;
         _base = ParseColor(colorHex) ?? Avalonia.Media.Color.FromRgb(0x46, 0xB4, 0x5A);  // default green
         _custom = dim ? null : HudColor.Brush(colorHex);   // fixed colour only when not dimming
     }
 
     private static Avalonia.Media.Color? ParseColor(string? colour) => HudColor.Resolve(colour);
+
+    /// <summary>Only matters when the gauge's colour is a theme token ("success"); the
+    /// built-in ratio ramp is deliberately scheme-independent and stays put.</summary>
+    public void ReTheme()
+    {
+        _base = ParseColor(_colour) ?? Avalonia.Media.Color.FromRgb(0x46, 0xB4, 0x5A);
+        _custom = _dim ? null : HudColor.Brush(_colour);
+        OnPropertyChanged(nameof(BarBrush));
+    }
 
     private double _value;
     public double Value
@@ -693,9 +773,16 @@ public sealed class GaugeWidgetViewModel : ViewModelBase
 
 /// <summary>A multi-line monospace text block bound to a state path (plugins compose
 /// whole report sections into one path). Optional "#RRGGBB" foreground override.</summary>
-public sealed class TextWidgetViewModel : ViewModelBase
+public sealed class TextWidgetViewModel : ViewModelBase, IReThemable
 {
-    public Avalonia.Media.IBrush Foreground { get; }
+    private readonly string? _colour;
+
+    private Avalonia.Media.IBrush _foreground;
+    public Avalonia.Media.IBrush Foreground
+    {
+        get => _foreground;
+        private set => SetField(ref _foreground, value);
+    }
 
     /// <summary>Set when the host can run a command — bound to StyledTextView.LinkCommand so
     /// <c>click=</c> runs in the text become clickable. Null leaves the text inert.</summary>
@@ -703,11 +790,20 @@ public sealed class TextWidgetViewModel : ViewModelBase
 
     public TextWidgetViewModel(string? colour)
     {
-        // Falls back to the scheme's body text rather than a hard-coded light grey, so a plugin
-        // that sets no colour reads correctly in the Light scheme too.
-        Avalonia.Media.Color c = HudColor.Resolve(colour) ?? Services.ThemeService.Current.Text;
-        Foreground = new Avalonia.Media.Immutable.ImmutableSolidColorBrush(c);   // immutable: built off the UI thread
+        _colour = colour;
+        _foreground = Resolve(colour);
     }
+
+    // Falls back to the scheme's body text rather than a hard-coded light grey, so a plugin
+    // that sets no colour reads correctly in the Light scheme too.
+    private static Avalonia.Media.IBrush Resolve(string? colour) =>
+        new Avalonia.Media.Immutable.ImmutableSolidColorBrush(   // immutable: built off the UI thread
+            HudColor.Resolve(colour) ?? Services.ThemeService.Current.Text);
+
+    /// <summary>Always assigns a FRESH brush instance, even when the colour is an unchanged
+    /// hex literal: StyledTextView drops its parse cache on any Foreground change, and the
+    /// re-parse is what re-resolves the markup's own theme tokens against the new scheme.</summary>
+    public void ReTheme() => Foreground = Resolve(_colour);
 
     private string _text = "";
     public string Text { get => _text; set => SetField(ref _text, value); }
@@ -730,9 +826,16 @@ public sealed class BarListWidgetViewModel : ViewModelBase
 /// rather than the panel spec — which is the point. The widget <i>set</i> is still fixed at
 /// build time; what varies is the content of this one widget.</para>
 /// </summary>
-public sealed class TableWidgetViewModel : ViewModelBase
+public sealed class TableWidgetViewModel : ViewModelBase, IReThemable
 {
-    public Avalonia.Media.IBrush? ColorBrush { get; }
+    private readonly string? _colour;
+
+    private Avalonia.Media.IBrush? _colorBrush;
+    public Avalonia.Media.IBrush? ColorBrush
+    {
+        get => _colorBrush;
+        private set => SetField(ref _colorBrush, value);
+    }
     public string Separator { get; }
     public string[]? Columns { get; }
     public string? Align { get; }
@@ -741,12 +844,15 @@ public sealed class TableWidgetViewModel : ViewModelBase
     public TableWidgetViewModel(string? colour, string? separator, string[]? columns,
                                 string? align, bool dimTrailing)
     {
-        ColorBrush = HudColor.Brush(colour);
+        _colour = colour;
+        _colorBrush = HudColor.Brush(colour);
         Separator = string.IsNullOrEmpty(separator) ? "\t" : separator;
         Columns = columns is { Length: > 0 } ? columns : null;
         Align = align;
         DimTrailing = dimTrailing;
     }
+
+    public void ReTheme() => ColorBrush = HudColor.Brush(_colour);
 
     private string _rows = "";
     public string Rows { get => _rows; set => SetField(ref _rows, value); }
@@ -754,9 +860,16 @@ public sealed class TableWidgetViewModel : ViewModelBase
 
 /// <summary>A grid of coloured cells: newline-separated rows of characters, coloured
 /// via the palette (char → colour). Rendered by <c>Controls.ColorGridView</c>.</summary>
-public sealed class ColorGridWidgetViewModel : ViewModelBase
+public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
 {
-    public Dictionary<char, Avalonia.Media.Color> Palette { get; }
+    private readonly IReadOnlyDictionary<string, string>? _paletteSpec;   // original strings, for re-theme
+
+    private Dictionary<char, Avalonia.Media.Color> _palette = new();
+    public Dictionary<char, Avalonia.Media.Color> Palette
+    {
+        get => _palette;
+        private set => SetField(ref _palette, value);
+    }
 
     /// <summary>Set when the colorgrid is clickable — bound to ColorGridView.CellCommand.</summary>
     public System.Windows.Input.ICommand? CellCommand { get; set; }
@@ -784,11 +897,8 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
         bool weave = false, IReadOnlyDictionary<string, string>? icons = null, double cell = 0)
     {
         MaxCell = cell > 0 ? System.Math.Clamp(cell, 3, 64) : 12;
-        Palette = new Dictionary<char, Avalonia.Media.Color>();
-        if (palette is not null)
-            foreach ((string key, string val) in palette)
-                if (key.Length >= 1 && HudColor.Resolve(val) is { } c)
-                    Palette[key[0]] = c;
+        _paletteSpec = palette;
+        _palette = ResolvePalette(palette);
         LabelChars = labels ?? "";
         Weave = weave;
         if (icons is not null && icons.Count > 0)
@@ -802,21 +912,47 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
 
     private string _gridText = "";
     public string GridText { get => _gridText; set => SetField(ref _gridText, value); }
+
+    private static Dictionary<char, Avalonia.Media.Color> ResolvePalette(
+        IReadOnlyDictionary<string, string>? palette)
+    {
+        var resolved = new Dictionary<char, Avalonia.Media.Color>();
+        if (palette is not null)
+            foreach ((string key, string val) in palette)
+                if (key.Length >= 1 && HudColor.Resolve(val) is { } c)
+                    resolved[key[0]] = c;
+        return resolved;
+    }
+
+    /// <summary>A NEW dictionary instance on purpose: ColorGridView clears its brush, pen,
+    /// label and icon-ink caches on a PaletteProperty swap, which is exactly the reset a
+    /// scheme change needs.</summary>
+    public void ReTheme() => Palette = ResolvePalette(_paletteSpec);
 }
 
 /// <summary>A progress bar widget bound to a current value and a maximum. An optional
 /// "#RRGGBB" colour overrides the theme accent for the bar fill.</summary>
-public sealed class ProgressWidgetViewModel : ViewModelBase
+public sealed class ProgressWidgetViewModel : ViewModelBase, IReThemable
 {
     public string Label { get; }
-    public Avalonia.Media.IBrush? ColorBrush { get; }
+    private readonly string? _colour;
+
+    private Avalonia.Media.IBrush? _colorBrush;
+    public Avalonia.Media.IBrush? ColorBrush
+    {
+        get => _colorBrush;
+        private set { if (SetField(ref _colorBrush, value)) OnPropertyChanged(nameof(HasColor)); }
+    }
     public bool HasColor => ColorBrush is not null;
 
     public ProgressWidgetViewModel(string label, string? colorHex = null)
     {
         Label = label;
-        ColorBrush = HudColor.Brush(colorHex);
+        _colour = colorHex;
+        _colorBrush = HudColor.Brush(colorHex);
     }
+
+    public void ReTheme() => ColorBrush = HudColor.Brush(_colour);
 
     private double _value;
     public double Value

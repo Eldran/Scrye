@@ -93,11 +93,11 @@ public static class ThemeService
     /// The scheme currently applied. Read by the HUD when it resolves a plugin's semantic colour
     /// tokens (see <c>ThemeToken</c>) into concrete brushes.
     ///
-    /// <para>Plugin widget brushes are immutable and resolved once, at panel-build time, because
-    /// panels are built on the session loop thread and Avalonia 12 faults if the compositor
-    /// touches a mutable brush created elsewhere. So this is a snapshot, not a binding: switching
-    /// scheme re-colours the app immediately but re-colours plugin panels on the next plugin
-    /// reload or reconnect.</para>
+    /// <para>Plugin widget brushes are immutable because panels are built on the session loop
+    /// thread and Avalonia 12 faults if the compositor touches a mutable brush created elsewhere.
+    /// Immutable does not mean stale: each world's HUD listens to <see cref="Changed"/> and swaps
+    /// in freshly-resolved brushes on the UI thread (<c>HudViewModel.OnThemeChanged</c>), so a
+    /// scheme change re-colours plugin panels immediately — no reload needed.</para>
     /// </summary>
     public static ThemeScheme Current { get; private set; } = Schemes[0];
 

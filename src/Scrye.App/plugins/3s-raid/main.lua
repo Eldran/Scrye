@@ -70,6 +70,25 @@ local ar = {
 local clock = 0
 scrye.every(1, function() clock = clock + 1 end)
 
+-- ---------- phone notifications (plugin.<id>.notify convention) ----------
+-- Two sources, both default OFF (raiding is routine; the phone is for exceptions):
+--   fleet  - ships came back to dock (useful un-armed too: a manual voyage returned)
+--   send   - every auto-dispatch (convoy/raid sent), for watching the bot from afar
+local nf = {
+  fleet = scrye.store.get("notify_fleet") == "1",
+  send  = scrye.store.get("notify_send") == "1",
+}
+local last_docked = nil   -- previous docked count; nil = no baseline yet
+
+local function publish_notify_state()
+  scrye.setState(SP .. "notify", table.concat({
+    string.format("Fleet returns\tships arriving back in dock\t%s\taraid notify fleet %s",
+      nf.fleet and "on" or "off", nf.fleet and "off" or "on"),
+    string.format("Dispatches\teach convoy/raid the bot sends\t%s\taraid notify send %s",
+      nf.send and "on" or "off", nf.send and "off" or "on"),
+  }, "\n"))
+end
+
 local connected = true
 scrye.onConnect(function() connected = true end)
 scrye.onDisconnect(function() connected = false end)
@@ -149,6 +168,15 @@ local function publish()
     scrye.setState(SP .. "armed",  ar.on and "ON" or "OFF")
     scrye.setState(SP .. "target", tgt)
     scrye.setState(SP .. "docked", string.format("%d / %d", #avail, maxs))
+
+    -- fleet-return notify: an INCREASE in docked ships means something came home.
+    -- The first pass only takes a baseline, so loading with a full dock stays quiet.
+    if last_docked ~= nil and #avail > last_docked and nf.fleet then
+      local back = #avail - last_docked
+      scrye.notify(string.format("%d ship%s back in dock (%d/%d available)",
+        back, back == 1 and "" or "s", #avail, maxs))
+    end
+    last_docked = #avail
     scrye.setState(SP .. "status", string.format(
       "convoy %s - ships %s - keep %d - hold %ds - reserve %s",
       ar.convoy and "on" or "off", tostring(ar.ships), ar.keep,
@@ -249,11 +277,15 @@ local function auto_raid_tick()
   -- When the reserved ship is docked, dispatch by name from the pool instead.
   if ar.convoy and want >= 2 and not reserved_docked then
     scrye.send(string.format("vlongship convoy %d %s", want, raid_town(target)))
-    note(string.format("convoy of %d -> %s%s", want, target, ar.auto_target and " (lowest heat)" or ""))
+    local msg = string.format("convoy of %d -> %s%s", want, target, ar.auto_target and " (lowest heat)" or "")
+    note(msg)
+    if nf.send then scrye.notify(msg) end
   else
     for i = 1, want do scrye.send(string.format("vlongship raid %s %s", pool[i], raid_town(target))) end
-    note(string.format("%d ship%s -> %s%s", want, want == 1 and "" or "s", target,
-      ar.auto_target and " (lowest heat)" or ""))
+    local msg = string.format("%d ship%s -> %s%s", want, want == 1 and "" or "s", target,
+      ar.auto_target and " (lowest heat)" or "")
+    note(msg)
+    if nf.send then scrye.notify(msg) end
   end
 end
 
@@ -296,6 +328,22 @@ local function ar_config(rest)
   end
   -- NB: the armed flag is deliberately NOT persisted -- the plugin always loads
   -- disarmed (see `ar.on` above), so writing it to the store would be a dead write.
+  local nk, nv = low:match("^notify%s+(%w+)%s+(%w+)$")
+  if nk then
+    if nf[nk] == nil or (nv ~= "on" and nv ~= "off") then
+      note("usage: araid notify fleet|send on|off") return
+    end
+    nf[nk] = (nv == "on")
+    scrye.store.set("notify_" .. nk, nf[nk] and "1" or "0")
+    note("phone notify '" .. nk .. "': " .. nv)
+    publish_notify_state()
+    return
+  end
+  if low == "notify" then
+    note(string.format("phone notify: fleet %s, send %s (araid notify fleet|send on|off)",
+      nf.fleet and "on" or "off", nf.send and "on" or "off"))
+    return
+  end
   if low == "on" then ar.on = true
   elseif low == "off" then ar.on = false
   elseif low == "convoy on" then ar.convoy = true; scrye.store.set("convoy", "1")
@@ -318,7 +366,7 @@ local function ar_config(rest)
       if ship:lower() == "none" or ship:lower() == "off" then ship = "" end
       ar.reserve = ship; scrye.store.set("reserve", ship)
     elseif low ~= "" then
-      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat")
+      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat | notify")
       return
     end
   end
@@ -381,4 +429,5 @@ scrye.watch("vik.buildings", function() publish() end)
 -- ---------- load ----------
 
 publish()
+publish_notify_state()
 note("loaded - OFF (armed state is never persisted; 'araid on' to arm, 'araid' for status).")

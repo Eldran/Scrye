@@ -611,7 +611,29 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             () => CompanionControl,
             () => SessionId,
             () => _session.Automation.NotifyingTriggers,
-            CopyToClipboard);
+            CopyToClipboard,
+            // Collect plugin.<id>.notify rows ON the session loop (the state store is
+            // single-threaded there) and deliver back on the UI thread.
+            deliver => _session.Post(() =>
+            {
+                var found = new System.Collections.Generic.List<(string, string)>();
+                foreach (var kv in _session.GameState.Snapshot())
+                {
+                    const string prefix = "plugin.";
+                    const string suffix = ".notify";
+                    if (!kv.Key.StartsWith(prefix, StringComparison.Ordinal) ||
+                        !kv.Key.EndsWith(suffix, StringComparison.Ordinal)) continue;
+                    string id = kv.Key[prefix.Length..^suffix.Length];
+                    // exactly plugin.<id>.notify — a nested path like plugin.x.notify.y is
+                    // that plugin's own business, not a sources blob
+                    if (id.Length == 0 || id.Contains('.')) continue;
+                    if (kv.Value.Text.Length > 0) found.Add((id, kv.Value.Text));
+                }
+                Dispatcher.UIThread.Post(() => deliver(found));
+            }),
+            // Toggle commands run the way typing them would (plugin aliases first). This is
+            // panel-authored text from a local plugin, not MUD-authored, so the echo is honest.
+            cmd => HandleCommandLink(cmd, prompt: false));
         // Plugins process each server line (onLine gag/rewrite + triggers) and user input
         // (aliases) via the session's filter hooks — so gagging actually suppresses display.
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook

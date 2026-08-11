@@ -20,6 +20,27 @@ public sealed record NotifySourceRow(string Name, string Pattern, string Group, 
     public string StateLabel => Enabled ? "" : "disabled";
 }
 
+/// <summary>One notification source a plugin reported via the <c>plugin.&lt;id&gt;.notify</c>
+/// state convention (see the guide): newline-joined rows of
+/// <c>label \t detail \t on|off \t toggleCommand</c>. The toggle command runs through the
+/// normal input pipeline, so the plugin's own alias handles it — the panel never needs to
+/// know what the command means.</summary>
+public sealed record PluginNotifyRow(string Label, string Detail, string State, RelayCommand? Toggle)
+{
+    /// <summary>Rows whose state isn't literally on/off (e.g. "watching: Goran") are
+    /// informational; they render without a toggle even if a command was supplied.</summary>
+    public bool CanToggle => Toggle is not null;
+
+    // The view shows one of three affordances; these partition cleanly because Toggle is
+    // only non-null when State is literally on/off.
+    public bool IsOn => CanToggle && string.Equals(State, "on", StringComparison.OrdinalIgnoreCase);
+    public bool IsOff => CanToggle && !IsOn;
+    public bool HasDetail => !string.IsNullOrEmpty(Detail);
+}
+
+/// <summary>A plugin's reported notification sources, grouped under its id.</summary>
+public sealed record PluginNotifyGroup(string PluginId, IReadOnlyList<PluginNotifyRow> Rows);
+
 /// <summary>
 /// Backs the companion panel: start/stop the phone server, show how to reach it, and list
 /// what can raise a notification.
@@ -39,8 +60,14 @@ public sealed class CompanionViewModel : ViewModelBase
     private readonly Func<string> _sessionId;
     private readonly Func<IReadOnlyList<(TriggerDef Def, bool Enabled)>> _notifyingTriggers;
     private readonly Action<string> _copy;
+    private readonly Action<Action<IReadOnlyList<(string PluginId, string Rows)>>>? _collectPluginSources;
+    private readonly Action<string>? _runCommand;
 
     public ObservableCollection<NotifySourceRow> NotifySources { get; } = new();
+
+    /// <summary>What each plugin says it will notify about, with tap-to-toggle rows.
+    /// Rebuilt wholesale on refresh, so no row mutability is needed.</summary>
+    public ObservableCollection<PluginNotifyGroup> PluginSources { get; } = new();
 
     public RelayCommand StartCommand { get; }
     public RelayCommand StopCommand { get; }
@@ -54,12 +81,19 @@ public sealed class CompanionViewModel : ViewModelBase
     public CompanionViewModel(Func<CompanionController?> controller,
                               Func<string> sessionId,
                               Func<IReadOnlyList<(TriggerDef, bool)>> notifyingTriggers,
-                              Action<string> copyToClipboard)
+                              Action<string> copyToClipboard,
+                              Action<Action<IReadOnlyList<(string PluginId, string Rows)>>>? collectPluginSources = null,
+                              Action<string>? runCommand = null)
     {
         _controller = controller;
         _sessionId = sessionId;
         _notifyingTriggers = notifyingTriggers;
         _copy = copyToClipboard;
+        // Both are session-loop couriers: collect posts a state snapshot back to the UI
+        // thread; runCommand submits through the input pipeline so plugin aliases fire.
+        // The session mailbox is FIFO, which is what makes toggle-then-recollect race-free.
+        _collectPluginSources = collectPluginSources;
+        _runCommand = runCommand;
 
         StartCommand = new RelayCommand(() => _ = StartAsync());
         StopCommand = new RelayCommand(() => _ = StopAsync());
@@ -232,8 +266,52 @@ public sealed class CompanionViewModel : ViewModelBase
         PushDevices = c?.PushSubscriberCount ?? 0;
 
         RefreshNotifySources();
+        RefreshPluginSources();
         _ = RefreshTailscaleAsync();
     }
+
+    /// <summary>Ask the session loop for every <c>plugin.*.notify</c> value; the reply lands
+    /// back on the UI thread via <see cref="ApplyPluginSources"/>.</summary>
+    private void RefreshPluginSources() => _collectPluginSources?.Invoke(ApplyPluginSources);
+
+    private void ApplyPluginSources(IReadOnlyList<(string PluginId, string Rows)> found)
+    {
+        PluginSources.Clear();
+        foreach ((string pluginId, string rows) in found)
+        {
+            var parsed = new List<PluginNotifyRow>();
+            foreach (string raw in rows.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                string[] f = raw.Split('\t');
+                string label = f[0].Trim();
+                string detail = f.Length > 1 ? f[1].Trim() : "";
+                string state = f.Length > 2 ? f[2].Trim() : "";
+                string command = f.Length > 3 ? f[3].Trim() : "";
+
+                // Only a literal on/off with a command is a switch; anything else is
+                // information. An unknown state with a command would be a mystery button.
+                bool toggleable = command.Length > 0
+                    && (state.Equals("on", StringComparison.OrdinalIgnoreCase)
+                        || state.Equals("off", StringComparison.OrdinalIgnoreCase));
+                RelayCommand? toggle = toggleable
+                    ? new RelayCommand(() =>
+                    {
+                        _runCommand?.Invoke(command);
+                        // FIFO mailbox: this collect is queued after the command, so the
+                        // snapshot it takes already reflects the plugin's alias having run.
+                        RefreshPluginSources();
+                    })
+                    : null;
+                parsed.Add(new PluginNotifyRow(label, detail, state, toggle));
+            }
+            if (parsed.Count > 0) PluginSources.Add(new PluginNotifyGroup(pluginId, parsed));
+        }
+        OnPropertyChanged(nameof(HasPluginSources));
+        OnPropertyChanged(nameof(NotifySummary));
+    }
+
+    public bool HasPluginSources => PluginSources.Count > 0;
 
     private void RefreshNotifySources()
     {
@@ -248,12 +326,22 @@ public sealed class CompanionViewModel : ViewModelBase
         OnPropertyChanged(nameof(NotifySummary));
     }
 
-    /// <summary>Deliberately mentions plugins even though they cannot be enumerated: plugin
-    /// code is arbitrary, and a list that looked complete while omitting <c>scrye.notify()</c>
+    /// <summary>Plugins that follow the <c>plugin.&lt;id&gt;.notify</c> convention are listed
+    /// with live toggles; the closing caveat stays because the convention is voluntary — a
+    /// list that looked complete while a non-reporting plugin called <c>scrye.notify()</c>
     /// would be worse than one that admits the gap.</summary>
-    public string NotifySummary => NotifySources.Count == 0
-        ? "No triggers in this world are set to Notify. Plugins may still notify on their own."
-        : $"{NotifySources.Count} trigger(s) set to Notify. Plugins may notify on their own too.";
+    public string NotifySummary
+    {
+        get
+        {
+            string triggers = NotifySources.Count == 0
+                ? "No triggers in this world are set to Notify."
+                : $"{NotifySources.Count} trigger(s) set to Notify.";
+            return HasPluginSources
+                ? triggers + " Plugin sources below; plugins that don't report may still notify."
+                : triggers + " Plugins may still notify on their own.";
+        }
+    }
 
     private async Task RefreshTailscaleAsync()
     {

@@ -133,6 +133,7 @@ local at = {
   full    = tonumber(sget("at_full"))     or 90,    -- % full that switches to clearing mode
   clear_pct = tonumber(sget("at_clearpct")) or 25,  -- min cart fill % while clearing
   escort  = tonumber(sget("at_escort")) or 5,       -- escort size for auto-dispatched carts
+  notify  = (sget("at_notify") == "1"),             -- buzz the phone per auto-dispatch (default off)
   pending = 0, last_carts = nil, cd_wait = false, pending_check = false,
   stats = { buys = 0, sells = 0, spent = 0, earned = 0, since = os.time(), recent = {} },
   exempt = {},
@@ -145,6 +146,15 @@ local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk
 
 -- forward declarations (mk_finish / the feed watch call these before they're defined)
 local at_schedule, at_draw, auto_trade_tick, publish_dispatch
+
+-- ---------- phone notifications (plugin.<id>.notify convention) ----------
+-- One source, default OFF: a healthy auto-trader dispatches all day, and a phone that
+-- buzzes per cart is a phone that gets muted. Turn it on to watch the bot from afar.
+local function publish_notify_state()
+  scrye.setState(P .. "notify",
+    string.format("Auto-trade dispatches\teach cart the auto-trader sends\t%s\tatrade notify %s",
+      at.notify and "on" or "off", at.notify and "off" or "on"))
+end
 
 -- forward declaration (mk_header schedules an early finish)
 local start_settle
@@ -550,6 +560,12 @@ local function at_record(side, qty, cmd, town, amount)
   s.recent[#s.recent + 1] = line
   while #s.recent > 40 do table.remove(s.recent, 1) end
   scrye.log(line)
+  -- the one choke point every auto-dispatch passes through, so the phone notify
+  -- lives here instead of at the three send sites
+  if at.notify then
+    scrye.notify(string.format("auto-trade: %s %d %s %s %s (~%dd)",
+      side, qty, cmd, (side == "buy") and "from" or "to", town, amount))
+  end
   if at_draw then at_draw() end
 end
 
@@ -917,6 +933,8 @@ local function at_config(rest)
   elseif rest == "scalp off"   then at.scalp = false; sset("at_scalp", "0"); at_draw()
   elseif rest == "restock on"  then at.restock = true;  sset("at_restock", "1"); if at.on then at_schedule() end; at_draw()
   elseif rest == "restock off" then at.restock = false; sset("at_restock", "0"); at_draw()
+  elseif rest == "notify on"   then at.notify = true;  sset("at_notify", "1"); publish_notify_state(); note("phone notify per auto-dispatch: on")
+  elseif rest == "notify off"  then at.notify = false; sset("at_notify", "0"); publish_notify_state(); note("phone notify per auto-dispatch: off")
   elseif rest == "stats"       then at_show_stats(); return
   elseif rest == "stats reset" then at.stats = { buys=0, sells=0, spent=0, earned=0, since=os.time(), recent={} }; note("session stats reset"); at_draw(); return
   elseif rest == "log"         then at_show_log(); return
@@ -925,7 +943,7 @@ local function at_config(rest)
   elseif rest:match("^exempt%s+") then at_toggle_exempt(rest:gsub("^exempt%s+", "")); at_draw(); return
   elseif key and AT_FIELD[key] then at_setnum(key, val); return
   else
-    note("usage: atrade on|off | scalp|restock|refined on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | stats | log")
+    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | stats | log")
     return
   end
   at_status()
@@ -1204,6 +1222,7 @@ scrye.onDisconnect(function() connected = false end)
 scrye.watch("vik", function() at_on_feed(); publish_dispatch() end)
 
 at_draw()   -- seed the Auto / Log tab state
+publish_notify_state()
 
 -- a (re)load mid-session gets no onConnect, so start the driver here as well
 if at.on then at_driver() end
