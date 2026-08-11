@@ -7,22 +7,15 @@ what we consciously parked, and what the recent infrastructure makes newly possi
 
 ## 1 · Needs finishing now
 
-- [ ] **Commit & push.** Everything since `c95ca24` is uncommitted on the working tree:
-  realm-tinted map panel, chat-pane line wrapping, market value-ranking fix, Quick Connect
-  dialog, push diagnostics (`PushOutcome`/`LastError`), the `BadJwtToken` VAPID-subject fix,
-  the `chat sound on|off` toggle, the phone markup renderer + `row` widget, and the updated
-  xunit tests. (Push from your machine — the bridge VM has no network.)
-- [ ] **Verify the phone client after rebuild.** Market/raid/stepper reports should render
-  coloured and tappable; the viking Sea tab's resolve box should appear beside the chart.
-  The desktop side of this batch compiles only in VS, so the rebuild is the real check.
-- [ ] **Run the test suite once** (`dotnet test`): `PushDeliveryTests` changed shape and
-  gained `AFailedDeliveryNamesItsReason` + `SubjectIsAContactUriOnARealDomain`.
+- [x] **Commit & push.** Landed as `6df3f34` (36 files) and pushed.
+- [x] **Verify the phone client after rebuild.** Confirmed working in-game 2026-08-11.
+- [x] **Run the test suite once** (`dotnet test`): passed, no failures.
 - [ ] **Give notifications something to say.** Delivery works now, but no trigger has the
   Notify flag set (`.companion notify` to check). Tick it on the triggers that matter, or
   pick items from list 3 below.
-- [ ] **Docs catch-up** in `Scrye-Guide.md`: the `chat sound` toggle, the `PushOutcome`
-  readout of `.companion notify test`, and that the companion now renders plugin markup
-  and `row` — worth a paragraph each so future-you knows they exist.
+- [x] **Docs catch-up** in `Scrye-Guide.md`: `chat sound` in the notification table + a
+  debug-in-this-order section, the `PushOutcome` test readout, phone markup + `row`
+  rendering, and the `inverse`-is-desktop-only note.
 
 ## 2 · Parked deliberately (known gaps, agreed to live with for now)
 

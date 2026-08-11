@@ -118,7 +118,7 @@ Three tabs across the top:
 
 - **Output** — the game's text, in colour, with a command line, a **↑** history button and a command pad underneath.
 - **Chat** — your capture panes (Chats, and any others plugins route into), each on its own sub‑tab.
-- **Panels** — your HUD panels, rendered from the same specs the desktop uses. Gauges, bars and text update live; buttons, input fields and colorgrid cells are all tappable and fire the same plugin callbacks they do on the desktop.
+- **Panels** — your HUD panels, rendered from the same specs the desktop uses. Gauges, bars and text update live; buttons, input fields and colorgrid cells are all tappable and fire the same plugin callbacks they do on the desktop. `text` widgets render the plugin colour markup exactly as the desktop does — colours, bold, and `click=` runs as tappable links — so a plugin report's inline actions (dispatch a trade, target a town, pick a route) work by tap. `row` containers lay out side by side too, wrapping onto the next line when the screen is too narrow. Two desktop-only exceptions: colorgrid micro-icons fall back to the character grid, and hover affordances don't exist on a touch screen.
 
 The header shows the connection dot, the character, and vitals. The **⋯** menu switches worlds and enables notifications.
 
@@ -143,8 +143,23 @@ On 3Scapes, the **3s-chat** plugin is the usual source. It notifies on **tells b
 | `chat unnotify <channel>` | Stop notifying for that channel. |
 | `chat watch <name>` | Notify (and beep) when that name appears in any chat message. |
 | `chat unwatch <name>` / `chat watched` | Remove one / list them. |
+| `chat sound off` \| `on` | Silence just the PC beep — the phone still buzzes and the pane still marks. |
 
-All of these persist per character.
+All of these persist per character. The sound toggle exists because the beep and the push
+notification serve different moments: sitting at the PC you may want quiet, while the phone
+should still buzz when you walk away.
+
+**If nothing arrives**, debug in this order:
+
+1. `.companion status` — if it says **0 devices registered**, the phone was never subscribed.
+   iOS Settings toggles don't create a subscription; tap **Enable notifications** *inside* the
+   installed companion app.
+2. `.companion notify test` — the readout is a real verdict, e.g. `delivered 1, pruned 0
+   expired, 0 failed`. A failure names its cause verbatim from the push service
+   (`403 from web.push.apple.com: {"reason":"BadJwtToken"}`), so a broken key, clock skew or
+   an oversized payload is a visible sentence instead of a silent shrug.
+3. If the test delivers but the game never notifies — nothing is *configured* to notify.
+   Set the **Notify** flag on a trigger or use the chat commands above.
 
 ## Where files live
 
@@ -347,7 +362,8 @@ cells still shrink to fit the panel width. And the **`row` container**
 (`{ type = "row", widgets = { ... } }`): its children are ordinary widgets laid out side by
 side, each at its measured width — the escape hatch from the panel's vertical stack. The
 viking sea chart uses it to put the resolve choices beside the chart instead of below it.
-Hosts that can't lay out rows (the companion) may stack or skip them.
+The companion renders rows side by side too, wrapping children onto the next line when the
+screen is too narrow for them.
 
 ## Permissions
 
@@ -565,6 +581,7 @@ Notes:
 
 - **Dynamic content** flows through `bind` + `setState`: the *set* of widgets is fixed when the panel is built, but their bound content updates live. You still can't add or remove *widgets* at runtime — but `list` and `table` are single widgets whose **row count follows the bound value**, so a variable‑length collection no longer needs a `text` blob or a `colorgrid`.
 - **If you're reaching for `string.format` and padding, use `table`.** Composing aligned columns in Lua is what `text` widgets forced; the host measures columns for you, and the mobile companion renders a real table rather than pre‑padded text that wraps badly on a phone.
+- **Inline markup in `text` widgets renders on both hosts** — colours, `bold`/`underline`/`italic`, and `click=`/`prompt=` runs are tappable links on the companion, dispatched through the same input pipeline as the desktop (plugin aliases get first refusal). The one exception: the `inverse` flag is desktop‑only — the companion ignores it rather than guessing at base colours it only inherits.
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
 - `colorgrid` `onClick` gives you the clicked cell's `col`, `row`, and character — map that back to your data.
 - `colorgrid` `onHover` *(1.6)* fires when the pointer moves onto a **different** cell (never per pixel), and once with `(-1, -1, "")` when it leaves the grid so you can clear whatever you were previewing. Hover is desktop-only — the companion's touch screen never fires it — so use it to *enrich* (a room-name readout beside the map), never for anything `onClick` can't also reach.
