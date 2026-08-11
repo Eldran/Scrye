@@ -128,6 +128,11 @@ internal static class AppShell
 
   .w-label { font-size:13px; }
   .w-text { font-size:12px; white-space:pre-wrap; word-break:break-word; line-height:1.35; }
+  /* click=/prompt= runs inside a text widget: inherit the run's colour, underline says tappable */
+  .w-text a.mk { color:inherit; text-decoration:underline; text-underline-offset:2px;
+                 -webkit-tap-highlight-color:rgba(90,255,154,.18); }
+  .w-row { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start; }
+  .w-row > * { flex:1 1 140px; min-width:0; }
   .w-gauge .cap { display:flex; justify-content:space-between; font-size:12px; margin-bottom:3px; }
   .w-gauge .cap span:last-child { color:var(--dim); }
   .bar { height:9px; border-radius:5px; background:#1c232c; overflow:hidden; }

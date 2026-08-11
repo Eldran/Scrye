@@ -368,6 +368,132 @@ function colour(v) {
   return (themeCache.getPropertyValue(varName) || '').trim();
 }
 
+// ---- plugin colour markup ---------------------------------------------------
+//
+// The same @{spec}text@{} grammar Scrye.Core.Text.Markup defines, because a text widget's
+// bound state arrives EXACTLY as the plugin composed it — the desktop parses it into
+// coloured, clickable runs, and before this parser the phone showed the raw markup instead.
+// Rules mirrored from Markup.cs: "@@" is a literal '@', "@{}" closes the innermost style
+// (styles nest on a stack), a malformed or over-long token renders literally rather than
+// eating text, an unknown colour name keeps the current colour, and click=/prompt= take the
+// REST of the spec verbatim (commands legitimately contain commas and spaces). The one
+// deliberate omission is the "inverse" flag: it needs resolved base colours, and here the
+// base is whatever the DOM inherits — so it is ignored rather than guessed.
+
+const MARKUP_SPEC_MAX = 256;   // same cap as Markup.MaxSpecLength, same reason
+
+// "@{...}" at position i -> [spec, indexPastBrace], or null when it is not a token.
+function markupToken(s, i) {
+  if (s[i] !== '@' || s[i + 1] !== '{') return null;
+  const close = s.indexOf('}', i + 2);
+  if (close < 0 || close - (i + 2) > MARKUP_SPEC_MAX) return null;
+  return [s.slice(i + 2, close), close + 1];
+}
+
+// Apply one spec ("colour", "colour/bg", ",bold", "...,click=cmd") to a copy of cur.
+function markupApply(cur, spec) {
+  const st = { fg: cur.fg, bg: cur.bg, bold: cur.bold, underline: cur.underline,
+               italic: cur.italic, link: cur.link };
+
+  // click=/prompt= first — only at the start or right after a comma, value runs to the end.
+  let cut = -1, verb = 0, prompt = false;
+  for (let i = 0; i < spec.length; i++) {
+    if (i !== 0 && spec[i - 1] !== ',') continue;
+    if (spec.startsWith('click=', i)) { cut = i; verb = 6; break; }
+    if (spec.startsWith('prompt=', i)) { cut = i; verb = 7; prompt = true; break; }
+  }
+  if (cut >= 0) {
+    const cmd = spec.slice(cut + verb).trim();
+    if (cmd) st.link = { action: cmd, prompt };
+    spec = cut === 0 ? '' : spec.slice(0, cut).replace(/,+$/, '');
+  }
+
+  const parts = spec.split(',');
+  const word = parts[0].trim();
+  if (word) {
+    const slash = word.indexOf('/');
+    const fore = slash >= 0 ? word.slice(0, slash).trim() : word;
+    const back = slash >= 0 ? word.slice(slash + 1).trim() : '';
+    if (fore) { const c = colour(fore); if (c) st.fg = c; }
+    if (back) { const c = colour(back); if (c) st.bg = c; }
+  }
+  for (let i = 1; i < parts.length; i++) {
+    switch (parts[i].trim().toLowerCase()) {
+      case 'bold': case 'b':      st.bold = true; break;
+      case 'underline': case 'u': st.underline = true; break;
+      case 'italic': case 'i':    st.italic = true; break;
+      // unknown flags (and 'inverse') are ignored, like an unknown colour
+    }
+  }
+  return st;
+}
+
+// One line of markup -> a div of styled spans/links. Markup state does not carry across
+// newlines (each line parses fresh), matching StyledTextView — a missing @{} costs one
+// line its colour, not the rest of the report.
+function markupLine(line) {
+  const div = el('div');
+  if (line.indexOf('@') < 0) { div.textContent = line || '\u00A0'; return div; }
+
+  const base = { fg: '', bg: '', bold: false, underline: false, italic: false, link: null };
+  const stack = [];
+  let cur = base, buf = '';
+
+  const flush = () => {
+    if (!buf) return;
+    let node;
+    if (cur.link) {
+      const link = cur.link;
+      node = el('a', 'mk');
+      node.href = 'javascript:void 0';
+      node.addEventListener('click', ev => {
+        ev.preventDefault();
+        // click= runs the text the way typing it would — command.send goes through the
+        // desktop's input pipeline, so the plugin's own aliases get first refusal, same
+        // as clicking the run on the desktop HUD.
+        if (link.prompt) { $('cmd').value = link.action; $('cmd').focus(); }
+        else sendCommand(link.action);
+      });
+    } else {
+      node = el('span');
+    }
+    node.textContent = buf;
+    let css = '';
+    if (cur.fg) css += `color:${cur.fg};`;
+    if (cur.bg) css += `background:${cur.bg};`;
+    if (cur.bold) css += 'font-weight:700;';
+    if (cur.underline) css += 'text-decoration:underline;';
+    if (cur.italic) css += 'font-style:italic;';
+    if (css) node.style.cssText = css;
+    div.appendChild(node);
+    buf = '';
+  };
+
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '@' && line[i + 1] === '@') { buf += '@'; i += 2; continue; }
+    const tok = markupToken(line, i);
+    if (tok) {
+      flush();
+      cur = tok[0].length === 0
+        ? (stack.length ? stack.pop() : base)
+        : (stack.push(cur), markupApply(cur, tok[0]));
+      i = tok[1];
+      continue;
+    }
+    buf += line[i]; i++;
+  }
+  flush();
+  if (!div.childNodes.length) div.textContent = '\u00A0';   // blank line keeps its height
+  return div;
+}
+
+function renderMarkup(host, text) {
+  const frag = document.createDocumentFragment();
+  for (const line of String(text ?? '').split('\n')) frag.appendChild(markupLine(line));
+  host.replaceChildren(frag);
+}
+
 // A palette (char -> colour) with every value resolved once, for colorgrid.
 function resolvePalette(p) {
   if (!p) return p;
@@ -560,8 +686,18 @@ function buildWidget(panelId, w, panelFg) {
     case 'text': {
       const e = el('div', 'w-text');
       if (fg) e.style.color = fg;
-      bind(w.bind, v => { e.textContent = v; });
+      // Parsed, not textContent: text widgets carry the plugin colour markup, and the
+      // click= runs in a report ARE its buttons (the market/raid/stepper reports).
+      bind(w.bind, v => renderMarkup(e, v));
       return e;
+    }
+
+    // row (API 1.8): children side by side — the Sea chart + its resolve box. Wrapping is
+    // allowed because a phone is narrower than the panel the author sized against.
+    case 'row': {
+      const box = el('div', 'w-row');
+      for (const c of w.children || []) box.appendChild(buildWidget(panelId, c, panelFg));
+      return box;
     }
 
     case 'barlist': {

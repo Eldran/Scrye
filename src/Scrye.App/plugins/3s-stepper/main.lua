@@ -232,7 +232,7 @@ local function draw()
     -- a stray click on a bot panel should not start walking an area
     local label = n .. mark
     row[#row + 1] = string.format("@{accent,click=- %s}%s@{}%s",
-      n, esc(label), string.rep(" ", math.max(1, 16 - #label)))
+      n, esc(label), string.rep(" ", math.max(1, 12 - #label)))
     if #row == 4 then lines[#lines + 1] = table.concat(row); row = {} end
   end
   if #row > 0 then lines[#lines + 1] = table.concat(row) end
@@ -296,6 +296,7 @@ local function end_of_path()
     bot_resume_step()
   else
     note("end of path - stopping" .. (bot.nohome and "" or ", heading home"))
+    scrye.sound("beep")   -- the original's ding.wav: the route is done, you're wanted
     bot_kill()
     if not bot.nohome then scrye.send("go home") end
   end
@@ -337,6 +338,7 @@ local function bot_advance_return()
     bot.paused_on_mob = false
     bot.user_paused = true
     note("arrived at start - paused ('..' or Resume to run again)")
+    scrye.sound("beep")   -- waiting on you
     draw()
   end
 end
@@ -798,6 +800,7 @@ scrye.addAlias{ pattern = [[^stepexport (\w+)$]], regex = true, run = function(n
 
 scrye.addPanel{
   title = "3S Stepper",
+  width = 340,   -- four 12-char area columns; the default 220 clipped the list
   tabs = {
     { title = "Bot", widgets = {
         { type = "text", bind = P .. "status" },

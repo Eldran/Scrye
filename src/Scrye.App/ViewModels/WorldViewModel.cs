@@ -783,6 +783,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     /// <summary>Deliver trigger-routed lines to their capture panes (UI thread).
     /// Panes are created on first use; unselected panes accumulate unread counts.</summary>
+    /// <summary>Capture-pane wrap measure, in characters — the width the MUD wraps its
+    /// own output to, so the panes read like the main output instead of monitor-wide.</summary>
+    private const int PaneWrapCols = 100;
+
     private void DrainRouted()
     {
         if (_pendingRouted.IsEmpty) return;
@@ -800,14 +804,20 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 pane = CreatePane(item.Pane, PaneDock.Bottom);
                 created = true;
             }
-            pane.Buffer.Add(item.Line);
-
-            if (companionBatches is not null)
+            // Wrap long chat lines to a readable measure BEFORE they hit the buffer: the
+            // terminal renderer is one-buffer-line-per-row, so on a widescreen an unwrapped
+            // tell runs the full monitor. ~100 columns matches the width the MUD wraps its
+            // own output to; continuations carry a hanging indent and no timestamp.
+            foreach (Line seg in item.Line.Wrap(PaneWrapCols))
             {
-                if (!companionBatches.TryGetValue(item.Pane, out OutputBatchBuilder? b))
-                    companionBatches[item.Pane] = b = new OutputBatchBuilder();
-                // Each pane's buffer carries its own sequence space; read it after the add.
-                b.Add(item.Line, pane.Buffer.SequenceAt(pane.Buffer.Count - 1));
+                pane.Buffer.Add(seg);
+                if (companionBatches is not null)
+                {
+                    if (!companionBatches.TryGetValue(item.Pane, out OutputBatchBuilder? b))
+                        companionBatches[item.Pane] = b = new OutputBatchBuilder();
+                    // Each pane's buffer carries its own sequence space; read it after the add.
+                    b.Add(seg, pane.Buffer.SequenceAt(pane.Buffer.Count - 1));
+                }
             }
             bool visible = pane.Dock == PaneDock.Floating
                 || ReferenceEquals(pane, SelectedBottomPane)
@@ -1248,10 +1258,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         AppendSystem($"sending a test notification to {c.PushSubscriberCount} device(s)...");
         try
         {
-            int delivered = await c.TestNotifyAsync();
-            AppendSystem(delivered > 0
-                ? $"delivered to {delivered} device(s)"
-                : "no device accepted it — check the phone's notification settings");
+            var outcome = await c.TestNotifyAsync();
+            AppendSystem(outcome.ToString());
+            if (outcome.Delivered == 0 && outcome.Failed == 0 && outcome.Expired == 0)
+                AppendSystem("no devices are registered — tap 'Enable notifications' in the companion app on the phone");
         }
         catch (Exception ex)
         {

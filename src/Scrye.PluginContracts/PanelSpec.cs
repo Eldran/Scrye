@@ -17,6 +17,10 @@ namespace Scrye.Core.Plugins;
 /// <see cref="Bind"/> is newline-separated rows of characters, and
 /// <see cref="Palette"/> maps each character to a "#RRGGBB" colour (maps, charts).</item>
 /// <item><c>button</c> — a clickable button firing the plugin callback in <see cref="Action"/>.</item>
+/// <item><c>row</c> — a horizontal container (API 1.8): <see cref="Children"/> holds ordinary
+/// widget specs laid out side by side, each at its measured width. In script the children come
+/// from a <c>widgets</c> list on the row. The escape hatch from the panel's vertical stack —
+/// a chart with its notes beside it rather than below.</item>
 /// <item><c>colorgrid</c> cells are clickable when the widget sets an <c>onClick</c> callback;
 /// the host invokes it with the clicked cell's (col, row, char).</item>
 /// <item><c>list</c> — a dynamic list of rows from <see cref="Bind"/>: one row per line, each
@@ -62,6 +66,25 @@ public sealed record WidgetSpec
     /// <summary>For <c>colorgrid</c>: character → cell colour ("#RRGGBB" or a
     /// <see cref="ThemeToken"/> name).</summary>
     public IReadOnlyDictionary<string, string>? Palette { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.8): character → micro-icon name. An iconed cell draws a
+    /// muted tile of its palette colour with a tiny vector glyph on top in a lightened shade
+    /// of the same colour — terrain that looks like terrain. The glyph vocabulary (host-drawn,
+    /// no image assets): <c>water dashes grass hill tree pine mountain house tower gate ruin
+    /// star person ship anchor flag bolt crown hammer cross dot</c>. Icons take precedence over
+    /// <see cref="Labels"/> letters for the same character; cells too small for a glyph
+    /// (&lt; 8 px) fall back to the plain colour tile and then the letter rules. Unknown names
+    /// render as plain tiles, and text-only hosts (the companion) ignore this map entirely —
+    /// the character grid remains the fallback by design.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Icons { get; init; }
+
+    /// <summary><c>colorgrid</c> only (API 1.8): the LARGEST cell size in pixels this grid may
+    /// use — 0 means the compact default (12). Cells still shrink to fit the panel width; this
+    /// only raises the ceiling, for charts whose icons deserve room (the viking sea chart uses
+    /// 24). Hosts clamp hostile values (3–64); text-rendering hosts ignore it.</summary>
+    public double Cell { get; init; }
 
     /// <summary>For <c>table</c>: optional header labels. When set, a header row is drawn and the
     /// column count is taken from here; extra fields in a data row are ignored and missing ones

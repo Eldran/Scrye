@@ -127,10 +127,10 @@ public sealed class CompanionController : IAsyncDisposable
     /// <summary>Devices currently registered for push, for status output.</summary>
     public int PushSubscriberCount => _server?.Notifier.SubscriberCount ?? 0;
 
-    /// <summary>Send a test notification to every registered device.</summary>
-    public Task<int> TestNotifyAsync() =>
+    /// <summary>Send a test notification to every registered device and report the outcome.</summary>
+    public Task<Scrye.Companion.Server.Push.PushOutcome> TestNotifyAsync() =>
         _server is null
-            ? Task.FromResult(0)
+            ? Task.FromResult(new Scrye.Companion.Server.Push.PushOutcome(0, 0, 0, "companion server is not running"))
             : _server.Notifier.NotifyAsync("Scrye", "Test notification from your PC.", null,
                                            DateTimeOffset.UtcNow);
 

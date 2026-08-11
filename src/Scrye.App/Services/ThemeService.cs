@@ -21,8 +21,15 @@ public sealed record ThemeScheme(
     Color Line,
     Color Text,
     Color TextDim,
-    Color InsetBg)
+    Color InsetBg,
+    Color? OutputBg = null)
 {
+    /// <summary>The terminal output surface for this scheme. Almost every scheme shares the
+    /// classic near-black (#080A0C) — MUD ANSI colours are designed for it, so the game text
+    /// reads the same under Slate and Light alike. A scheme may override it, and stays
+    /// responsible for keeping it DARK: "void" goes pure black. Never light.</summary>
+    public Color OutputSurface => OutputBg ?? Color.FromRgb(0x08, 0x0A, 0x0C);
+
     // Semantic status colours. Derived rather than declared per-scheme on purpose: they must mean
     // the same thing in every scheme (green is "fine", red is "bad"), so letting each scheme
     // restyle them would break the contract plugins rely on. Only the light/dark split matters,
@@ -47,14 +54,13 @@ public sealed record ThemeScheme(
 /// theme variant. Everything that consumes the palette does so via DynamicResource,
 /// so a scheme change takes effect immediately — no restart.
 ///
-/// The terminal output surface (ScryeOutputBg and OutputView's own fill) is
-/// intentionally constant: MUD ANSI colors are designed for a dark background,
-/// so the game output stays dark in every scheme, including Light.
+/// The terminal output surface (ScryeOutputBg and OutputView's own fill) is per-scheme
+/// since the "void" scheme, but with an invariant every scheme upholds: it is ALWAYS
+/// dark, because MUD ANSI colors are designed for a dark background — the Light scheme
+/// keeps the classic near-black terminal for exactly that reason.
 /// </summary>
 public static class ThemeService
 {
-    /// <summary>The fixed terminal surface color (matches OutputView's fill).</summary>
-    private static readonly Color OutputBg = Color.FromRgb(0x08, 0x0A, 0x0C);
     /// <summary>The fixed terminal text colour — used for the command input line so the
     /// interactive output area reads the same in every scheme (matching the game output,
     /// whose per-run colours are already theme-independent).</summary>
@@ -69,6 +75,16 @@ public static class ThemeService
         new ThemeScheme("forest",   "Forest (green)",        true,  C("#4CBB6C"), C("#121A14"), C("#18241B"), C("#1F2E23"), C("#2C4032"), C("#D5E2D8"), C("#8CA394"), C("#0D140F")),
         new ThemeScheme("amber",    "Amber (warm)",          true,  C("#E0A030"), C("#1C1712"), C("#251E17"), C("#2F261C"), C("#443627"), C("#E8DECF"), C("#A8977E"), C("#14100C")),
         new ThemeScheme("crimson",  "Crimson (red)",         true,  C("#E04858"), C("#1B1215"), C("#251A1E"), C("#2F2127"), C("#452E35"), C("#E6D9DC"), C("#A88F96"), C("#140D10")),
+        // Black on black: panels melt into the terminal and the borders carry all the
+        // structure (line is a step brighter than slate's for exactly that reason).
+        new ThemeScheme("void",     "Void (black on black)", true,  C("#35C4D6"), C("#000000"), C("#000000"), C("#141414"), C("#303030"), C("#D6DEE8"), C("#8A93A0"), C("#0A0A0A"), C("#000000")),
+        // The 3scapes.org palette, verbatim from the site's own CSS variables (fetched
+        // 2026-08): --bg #04060A, --green #5AFF9A (the accent), --text #C8D8CC,
+        // --text-dim #7A9A8A. The site layers translucent green washes over the black;
+        // panel/line here are those washes composited to solid (panel = 55% #0A1912
+        // over bg, line = 25% green over panel). Output surface matches the site bg —
+        // darker than the classic terminal and faintly green, like an old phosphor CRT.
+        new ThemeScheme("3scapes",  "3Scapes (phosphor)",    true,  C("#5AFF9A"), C("#04060A"), C("#07100E"), C("#0C1A14"), C("#1C4B31"), C("#C8D8CC"), C("#7A9A8A"), C("#030A07"), C("#04060A")),
     };
 
     public static ThemeScheme Default => Schemes[0];
@@ -123,7 +139,7 @@ public static class ThemeService
 
         // Scrye palette — everything in Theme.axaml / MainWindow.axaml uses DynamicResource.
         r["ScryeBg"] = new SolidColorBrush(s.Bg);
-        r["ScryeOutputBg"] = new SolidColorBrush(OutputBg);     // constant: see class remarks
+        r["ScryeOutputBg"] = new SolidColorBrush(s.OutputSurface);   // per-scheme since "void"; always dark
         r["ScryeOutputText"] = new SolidColorBrush(OutputText); // constant: terminal/input text
         r["ScryePanel"] = new SolidColorBrush(s.Panel);
         r["ScryePanelAlt"] = new SolidColorBrush(s.PanelAlt);
@@ -143,7 +159,13 @@ public static class ThemeService
         r["ScryeInfo"] = new SolidColorBrush(s.Info);
 
         Current = s;
+        Changed?.Invoke();
     }
+
+    /// <summary>Raised after a scheme is applied. DynamicResource consumers update themselves;
+    /// this is for the custom-DRAWN surfaces (OutputView paints its own background) that need
+    /// an explicit repaint when the palette moves under them.</summary>
+    public static event Action? Changed;
 
     private static Color C(string hex) => Color.Parse(hex);
 

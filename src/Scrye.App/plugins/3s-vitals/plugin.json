@@ -1,0 +1,20 @@
+{
+  "id": "3s-vitals",
+  "name": "3S Vitals",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Compact vitals HUD: HP / Seid / Vig / Rad gauges plus the current enemy and its health. Extracted from 3S Viking Status so the bars you glance at mid-fight live in their own small panel.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true,
+  "requires": {
+    "scryeApi": ">=1.1 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "ui.panels"
+  ]
+}

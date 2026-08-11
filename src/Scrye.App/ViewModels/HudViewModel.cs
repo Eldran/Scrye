@@ -213,6 +213,16 @@ public sealed class HudViewModel : IDisposable
                 return new ButtonWidgetViewModel(w.Text ?? "Button",
                     () => { if (actionId is not null) _invokeAction?.Invoke(pluginId, actionId); });
             }
+            case "row":
+            {
+                // side-by-side container (API 1.8): children are ordinary widgets built by
+                // this same method, so anything that stacks can also sit in a row
+                var hrow = new RowWidgetViewModel();
+                if (w.Children is not null)
+                    foreach (WidgetSpec child in w.Children)
+                        hrow.Children.Add(BuildWidget(pluginId, child, subs, panelFg));
+                return hrow;
+            }
             case "buttonrow":
             {
                 var row = new ButtonRowWidgetViewModel();
@@ -300,7 +310,7 @@ public sealed class HudViewModel : IDisposable
             }
             case "colorgrid":
             {
-                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels, w.Weave);
+                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels, w.Weave, w.Icons, w.Cell);
                 if (!string.IsNullOrEmpty(w.Action))
                 {
                     string actionId = w.Action;
@@ -493,6 +503,14 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
         Text = text;
         Command = new RelayCommand(onClick);
     }
+}
+
+/// <summary>Widgets laid out side by side (the "row" container, API 1.8). Children are
+/// ordinary widget view-models rendered by the same DataTemplates as stacked widgets;
+/// each takes its measured width — a chart on the left, its notes on the right.</summary>
+public sealed class RowWidgetViewModel : ViewModelBase
+{
+    public System.Collections.ObjectModel.ObservableCollection<object> Children { get; } = new();
 }
 
 /// <summary>A row of buttons rendered side by side as equal-width columns (a "buttonrow" widget).</summary>
@@ -754,9 +772,18 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
     /// see WidgetSpec.Weave. Bound to ColorGridView.Weave.</summary>
     public bool Weave { get; }
 
+    /// <summary>Micro-icon map (API 1.8) — character to glyph name; see WidgetSpec.Icons.
+    /// Bound to ColorGridView.Icons; null when the widget declared none.</summary>
+    public Dictionary<char, string>? Icons { get; }
+
+    /// <summary>Cell-size ceiling (API 1.8) — the compact default 12 unless the spec raised
+    /// it; see WidgetSpec.Cell. Bound to ColorGridView.MaxCell.</summary>
+    public double MaxCell { get; }
+
     public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette, string? labels = null,
-        bool weave = false)
+        bool weave = false, IReadOnlyDictionary<string, string>? icons = null, double cell = 0)
     {
+        MaxCell = cell > 0 ? System.Math.Clamp(cell, 3, 64) : 12;
         Palette = new Dictionary<char, Avalonia.Media.Color>();
         if (palette is not null)
             foreach ((string key, string val) in palette)
@@ -764,6 +791,13 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase
                     Palette[key[0]] = c;
         LabelChars = labels ?? "";
         Weave = weave;
+        if (icons is not null && icons.Count > 0)
+        {
+            Icons = new Dictionary<char, string>();
+            foreach ((string key, string val) in icons)
+                if (key.Length >= 1 && !string.IsNullOrWhiteSpace(val))
+                    Icons[key[0]] = val.Trim().ToLowerInvariant();
+        }
     }
 
     private string _gridText = "";

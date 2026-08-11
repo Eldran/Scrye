@@ -88,6 +88,34 @@ public sealed class MapPluginTests
     private static void Arrive(IPluginRuntime rt, string shortDesc) =>
         rt.ProcessLine($"=S={shortDesc}=S=");
 
+    /// <summary>The "map.hold" event (the chaos-sea contract): while another plugin holds the
+    /// map, moves and arrivals learn nothing; releasing (or 'map on', which outranks any hold)
+    /// resumes learning. Guards the random-sea case: sea steps must never dead-reckon phantom
+    /// rooms into a real area.</summary>
+    [Fact]
+    public void MapHoldSuspendsLearningUntilReleasedOrOverridden()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = Load(host);
+        Arrive(rt, "Start room (n).");
+        string before = host.State.GetValueOrDefault("plugin.3s-map.rooms") ?? "0";
+
+        rt.DispatchPluginEvent("map.hold", "{\"on\":true}", "3s-chaossea");
+        Assert.Contains("HELD (3s-chaossea)", host.State.GetValueOrDefault("plugin.3s-map.status") ?? "");
+        rt.DispatchCommand("n");
+        Arrive(rt, "A random sea room (n, s).");
+        Assert.Equal(before, host.State.GetValueOrDefault("plugin.3s-map.rooms"));
+
+        rt.DispatchPluginEvent("map.hold", "{\"on\":false}", "3s-chaossea");
+        rt.DispatchCommand("n");
+        Arrive(rt, "A real room (n, s).");
+        Assert.NotEqual(before, host.State.GetValueOrDefault("plugin.3s-map.rooms"));
+
+        rt.DispatchPluginEvent("map.hold", "{\"on\":true}", "3s-chaossea");
+        rt.ProcessInput("map on");
+        Assert.DoesNotContain("HELD", host.State.GetValueOrDefault("plugin.3s-map.status") ?? "");
+    }
+
     /// <summary>Run `map export` and parse the JSON line it prints (the plugin's "@@" markup
     /// escaping is undone first — export output is data, not decoration).</summary>
     private static JsonElement Export(IPluginRuntime rt, FakeHost host, string? areaName = null)

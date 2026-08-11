@@ -11,16 +11,6 @@
 
     <Grid>
         <DockPanel>
-            <!-- quick-connect bar (full width) -->
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8" Spacing="6">
-                <TextBox Width="220" PlaceholderText="host" Text="{Binding Host}" AutomationProperties.Name="Host" />
-                <TextBox Width="64" PlaceholderText="port" Text="{Binding Port}" AutomationProperties.Name="Port" />
-                <CheckBox Content="TLS" IsChecked="{Binding UseTls}" VerticalAlignment="Center" />
-                <CheckBox Content="MIP" IsChecked="{Binding EnableMip}" VerticalAlignment="Center" />
-                <Button Content="Quick Connect" Command="{Binding ConnectCommand}" />
-                <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Right" />
-            </StackPanel>
-
             <!-- profile tree sidebar: MUD -> account -> character -->
             <Border DockPanel.Dock="Left" Width="230" Background="{DynamicResource ScryePanel}" Padding="8"
                     BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0">
@@ -28,6 +18,11 @@
                     <TextBlock DockPanel.Dock="Top" Text="MUDS" FontWeight="SemiBold" FontSize="11"
                                Foreground="{DynamicResource ScryeAccent}" Margin="2,0,0,8" />
                     <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                        <!-- also in each world's bottom bar; this copy makes Settings reachable
+                             BEFORE any world is connected -->
+                        <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Stretch" />
+                        <Button Content="Quick Connect" Command="{Binding OpenQuickConnectCommand}" HorizontalAlignment="Stretch"
+                                ToolTip.Tip="Connect to a host/port without saving a profile (session-only)" />
                         <Button Content="Connect" Command="{Binding ConnectNodeCommand}" HorizontalAlignment="Stretch" />
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <Button Content="New MUD" Command="{Binding NewMudCommand}" />
@@ -327,6 +322,8 @@
                                                                                 CellCommand="{Binding CellCommand}"
                                                                                 HoverCommand="{Binding HoverCommand}"
                                                                                 LabelChars="{Binding LabelChars}"
+                                                                                Icons="{Binding Icons}"
+                                                                                MaxCell="{Binding MaxCell}"
                                                                                 Weave="{Binding Weave}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:BarListWidgetViewModel">
@@ -354,6 +351,17 @@
                                                             <TextBox Text="{Binding Text, Mode=TwoWay}" FontSize="11" Padding="4,2"
                                                                      KeyDown="OnInputWidgetKeyDown" />
                                                         </DockPanel>
+                                                    </DataTemplate>
+                                                    <!-- row container (API 1.8): children side by side, each at its measured
+                                                         width — the colorgrid reports tight content size for exactly this -->
+                                                    <DataTemplate DataType="vm:RowWidgetViewModel">
+                                                        <ItemsControl ItemsSource="{Binding Children}">
+                                                            <ItemsControl.ItemsPanel>
+                                                                <ItemsPanelTemplate>
+                                                                    <StackPanel Orientation="Horizontal" Spacing="10" />
+                                                                </ItemsPanelTemplate>
+                                                            </ItemsControl.ItemsPanel>
+                                                        </ItemsControl>
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonRowWidgetViewModel">
                                                         <ItemsControl ItemsSource="{Binding Buttons}">
@@ -1117,6 +1125,33 @@
                         </TabItem>
                     </TabControl>
                 </DockPanel>
+            </Border>
+        </Border>
+
+        <!-- quick-connect dialog: the old top bar's host/port/TLS/MIP, on demand -->
+        <Border IsVisible="{Binding QuickConnectOpen}" Background="{DynamicResource ScryeScrim}">
+            <Border Width="320" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Background="{DynamicResource ScryePanel}" BorderBrush="{DynamicResource ScryeLine}"
+                    BorderThickness="1" CornerRadius="8" Padding="18">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="Quick Connect" FontWeight="SemiBold" FontSize="16"
+                               Foreground="{DynamicResource ScryeAccent}" />
+                    <TextBlock Text="Session-only: nothing is saved. Use a profile for worlds you keep."
+                               FontSize="11" Foreground="{DynamicResource ScryeTextDim}" TextWrapping="Wrap" />
+                    <TextBox PlaceholderText="host" Text="{Binding Host}" AutomationProperties.Name="Host" />
+                    <DockPanel>
+                        <CheckBox DockPanel.Dock="Right" Content="MIP" IsChecked="{Binding EnableMip}"
+                                  Margin="8,0,0,0" VerticalAlignment="Center"
+                                  ToolTip.Tip="3Scapes MIP feed (state for the bundled plugins)" />
+                        <CheckBox DockPanel.Dock="Right" Content="TLS" IsChecked="{Binding UseTls}"
+                                  Margin="8,0,0,0" VerticalAlignment="Center" />
+                        <TextBox PlaceholderText="port" Text="{Binding Port}" AutomationProperties.Name="Port" />
+                    </DockPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,6,0,0">
+                        <Button Content="Cancel" Command="{Binding CancelQuickConnectCommand}" />
+                        <Button Content="Connect" Command="{Binding ConnectCommand}" />
+                    </StackPanel>
+                </StackPanel>
             </Border>
         </Border>
 

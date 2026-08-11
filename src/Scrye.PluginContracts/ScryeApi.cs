@@ -68,7 +68,19 @@ public static class ScryeApi
     //      Current did not move — but scripts may now use 5.3/5.4 language features
     //      (integer division //, bitwise operators, goto, utf8, integer subtype), and
     //      string.format("%d", x) now errors when x has a fractional part.
-    public static readonly Version Current = new(1, 7);
+    // 1.8 — colorgrid `icons = { ["char"] = "glyph", ... }`: micro-icons. An iconed cell
+    //       draws a muted tile of its palette colour with a tiny host-drawn vector glyph on
+    //       top (vocabulary: water dashes grass hill tree pine mountain house tower gate
+    //       ruin star person ship anchor flag bolt crown hammer cross dot). Icons beat
+    //       `labels` letters for the same character; cells under 8 px fall back to plain
+    //       tiles, then the letter rules. Additive: unknown names render as plain tiles and
+    //       text-rendering hosts (the companion) ignore the map. Also colorgrid `cell = N`:
+    //       raises the 12 px cell-size ceiling (clamped 3-64) for charts whose icons
+    //       deserve room; cells still shrink to fit the panel width. And the `row`
+    //       container widget (`{ type = "row", widgets = {...} }`): children laid out
+    //       side by side, each at its measured width -- a chart with its notes beside
+    //       it instead of below. Hosts that can't lay out rows may stack or skip them.
+    public static readonly Version Current = new(1, 8);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

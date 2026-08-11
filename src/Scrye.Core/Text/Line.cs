@@ -77,6 +77,77 @@ public sealed class Line
         return new Line(outRuns, IsPrompt, ReceivedUtc);
     }
 
+    /// <summary>True on the second and later segments produced by <see cref="Wrap"/> —
+    /// the renderer skips the timestamp on continuations so a wrapped message reads as
+    /// one entry rather than several.</summary>
+    public bool Continuation { get; init; }
+
+    private const string Indent = "  ";   // hanging indent on continuation segments
+
+    /// <summary>
+    /// Split this line into display segments no wider than <paramref name="maxCols"/>
+    /// characters, breaking at the last space before the limit (mid-word only when a
+    /// single word outruns the whole width). Continuation segments carry a two-space
+    /// hanging indent and <see cref="Continuation"/> = true. Styling, flags and link
+    /// info survive because runs are SLICED, never re-parsed — and link spans are
+    /// computed lazily per segment from those runs, so clickable regions keep working
+    /// on whichever row they land. A line already within the limit returns itself.
+    ///
+    /// <para>This exists for capture panes on wide monitors: the terminal renderer is
+    /// strictly one-buffer-line-per-row (selection, links and search all assume it),
+    /// so wrapping happens here, at ingestion, by making MORE lines — not in the
+    /// renderer by making rows taller.</para>
+    /// </summary>
+    public IReadOnlyList<Line> Wrap(int maxCols)
+    {
+        string plain = PlainText;
+        if (maxCols < 8 || plain.Length <= maxCols) return new[] { this };
+
+        var pieces = new List<(List<StyledRun> Runs, bool Cont)>();
+        int start = 0;
+        bool first = true;
+        while (start < plain.Length)
+        {
+            int budget = Math.Max(1, maxCols - (first ? 0 : Indent.Length));
+            int len = Math.Min(budget, plain.Length - start);
+            if (start + len < plain.Length)
+            {
+                int space = plain.LastIndexOf(' ', start + len - 1, len);
+                if (space > start) len = space - start;      // cut before the space
+            }
+            List<StyledRun> runs = SliceRuns(start, start + len);
+            if (!first)
+                runs.Insert(0, new StyledRun(Indent, Rgb.DefaultFore, Rgb.DefaultBack, RunFlags.None));
+            pieces.Add((runs, !first));
+            start += len;
+            while (start < plain.Length && plain[start] == ' ') start++;   // swallow the break space
+            first = false;
+        }
+
+        var segments = new List<Line>(pieces.Count);
+        for (int i = 0; i < pieces.Count; i++)
+            segments.Add(new Line(pieces[i].Runs, IsPrompt && i == pieces.Count - 1, ReceivedUtc)
+            { Continuation = pieces[i].Cont });
+        return segments;
+    }
+
+    /// <summary>The runs covering plain-text range [<paramref name="start"/>,
+    /// <paramref name="end"/>), split at the boundaries; flags and link info preserved.</summary>
+    private List<StyledRun> SliceRuns(int start, int end)
+    {
+        var outRuns = new List<StyledRun>();
+        int pos = 0;
+        foreach (StyledRun run in Runs)
+        {
+            int rStart = pos, rEnd = pos + run.Text.Length;
+            pos = rEnd;
+            if (rEnd <= start || rStart >= end) continue;
+            int a = Math.Max(rStart, start), b = Math.Min(rEnd, end);
+            outRuns.Add(run with { Text = run.Text[(a - rStart)..(b - rStart)] });
+        }
+        return outRuns;
+    }
+
     /// <summary>Clickable regions: MXP link runs plus auto-detected http(s) URLs in
     /// ordinary text. Character positions index into <see cref="PlainText"/>.</summary>
     public IReadOnlyList<LinkSpan> Links => _links ??= ComputeLinks();

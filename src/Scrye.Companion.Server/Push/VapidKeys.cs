@@ -39,7 +39,12 @@ public sealed class VapidKeys
     /// <summary>Load the keypair from <paramref name="path"/>, generating and saving one on
     /// first use. Any unreadable or corrupt file is replaced rather than throwing: a broken
     /// key file should cost you your subscriptions, not the ability to start Scrye.</summary>
-    public static VapidKeys LoadOrCreate(string path, string subject = "mailto:scrye@localhost")
+    // The subject must be a contact URI on a REAL domain. Apple validates the domain and
+    // rejects the whole JWT as BadJwtToken over an "@localhost" address — a 403 that FCM
+    // never gives, so it only surfaces the first time an iPhone registers. The project
+    // page is a valid https: contact per RFC 8292 and can never go stale the way an
+    // email default would.
+    public static VapidKeys LoadOrCreate(string path, string subject = "https://github.com/Eldran/Scrye")
     {
         try
         {

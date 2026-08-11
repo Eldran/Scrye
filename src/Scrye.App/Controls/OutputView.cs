@@ -89,8 +89,30 @@ public class OutputView : Control
 
     private readonly Dictionary<uint, IImmutableBrush> _brushCache = new();
     private readonly Dictionary<(uint fore, uint back), Rgb> _readableCache = new();
-    private static readonly IImmutableBrush Background = new ImmutableSolidColorBrush(Color.FromRgb(0x08, 0x0A, 0x0C));
-    private static readonly Rgb SurfaceRgb = new(0x08, 0x0A, 0x0C);   // the colour behind default-background text (matches Background)
+    // The terminal surface follows the active scheme (per-scheme since "void"; always
+    // dark). Cached per colour; ThemeService.Changed repaints us when the scheme moves.
+    private Avalonia.Media.Color _surfaceColor;
+    private IImmutableBrush _surfaceBrush = new ImmutableSolidColorBrush(Color.FromRgb(0x08, 0x0A, 0x0C));
+    private Rgb _surfaceRgb = new(0x08, 0x0A, 0x0C);
+
+    private IImmutableBrush Background
+    {
+        get
+        {
+            Avalonia.Media.Color c = Services.ThemeService.Current.OutputSurface;
+            if (c != _surfaceColor)
+            {
+                _surfaceColor = c;
+                _surfaceBrush = new ImmutableSolidColorBrush(c);
+                _surfaceRgb = new Rgb(c.R, c.G, c.B);
+                _readableCache.Clear();   // the lift floor moved with the surface
+            }
+            return _surfaceBrush;
+        }
+    }
+
+    /// <summary>The colour behind default-background text (matches <see cref="Background"/>).</summary>
+    private Rgb SurfaceRgb { get { _ = Background; return _surfaceRgb; } }
     private const double MinContrast = 3.0;                          // readability floor (WCAG contrast ratio) for glyph vs surface
     private static readonly IImmutableBrush SelectionBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0x35, 0xC4, 0xD6));
     private static readonly IImmutableBrush MatchBrush = new ImmutableSolidColorBrush(Color.FromArgb(0x55, 0xF0, 0xC0, 0x40));
@@ -169,10 +191,13 @@ public class OutputView : Control
         _scrollViewer = this.FindAncestorOfType<ScrollViewer>();
         if (_scrollViewer is not null)
             _scrollViewer.PropertyChanged += ScrollViewerOnPropertyChanged;
+        // scheme switches must repaint the custom-drawn surface even with no new output
+        Services.ThemeService.Changed += InvalidateVisual;
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        Services.ThemeService.Changed -= InvalidateVisual;
         if (_scrollViewer is not null)
             _scrollViewer.PropertyChanged -= ScrollViewerOnPropertyChanged;
         _scrollViewer = null;
@@ -472,7 +497,7 @@ public class OutputView : Control
             string plain = src[i].PlainText;
             if (selA is not null) DrawSelection(context, i, y, plain.Length, selA.Value, selB!.Value);
             if (!string.IsNullOrEmpty(term)) DrawMatches(context, plain, term!, y, i == ActiveMatchLine);
-            if (stamps && plain.Length > 0) DrawTimestamp(context, src[i], y);
+            if (stamps && plain.Length > 0 && !src[i].Continuation) DrawTimestamp(context, src[i], y);
             DrawLine(context, src[i], y);
             DrawLinks(context, src[i], y);
         }

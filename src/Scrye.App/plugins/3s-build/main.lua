@@ -2,11 +2,12 @@
 --
 -- NOTE: dropped / simplified vs the original:
 --   * miniwindow -> HUD panel with a monospace text report. Colour per token IS back
---     (plugin API 1.2 inline markup): affordable cost tokens are green, short ones red
---     and "!"-prefixed, and the tier column keeps the original's per-tier palette in an
---     80s repaint. Each row still carries a status marker ("OK " affordable / " ! "
---     short / "req" prereq unmet / "wip" building / "max" tier 5) so the report is
---     still readable with colour off.
+--     (plugin API 1.2 inline markup): affordable cost tokens are green, short ones
+--     red AND bold (bold is the colour-blind fallback -- the old "!" prefixes and the
+--     " ! " row marker were dropped as noise), and the tier column keeps the
+--     original's per-tier palette in an 80s repaint. Rows still carry "OK " affordable
+--     / "req" prereq unmet / "wip" building / "max" tier 5 markers; a short row's
+--     marker lane is simply blank.
 --   * "build" show/hide is dropped (panels are HUD-managed); "build" now PRINTS the
 --     report to the output window instead.
 --   * click-a-row-to-start is not possible; replaced with alias "build start <name>"
@@ -356,7 +357,7 @@ local function bp_draw()
 
   local lines = {}
   lines[#lines + 1] = string.format(
-    "@{dim}Daler@{} @{accent,bold}%s@{}   @{dim}%s   (@{}@{error}!@{}@{dim} = short)@{}",
+    "@{dim}Daler@{} @{accent,bold}%s@{}   @{dim}%s@{}",
     esc(comma(daler)), show_max and "[all]" or "[+max]")
   for _, r in ipairs(shown) do
     local mark, body
@@ -367,13 +368,13 @@ local function bp_draw()
     elseif r.cat == 2 then
       mark, body = "@{dim}req@{}", "@{dim}" .. esc(r.locked) .. "@{}"
     else
-      mark = r.buildable and "@{success,bold}OK @{}" or "@{error,bold} ! @{}"
+      mark = r.buildable and "@{success,bold}OK @{}" or "   "   -- short: the red says it
       local toks = {}
       for _, t in ipairs(r.toks) do
         -- the original coloured every cost token: green when you can afford it, red when short
         toks[#toks + 1] = t.ok
           and ("@{success}" .. esc(t.text) .. "@{}")
-          or  ("@{error,bold}!" .. esc(t.text) .. "@{}")
+          or  ("@{error,bold}" .. esc(t.text) .. "@{}")
       end
       body = table.concat(toks, "  ")
     end
@@ -563,8 +564,9 @@ scrye.addPanel{
   widgets = {
     { type = "value", text = "",  bind = STATE_SUMMARY, color = "success" },  -- semantic: buildable-now count
     { type = "text",   bind = STATE_REPORT },
-    { type = "button", text = "Refresh", action = function() bp_draw() end },
-    { type = "button", text = "Scan",    action = function() bp_scan() end },
+    -- one button only: the report redraws itself on every feed change, so a manual
+    -- Refresh did nothing Scan doesn't do better ('build refresh' still exists).
+    { type = "button", text = "Scan", action = function() bp_scan() end },
   },
 }
 

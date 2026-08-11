@@ -669,11 +669,37 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
         cl.Pop(1);
 
+        // colorgrid micro-icons (API 1.8): { ["char"] = "glyph-name", ... }
+        Dictionary<string, string>? iconMap = null;
+        cl.GetField(w, "icons");
+        if (cl.IsTable(-1))
+        {
+            iconMap = new Dictionary<string, string>(StringComparer.Ordinal);
+            int ic = cl.GetTop();
+            cl.PushNil();
+            while (cl.Next(ic))
+            {
+                string? key = LuaHost.ToStringLoose(cl, cl.GetTop() - 1);
+                string? val = LuaHost.ToStringLoose(cl, cl.GetTop());
+                if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(val)) iconMap[key] = val;
+                cl.Pop(1);
+            }
+        }
+        cl.Pop(1);
+
         // buttonrow children: buttons = { {text=, action=fn}, ... }
         List<WidgetSpec>? children = null;
         cl.GetField(w, "buttons");
         if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop());
         cl.Pop(1);
+
+        // row-container children (API 1.8): widgets = { <any widget specs> }
+        if (children is null)
+        {
+            cl.GetField(w, "widgets");
+            if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop());
+            cl.Pop(1);
+        }
 
         // table columns: columns = { "Item", "Qty", "Price" }
         List<string>? columns = null;
@@ -692,6 +718,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
         cl.Pop(1);
 
+        // colorgrid cell-size ceiling (API 1.8): cell = 24 doubles the compact default
+        cl.GetField(w, "cell");
+        double cellMax = cl.Type(-1) == LuaType.Number ? cl.ToNumber(-1) : 0;
+        cl.Pop(1);
+
         return new WidgetSpec
         {
             Type = Field(cl, w, "type") ?? "label",
@@ -703,6 +734,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Dim = FieldBool(cl, w, "dim", defaultValue: false),
             Weave = FieldBool(cl, w, "weave", defaultValue: false),
             Palette = palette,
+            Icons = iconMap,
+            Cell = cellMax,
             Columns = columns,
             Separator = Field(cl, w, "separator"),
             Labels = Field(cl, w, "labels"),

@@ -178,6 +178,25 @@ local MAP_PAL = {
   ["?"] = "#282828",                                       -- unmapped char
 }
 
+-- Micro-icons (API 1.8): terrain drawn as tiny glyphs over muted tiles of the same
+-- palette colours. Chars left out (void, roads, walls, masked) stay flat tiles --
+-- linear/background features read better as colour than as a repeated glyph.
+local MAP_ICONS = {
+  ["t"] = "dashes",  ["T"] = "dashes",    -- tundra
+  ["h"] = "hill",    ["H"] = "hill",
+  ["A"] = "mountain",
+  ["f"] = "tree",    ["F"] = "pine",
+  ["p"] = "grass",
+  ["W"] = "water",   ["w"] = "water", ["~"] = "water",
+  ["P"] = "gate",
+  ["L"] = "tower",                        -- lin hold (enemy keep)
+  ["S"] = "house",                        -- settlement
+  ["C"] = "crown",   ["M"] = "crown",     -- capitals
+  ["R"] = "ruin",
+  ["*"] = "star",
+  ["X"] = "person",                       -- you
+}
+
 -- voyage chart char -> colour
 local SEA_PAL = {
   ["#"] = "#303030",                      -- unrevealed
@@ -196,6 +215,22 @@ local SEA_PAL = {
   ["B"] = "#A84E7C",                      -- stormbelt
   ["*"] = "#456F4E",                      -- resolved node
   [" "] = "#19232A",                      -- sea (cool deep surface; specials validated against it)
+}
+
+-- Sea-chart micro-icons. '=' crosscurrent, '^' deadwater, 'B' stormbelt and the
+-- unrevealed/unknown washes stay flat (zones, not things) and keep their letters.
+local SEA_ICONS = {
+  ["O"] = "water",  ["~"] = "water",
+  ["F"] = "dashes",                       -- fog
+  ["I"] = "hill",                         -- island
+  ["H"] = "anchor",                       -- harbor
+  ["W"] = "cross",                        -- wreck
+  ["T"] = "bolt",                         -- storm
+  ["X"] = "star",                         -- objective
+  ["S"] = "ship",                         -- your ship
+  ["+"] = "dot",                          -- queued path
+  [">"] = "flag",                         -- destination
+  ["*"] = "dot",                          -- resolved node
 }
 
 -- city plan: terrain char -> tile colour; placed buildings become role digits 1-7
@@ -217,6 +252,19 @@ local PLAN_PAL = {
   ["6"] = "#E0E0E0",  -- homes      (white)
   ["7"] = "#FFD040",  -- throne     (gold)
   ["?"] = "#383838",  -- unknown
+}
+
+-- Town-plan micro-icons: one glyph per district, terrain as on the world map.
+local PLAN_ICONS = {
+  ["f"] = "tree", ["H"] = "hill", ["w"] = "water",
+  ["G"] = "gate", ["B"] = "gate",
+  ["1"] = "grass",    -- producers (fields)
+  ["2"] = "hammer",   -- industry
+  ["3"] = "cross",    -- grim quarter
+  ["4"] = "ship",     -- trade
+  ["5"] = "star",     -- culture
+  ["6"] = "house",    -- homes
+  ["7"] = "crown",    -- throne
 }
 local ROLE_DIGIT = { prod = "1", ind = "2", grim = "3", trade = "4",
                      cult = "5", home = "6", throne = "7" }
@@ -438,6 +486,20 @@ local function publish_town_list()
 end
 publish_town_list()   -- TRAVEL_TOWNS is static, so once is enough
 
+-- Icons on the three grids (world map / sea chart / town plan) are a persisted
+-- preference: the toggle rebuilds the panel in place ('addPanel' with the same title
+-- keeps position, size and the selected tab -- and this panel has no input fields,
+-- so a rebuild can never eat anything you were typing).
+local icons_on = scrye.store.get("icons") ~= "0"
+local build_panel   -- defined below, after the widget builders it needs
+
+local function toggle_icons()
+  icons_on = not icons_on
+  scrye.store.set("icons", icons_on and "1" or "0")
+  build_panel()
+  scrye.print("[viking] map icons " .. (icons_on and "ON" or "OFF") .. " (vicons toggles)")
+end
+
 -- Travel tab: one clickable list.
 local travel_widgets = {
   { type = "label", text = "Walk to a settlement (uses the built-in route from where you are):" },
@@ -448,7 +510,7 @@ local travel_widgets = {
 -- Map tab widgets: the rendered map (also clickable) + a clickable town list + the full location list.
 local map_widgets = {
   { type = "value", text = "", bind = P .. "maphdr", color = "#6288E1" },   -- section header echoes the accent
-  { type = "colorgrid", bind = P .. "map", palette = MAP_PAL,
+  { type = "colorgrid", bind = P .. "map", palette = MAP_PAL, icons = icons_on and MAP_ICONS or nil,
     onClick = function(col, row, ch)
       local key = col .. "|" .. row
       local code = travel_code(key)
@@ -468,6 +530,7 @@ local map_widgets = {
   { type = "text",  bind = P .. "towns" },
 }
 map_widgets[#map_widgets + 1] = { type = "text", bind = P .. "maplocs" }   -- full location list w/ coords
+map_widgets[#map_widgets + 1] = { type = "button", text = "Icons on/off", action = function() toggle_icons() end }
 
 -- ---------------------------------------------------- seconds counter
 -- No os.time in the sandbox: count elapsed seconds ourselves (throttles/cooldowns).
@@ -619,22 +682,36 @@ local function build_city()
       add(string.format("%-4s %-10s -> %-16s %5s  x%s", f[1] or "?", f[2] or "?", f[3] or "?", eta, f[5] or "?"))
     end
   end
-  -- Refinery -> a barlist (label | caption | value | max | refined): fill = cur/max,
-  -- the filled part splits into refined (green) and raw (amber). refined = quality-weighted
-  -- units = sum over stages of qty * pct/100.
+  -- Refinery -> a barlist (label | caption | value | max | refined | tooltip): fill =
+  -- cur/max, the filled part splits into raw (amber, left) and refined (green, right).
+  -- refined = quality-weighted units = sum over stages of qty * pct/100. The sixth field
+  -- is the hover tooltip: the per-quality breakdown the MUSHclient miniwindow showed on
+  -- its hotspots, best quality first ('\n' becomes a line break host-side).
   local R = {}
   for _, r in ipairs(split(gv("REFINERY"), "|")) do
     local f = split(r, ":")
     if f[1] and f[1] ~= "" then
       local name = f[1]:gsub("_", " "):gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b:lower() end)
       local cur, max = num(f[3]), num(f[4])
-      local refined = 0
+      local refined, stages = 0, {}
       for _, s in ipairs(split(f[5] or "", ";")) do
         local g = split(s, ",")
-        if g[1] and g[1] ~= "" then refined = refined + num(g[2]) * num(g[3]) / 100 end
+        if g[1] and g[1] ~= "" then
+          local qty, pct = num(g[2]), num(g[3])
+          refined = refined + qty * pct / 100
+          if qty > 0 then stages[#stages + 1] = { qty = qty, pct = pct } end
+        end
       end
-      R[#R + 1] = string.format("%s\tT%s %d/%d\t%d\t%d\t%d",
-        name, f[2] or "?", cur, max, cur, max, math.floor(refined + 0.5))
+      table.sort(stages, function(a, b) return a.pct > b.pct end)
+      local tip = {}
+      for _, st in ipairs(stages) do
+        tip[#tip + 1] = string.format("%d units @ %d%%%s", st.qty, st.pct,
+          st.pct >= 100 and " (refined)" or st.pct == 0 and " (raw)" or "")
+      end
+      if #tip == 0 then tip[1] = "empty" end
+      R[#R + 1] = string.format("%s\tT%s %d/%d\t%d\t%d\t%d\t%s",
+        name, f[2] or "?", cur, max, cur, max, math.floor(refined + 0.5),
+        table.concat(tip, "\\n"))
     end
   end
   scrye.setState(P .. "refinery", table.concat(R, "\n"))
@@ -1242,6 +1319,8 @@ local SEANAV_TARGETS = { I = true, W = true, X = true }
 -- The chars worth a letter on the chart -- the original's SEALETTER set. Everything else
 -- (fog, open sea, unrevealed) stays a plain tile so the map still reads as a map.
 local SEALETTERS = "SXHWTI>*B="
+-- the legend strip's characters, in the order the key text below it reads
+local SEA_LEGEND = "SXHWTIF#O*B+>=^"
 
 -- Chart cells are labelled A01..P16: row letter, then 1-based column.
 local function sea_coord(cl, rw) return string.char(65 + rw) .. string.format("%02d", cl + 1) end
@@ -1487,8 +1566,8 @@ local function build_sea()
   for _, t in ipairs(resolves) do
     opts[#opts + 1] = string.format("@{warning,bold,click=vvoyage resolve %s}%s@{}", t, esc(t))
   end
-  scrye.setState(P .. "resolveopts",
-    #opts > 0 and ("  " .. table.concat(opts, "    ")) or col("dim", "(no resolve pending)"))
+  scrye.setState(P .. "resolveopts", "@{dim}Resolve:@{}\n"
+    .. (#opts > 0 and table.concat(opts, "\n") or col("dim", "(none pending)")))
   if #resolves > 0 then
     add(col("warning", "Resolve pending: " .. table.concat(resolves, ", "))
         .. col("dim", "   (click one below, or: vvoyage resolve <opt>)"))
@@ -1859,26 +1938,28 @@ local function patrol_commit()
   else scrye.print("[viking] no patrol number known") end
 end
 
+build_panel = function()
+-- map_widgets is constructed once at load; re-gate its grid so the toggle
+-- actually reaches it (the sea/plan grids are inline below and rebuild fresh)
+for _, w in ipairs(map_widgets) do
+  if w.type == "colorgrid" then w.icons = icons_on and MAP_ICONS or nil end
+end
 scrye.addPanel{
   title = "Viking Status",
   width = 560,
   accent = "#6288E1",          -- signature: viking steel-blue (validated accent set)
   tabs = {
+    -- The HP/Seid/Vig/Rad + Enemy gauges moved to their own plugin (3s-vitals):
+    -- they bind global state, so the split cost nothing and the bars can float
+    -- small next to the output while this panel stays parked.
     { title = "Stats", widgets = {
-        -- dim = true: the bar darkens as the value drops (green base for stats)
-        { type = "gauge", text = "HP",   value = "character.health.current", max = "character.health.max", dim = true },
-        { type = "gauge", text = "Seid", value = "vik.seid", max = "vik.mseid", dim = true },
-        { type = "gauge", text = "Vig",  value = "vik.vig",  max = "vik.mvig",  dim = true },
-        { type = "gauge", text = "Rad",  value = "vik.rad",  max = "vik.mrad",  dim = true },
-        { type = "value", text = "Enemy: ", bind = "enemy.name", color = "error" },                -- semantic: enemy
-        { type = "gauge", text = "Enemy", value = "enemy.health", max = 100, dim = true, color = "error" },
         { type = "value", text = "Modrsokn: ", bind = P .. "mordsokn", color = "info" },            -- semantic
         { type = "text", bind = P .. "stats" },
         { type = "button", text = "Commit patrol (last count)", action = patrol_commit },
     } },
     { title = "City", widgets = {
         { type = "text", bind = P .. "city" },
-        { type = "label", text = "-- Refinery --   bar = fill x quality (amber raw -> green refined)", color = "dim" },
+        { type = "label", text = "-- Refinery --   raw (amber) refines left to right (green) - hover a bar for the quality breakdown", color = "dim" },
         { type = "barlist", bind = P .. "refinery" },
     } },
     { title = "Builds", widgets = {
@@ -1902,19 +1983,32 @@ scrye.addPanel{
         -- Letters on the notable cells (the original's SEALETTER set) so the chart is
         -- readable without cross-referencing the legend; plain terrain stays a colour tile.
         -- Clicking a cell queues a course there, replacing the original's chart hotspots.
-        { type = "colorgrid", bind = P .. "seachart", palette = SEA_PAL,
-          labels = SEALETTERS,
-          onClick = function(cl, rw, ch)
-            if ch == nil or ch == "" or ch == " " then return end
-            local coord = sea_coord(cl, rw)
-            scrye.send("vvoyage queue " .. coord)
-            scrye.print("[viking] queued course to " .. coord
-              .. (SEA_NAME[ch] and ("  (" .. SEA_NAME[ch] .. ")") or ""))
-          end },
-        { type = "label", text = "Resolve:", color = "dim" },
-        { type = "text",  bind = P .. "resolveopts" },
-        { type = "label", text = "S ship  X objective  H harbor  W wreck  T storm  I island  F fog  # unrevealed  O open sea  * resolved  B stormbelt  + path  > destination" },
+        -- chart + resolve side by side (the "row" container, API 1.8): the resolve
+        -- choices live in the dead space right of the chart instead of below it
+        { type = "row", widgets = {
+          { type = "colorgrid", bind = P .. "seachart", palette = SEA_PAL,
+            icons = icons_on and SEA_ICONS or nil, labels = SEALETTERS, cell = 24,
+            onClick = function(cl, rw, ch)
+              if ch == nil or ch == "" or ch == " " then return end
+              local coord = sea_coord(cl, rw)
+              scrye.send("vvoyage queue " .. coord)
+              scrye.print("[viking] queued course to " .. coord
+                .. (SEA_NAME[ch] and ("  (" .. SEA_NAME[ch] .. ")") or ""))
+            end },
+          { type = "text", bind = P .. "resolveopts" },
+        } },
+        -- Legend that shows what the chart actually draws: a row of the special tiles
+        -- exactly as rendered (glyphs when icons are on, flat when off), the same
+        -- characters as letter tiles beneath (aligned -- both rows share one bound
+        -- string), and the letter -> name key underneath.
+        { type = "colorgrid", bind = P .. "sealegend", palette = SEA_PAL,
+          icons = icons_on and SEA_ICONS or nil, cell = 24 },
+        { type = "colorgrid", bind = P .. "sealegend", palette = SEA_PAL,
+          labels = SEA_LEGEND, cell = 24 },
+        { type = "label", color = "dim",
+          text = "S ship  X objective  H harbor  W wreck  T storm  I island  F fog  # unrevealed  O open sea  * resolved  B stormbelt  + path  > destination  = current  ^ deadwater" },
         { type = "button", text = "Clear voyage queue", action = function() scrye.send("vvoyage clear") end },
+        { type = "button", text = "Icons on/off", action = function() toggle_icons() end },
     } },
     { title = "Voyage", widgets = {
         { type = "text", bind = P .. "voyage" },
@@ -1923,7 +2017,7 @@ scrye.addPanel{
     { title = "Travel", widgets = travel_widgets },
     { title = "Plan", widgets = {
         { type = "value", text = "", bind = P .. "planhdr", color = "#6288E1" },   -- section header echoes the accent
-        { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL },
+        { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL, icons = icons_on and PLAN_ICONS or nil },
         { type = "text", bind = P .. "planlist" },
     } },
     { title = "Mission", widgets = {
@@ -1936,6 +2030,12 @@ scrye.addPanel{
     } },
   },
 }
+end
+build_panel()
+
+scrye.addAlias{ pattern = [[^vicons$]], regex = true, run = function() toggle_icons() end }
+
+scrye.setState(P .. "sealegend", SEA_LEGEND)   -- the legend strip (static)
 
 -- ------------------------------------------------------------------ init
 update_seanav_state()

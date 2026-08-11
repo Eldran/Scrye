@@ -335,10 +335,13 @@ public sealed class CompanionViewModel : ViewModelBase
         Notice = "sending a test notification…";
         try
         {
-            int delivered = await c.TestNotifyAsync();
-            Notice = delivered > 0
-                ? $"delivered to {delivered} device(s)"
-                : "no device accepted it — check the phone's notification settings";
+            var outcome = await c.TestNotifyAsync();
+            // The outcome sentence names the failure ("403 from web.push.apple.com: BadJwtToken")
+            // instead of the old boolean shrug; the only case it can't express is "there was
+            // nothing to send to", which gets its own hint because it's the most common one.
+            Notice = outcome is { Delivered: 0, Failed: 0, Expired: 0 }
+                ? "no devices are registered — tap 'Enable notifications' in the companion app on the phone"
+                : outcome.ToString();
         }
         catch (Exception ex)
         {

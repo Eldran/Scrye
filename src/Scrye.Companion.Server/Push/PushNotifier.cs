@@ -3,6 +3,17 @@ using Microsoft.Extensions.Logging;
 namespace Scrye.Companion.Server.Push;
 
 /// <summary>
+/// What a fan-out actually did — the test command shows this verbatim, so a failing
+/// delivery is a visible sentence instead of a silent shrug.
+/// </summary>
+public sealed record PushOutcome(int Delivered, int Expired, int Failed, string? LastError)
+{
+    public override string ToString() =>
+        $"delivered {Delivered}, pruned {Expired} expired, {Failed} failed"
+        + (LastError is not null ? $" ({LastError})" : "");
+}
+
+/// <summary>
 /// Fans a notification out to every registered device, pruning the ones the push service
 /// says are gone.
 ///
@@ -26,14 +37,14 @@ public sealed class PushNotifier
 
     public int SubscriberCount => _store.Count;
 
-    /// <summary>Notify every device. Returns how many were delivered — used by tests and by
-    /// the desktop's status output; callers in the hot path should use
-    /// <see cref="NotifyInBackground"/>.</summary>
-    public async Task<int> NotifyAsync(string title, string body, string? sessionId, DateTimeOffset now,
-                                       CancellationToken ct = default)
+    /// <summary>Notify every device and report exactly what happened — used by the test
+    /// command and status output; callers in the hot path use <see cref="NotifyInBackground"/>.</summary>
+    public async Task<PushOutcome> NotifyAsync(string title, string body, string? sessionId, DateTimeOffset now,
+                                               CancellationToken ct = default)
     {
         string payload = PushSender.BuildPayload(title, body, sessionId);
-        int delivered = 0;
+        int delivered = 0, expired = 0, failed = 0;
+        string? lastError = null;
 
         foreach (PushSubscription sub in _store.All)
         {
@@ -47,15 +58,18 @@ public sealed class PushNotifier
                     // The device uninstalled, cleared data, or revoked permission. Keeping
                     // it would mean retrying forever and courting a rate limit.
                     _store.Remove(sub.Id);
+                    expired++;
                     _logger?.LogInformation("Pruned expired push subscription");
                     break;
                 case PushResult.Failed:
-                    _logger?.LogWarning("Push delivery failed for one subscription");
+                    failed++;
+                    lastError = _sender.LastError ?? lastError;
+                    _logger?.LogWarning("Push delivery failed: {Reason}", _sender.LastError);
                     break;
             }
         }
 
-        return delivered;
+        return new PushOutcome(delivered, expired, failed, lastError);
     }
 
     /// <summary>Notify without waiting. Exceptions are swallowed deliberately: a failed

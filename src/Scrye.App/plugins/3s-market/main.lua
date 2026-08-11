@@ -12,8 +12,11 @@
 --     session stats, Log/Stats tabs, 3s_autotrade.log file) -- it relied on
 --     click hotspots, inputboxes, io.* log files, os.time and the MIP companion
 --     plugin's broadcasts, and is outside this port's scope (market scan + report).
---   * Town-click dispatch, Units/Escort controls DROPPED (no per-row hotspots in
---     the declarative panel API); the ranked report is display-only.
+--   * Town-click dispatch is BACK (inline click markup): every town cell in the
+--     report dispatches the configured Units of that row's good (buy side blue,
+--     sell side green), and clicking a GOOD's name toggles it held/released --
+--     held goods show amber and are never auto-traded. Units/Escort live in the
+--     panel inputs.
 --   * The "updated HH:MM" stamp DROPPED (no clock in the sandbox); the status line
 --     says whether data is from this session or restored from the last one.
 --   * Low-stock towns were orange in the miniwindow; here they are marked with "*"
@@ -262,7 +265,21 @@ local function mk_render(status)
   if #results == 0 then
     lines[#lines + 1] = "No data - click Refresh (or type mkref)."
   else
+    -- Markup characters are invisible to the renderer, so cells are padded on the
+    -- RAW text and wrapped in markup AFTER -- never string.format over markup.
+    local function padl(v, w) v = tostring(v or ""); return string.rep(" ", math.max(0, w - #v)) .. v end
+    local function padr(v, w) v = tostring(v or ""); return v .. string.rep(" ", math.max(0, w - #v)) end
+    -- a town cell dispatches the configured Units of this row's good there on click
+    -- (buy side blue = daler out, sell side green = daler in). cell() truncates the
+    -- display name to 14; TOWNCMD knows the truncated forms, so the click still lands.
+    local function town_link(town, side, cmd)
+      if town == "" then return padr("", 14) end
+      return string.format("@{%s,click=mkdispatch %s %s %s}%s@{}%s",
+        side == "buy" and "info" or "success", side, cmd, town_cmd(town),
+        esc(town), string.rep(" ", math.max(0, 14 - #town)))
+    end
     for _, r in ipairs(results) do
+      local cmd = disp_cmd(r.cmd)
       local bp, bt, bq = cell(r.buys[1])
       local sp, st, sq = cell(r.sells[1])
       local profit
@@ -271,9 +288,16 @@ local function mk_render(status)
       else
         profit = "sell"          -- sell-only good, no buy side
       end
-      -- held goods are marked "#" (the MUSHclient window tinted them blue instead)
-      local label = at.exempt[disp_cmd(r.cmd)] and ("#" .. r.res) or r.res
-      lines[#lines + 1] = string.format(FMT, label, bp, bt, bq, sp, st, sq, profit)
+      -- the good's name toggles held/released on click; held goods wear amber
+      -- (the MUSHclient window tinted them blue -- same idea, theme-aware colour)
+      local goodcell = string.format("@{%s,click=atrade exempt %s}%s@{}",
+        at.exempt[cmd] and "warning" or "text", cmd, padr(esc(r.res), 11))
+      local function row(label, b)
+        return label .. " " .. padl(b.bp, 4) .. " " .. town_link(b.bt, "buy", cmd) .. " "
+          .. padl(b.bq, 6) .. "  " .. padl(b.sp, 4) .. " " .. town_link(b.st, "sell", cmd) .. " "
+          .. padl(b.sq, 6) .. "  " .. (b.profit or "")
+      end
+      lines[#lines + 1] = row(goodcell, { bp = bp, bt = bt, bq = bq, sp = sp, st = st, sq = sq, profit = profit })
       local b2, b3 = extra_towns(r.buys)
       local s2, s3 = extra_towns(r.sells)
       if b2 or s2 then
@@ -281,18 +305,19 @@ local function mk_render(status)
         if b2 then xbp, xbt, xbq = cell(b2) end
         local xsp, xst, xsq = "", "", ""
         if s2 then xsp, xst, xsq = cell(s2) end
-        lines[#lines + 1] = string.format(FMT, "  or", xbp, xbt, xbq, xsp, xst, xsq, "")
+        lines[#lines + 1] = row(padr("  or", 11), { bp = xbp, bt = xbt, bq = xbq, sp = xsp, st = xst, sq = xsq })
       end
       if b3 or s3 then
         local xbp, xbt, xbq = "", "", ""
         if b3 then xbp, xbt, xbq = cell(b3) end
         local xsp, xst, xsq = "", "", ""
         if s3 then xsp, xst, xsq = cell(s3) end
-        lines[#lines + 1] = string.format(FMT, "  or", xbp, xbt, xbq, xsp, xst, xsq, "")
+        lines[#lines + 1] = row(padr("  or", 11), { bp = xbp, bt = xbt, bq = xbq, sp = xsp, st = xst, sq = xsq })
       end
     end
     lines[#lines + 1] = ""
-    lines[#lines + 1] = "* stock under " .. LOWSTOCK .. " (next-best town shown)   # held (atrade exempt)"
+    lines[#lines + 1] = "@{dim}* stock under " .. LOWSTOCK .. " (next-best town shown)@{}"
+    lines[#lines + 1] = "@{dim}click a good to hold it (@{}@{warning}held@{}@{dim} = never auto-traded) - click a town to send Units@{}"
   end
   scrye.setState(P .. "report", table.concat(lines, "\n"))
   if publish_dispatch then publish_dispatch() end
@@ -583,7 +608,11 @@ auto_trade_tick = function()
   local fillmin  = clearing and (at.clear_pct or 25) or (at.min_pct or 70)
   local need = math.max(1, math.min(cap, math.ceil(cap * fillmin / 100)))
 
-  -- SELL: offload warehouse stock to its best-paying town
+  -- SELL: offload warehouse stock to its best-paying town. Candidates are ranked
+  -- by CART VALUE (units x best sell price) -- the market report's Profit column is
+  -- never consulted here; profit is an arbitrage number and these are goods we
+  -- already own. A small cart of something expensive legitimately outranks a full
+  -- cart of something cheap.
   local cand = {}
   for _, r in ipairs(results) do
     if not at.exempt[disp_cmd(r.cmd)] and r.sells and r.sells[1] then
@@ -593,12 +622,17 @@ auto_trade_tick = function()
       if not (isref or SPECIAL[r.cmd]) then reserve = math.max(reserve, at.stock or 300) end
       local avail = have - reserve
       if isref and not at.refined then avail = 0 end
-      if avail > 0 and math.min(avail, cap) >= need then
+      -- Candidacy needs only a dispatchable amount (the game minimum), NOT the cart
+      -- fill-minimum: gating sells on `need` starved high-price goods -- finery had
+      -- to pile up past 70% of a cart before it could even enter the race, while
+      -- cheap bulk qualified every pass. Junk carts still stay off the road: the
+      -- value floor below refuses anything under min_rel% of the best load.
+      if avail >= MK_UNITS_MIN then
         local best, bestq = nil, nil
         for _, s in ipairs(r.sells) do
           local dem = tonumber(s.qty)
           local qty = math.min(avail, cap, (dem and dem > 0) and dem or cap)
-          if qty >= 1 then
+          if qty >= MK_UNITS_MIN then   -- below the game's dispatch minimum isn't a cart
             local val = qty * (s.price or 0)
             if not best or val > best.value then best = { town = s.town, qty = qty, value = val } end
             if not bestq or qty > bestq.qty or (qty == bestq.qty and val > bestq.value) then
@@ -887,7 +921,7 @@ local function at_config(rest)
   elseif rest == "stats reset" then at.stats = { buys=0, sells=0, spent=0, earned=0, since=os.time(), recent={} }; note("session stats reset"); at_draw(); return
   elseif rest == "log"         then at_show_log(); return
   elseif rest == "exempt"       then local l={}; for k,on in pairs(at.exempt) do if on then l[#l+1]=k end end; table.sort(l); note("held: " .. (#l>0 and table.concat(l, ", ") or "(none)")); return
-  elseif rest == "exempt clear" then at.exempt = {}; sset("at_exempt", ""); note("held list cleared"); at_draw(); return
+  elseif rest == "exempt clear" then at.exempt = {}; sset("at_exempt", ""); note("held list cleared"); mk_render(nil); at_draw(); return
   elseif rest:match("^exempt%s+") then at_toggle_exempt(rest:gsub("^exempt%s+", "")); at_draw(); return
   elseif key and AT_FIELD[key] then at_setnum(key, val); return
   else
@@ -1138,7 +1172,7 @@ scrye.addPanel{
         { type = "input", text = "Clearing % ",         bind = P .. "v_full",    onSubmit = function(t) at_setnum("full", t) end },
         { type = "input", text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) at_setnum("clear", t) end },
         { type = "input", text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) at_setnum("escort", t) end },
-        { type = "label", text = "Hold a good: type  atrade exempt <good>", color = "dim" },
+        { type = "label", text = "Hold a good: click its name in the Market tab (or: atrade exempt <good>)", color = "dim" },
     } },
     { title = "Log", widgets = {
         { type = "text", bind = P .. "atlog" },

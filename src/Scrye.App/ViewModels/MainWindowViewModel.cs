@@ -17,6 +17,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     public CompanionController Companion { get; }
 
     public RelayCommand ConnectCommand { get; }         // quick-connect
+    public RelayCommand OpenQuickConnectCommand { get; }
+    public RelayCommand CancelQuickConnectCommand { get; }
+
+    private bool _quickConnectOpen;
+    /// <summary>The quick-connect dialog (host/port/TLS/MIP, session-only) — the old
+    /// always-visible top bar, now summoned on demand from the sidebar.</summary>
+    public bool QuickConnectOpen { get => _quickConnectOpen; set => SetField(ref _quickConnectOpen, value); }
     public RelayCommand NewMudCommand { get; }
     public RelayCommand AddAccountCommand { get; }
     public RelayCommand AddCharacterCommand { get; }
@@ -105,7 +112,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         Services.ThemeService.Apply(startupGlobal.Theme);
         Services.ThemeService.ApplyAnsiPalette(startupGlobal.AnsiPalette);
 
-        ConnectCommand = new RelayCommand(QuickConnect);
+        ConnectCommand = new RelayCommand(() => { QuickConnectOpen = false; QuickConnect(); });
+        OpenQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = true);
+        CancelQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = false);
         NewMudCommand = new RelayCommand(() =>
             Editor = new WorldEditorViewModel("New MUD", null, isNew: true, LayerKind.Mud));
         AddAccountCommand = new RelayCommand(AddAccount);

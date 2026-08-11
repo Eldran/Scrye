@@ -65,16 +65,38 @@ public class ColorGridView : Control
     public static readonly StyledProperty<bool> WeaveProperty =
         AvaloniaProperty.Register<ColorGridView, bool>(nameof(Weave));
 
+    /// <summary>Micro-icons (plugin API 1.8): maps a grid character to one of the named
+    /// glyphs in <see cref="IconGlyphs"/>. An iconed cell draws a muted tile of its palette
+    /// colour with the glyph on top in a lightened shade of the same colour — so terrain
+    /// looks like terrain instead of a heatmap, and a palette change recolours everything.
+    /// Icons win over <see cref="LabelChars"/> letters; below <see cref="MinIconCell"/> the
+    /// cell falls back to the plain tile (and then the letter rules apply), so a dense grid
+    /// degrades exactly like the letters do. Unknown glyph names render as plain tiles.</summary>
+    public static readonly StyledProperty<Dictionary<char, string>?> IconsProperty =
+        AvaloniaProperty.Register<ColorGridView, Dictionary<char, string>?>(nameof(Icons));
+
+    /// <summary>Upper clamp for the cell size (plugin API 1.8's colorgrid <c>cell</c>).
+    /// The default 12 keeps dense grids compact; a chart that wants readable icons
+    /// (the viking sea chart) raises it and the cells grow — still shrinking to fit
+    /// the available width, exactly as before, just allowed to be bigger first.</summary>
+    public static readonly StyledProperty<double> MaxCellProperty =
+        AvaloniaProperty.Register<ColorGridView, double>(nameof(MaxCell), 12);
+
     public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
     public ICommand? HoverCommand { get => GetValue(HoverCommandProperty); set => SetValue(HoverCommandProperty, value); }
     public string LabelChars { get => GetValue(LabelCharsProperty); set => SetValue(LabelCharsProperty, value); }
     public bool Weave { get => GetValue(WeaveProperty); set => SetValue(WeaveProperty, value); }
+    public Dictionary<char, string>? Icons { get => GetValue(IconsProperty); set => SetValue(IconsProperty, value); }
+    public double MaxCell { get => GetValue(MaxCellProperty); set => SetValue(MaxCellProperty, value); }
 
     /// <summary>Last cell reported to <see cref="HoverCommand"/>; (-1,-1) = pointer not over a cell.</summary>
     private int _hoverCol = -1, _hoverRow = -1;
 
     /// <summary>Below this cell size a letter is illegible, so we draw tiles only.</summary>
     private const double MinLabelCell = 7;
+
+    /// <summary>Below this cell size a glyph is just noise; iconed cells fall back to tiles.</summary>
+    private const double MinIconCell = 8;
 
     private static readonly ImmutableSolidColorBrush LabelDark = new(Color.FromRgb(0x08, 0x06, 0x14));
     private static readonly ImmutableSolidColorBrush LabelLight = new(Color.FromRgb(0xF4, 0xEF, 0xFF));
@@ -84,8 +106,123 @@ public class ColorGridView : Control
 
     static ColorGridView()
     {
-        AffectsMeasure<ColorGridView>(GridTextProperty, WeaveProperty);
-        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty, LabelCharsProperty, WeaveProperty);
+        AffectsMeasure<ColorGridView>(GridTextProperty, WeaveProperty, MaxCellProperty);
+        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty, LabelCharsProperty, WeaveProperty, IconsProperty, MaxCellProperty);
+    }
+
+    // ---- micro-icon glyphs (API 1.8) ---------------------------------------------------
+    // Each glyph is designed in a 12-unit box and scaled by u = cellSize / 12. Fill is the
+    // main shape; Stroke is line work drawn with a round-capped pen. Either may be empty.
+    // The SVG path mini-language keeps these auditable against the design mock.
+
+    /// <summary>The public glyph vocabulary, for docs and validation.</summary>
+    public static readonly string[] IconGlyphs =
+    {
+        "water", "dashes", "grass", "hill", "tree", "pine", "mountain", "house", "tower",
+        "gate", "ruin", "star", "person", "ship", "anchor", "flag", "bolt", "crown",
+        "hammer", "cross", "dot",
+    };
+
+    private static (string Fill, string Stroke) IconPaths(string name, double u) => name switch
+    {
+        "water" => ("", F("M{0},{1} q{2},{3} {4},0 t{4},0 t{4},0 M{0},{5} q{2},{3} {4},0 t{4},0 t{4},0",
+                         1.5 * u, 4.5 * u, 1.5 * u, -2 * u, 3 * u, 8 * u)),
+        "dashes" => ("", F("M{0},{1} h{2} M{0},{3} h{4}", 2.5 * u, 4.5 * u, 7 * u, 7.5 * u, 4.5 * u)),
+        "grass" => ("", F("M{0},{1} v{2} M{3},{4} v{5} M{6},{1} v{2}",
+                          2.5 * u, 8.5 * u, -3 * u, 5.5 * u, 9 * u, -4 * u, 8.5 * u)),
+        "hill" => ("", F("M{0},{1} q{2},{3} {4},0 M{5},{1} q{6},{7} {8},0",
+                         1 * u, 8.5 * u, 2.5 * u, -5 * u, 5 * u, 5.5 * u, 2.2 * u, -3.6 * u, 4.4 * u)),
+        "tree" => (F("M{0},{1} L{2},{3} L{4},{3} Z M{5},{3} h{6} v{7} h-{6} Z",
+                     6 * u, 1.2 * u, 9.6 * u, 7 * u, 2.4 * u, 5.1 * u, 1.8 * u, 3.4 * u), ""),
+        "pine" => (F("M{0},{1} L{2},{3} L{4},{3} L{5},{6} L{7},{6} L{8},{3} L{9},{3} Z M{10},{6} h{11} v{12} h-{11} Z",
+                     6 * u, 1 * u, 8.8 * u, 4.6 * u, 7.6 * u, 10 * u, 8 * u, 2 * u, 4.4 * u, 3.2 * u, 5.2 * u, 1.6 * u, 2.6 * u), ""),
+        "mountain" => (F("M{0},{1} L{2},{3} L{4},{5} L{6},{7} L{8},{1} Z",
+                         1 * u, 9.5 * u, 4.5 * u, 2.5 * u, 6.5 * u, 6.5 * u, 8 * u, 4 * u, 11 * u), ""),
+        "house" => (F("M{0},{1} h{2} v{3} h-{2} Z M{4},{1} L{5},{6} L{7},{1} Z",
+                      2.5 * u, 6 * u, 7 * u, 4 * u, 1.5 * u, 6 * u, 2 * u, 10.5 * u), ""),
+        "tower" => (F("M{0},{1} h{2} v{3} h{4} v-{3} h{2} v{5} h-{6} Z M{7},{8} h{9} v{10} h-{9} Z",
+                      3.5 * u, 3 * u, 1.5 * u, 1.4 * u, 2 * u, 2.8 * u, 5 * u, 4.2 * u, 5.8 * u, 3.6 * u, 4.4 * u), ""),
+        "gate" => (F("M{0},{1} v-{2} q{3},-{4} {5},0 v{2} h-{6} v-{7} h-{8} v{7} Z",
+                     2.5 * u, 10.5 * u, 5 * u, 3.5 * u, 4 * u, 7 * u, 2 * u, 3.5 * u, 3 * u), ""),
+        "ruin" => (F("M{0},{1} h{2} v{3} h-{2} Z M{4},{5} h{2} v{6} h-{2} Z M{7},{8} h{2} v{9} h-{2} Z",
+                     2.5 * u, 5 * u, 1.7 * u, 5 * u, 5.2 * u, 3.4 * u, 6.6 * u, 7.9 * u, 6.2 * u, 3.8 * u), ""),
+        "star" => (F("M{0},{1} L{2},{3} L{4},{0} L{2},{5} L{0},{6} L{7},{5} L{1},{0} L{7},{3} Z",
+                     6 * u, 1.5 * u, 7.2 * u, 4.8 * u, 10.5 * u, 7.2 * u, 10.5 * u, 4.8 * u), ""),
+        "person" => (F("M{0},{1} a{2},{2} 0 1 0 0.01,0 Z M{3},{4} q{5},{6} {7},0 Z",
+                       6 * u, 2 * u, 1.8 * u, 3.4 * u, 10.5 * u, 2.6 * u, -5 * u, 5.2 * u), ""),
+        "ship" => (F("M{0},{1} h{2} l-{3},{4} h-{5} Z M{6},{7} v{8} l-{9},0 Z",
+                     2 * u, 7.5 * u, 8 * u, 1.5 * u, 2.5 * u, 5 * u, 6.5 * u, 1.5 * u, 5 * u, 3.6 * u), ""),
+        "anchor" => ("", F("M{0},{1} v{2} M{3},{4} h{5} M{6},{7} a{8},{8} 0 0 0 {9},0 M{0},{10} a{11},{11} 0 1 1 0.01,0",
+                           6 * u, 3.6 * u, 6 * u, 3.8 * u, 5 * u, 4.4 * u, 2.6 * u, 8 * u, 3.4 * u, 6.8 * u, 2.4 * u, 1.2 * u)),
+        "flag" => (F("M{0},{1} L{2},{3} L{0},{4} Z", 5 * u, 1.5 * u, 10 * u, 3.5 * u, 5.5 * u),
+                   F("M{0},{1} v{2}", 4.4 * u, 1.5 * u, 9 * u)),
+        "bolt" => (F("M{0},{1} L{2},{3} L{4},{3} L{5},{6} L{7},{8} L{0},{8} Z",
+                     6.5 * u, 1 * u, 3.5 * u, 6.5 * u, 5.5 * u, 4.5 * u, 10.5 * u, 8.5 * u, 5 * u), ""),
+        "crown" => (F("M{0},{1} v-{2} l{3},{4} l{5},-{6} l{5},{6} l{3},-{4} v{2} Z",
+                      2 * u, 9 * u, 4 * u, 2.3 * u, 2 * u, 1.7 * u, 3 * u), ""),
+        "hammer" => (F("M{0},{1} h{2} v{3} h-{2} Z", 3 * u, 2.5 * u, 6 * u, 2.2 * u),
+                     F("M{0},{1} L{0},{2}", 6 * u, 4.7 * u, 10.5 * u)),
+        "cross" => ("", F("M{0},{0} L{1},{1} M{1},{0} L{0},{1}", 3 * u, 9 * u)),
+        "dot" => (F("M{0},{1} a{2},{2} 0 1 0 0.01,0 Z", 6 * u, 3.8 * u, 2.2 * u), ""),
+        _ => ("", ""),
+    };
+
+    private static string F(string fmt, params double[] a)
+    {
+        object[] inv = new object[a.Length];
+        for (int i = 0; i < a.Length; i++) inv[i] = a[i].ToString("0.##", CultureInfo.InvariantCulture);
+        return string.Format(CultureInfo.InvariantCulture, fmt, inv);
+    }
+
+    // parsed geometry per (glyph, cell size) — sizes are few (one per grid), so this stays tiny
+    private readonly Dictionary<(string, double), (Geometry? Fill, Geometry? Stroke)> _iconGeo = new();
+    // muted tile / lightened ink per character, rebuilt on palette swap alongside _brushes
+    private readonly Dictionary<char, (IImmutableBrush Bg, IImmutableBrush Ink, ImmutablePen Pen)> _iconInk = new();
+
+    private static Color Mix(Color c, byte target, double k) => Color.FromRgb(
+        (byte)(c.R + (target - c.R) * k), (byte)(c.G + (target - c.G) * k), (byte)(c.B + (target - c.B) * k));
+
+    private (Geometry? Fill, Geometry? Stroke) IconGeo(string name, double size)
+    {
+        if (_iconGeo.TryGetValue((name, size), out var cached)) return cached;
+        (string fill, string stroke) = IconPaths(name, size / 12.0);
+        var geo = (fill.Length > 0 ? Geometry.Parse(fill) : null,
+                   stroke.Length > 0 ? Geometry.Parse(stroke) : null);
+        _iconGeo[(name, size)] = geo;
+        return geo;
+    }
+
+    /// <summary>Muted tile + lightened glyph ink for a palette colour, so every icon
+    /// automatically matches its terrain colour and the theme it came from.</summary>
+    private (IImmutableBrush Bg, IImmutableBrush Ink, ImmutablePen Pen) IconInk(char ch, Dictionary<char, Color>? palette, double size)
+    {
+        if (_iconInk.TryGetValue(ch, out var cached) && Math.Abs(cached.Pen.Thickness - PenWidth(size)) < 0.01)
+            return cached;
+        Color tile = palette is not null && palette.TryGetValue(ch, out Color pc) ? pc : Color.FromRgb(0x28, 0x28, 0x28);
+        var ink = new ImmutableSolidColorBrush(Mix(tile, 255, 0.22));
+        var made = ((IImmutableBrush)new ImmutableSolidColorBrush(Mix(tile, 0, 0.55)), (IImmutableBrush)ink,
+                    new ImmutablePen(ink, PenWidth(size), lineCap: PenLineCap.Round, lineJoin: PenLineJoin.Round));
+        _iconInk[ch] = made;
+        return made;
+    }
+
+    private static double PenWidth(double size) => Math.Max(1, size * 0.11);
+
+    /// <summary>Draw the iconed cell at (x, y): muted tile, then the glyph. Returns false when
+    /// the glyph name is unknown so the caller can fall back to a plain tile.</summary>
+    private bool DrawIcon(DrawingContext context, char ch, string name, double x, double y, double size,
+                          Dictionary<char, Color>? palette)
+    {
+        (Geometry? fill, Geometry? stroke) = IconGeo(name, size);
+        if (fill is null && stroke is null) return false;
+        (IImmutableBrush bg, IImmutableBrush ink, ImmutablePen pen) = IconInk(ch, palette, size);
+        context.FillRectangle(bg, new Rect(x, y, size - 1, size - 1));
+        using (context.PushTransform(Matrix.CreateTranslation(x, y)))
+        {
+            if (fill is not null) context.DrawGeometry(ink, null, fill);
+            if (stroke is not null) context.DrawGeometry(null, pen, stroke);
+        }
+        return true;
     }
 
     public string GridText { get => GetValue(GridTextProperty); set => SetValue(GridTextProperty, value); }
@@ -99,7 +236,8 @@ public class ColorGridView : Control
         int cols = 0;
         foreach (string r in rows) cols = Math.Max(cols, r.Length);
         if (cols == 0) return 0;
-        return Math.Clamp(Math.Floor(width / cols), 3, 12);
+        double max = Math.Clamp(MaxCell, 3, 64);   // a hostile spec value must not explode layout
+        return Math.Clamp(Math.Floor(width / cols), 3, max);
     }
 
     /// <summary>
@@ -132,15 +270,22 @@ public class ColorGridView : Control
 
     protected override Size MeasureOverride(Size availableSize)
     {
+        // Report the TIGHT content size, not the offered width: in a vertical stack the
+        // grid still gets arranged full-width (alignment stretch), so nothing changes —
+        // but inside a horizontal "row" container (API 1.8) the neighbours pack right up
+        // against the grid instead of against a phantom full-width slab. With an infinite
+        // offer the cells simply take their ceiling size.
         string[] rows = Rows(GridText);
-        double width = double.IsInfinity(availableSize.Width) ? 400 : availableSize.Width;
+        int cols = 0;
+        foreach (string r in rows) cols = Math.Max(cols, r.Length);
+        double width = double.IsInfinity(availableSize.Width) ? double.PositiveInfinity : availableSize.Width;
         if (Weave)
         {
             (double node, double edge) = WeaveCellsFor(rows, width);
-            return new Size(width, WeaveOffset(rows.Length, node, edge));
+            return new Size(WeaveOffset(cols, node, edge), WeaveOffset(rows.Length, node, edge));
         }
         double cell = CellFor(rows, width);
-        return new Size(width, rows.Length * cell);
+        return new Size(cols * cell, rows.Length * cell);
     }
 
     public override void Render(DrawingContext context)
@@ -162,6 +307,8 @@ public class ColorGridView : Control
         string labels = LabelChars ?? "";
         bool drawLabels = labels.Length > 0 && cell >= MinLabelCell;
         double fontSize = System.Math.Floor(cell * 0.78);
+        Dictionary<char, string>? icons = Icons;
+        bool drawIcons = icons is not null && icons.Count > 0 && cell >= MinIconCell;
 
         for (int r = 0; r < rows.Length; r++)
         {
@@ -170,6 +317,12 @@ public class ColorGridView : Control
             {
                 char ch = row[c];
                 if (ch == ' ') continue;
+
+                // an iconed cell replaces both the flat tile and any letter for this char
+                if (drawIcons && icons!.TryGetValue(ch, out string? glyph)
+                    && DrawIcon(context, ch, glyph, c * cell, r * cell, cell, palette))
+                    continue;
+
                 context.FillRectangle(BrushFor(ch, palette),
                     new Rect(c * cell, r * cell, cell - 1, cell - 1));
 
@@ -196,6 +349,8 @@ public class ColorGridView : Control
         string labels = LabelChars ?? "";
         bool drawLabels = labels.Length > 0 && node >= MinLabelCell;
         double fontSize = System.Math.Floor(node * 0.78);
+        Dictionary<char, string>? icons = Icons;
+        bool drawIcons = icons is not null && icons.Count > 0 && node >= MinIconCell;
         // connector line thickness: reads at a glance yet clearly thinner than a tile
         double t = Math.Max(2, Math.Floor(node / 3));
 
@@ -245,7 +400,12 @@ public class ColorGridView : Control
                 }
 
                 // node cells — and any non-connector character that strays onto an odd cell —
-                // draw as tiles, exactly like the unwoven grid
+                // draw as tiles, exactly like the unwoven grid (icons on nodes only: an odd
+                // cell is too narrow for a glyph even when a stray tile character lands there)
+                if (isNode && drawIcons && icons!.TryGetValue(ch, out string? glyph)
+                    && DrawIcon(context, ch, glyph, x, y, node, palette))
+                    continue;
+
                 context.FillRectangle(BrushFor(ch, palette), new Rect(x, y, w - 1, h - 1));
 
                 if (!isNode || !drawLabels || labels.IndexOf(ch) < 0) continue;
@@ -306,7 +466,7 @@ public class ColorGridView : Control
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == PaletteProperty) { _brushes.Clear(); _pens.Clear(); _labels.Clear(); }   // palette swap: rebuild caches
+        if (change.Property == PaletteProperty) { _brushes.Clear(); _pens.Clear(); _labels.Clear(); _iconInk.Clear(); }   // palette swap: rebuild caches
         if (change.Property == CellCommandProperty || change.Property == HoverCommandProperty)
             InvalidateVisual();   // toggle hit-test background
     }

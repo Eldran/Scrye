@@ -76,6 +76,9 @@ local function esc(s) return (tostring(s or ""):gsub("@", "@@")) end
 local watches = {}    -- set: lowered-as-typed name -> true (stored as typed)
 local notify_chans = {}   -- set: lowercased channel name -> true
 local notify_tells = true -- tells notify by default; the whole point of notifications
+local sound_on = true     -- the beep half of a notification, separable from the push half
+                          -- ("chat sound off"): sitting at the PC you may want quiet, while
+                          -- the phone should still buzz when you walk away
 
 -- ---------------- watch persistence (scrye.store, newline-joined) -----------
 
@@ -111,6 +114,8 @@ do
   -- stored as "0"/"1" so an unset value keeps the default rather than reading as off
   local t = scrye.store.get("notify_tells")
   if t == "0" then notify_tells = false end
+  local s = scrye.store.get("sound")
+  if s == "0" then sound_on = false end
 end
 
 -- A tell is the case notifications exist for: someone addressed you personally.
@@ -244,7 +249,7 @@ scrye.onChannel(function(chan, text)
 
   if why then
     scrye.notify(string.format("[%s] %s", chan, text))
-    scrye.sound("beep")
+    if sound_on then scrye.sound("beep") end
   end
 end)
 
@@ -285,6 +290,7 @@ local function note_notifying()
   for c in pairs(notify_chans) do t[#t + 1] = c end
   table.sort(t)
   scrye.print("notify tells: " .. (notify_tells and "on" or "off"))
+  scrye.print("notify sound: " .. (sound_on and "on" or "off"))
   scrye.print("notify channels: " .. (#t > 0 and table.concat(t, ", ") or "(none)"))
   local w = {}
   for n in pairs(watches) do w[#w + 1] = n end
@@ -308,6 +314,22 @@ scrye.addAlias{
   run = function(state)
     notify_tells = (state:lower() == "on")
     scrye.store.set("notify_tells", notify_tells and "1" or "0")
+    note_notifying()
+  end,
+}
+
+-- The beep alone, independent of what notifies: "chat sound off" keeps the phone
+-- buzzing and the chat pane marking, it just stops the PC speaker.
+scrye.addAlias{
+  pattern = "^chat sound$", regex = true,
+  run = note_notifying,
+}
+
+scrye.addAlias{
+  pattern = "^chat sound (on|off)$", regex = true,
+  run = function(state)
+    sound_on = (state:lower() == "on")
+    scrye.store.set("sound", sound_on and "1" or "0")
     note_notifying()
   end,
 }

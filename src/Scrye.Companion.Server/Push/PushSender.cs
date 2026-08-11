@@ -54,6 +54,13 @@ public sealed class PushSender : IDisposable
         _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
+    /// <summary>Why the most recent <see cref="SendAsync"/> was rejected — HTTP status,
+    /// endpoint host, and the push service's own reason string (Apple and Google both
+    /// explain failures in the response body). Null after a success. Exists because a
+    /// silent Failed is indistinguishable from working, which is how a broken VAPID key
+    /// or clock skew hides for months.</summary>
+    public string? LastError { get; private set; }
+
     public async Task<PushResult> SendAsync(
         PushSubscription sub,
         string payload,
@@ -86,12 +93,20 @@ public sealed class PushSender : IDisposable
 
             using HttpResponseMessage res = await _http.SendAsync(req, ct).ConfigureAwait(false);
 
-            if (res.IsSuccessStatusCode) return PushResult.Delivered;
+            if (res.IsSuccessStatusCode) { LastError = null; return PushResult.Delivered; }
             if (res.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone) return PushResult.Expired;
+            string reason = "";
+            try
+            {
+                reason = (await res.Content.ReadAsStringAsync(ct).ConfigureAwait(false)).Trim();
+                if (reason.Length > 160) reason = reason[..160];
+            }
+            catch (Exception) { /* the status alone still helps */ }
+            LastError = $"{(int)res.StatusCode} from {endpoint.Host}" + (reason.Length > 0 ? $": {reason}" : "");
             return PushResult.Failed;
         }
-        catch (OperationCanceledException) { return PushResult.Failed; }
-        catch (Exception) { return PushResult.Failed; }
+        catch (OperationCanceledException) { LastError = "timed out reaching the push service"; return PushResult.Failed; }
+        catch (Exception ex) { LastError = ex.Message; return PushResult.Failed; }
     }
 
     /// <summary>The JSON a service worker receives. Kept deliberately small — the payload is

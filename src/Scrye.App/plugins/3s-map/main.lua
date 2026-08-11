@@ -96,7 +96,18 @@ local TCOLS, TROWS = COLS * 2 - 1, ROWS * 2 - 1
 
 -- ---------- state ----------
 local enabled = true          -- capture on/off ('map on'/'map off', persisted)
+local held_by = nil           -- transient hold via the "map.hold" event (never persisted):
+                              -- another plugin owns movement in unmappable space right now
 local area = "default"        -- current area name (persisted)
+
+-- Which of 3Scapes' three realms this area belongs to (nil = unknown / Pinnacle).
+-- The colours are 3scapes.org's own realm palette; the map panel's accent wears the
+-- current realm's colour, so a glance at the border says which world you're in.
+-- Persisted in the area blob; the hub areas self-identify by name, and crossing into
+-- an unrealmed area from a realmed one passes the realm along (lineage, not magic).
+local REALM_COLOR = { fantasy = "#A070FF", science = "#38D0FF", chaos = "#FF4FA0" }
+local realm = nil
+local build_panel, refresh_accent   -- defined with the panel, used by the crossings
 local rooms = {}              -- rooms[z][x][y] = { name="", exits={}, flag="", note="" }
 local room_count = 0
 local pos = { x = 0, y = 0, z = 0 }
@@ -240,7 +251,7 @@ local function area_to_table()
     if a.x ~= b.x then return a.x < b.x end
     return a.y < b.y
   end)
-  return { name = area, rooms = list }
+  return { name = area, realm = realm, rooms = list }
 end
 
 local function load_area_table(t)
@@ -327,6 +338,12 @@ local function load_area(name)
   drift = false
   view_z = nil
   local stored = scrye.json.decode(scrye.store.get("map:" .. name) or "")
+  realm = nil
+  if type(stored) == "table" and REALM_COLOR[tostring(stored.realm or "")] then
+    realm = stored.realm
+  elseif REALM_COLOR[name:lower()] then
+    realm = name:lower()                       -- the hub areas self-identify by name
+  end
   if type(stored) == "table" then
     load_area_table(stored)
   elseif SEEDS[name] then
@@ -477,6 +494,7 @@ draw = function()
   scrye.setState(P .. "grid", table.concat(lines, "\n"))
 
   local mode = enabled and "MAPPING" or "OFF"
+  if held_by then mode = "HELD (" .. esc(held_by) .. ")" end
   if walk then
     mode = string.format("WALKING %d/%d", math.min(walk.idx, #walk.dirs), #walk.dirs)
   elseif drift then
@@ -733,7 +751,7 @@ end
 
 local function on_room(short)
   seen_s = true
-  if not enabled then return end
+  if not enabled or held_by then return end
 
   local name, exit_desc = parse_short(short)
 
@@ -767,7 +785,13 @@ local function on_room(short)
         if step.rev then rev = { dir = step.rev, dest = from_here } end
         note("area link - switching to '" .. esc(d.area) .. "'")
         flush()
+        local from_realm = realm
         load_area(d.area)                     -- clears pending/undo; the jump invalidates both
+        if not realm and from_realm then
+          realm = from_realm                  -- lineage: the new area is in the realm we came from
+          mark_dirty()
+        end
+        if refresh_accent then refresh_accent() end
         last_cross = from_here                -- after load_area, which clears it
       end
       pos = { x = d.x, y = d.y, z = d.z }
@@ -792,7 +816,13 @@ local function on_room(short)
       end
       if e.area ~= area then
         flush()
+        local from_realm = realm
         load_area(e.area)                     -- creates the area if it is new
+        if not realm and from_realm then
+          realm = from_realm
+          mark_dirty()
+        end
+        if refresh_accent then refresh_accent() end
       end
       last_cross = from_here                  -- after load_area, which clears it
       pos = { x = e.x, y = e.y, z = e.z }
@@ -902,7 +932,7 @@ end
 -- maps instead of dead-reckoning a phantom room — and only then plain
 -- compass dead reckoning.
 scrye.onCommand(function(cmd)
-  if not enabled then return end
+  if not enabled or held_by then return end
   local word = tostring(cmd or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
   if word == "" then return end
   local canon = CANON[word]
@@ -936,6 +966,30 @@ scrye.onCommand(function(cmd)
   pending[#pending + 1] = entry
 end)
 
+-- Another plugin can suspend auto-mapping while it owns movement through space
+-- that must not be mapped (API 1.6 events): the chaos-sea explorer holds the map
+-- while its randomly generated sea is active, so sea steps never dead-reckon
+-- phantom rooms into a real area. The hold is transient by design -- never
+-- persisted, released by the sender, and 'map on' always overrides it.
+scrye.on("map.hold", function(data, _, source)
+  local ok, t = pcall(scrye.json.decode, data)
+  local on = ok and type(t) == "table" and t.on == true
+  local who = source or "?"
+  if on and not held_by then
+    held_by = who
+    pending = {}
+    if walk then walk_stop("walk stopped - auto-mapping held by " .. esc(who)) end
+    note("auto-mapping held by " .. esc(who) .. " - their moves will not be mapped ('map on' overrides)")
+  elseif not on and held_by then
+    held_by = nil
+    pending = {}
+    note("auto-mapping resumed (" .. esc(who) .. " released the hold)")
+  else
+    return
+  end
+  draw()
+end)
+
 -- ---------- triggers ----------
 scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true,
   run = function(short) on_room(short or "") end }
@@ -955,12 +1009,17 @@ scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], rege
 
 -- ---------- commands ----------
 local function status()
-  note(string.format("%s - area '%s' at %d,%d,%d - %d rooms, %d move(s) pending",
-    enabled and "ON" or "OFF", esc(area), pos.x, pos.y, pos.z, room_count, #pending))
+  note(string.format("%s - area '%s'%s at %d,%d,%d - %d rooms, %d move(s) pending",
+    enabled and "ON" or "OFF", esc(area), realm and (" (" .. realm .. ")") or "",
+    pos.x, pos.y, pos.z, room_count, #pending))
+  if held_by then
+    note("auto-mapping is HELD by " .. esc(held_by) .. " (their space is unmappable; 'map on' overrides)")
+  end
   if enabled and not seen_s then
     note("no =S= room markers seen yet - check your 3Scapes marker settings (the stepper/chaos-sea prerequisite)")
   end
   note("commands: map on|off - map area <name> - map areas - map set x y [z] - map undo")
+  note("          map realm fantasy|science|chaos|-  (tint the panel by realm; crossings inherit it)")
   note("          map note <text>|- - map flag <A-Z>|- - map find <text>")
   note("          map goto x y [z] - map go <n> - map stop  (or click a mapped room on the panel)")
   note("          map link <cmd> (arm; next arrival binds) - map link <cmd> = [area] x y z  (cmd may be n/s/e/...)")
@@ -973,6 +1032,7 @@ scrye.addAlias{ pattern = [[^map$]], regex = true, run = status }
 
 scrye.addAlias{ pattern = [[^map on$]], regex = true, run = function()
   enabled = true
+  held_by = nil                -- the user outranks any plugin's hold
   save_now()
   draw()
   note("mapping ON - area '" .. esc(area) .. "'")
@@ -987,12 +1047,21 @@ scrye.addAlias{ pattern = [[^map off$]], regex = true, run = function()
   note("mapping OFF")
 end }
 
+scrye.addAlias{ pattern = [[^map realm (fantasy|science|chaos|-)$]], regex = true, run = function(w)
+  realm = (w ~= "-") and w or nil
+  save_now()
+  if refresh_accent then refresh_accent() end
+  note(realm and ("area '" .. esc(area) .. "' is in the " .. realm .. " realm - panel tinted to match")
+             or ("area '" .. esc(area) .. "' realm cleared - panel follows the theme"))
+end }
+
 scrye.addAlias{ pattern = [[^map area ([\w-]+)$]], regex = true, run = function(name)
   if not name or name == "" then return end
   if walk then walk_stop(nil) end   -- the plan belonged to the old area
   flush()               -- current area's unsaved work first
   load_area(name)
   save_now()            -- the new (possibly empty) area exists from now on
+  if refresh_accent then refresh_accent() end
   draw()
   set_peek_to_current()
   refresh_roomlist(nil)
@@ -1254,9 +1323,11 @@ scrye.addAlias{ pattern = [[^map wipe ([\w-]+)(?: (confirm))?$]], regex = true,
   end }
 
 -- ---------- the panel (M2) ----------
+build_panel = function()
 scrye.addPanel{
   title = "3S Map",
   width = 280,
+  accent = realm and REALM_COLOR[realm] or nil,   -- border wears the current realm's colour
   tabs = {
     { title = "Map", widgets = {
       { type = "label", bind = P .. "status", color = "dim" },
@@ -1300,6 +1371,17 @@ scrye.addPanel{
     } },
   },
 }
+end
+
+-- Rebuild the panel only when the realm actually changed: a rebuild re-seeds the
+-- Rooms tab's search box, so it must never happen on a mere redraw.
+local shown_realm = nil
+refresh_accent = function()
+  if realm == shown_realm then return end
+  shown_realm = realm
+  build_panel()
+end
+build_panel()
 
 -- ---------- lifecycle ----------
 scrye.onDisconnect(function()
@@ -1317,6 +1399,7 @@ end)
 -- ---------- startup ----------
 enabled = (scrye.store.get("enabled") or "1") ~= "0"
 load_area(scrye.store.get("area") or "default")
+refresh_accent()   -- the restored area may carry a realm; tint before first paint
 draw()
 set_peek_to_current()
 refresh_roomlist(nil)

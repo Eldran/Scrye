@@ -636,12 +636,28 @@ public sealed class WasmPluginRuntime : IPluginRuntime
                 if (p.Value.ValueKind == JsonValueKind.String) palette[p.Name] = p.Value.GetString() ?? "";
         }
 
+        // colorgrid micro-icons (API 1.8): { "char": "glyph-name", ... }
+        Dictionary<string, string>? iconMap = null;
+        if (w.TryGetProperty("icons", out JsonElement ico) && ico.ValueKind == JsonValueKind.Object)
+        {
+            iconMap = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (JsonProperty p in ico.EnumerateObject())
+                if (p.Value.ValueKind == JsonValueKind.String) iconMap[p.Name] = p.Value.GetString() ?? "";
+        }
+
         List<WidgetSpec>? children = null;
         if (w.TryGetProperty("buttons", out JsonElement btns) && btns.ValueKind == JsonValueKind.Array)
         {
             children = new List<WidgetSpec>();
             foreach (JsonElement b in btns.EnumerateArray())
                 if (b.ValueKind == JsonValueKind.Object) children.Add(ToWidgetSpec(b, created));
+        }
+        else if (w.TryGetProperty("widgets", out JsonElement kids) && kids.ValueKind == JsonValueKind.Array)
+        {
+            // row-container children (API 1.8)
+            children = new List<WidgetSpec>();
+            foreach (JsonElement k in kids.EnumerateArray())
+                if (k.ValueKind == JsonValueKind.Object) children.Add(ToWidgetSpec(k, created));
         }
 
         List<string>? columns = null;
@@ -662,6 +678,9 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Dim = w.TryGetProperty("dim", out JsonElement d) && d.ValueKind == JsonValueKind.True,
             Weave = w.TryGetProperty("weave", out JsonElement wv) && wv.ValueKind == JsonValueKind.True,
             Palette = palette,
+            Icons = iconMap,
+            Cell = w.TryGetProperty("cell", out JsonElement ce) && ce.ValueKind == JsonValueKind.Number
+                ? ce.GetDouble() : 0,
             Columns = columns,
             Separator = Str(w, "separator"),
             Labels = Str(w, "labels"),

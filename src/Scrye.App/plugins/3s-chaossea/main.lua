@@ -1040,15 +1040,21 @@ function cs_interface(args)
     paused = false
     resting = false
     if not get_room(pos) then add_room(pos) end
+    -- hold the world automapper: the sea is a fresh random instance, and our steps
+    -- must not dead-reckon phantom rooms into whatever real area 3s-map was in
+    scrye.emit("map.hold", scrye.json.encode({ on = true }))
     note("enabled - glance to map this room, then 'cs step' or 'cs auto on'")
     scrye.send("!glance")
   elseif args == "disable" then
-    enabled = false; auto = false; note("disabled")
+    enabled = false; auto = false
+    scrye.emit("map.hold", scrye.json.encode({ on = false }))   -- release the automapper
+    note("disabled")
   elseif args == "reset" then
     reset(); note("map reset")
   elseif args == "step" then
     cs_step()
   elseif args == "auto on" then
+    if not enabled then scrye.emit("map.hold", scrye.json.encode({ on = true })) end
     enabled = true; auto = true; goal_found = false; blind_steps = 0
     note("auto-exploring (kill: " .. killname .. ", stops at: " .. goal .. ")")
     -- map the CURRENT room first (a reload wipes the map, so the frontier may be empty). The

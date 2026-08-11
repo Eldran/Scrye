@@ -8,11 +8,18 @@ namespace Scrye.App.Controls;
 
 /// <summary>
 /// Renders a dynamic list of labelled "fill × quality" bars — one row per line of
-/// <see cref="Rows"/>. Each line is tab-separated: <c>label \t caption \t value \t max \t refined</c>.
-/// The bar fills to <c>value/max</c>; the filled part is split into a <b>refined</b> (green)
-/// segment of width <c>refined/max</c> and the remaining <b>raw</b> (amber) segment, over a dark
-/// track. Lines that aren't in that shape are drawn as plain text (so headers/"none" still show).
-/// This is the Avalonia successor to the MUSHclient refinery miniwindow bars.
+/// <see cref="Rows"/>. Each line is tab-separated:
+/// <c>label \t caption \t value \t max \t refined [\t tooltip]</c>.
+/// The bar fills to <c>value/max</c>; the filled part splits into a <b>raw</b> (amber)
+/// segment on the left and the <b>refined</b> (green) segment of width <c>refined/max</c>
+/// on the right — raw units enter on the left and come out refined on the right, the
+/// direction the refining actually runs. Lines that aren't in that shape are drawn as
+/// plain text (so headers/"none" still show).
+///
+/// <para>The optional sixth field is a hover tooltip (API 1.8) — the per-quality breakdown
+/// the MUSHclient refinery miniwindow showed on its hotspots. A literal <c>\n</c> in it
+/// becomes a line break (rows are newline-separated, so the field can't carry a real one).
+/// Rows without it show no tooltip.</para>
 /// </summary>
 public class BarListView : Control
 {
@@ -69,6 +76,10 @@ public class BarListView : Control
         if (lines.Length == 0) return;
         double rowH = LineHeight();
 
+        // transparent backdrop so the whole list is hit-testable for the hover tooltips
+        // (a bare Control only receives pointer events where it has drawn something)
+        context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         // First pass: align the label and caption columns to the widest of each.
         double labelW = 0, capW = 0;
         var parsed = new (string label, string caption, double frac, double gfrac, bool isBar, string raw)[lines.Length];
@@ -114,10 +125,42 @@ public class BarListView : Control
 
             double by = y + System.Math.Max(0, (rowH - RowGap - BarH) / 2);
             context.FillRectangle(Track, new Rect(barX, by, barW, BarH));            // empty track
+            // raw enters on the left, refined comes out on the right
             double greenW = barW * p.gfrac;
             double amberW = barW * (p.frac - p.gfrac);
-            if (greenW > 0) context.FillRectangle(Refined, new Rect(barX, by, greenW, BarH));
-            if (amberW > 0) context.FillRectangle(Raw, new Rect(barX + greenW, by, amberW, BarH));
+            if (amberW > 0) context.FillRectangle(Raw, new Rect(barX, by, amberW, BarH));
+            if (greenW > 0) context.FillRectangle(Refined, new Rect(barX + amberW, by, greenW, BarH));
         }
+    }
+
+    // ---- hover tooltip (the sixth field) -----------------------------------------------
+
+    /// <summary>Row whose tooltip is currently installed; -1 = none.</summary>
+    private int _tipRow = -1;
+
+    protected override void OnPointerMoved(Avalonia.Input.PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+        int row = (int)(e.GetPosition(this).Y / LineHeight());
+        if (row == _tipRow) return;
+        _tipRow = row;
+
+        string? tip = null;
+        string[] lines = Lines(Rows);
+        if (row >= 0 && row < lines.Length)
+        {
+            string[] f = lines[row].Split('\t');
+            if (f.Length >= 6 && f[5].Length > 0) tip = f[5].Replace("\\n", "\n");
+        }
+        ToolTip.SetTip(this, tip);
+        if (tip is null) ToolTip.SetIsOpen(this, false);
+    }
+
+    protected override void OnPointerExited(Avalonia.Input.PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _tipRow = -1;
+        ToolTip.SetTip(this, null);
+        ToolTip.SetIsOpen(this, false);
     }
 }

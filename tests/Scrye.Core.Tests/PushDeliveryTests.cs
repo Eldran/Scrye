@@ -95,6 +95,23 @@ public class PushDeliveryTests : IDisposable
     }
 
     [Fact]
+    public void SubjectIsAContactUriOnARealDomain()
+    {
+        // Apple validates the sub claim's domain and rejects "@localhost" with BadJwtToken —
+        // silently killing iOS push while FCM keeps working. Pin the default to something
+        // with a routable domain so the regression can't sneak back in.
+        VapidKeys keys = VapidKeys.LoadOrCreate(TempFile("vapid"));
+
+        Assert.True(keys.Subject.StartsWith("mailto:") || keys.Subject.StartsWith("https://"),
+            "RFC 8292: sub must be a mailto: or https: URI");
+        Assert.DoesNotContain("localhost", keys.Subject);
+        string host = keys.Subject.StartsWith("mailto:")
+            ? keys.Subject.Split('@')[^1]
+            : new Uri(keys.Subject).Host;
+        Assert.Contains(".", host);   // a real, dotted domain — what Apple actually checks
+    }
+
+    [Fact]
     public void JwtSignatureIsRawR_S_NotDer()
     {
         // ECDsa produces DER by default; push services reject that as malformed.
@@ -216,9 +233,10 @@ public class PushDeliveryTests : IDisposable
         store.Add(Subscription());
         var notifier = new PushNotifier(store, sender);
 
-        int delivered = await notifier.NotifyAsync("t", "b", null, DateTimeOffset.UtcNow);
+        PushOutcome outcome = await notifier.NotifyAsync("t", "b", null, DateTimeOffset.UtcNow);
 
-        Assert.Equal(0, delivered);
+        Assert.Equal(0, outcome.Delivered);
+        Assert.Equal(1, outcome.Expired);
         Assert.Equal(0, store.Count);   // retrying a dead endpoint forever invites a rate limit
     }
 
@@ -270,7 +288,29 @@ public class PushDeliveryTests : IDisposable
         PushSender sender = MakeSender(HttpStatusCode.OK, _ => { }, out _);
         var notifier = new PushNotifier(new PushStore(), sender);
 
-        Assert.Equal(0, await notifier.NotifyAsync("t", "b", null, DateTimeOffset.UtcNow));
+        // Record equality: nothing delivered, nothing pruned, nothing failed, no error.
+        Assert.Equal(new PushOutcome(0, 0, 0, null),
+                     await notifier.NotifyAsync("t", "b", null, DateTimeOffset.UtcNow));
+    }
+
+    [Fact]
+    public async Task AFailedDeliveryNamesItsReason()
+    {
+        // The whole point of PushOutcome: a rejection must surface as a sentence the test
+        // command can print, not vanish into a counter.
+        PushSender sender = MakeSender(HttpStatusCode.Forbidden, _ => { }, out _);
+        var store = new PushStore();
+        store.Add(Subscription());
+        var notifier = new PushNotifier(store, sender);
+
+        PushOutcome outcome = await notifier.NotifyAsync("t", "b", null, DateTimeOffset.UtcNow);
+
+        Assert.Equal(1, outcome.Failed);
+        Assert.NotNull(outcome.LastError);
+        Assert.Contains("403", outcome.LastError);
+        Assert.Contains("web.push.apple.com", outcome.LastError);
+        Assert.Contains("failed", outcome.ToString());
+        Assert.Equal(1, store.Count);   // a 403 is our fault (VAPID/clock), not the device's — keep it
     }
 
     // ---- helpers -------------------------------------------------------------

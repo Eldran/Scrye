@@ -52,7 +52,7 @@ These are all editable in Settings (Global) or per world/character.
 
 In **Settings → Appearance**:
 
-- **Theme** — several dark/light color schemes with different accents. The game **output pane stays a constant near‑black** across all themes so the MUD's own colors always read correctly.
+- **Theme** — several dark/light color schemes with different accents. The game **output pane stays near‑black in every scheme** so the MUD's own colors always read correctly — even under Light. The **Void (black on black)** scheme takes that to its conclusion: pure-black output *and* pure-black panels, with the borders carrying the structure.
 - **MUD colors (ANSI palette)** — choose how the MUD's ANSI color codes are painted:
   - **Modern (xterm)** — the softer xterm/VGA palette (default).
   - **MUSHclient (classic)** — MUSHclient's default palette (pure‑primary bright colors, olive yellow), if you want it to look exactly like MUSHclient. Applies to new output.
@@ -325,7 +325,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.7.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.8.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -334,7 +334,20 @@ colorgrid `onHover`, and sub-second timers (250 ms resolution). **1.7 adds color
 `weave = true`**: even cells render as full tiles and odd cells as thin connector lines
 (`-` `|` `/` `\` `x` in their palette colour), so a map can draw rooms on even cells and the
 exits between them on the odd cells they share; click/hover coordinates stay raw (halve the
-even ones), and the companion simply shows the same characters as an ASCII map.
+even ones), and the companion simply shows the same characters as an ASCII map. **1.8 adds
+colorgrid `icons = { ["char"] = "glyph" }`** — micro-icons: an iconed cell draws a muted tile
+of its palette colour with a tiny host-drawn vector glyph on top, so terrain reads as terrain.
+The glyph vocabulary: `water dashes grass hill tree pine mountain house tower gate ruin star
+person ship anchor flag bolt crown hammer cross dot`. Icons beat `labels` letters for the same
+character, cells under 8 px fall back to plain tiles (then the letter rules), unknown names
+render as plain tiles, and the companion ignores the map — the character grid remains the
+text fallback. 1.8 also adds colorgrid `cell = N`: the cell-size ceiling, default 12 px
+(clamped 3–64) — raise it when a chart's icons deserve room (the viking sea chart uses 24);
+cells still shrink to fit the panel width. And the **`row` container**
+(`{ type = "row", widgets = { ... } }`): its children are ordinary widgets laid out side by
+side, each at its measured width — the escape hatch from the panel's vertical stack. The
+viking sea chart uses it to put the resolve choices beside the chart instead of below it.
+Hosts that can't lay out rows (the companion) may stack or skip them.
 
 ## Permissions
 
@@ -459,6 +472,15 @@ This replaces the world-variable side-channels plugins used to coordinate throug
 `cs_auto`, …). Emit chains are capped at depth 8 — an A-emits→B-emits→A cycle is cut with a
 report, not a hang. An emit from your load script (before the session finishes wiring) is
 dropped: register handlers at load, emit from hooks.
+
+Conventions the bundled plugins speak over this channel: `map.path.find` / `map.path.result`
+(BFS delegation to the wasm pathfinder — see `sdk/rust/plugins/3s-pathfinder`), `map.room` /
+`map.walk.started` / `map.walk.stopped` (the automapper's position feed), and **`map.hold`**
+(`{"on":true|false}`): suspend the automapper while YOUR plugin owns movement through space
+that must not be mapped. The chaos-sea explorer holds the map while a randomly generated sea
+is active, so sea steps never dead-reckon phantom rooms into a real area. The hold is
+transient — never persisted, released by the sender, shown on the map panel as
+`HELD (<plugin>)`, and `map on` always overrides it.
 
 ### JSON *(1.6)*
 
