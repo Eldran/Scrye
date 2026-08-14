@@ -28,7 +28,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
 {
     // ---- shared engine + epoch ticker -----------------------------------------
     // One Engine for the whole app: module compilation is per-engine, and the epoch
-    // counter it carries is bumped by a single background timer. IncrementEpoch is
+    // counter it carries is bumped by a single background ticker. IncrementEpoch is
     // explicitly thread-safe. Stores (per-plugin) set how many ticks a call may span.
     private const int EpochTickMs = 25;
     private const ulong DeadlineTicks = 4;            // ≈ 100 ms per host→guest call
@@ -37,11 +37,35 @@ public sealed class WasmPluginRuntime : IPluginRuntime
     private static readonly Lazy<Engine> SharedEngine = new(() =>
     {
         var engine = new Engine(new Config().WithEpochInterruption(true));
-        _epochTimer = new System.Threading.Timer(_ => engine.IncrementEpoch(),
-                                                 null, EpochTickMs, EpochTickMs);
+
+        // A DEDICATED THREAD, deliberately not a System.Threading.Timer.
+        //
+        // A timer callback is queued to the thread pool — the same pool a spinning guest is
+        // sitting on, and the same pool everything else in the app competes for. That makes
+        // the watchdog depend on the resource the runaway plugin is exhausting, which is
+        // precisely backwards. CI proved it: on a two-core runner with tests running in
+        // parallel, a trap that should land in ~100 ms took 3688 ms.
+        //
+        // This thread only sleeps and increments, so it stays schedulable no matter how
+        // busy the pool gets. Background, so it never holds the process open, and it is
+        // never joined or cancelled: the epoch counter is process-wide and wrapping is
+        // harmless, so there is nothing to tear down.
+        var ticker = new System.Threading.Thread(() =>
+        {
+            while (true)
+            {
+                System.Threading.Thread.Sleep(EpochTickMs);
+                engine.IncrementEpoch();
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "wasm-epoch-ticker",
+        };
+        ticker.Start();
+
         return engine;
     });
-    private static System.Threading.Timer? _epochTimer;   // rooted for app lifetime
 
     private enum HookKind { Line, Channel, Gmcp, Connect, Disconnect, Prompt, Idle, Command, Event, Timer, RuleRun, Action, Watch }
 
@@ -627,6 +651,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         // Where Lua embeds functions, wasm embeds hook ids from register_action (numbers).
         string? actionId = ActionRef(w, created, "action") ?? ActionRef(w, created, "onClick") ?? ActionRef(w, created, "onSubmit");
         string? hoverId = ActionRef(w, created, "onHover");
+        string? contextId = ActionRef(w, created, "onRightClick");   // 1.9: secondary activation
 
         Dictionary<string, string>? palette = null;
         if (w.TryGetProperty("palette", out JsonElement pal) && pal.ValueKind == JsonValueKind.Object)
@@ -687,6 +712,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Align = Str(w, "align"),
             Action = actionId,
             HoverAction = hoverId,
+            ContextAction = contextId,
             Children = children,
         };
     }
