@@ -21,6 +21,10 @@ _stage_tmp/
 # delivery scratch (zips staged/committed by the cloud bridge)
 _incoming/
 _to_delete/
+# ...and the zips themselves. Nine of these were committed by accident during the early
+# milestones: each one is a snapshot of source files that are already in the repo, so they
+# were pure duplication sitting at the top of the file listing.
+_*_delivery.zip
 
 # local build output (self-contained zips)
 dist/
