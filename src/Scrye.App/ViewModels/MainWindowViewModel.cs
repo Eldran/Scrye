@@ -249,8 +249,15 @@ public sealed class MainWindowViewModel : ViewModelBase
                     ? $"Scrye/character/{mudPart}/{name}"
                     : $"Scrye/character/{mudPart}/{Editor.ParentAccount}/{name}",
             };
-            CredentialStore.Save(key, Editor.Password);
-            layer.PasswordRef = key;
+            // Only record the reference if the secret really landed. On Linux the store can be
+            // present but unwritable (keyring locked, or no desktop session), and a PasswordRef
+            // pointing at nothing would fail at login with nothing on screen to explain it.
+            if (CredentialStore.Save(key, Editor.Password))
+                layer.PasswordRef = key;
+            else
+                RaiseToast("Password not saved",
+                    CredentialStore.UnavailableReason ?? "the OS credential store refused the write "
+                        + "(is your keyring unlocked?). You'll be asked for the password at login.");
         }
 
         switch (Editor.TargetKind)

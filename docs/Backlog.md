@@ -34,6 +34,19 @@ what we consciously parked, and what the recent infrastructure makes newly possi
 - **Panels can be dragged over the output/chat panes.** A clamp-to-free-space option was
   discussed and parked — the overlap is sometimes wanted.
 - **CS0067 warning** (`RelayCommand<T>.CanExecuteChanged` never used) — cosmetic, harmless.
+- ~~**Auto-login passwords are Windows-only.**~~ — Linux DONE (2026-08-14): the Secret
+  Service via `secret-tool`, verified end to end against a live gnome-keyring. **macOS is
+  still open**: it wants Security.framework, because the `security` CLI takes the password
+  in argv where `ps` can read it. Note libsecret's own C API is variadic, which is why the
+  Linux side went through the CLI rather than P/Invoke — the same reasoning applies to any
+  future rewrite.
+- **Text-to-speech is Windows-only.** `System.Speech`, guarded so it declines rather than
+  crashes. macOS has `say` and Linux has `spd-say`/`espeak`, both a shell-out away if anyone
+  wants it — the same shape the sound player now uses.
+- **macOS has never been run.** It compiles weekly in CI, and nothing structural blocks it
+  (every native dependency ships macOS binaries), but nobody here owns a Mac. Handing a build
+  to someone else additionally needs a `.app` bundle, a Developer ID certificate and
+  notarization, or Gatekeeper refuses to open it — that pipeline is the real cost, not the code.
 
 ## 3 · Newly possible — ideas unlocked by recent work
 

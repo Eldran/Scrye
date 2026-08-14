@@ -66,7 +66,7 @@ To produce a self-contained build packed for sharing:
 
 The recipient needs nothing installed. On Windows they unzip and run `Scrye.App.exe`; unsigned builds show a SmartScreen warning on first launch. On Linux they extract and `chmod +x Scrye.App` first — NTFS has no executable bit, so nothing packed on Windows carries one.
 
-**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction, and the only Windows-specific piece is text-to-speech (guarded at runtime, so it declines rather than crashes elsewhere).
+**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction. Sound works everywhere (winmm on Windows, `afplay` on macOS, `paplay`/`aplay` on Linux), and auto-login passwords are stored in the OS credential store on Windows (Credential Manager) and Linux (the Secret Service — GNOME Keyring or KWallet — via `secret-tool` from `libsecret-tools`). **Text-to-speech is still Windows-only**, guarded so it declines rather than crashes; so is password storage on **macOS**, where it is not implemented. Saving a password that cannot be stored says so rather than failing quietly at the next login.
 
 - **Windows** is the primary platform: developed, built and played on daily.
 - **Linux** works. The `linux-x64` self-contained build has been run on Ubuntu and renders identically to Windows, fonts included. It is smoke-tested when something platform-sensitive changes, not on every commit, so treat it as working-but-lightly-exercised.
