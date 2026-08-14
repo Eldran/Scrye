@@ -4,6 +4,19 @@ A modern MUD client — the clean-room successor to MUSHclient, built in C# / .N
 
 Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin compatibility with it. It reimagines the client for today: Unicode-native, GMCP-first, async, and testable, with a redesigned scripting and plugin model.
 
+## Download
+
+**[Latest release](../../releases/latest)** — self-contained builds for Windows and Linux. Nothing to install: no .NET, no runtime. Unzip and run.
+
+| Platform | File | Then |
+|---|---|---|
+| Windows 10/11 (x64) | `Scrye-<version>-win-x64.zip` | Unzip, run `Scrye.App.exe` |
+| Linux (x64) | `Scrye-<version>-linux-x64.tar.gz` | `tar -xzf` it, run `./Scrye.App` |
+
+The Windows build is unsigned, so first launch shows SmartScreen's "Windows protected your PC" — **More info → Run anyway**. `SHA256SUMS.txt` is attached to every release if you'd rather verify than trust. macOS isn't released; see [platforms](#build--run) below.
+
+Building from source is only necessary if you want to change something — see **Build & run**.
+
 ## Status
 
 Scrye is a working client in daily use on [3Scapes](https://www.3scapes.org/). Connecting, automation, scripting, plugins, HUD panels and profiles are all implemented and exercised in real play — not scaffolding.
@@ -66,6 +79,8 @@ To produce a self-contained build packed for sharing:
 
 The recipient needs nothing installed. On Windows they unzip and run `Scrye.App.exe`; unsigned builds show a SmartScreen warning on first launch. On Linux they extract and `chmod +x Scrye.App` first — NTFS has no executable bit, so nothing packed on Windows carries one.
 
+That script is for handing a build to someone directly. **Releases are automated**: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes each platform *on* that platform (so the Linux tarball keeps its executable bit and needs no `chmod`), attaches the archives and their SHA-256 sums to a draft GitHub Release, and takes its install instructions from `.github/release-body.md`.
+
 **A note on platforms.** The engine and the Avalonia UI are cross-platform by construction. Sound works everywhere (winmm on Windows, `afplay` on macOS, `paplay`/`aplay` on Linux), and auto-login passwords are stored in the OS credential store on Windows (Credential Manager) and Linux (the Secret Service — GNOME Keyring or KWallet — via `secret-tool` from `libsecret-tools`). **Text-to-speech is still Windows-only**, guarded so it declines rather than crashes; so is password storage on **macOS**, where it is not implemented. Saving a password that cannot be stored says so rather than failing quietly at the next login.
 
 - **Windows** is the primary platform: developed, built and played on daily.
@@ -94,7 +109,7 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 }
 ```
 
-The **plugin API is versioned independently of the client** (currently 1.1, and versioned as the
+The **plugin API is versioned independently of the client** (currently 1.11, and versioned as the
 `Scrye.PluginContracts` assembly), so a plugin declares what it needs and an incompatible build
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.

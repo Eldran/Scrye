@@ -1,0 +1,182 @@
+name: Release
+
+# Turns a version tag into something a stranger can actually run.
+#
+# ci.yml answers "does it build?" — this answers "can someone download it?". Push a tag
+# and it publishes a self-contained build for each platform, packs it, and attaches both
+# to a GitHub Release, so the repo's front page offers a download instead of a build
+# instruction. The target machine needs nothing installed: no .NET, no runtime.
+#
+#     git tag v0.9.0
+#     git push origin v0.9.0
+#
+# Each platform is published ON that platform rather than cross-published from one
+# runner. Cross-publishing works (the SDK will happily emit an ELF apphost from Windows)
+# but the archive loses the executable bit, because NTFS has no such bit to record —
+# which is exactly why the hand-rolled Linux tarball needs a "chmod +x" in its README
+# instructions and this one does not.
+#
+# The release is created as a DRAFT: nothing is public until you look at the assets and
+# press Publish. To make tags publish immediately, drop `--draft` from the gh call below.
+#
+# macOS is deliberately absent. It compiles (ci.yml builds it weekly) but has never been
+# run, and an unsigned, un-notarized .app gets a harder refusal from Gatekeeper than
+# SmartScreen gives on Windows — shipping one would generate bug reports about a build
+# nobody has verified. Add an entry to the matrix once someone has actually run it.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Build the artifacts without tagging anything, to check this workflow works before
+  # committing to a version number. Produces run artifacts only — no release.
+  workflow_dispatch:
+
+# gh release create writes to the repo. Nothing else here needs a token.
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  build:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing should not hide whether the other one worked.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      # The version goes in the file name so a downloaded archive is still identifiable
+      # six months later, sitting in someone's Downloads folder next to three others.
+      # A manual run has no tag, so it builds as "dev" and never reaches the release job.
+      - name: Work out the version
+        id: v
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      # PublishDir is overridden rather than taken from the .pubxml: the profiles were
+      # written for a Windows-hosted publish and spell it "bin\publish\<rid>\". A relative
+      # forward-slash path resolves the same way on every runner, and is relative to the
+      # PROJECT folder, so this lands in src/Scrye.App/publish/<rid>/.
+      #
+      # Everything else — self-contained, single-file, trimming off — comes from the
+      # profile, so this stays in step with a local ./publish-win.ps1 run.
+      - name: Publish
+        shell: bash
+        run: >
+          dotnet publish src/Scrye.App/Scrye.App.csproj
+          -p:PublishProfile=${{ matrix.rid }}
+          -p:PublishDir=publish/${{ matrix.rid }}/
+
+      # Packed on the native runner, one step per platform: a zip is what a Windows user
+      # expects to double-click, a .tar.gz is what a Linux user expects and it carries the
+      # executable bit through extraction.
+      - name: Pack (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "src/Scrye.App/publish/${{ matrix.rid }}/*" `
+            -DestinationPath "dist/Scrye-${{ steps.v.outputs.version }}-${{ matrix.rid }}.zip"
+
+      - name: Pack (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          # The apphost is chmod'd explicitly: single-file publish sets it, but saying so
+          # here means a change in SDK behaviour shows up as a failing step rather than as
+          # a download that silently will not start.
+          chmod +x "src/Scrye.App/publish/${{ matrix.rid }}/Scrye.App"
+          tar -czf "dist/Scrye-${{ steps.v.outputs.version }}-${{ matrix.rid }}.tar.gz" \
+            -C "src/Scrye.App/publish/${{ matrix.rid }}" .
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scrye-${{ matrix.rid }}
+          path: dist/*
+          retention-days: 7
+          # An empty dist means a pack step silently produced nothing, which must fail
+          # loudly rather than result in an empty release.
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    needs: build
+    # Only a tag makes a release; a manual run stops after building, so the workflow can
+    # be exercised without inventing a version number.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Checksums matter more than usual here: the builds are unsigned, so this is the
+      # only way a cautious downloader can tell they got what the workflow produced.
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # The body lives in .github/release-body.md so the install instructions can be
+      # edited without touching workflow YAML. --generate-notes appends GitHub's own
+      # commit summary underneath it.
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Links in the body are absolute: a release page sits several path segments
+          # deep, so the relative links that work in a README do not resolve here.
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          sed "s|{{REPO}}|${REPO_URL}|g" .github/release-body.md > body.md
+
+          # A tag like v0.9.0-beta1 is a prerelease; v0.9.0 is not.
+          case "${GITHUB_REF_NAME}" in
+            *-*) PRERELEASE="--prerelease" ;;
+            *)   PRERELEASE="" ;;
+          esac
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/Scrye-*.zip dist/Scrye-*.tar.gz dist/SHA256SUMS.txt \
+            --title "Scrye ${GITHUB_REF_NAME}" \
+            --notes "$(cat body.md)" \
+            --generate-notes \
+            --draft \
+            $PRERELEASE
+          echo "Draft created. Review the assets, then press Publish release."
