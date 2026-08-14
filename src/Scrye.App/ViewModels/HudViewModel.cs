@@ -245,8 +245,11 @@ public sealed class HudViewModel : IDisposable
             case "button":
             {
                 string? actionId = w.Action;
+                string? contextId = w.ContextAction;
                 return new ButtonWidgetViewModel(w.Text ?? "Button",
-                    () => { if (actionId is not null) _invokeAction?.Invoke(pluginId, actionId); });
+                    () => { if (actionId is not null) _invokeAction?.Invoke(pluginId, actionId); },
+                    contextId is null ? null
+                        : () => _invokeAction?.Invoke(pluginId, contextId));
             }
             case "row":
             {
@@ -268,15 +271,19 @@ public sealed class HudViewModel : IDisposable
                 if (!string.IsNullOrEmpty(w.Bind) && !string.IsNullOrEmpty(w.Action))
                 {
                     string actionId = w.Action;
-                    BindText(w.Bind, s => RebuildChoices(row, s, pluginId, actionId), subs);
+                    string? rowContext = w.ContextAction;
+                    BindText(w.Bind, s => RebuildChoices(row, s, pluginId, actionId, rowContext), subs);
                     return row;
                 }
                 if (w.Children is not null)
                     foreach (WidgetSpec child in w.Children)
                     {
                         string? childAction = child.Action;
+                        string? childContext = child.ContextAction;
                         row.Buttons.Add(new ButtonWidgetViewModel(child.Text ?? "Button",
-                            () => { if (childAction is not null) _invokeAction?.Invoke(pluginId, childAction); }));
+                            () => { if (childAction is not null) _invokeAction?.Invoke(pluginId, childAction); },
+                            childContext is null ? null
+                                : () => _invokeAction?.Invoke(pluginId, childContext)));
                     }
                 return row;
             }
@@ -361,6 +368,13 @@ public sealed class HudViewModel : IDisposable
                         _invokeCellAction?.Invoke(pluginId, hoverId, cell.Col, cell.Row,
                             cell.Ch == '\0' ? "" : cell.Ch.ToString()));
                 }
+                if (!string.IsNullOrEmpty(w.ContextAction))
+                {
+                    // onRightClick (1.9): same (col,row,char) shape as onClick, separate id
+                    string contextId = w.ContextAction;
+                    vm.ContextCommand = new RelayCommand<Controls.GridCell>(cell =>
+                        _invokeCellAction?.Invoke(pluginId, contextId, cell.Col, cell.Row, cell.Ch.ToString()));
+                }
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
             }
@@ -376,7 +390,8 @@ public sealed class HudViewModel : IDisposable
     /// <summary>Repopulate a bound buttonrow from a newline-separated list of labels. Blank
     /// lines are skipped, and an empty value clears the row — which is how a plugin says
     /// "nothing to choose right now" without leaving stale buttons on screen.</summary>
-    private void RebuildChoices(ButtonRowWidgetViewModel row, string labels, string pluginId, string actionId)
+    private void RebuildChoices(ButtonRowWidgetViewModel row, string labels, string pluginId,
+                                string actionId, string? contextId = null)
     {
         row.Buttons.Clear();
         if (string.IsNullOrWhiteSpace(labels)) return;
@@ -388,7 +403,9 @@ public sealed class HudViewModel : IDisposable
             index++;
             int captured = index;                       // capture per iteration, not by reference
             row.Buttons.Add(new ButtonWidgetViewModel(label,
-                () => _invokeChoice?.Invoke(pluginId, actionId, label, captured)));
+                () => _invokeChoice?.Invoke(pluginId, actionId, label, captured),
+                contextId is null ? null
+                    : () => _invokeChoice?.Invoke(pluginId, contextId, label, captured)));
         }
     }
 
@@ -544,15 +561,23 @@ public sealed class HudTabViewModel
     public HudTabViewModel(string title) => Title = title;
 }
 
-/// <summary>A clickable button widget: its <see cref="Command"/> invokes the plugin's callback.</summary>
+/// <summary>A clickable button widget: its <see cref="Command"/> invokes the plugin's callback.
+/// <see cref="ContextCommand"/> is the API 1.9 secondary activation (right-click on the desktop,
+/// long-press on the phone) and is null unless the widget declared <c>onRightClick</c>.</summary>
 public sealed class ButtonWidgetViewModel : ViewModelBase
 {
     public string Text { get; }
     public RelayCommand Command { get; }
-    public ButtonWidgetViewModel(string text, Action onClick)
+
+    /// <summary>Bound by <c>behaviors:RightClick.Command</c> in the button template. Null when
+    /// the widget declared no onRightClick, which is what keeps the behaviour inert.</summary>
+    public RelayCommand? ContextCommand { get; }
+
+    public ButtonWidgetViewModel(string text, Action onClick, Action? onRightClick = null)
     {
         Text = text;
         Command = new RelayCommand(onClick);
+        ContextCommand = onRightClick is null ? null : new RelayCommand(onRightClick);
     }
 }
 
@@ -877,6 +902,10 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
     /// <summary>Set when the colorgrid has an onHover callback (API 1.6) — bound to
     /// ColorGridView.HoverCommand. Fired per cell-change, and with (-1,-1,'\0') on exit.</summary>
     public System.Windows.Input.ICommand? HoverCommand { get; set; }
+
+    /// <summary>Set when the colorgrid has an onRightClick callback (API 1.9) — bound to
+    /// ColorGridView.ContextCommand. Right-click fires this INSTEAD of CellCommand.</summary>
+    public System.Windows.Input.ICommand? ContextCommand { get; set; }
 
     /// <summary>Characters drawn as a letter on top of their tile; see WidgetSpec.Labels.</summary>
     public string LabelChars { get; }

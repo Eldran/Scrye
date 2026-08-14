@@ -80,7 +80,30 @@ public static class ScryeApi
     //       container widget (`{ type = "row", widgets = {...} }`): children laid out
     //       side by side, each at its measured width -- a chart with its notes beside
     //       it instead of below. Hosts that can't lay out rows may stack or skip them.
-    public static readonly Version Current = new(1, 8);
+    // 1.9 — `onRightClick` on colorgrid, button and buttonrow widgets: a SECOND, distinct
+    //       callback, never a variant of onClick. On a grid it receives the same
+    //       (col, row, ch) as onClick; on a button it takes no arguments, like onClick.
+    //       Additive: a widget that declares none behaves exactly as before.
+    //
+    //       Note this also FIXES a bug rather than only adding to the surface — colorgrid
+    //       cell clicks used to fire on any pointer button, so a right-click silently ran
+    //       onClick. Left click now runs onClick and nothing else. A plugin that relied on
+    //       the old behaviour was relying on an accident, but it is a behaviour change.
+    //
+    //       Unlike onHover, this is NOT desktop-only and so may gate real actions: the
+    //       companion maps a ~500 ms long-press onto it, so anything reachable by
+    //       right-click on the desktop is reachable by touch on the phone.
+    // 1.10 — scrye.onRelay(fn) / scrye.onRelay("Tell", fn): chat arriving from ANOTHER open
+    //        world, because this world's tab is the one in front. Handlers get
+    //        (sourceWorld, channel, message) — same filtered-hook shape as onChannel, one extra
+    //        leading argument. Which channels a world relays is its own RelayChannels setting,
+    //        tells only by default.
+    //
+    //        It is a SEPARATE hook rather than more onChannel traffic because a plugin that
+    //        treated foreign chat as its own would notify twice (the source world already did),
+    //        write another MUD's lines into its own log, and fold them into its own history.
+    //        Additive: a plugin that registers no handler never sees a relay.
+    public static readonly Version Current = new(1, 10);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

@@ -291,6 +291,14 @@ public sealed class PluginManager : IDisposable
         DrainQuarantine();
     }
 
+    /// <summary>Chat relayed in from another open world (API 1.10). Fans out to every plugin's
+    /// <c>scrye.onRelay</c>; nothing here reaches <c>onChannel</c>, on purpose.</summary>
+    public void DispatchRelay(string sourceWorld, string channel, string message)
+    {
+        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchRelay(sourceWorld, channel, message);
+        DrainQuarantine();
+    }
+
     public void DispatchGmcp(string package, string json)
     {
         for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchGmcp(package, json);

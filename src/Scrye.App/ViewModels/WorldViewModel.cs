@@ -30,6 +30,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 {
     private static readonly Rgb EchoColour = new(0x60, 0xC0, 0xF0);   // cyan-ish for local echo
     private static readonly Rgb SystemColour = new(0xF0, 0xC0, 0x40); // amber for system notices
+    private static readonly Rgb RelayColour  = new(0xC0, 0x90, 0xE0); // violet for another world's chat
     private static readonly Rgb PluginColour = new(0x90, 0xE0, 0x90); // green for plugin output
 
     private readonly MudSession _session;
@@ -456,6 +457,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// MainWindowViewModel for profile worlds; null for quick-connect = session-only).</summary>
     public Action<string, bool>? PersistPluginEnable { get; set; }
 
+    /// <summary>Persist a trigger's Notify flag to the connected node's profile layer. Assigned
+    /// by the shell, which owns the profile store; null for a quick-connect world, and the
+    /// companion panel greys the tick boxes out when it is.</summary>
+    public Action<TriggerDef, bool>? PersistTriggerNotify { get; set; }
+
     public WorldViewModel(WorldProfile profile, IReadOnlyList<string>? enabledPlugins = null)
     {
         Title = profile.Name;
@@ -610,7 +616,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         CompanionPanel = new CompanionViewModel(
             () => CompanionControl,
             () => SessionId,
-            () => _session.Automation.NotifyingTriggers,
+            () => _session.Automation.AllTriggers,
             CopyToClipboard,
             // Collect plugin.<id>.notify rows ON the session loop (the state store is
             // single-threaded there) and deliver back on the UI thread.
@@ -631,6 +637,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 }
                 Dispatcher.UIThread.Post(() => deliver(found));
             }),
+            // Flipping a trigger's Notify: persist through the shell (it owns the profile
+            // store), then re-apply so the change takes effect without a reconnect. Null for a
+            // quick-connect world, which has no layer to write into — the panel greys those out.
+            (def, on) =>
+            {
+                PersistTriggerNotify?.Invoke(def, on);
+                _session.Post(() => _session.Automation.SetTriggerNotify(def, on));
+            },
+            () => PersistTriggerNotify is not null,
             // Toggle commands run the way typing them would (plugin aliases first). This is
             // panel-authored text from a local plugin, not MUD-authored, so the echo is honest.
             cmd => HandleCommandLink(cmd, prompt: false));
@@ -639,7 +654,17 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook
         _session.InputFilter = _plugins.ProcessInput;         // plugin aliases (a match consumes input)
         _session.GmcpReceived += (pkg, json) => _plugins.DispatchGmcp(pkg, json);
-        _session.ChannelMessage += (ch, msg) => _plugins.DispatchChannel(ch, msg);   // MIP chat → scrye.onChannel
+        _session.ChannelMessage += (ch, msg) =>
+        {
+            _plugins.DispatchChannel(ch, msg);                        // MIP chat → scrye.onChannel
+            // …and, when this world is allowed to, offer it to whichever tab is in front. The
+            // shell decides whether anyone wants it; this only says "here is one, from me".
+            if (!_session.Profile.ShouldRelay(ch)) return;
+            if (ch.Equals("Tell", StringComparison.OrdinalIgnoreCase)
+                && msg.StartsWith(Scrye.Core.Mip.MipProcessor.OutgoingTellPrefix, StringComparison.Ordinal))
+                return;                                               // your own outgoing tell
+            ChannelRelayed?.Invoke(this, ch, msg);
+        };
         _session.Ticked += _plugins.Tick;                     // plugin timers (scrye.after/every)
         _session.CommandSent += _plugins.DispatchCommand;     // every outgoing command → scrye.onCommand (1.6)
         // scrye.emit lands back on the manager, which fans it out to every plugin's scrye.on
@@ -732,6 +757,32 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
+
+    /// <summary>A chat line from ANOTHER world, shown here because this is the tab in front.
+    /// Raised by <see cref="ChannelRelayed"/> on the source world and routed by the shell.</summary>
+    public event Action<WorldViewModel, string, string>? ChannelRelayed;
+
+    /// <summary>Draw another world's chat line in this pane. It goes straight onto the pending
+    /// queue, like <see cref="AppendSystem"/>: it is NOT MUD output, so it must not reach this
+    /// world's triggers, its capture panes, or its session transcript — a foreign line matching
+    /// a local trigger and firing automation would be a genuinely bad surprise.</summary>
+    public void AppendRelay(string sourceWorld, string channel, string text)
+    {
+        string label = channel.Equals("Tell", StringComparison.OrdinalIgnoreCase)
+            ? sourceWorld                                   // "[Aardwolf] Bob: hi" reads as a tell already
+            : $"{sourceWorld}/{channel}";
+        _pending.Enqueue(Line.FromText($"[{label}] {text}", RelayColour));
+    }
+
+    /// <summary>Take a chat line relayed from another world: draw it inline AND offer it to this
+    /// world's plugins as <c>scrye.onRelay</c>, which is how it reaches a chat pane instead of
+    /// scrolling away. The plugin half is posted to the session loop, because that is the only
+    /// thread a plugin runtime may be entered on.</summary>
+    public void ReceiveRelay(string sourceWorld, string channel, string text)
+    {
+        AppendRelay(sourceWorld, channel, text);
+        _session.Post(() => _plugins.DispatchRelay(sourceWorld, channel, text));
+    }
 
     private void Flush()
     {

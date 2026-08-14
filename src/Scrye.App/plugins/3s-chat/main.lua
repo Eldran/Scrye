@@ -133,19 +133,29 @@ local function publish_notify_state()
     sound_on and "on" or "off",
     "chat sound " .. (sound_on and "off" or "on"))
 
+  -- Editable lists (Companion panel, API 1.10 convention): an "add" row carries a command
+  -- TEMPLATE with {} for the typed text, and each existing entry is an "item" row whose
+  -- command removes it. The commands are the same aliases you would type, so the panel
+  -- never has to understand what a channel or a watched name is.
   local chans = {}
   for c in pairs(notify_chans) do chans[#chans + 1] = c end
   table.sort(chans)
-  rows[#rows + 1] = string.format("Channels\t%s\t%s\t",
-    #chans > 0 and table.concat(chans, ", ") or "none - add with: chat notify <channel>",
-    #chans > 0 and (#chans .. " notifying") or "-")
+  rows[#rows + 1] = string.format("Notify on channel\t%s\tadd\tchat notify {}",
+    #chans > 0 and (#chans .. " channel" .. ((#chans == 1) and "" or "s")) or "none yet")
+  for _, c in ipairs(chans) do
+    -- NB 'chat notify <c>' only ADDS; removal is its own alias. Sending the add command
+    -- again would silently do nothing, which as an ✕ button would be worse than no button.
+    rows[#rows + 1] = string.format("%s\t\titem\tchat unnotify %s", c, c)
+  end
 
   local w = {}
   for n in pairs(watches) do w[#w + 1] = n end
   table.sort(w)
-  rows[#rows + 1] = string.format("Watched names\t%s\t%s\t",
-    #w > 0 and table.concat(w, ", ") or "nobody - add with: chat watch <name>",
-    #w > 0 and (#w .. " watched") or "-")
+  rows[#rows + 1] = string.format("Watch a name\t%s\tadd\tchat watch {}",
+    #w > 0 and (#w .. " watched") or "nobody yet")
+  for _, n in ipairs(w) do
+    rows[#rows + 1] = string.format("%s\t\titem\tchat unwatch %s", n, n)
+  end
 
   scrye.setState("plugin.3s-chat.notify", table.concat(rows, "\n"))
 end
@@ -399,6 +409,40 @@ scrye.addAlias{
       .. "clear it from the pane).")
   end,
 }
+
+-- ---------------- chat relayed from another open world -----------------------
+-- API 1.10. A tell to a character on a different MUD is drawn inline in whichever tab
+-- is in front, which means it scrolls away; putting it in the pane too is the whole
+-- point of the pane. It is deliberately NOT run through the onChannel path above:
+--
+--   * no notify -- the world it came from already decided whether to buzz you, and
+--     a second notification for one message is worse than none,
+--   * no chat log -- another MUD's chat does not belong in this world's log file,
+--   * no restore buffer -- replaying foreign lines into this world's pane on a later
+--     session would be confusing, and they are still in their own world's history.
+--
+-- What it does get: the same timestamp, the same escaping, and the source world in
+-- place of the channel colour block, so it reads as "from elsewhere" at a glance.
+scrye.onRelay(function(world, chan, text)
+  world = tostring(world or ""):gsub("[%z\1-\31]", " ")
+  chan  = tostring(chan  or ""):gsub("[%z\1-\31]", " ")
+  text  = tostring(text  or ""):gsub("[%z\1-\31]", " ")
+
+  local ok, stripped = pcall(strip_banner, chan, text)
+  if ok and stripped then text = stripped end
+
+  local stamp = ""
+  do
+    local ok_t, sres = pcall(os.date, "%H:%M")
+    if ok_t and type(sres) == "string" then stamp = sres end
+  end
+
+  -- "12:04 [Aardwolf] Bob: hi" for a tell, "12:04 [Aardwolf/Guild] ..." for a channel
+  local label = is_tell(chan) and world or (world .. "/" .. chan)
+  scrye.capture(PANE, string.format("%s@{dim}[%s]@{} %s",
+    (stamp ~= "") and string.format("@{dim}%s @{}", esc(stamp)) or "",
+    esc(label), esc(text)))
+end)
 
 -- ---------------- commands the pane makes unnecessary ------------------------
 -- These were window controls in MUSHclient. Consume them with an explanation rather

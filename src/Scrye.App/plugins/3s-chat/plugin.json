@@ -10,7 +10,7 @@
   "entry": "main.lua",
   "lang": "lua",
   "requires": {
-    "scryeApi": ">=1.2 <2.0"
+    "scryeApi": ">=1.10 <2.0"
   },
   "permissions": [
     "output.read",

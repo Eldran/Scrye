@@ -55,6 +55,14 @@ public class ColorGridView : Control
     public static readonly StyledProperty<ICommand?> HoverCommandProperty =
         AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(HoverCommand));
 
+    /// <summary>Optional command run on a cell's SECONDARY activation — a right-click (plugin
+    /// API 1.9's colorgrid <c>onRightClick</c>) — with a <see cref="GridCell"/> parameter.
+    /// A right-click runs this and never <see cref="CellCommand"/>; a left click runs
+    /// <see cref="CellCommand"/> and never this. When set, the grid becomes hit-testable even
+    /// without a click command.</summary>
+    public static readonly StyledProperty<ICommand?> ContextCommandProperty =
+        AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(ContextCommand));
+
     /// <summary>Characters that get a letter drawn on their tile (e.g. "SXHWTI&gt;*B").
     /// Empty means tiles only.</summary>
     public static readonly StyledProperty<string> LabelCharsProperty =
@@ -84,6 +92,7 @@ public class ColorGridView : Control
 
     public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
     public ICommand? HoverCommand { get => GetValue(HoverCommandProperty); set => SetValue(HoverCommandProperty, value); }
+    public ICommand? ContextCommand { get => GetValue(ContextCommandProperty); set => SetValue(ContextCommandProperty, value); }
     public string LabelChars { get => GetValue(LabelCharsProperty); set => SetValue(LabelCharsProperty, value); }
     public bool Weave { get => GetValue(WeaveProperty); set => SetValue(WeaveProperty, value); }
     public Dictionary<char, string>? Icons { get => GetValue(IconsProperty); set => SetValue(IconsProperty, value); }
@@ -296,7 +305,7 @@ public class ColorGridView : Control
 
         // When interactive, fill a transparent background so the whole grid is hit-testable
         // (a bare Control only receives pointer events where it has drawn something).
-        if (CellCommand is not null || HoverCommand is not null)
+        if (CellCommand is not null || HoverCommand is not null || ContextCommand is not null)
             context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
         if (Weave) { RenderWeave(context, rows, palette); return; }
@@ -467,7 +476,8 @@ public class ColorGridView : Control
     {
         base.OnPropertyChanged(change);
         if (change.Property == PaletteProperty) { _brushes.Clear(); _pens.Clear(); _labels.Clear(); _iconInk.Clear(); }   // palette swap: rebuild caches
-        if (change.Property == CellCommandProperty || change.Property == HoverCommandProperty)
+        if (change.Property == CellCommandProperty || change.Property == HoverCommandProperty
+            || change.Property == ContextCommandProperty)
             InvalidateVisual();   // toggle hit-test background
     }
 
@@ -531,10 +541,18 @@ public class ColorGridView : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        ICommand? cmd = CellCommand;
+
+        // Which button decides which callback. Before API 1.9 this fired CellCommand for ANY
+        // button, so a right-click silently ran onClick; a press that is neither left nor
+        // right (middle, pen barrel, touch contact past the first) now does nothing at all.
+        Point at = e.GetPosition(this);
+        PointerPointProperties props = e.GetCurrentPoint(this).Properties;
+        ICommand? cmd = props.IsLeftButtonPressed ? CellCommand
+            : props.IsRightButtonPressed ? ContextCommand
+            : null;
         if (cmd is null) return;
 
-        if (CellAt(e.GetPosition(this)) is not { } hit) return;
+        if (CellAt(at) is not { } hit) return;
         if (cmd.CanExecute(hit)) cmd.Execute(hit);
         e.Handled = true;
     }

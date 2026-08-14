@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Scrye.App.Companion;
+using Scrye.Core.Automation;
 using Scrye.Core.Model;
 using Scrye.Core.Profiles;
 
@@ -63,6 +64,28 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void SendBroadcast(string text)
     {
         foreach (WorldViewModel w in Worlds) w.ReceiveBroadcast(text);
+    }
+
+    // ---- cross-world chat relay ---------------------------------------------
+    //
+    // A tell to a character on one MUD is easy to miss while you are playing another, so a
+    // world that allows it (WorldProfile.RelayChannels) offers its chat lines here and they
+    // are drawn in whichever tab is in FRONT. Deliberately one-way and read-only: a reply
+    // typed into this tab goes to THIS world, and routing it anywhere else on the strength
+    // of the last line you saw is how a private message ends up on the wrong MUD.
+    //
+    // Runs on the source world's session loop, not the UI thread. That is safe because the
+    // whole handler is a reference read plus an enqueue onto a concurrent queue — the tab
+    // paints it on its next flush like any other line.
+
+    private void AttachRelay(WorldViewModel world) => world.ChannelRelayed += OnChannelRelayed;
+    private void DetachRelay(WorldViewModel world) => world.ChannelRelayed -= OnChannelRelayed;
+
+    private void OnChannelRelayed(WorldViewModel source, string channel, string text)
+    {
+        WorldViewModel? target = Active;
+        if (target is null || ReferenceEquals(target, source)) return;   // you are already reading it
+        target.ReceiveRelay(source.Title, channel, text);
     }
 
     // ---- toast stack (trigger notifications + connection changes) -------------
@@ -303,6 +326,50 @@ public sealed class MainWindowViewModel : ViewModelBase
         else _store.SaveMud(r.Mud, layer);
     }
 
+    private void PersistTriggerNotify(ProfileRef r, TriggerDef def, bool notify)
+    {
+        if (!Services.CrashLog.Guard("PersistTriggerNotify", () => SaveTriggerNotify(r, def, notify)))
+            RaiseToast("Notifications", $"Couldn't save the Notify change for '{def.Name}' (see logs).");
+    }
+
+    /// <summary>Write a trigger's Notify flag into the connected node's own layer.
+    ///
+    /// <para>Two cases. If the trigger already lives in THIS layer it is replaced in place, which
+    /// works whether or not it has a name. If it was inherited from a shallower layer the change
+    /// is stored as an overriding copy here — the cascade merges rules by name, so the copy shadows
+    /// the original for this character only, and the shallower layer keeps working for everyone
+    /// else. That merge key is also why an inherited UNNAMED trigger can't be edited from the
+    /// panel at all: anonymous rules get a synthetic per-layer key, so nothing written here could
+    /// ever line up with it. The panel refuses those rather than silently writing a duplicate.</para>
+    /// </summary>
+    private void SaveTriggerNotify(ProfileRef r, TriggerDef def, bool notify)
+    {
+        ProfileLayer layer;
+        if (r.Character is not null)
+            layer = _store.LoadCharacter(r.Mud, r.Account, r.Character)
+                    ?? new ProfileLayer { Kind = LayerKind.Character, Name = r.Character };
+        else if (r.Account is not null)
+            layer = _store.LoadAccount(r.Mud, r.Account) ?? new ProfileLayer { Kind = LayerKind.Account, Name = r.Account };
+        else
+            layer = _store.LoadMud(r.Mud) ?? new ProfileLayer { Kind = LayerKind.Mud, Name = r.Mud };
+
+        int at = layer.Triggers.FindIndex(t => t.Name == def.Name && t.Pattern == def.Pattern);
+        if (at >= 0)
+        {
+            if (layer.Triggers[at].Notify == notify) return;      // nothing to write
+            layer.Triggers[at] = layer.Triggers[at] with { Notify = notify };
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(def.Name)) return;      // unnameable override; panel blocks this
+            layer.Triggers.Add(def with { Notify = notify });
+        }
+
+        if (r.Character is not null) _store.SaveCharacter(r.Mud, r.Account, r.Character, layer);
+        else if (r.Account is not null) _store.SaveAccount(r.Mud, r.Account, layer);
+        else _store.SaveMud(r.Mud, layer);
+    }
+
     private EffectiveProfile Resolve(ProfileRef r) =>
         r.Character is not null ? _store.ResolveCharacter(r.Mud, r.Account, r.Character)
         : r.Account is not null ? _store.ResolveAccount(r.Mud, r.Account)
@@ -328,9 +395,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
         var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
         vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
+        vm.PersistTriggerNotify = (def, notify) => PersistTriggerNotify(r, def, notify);
         vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
         Worlds.Add(vm);
         Companion.Attach(vm);
+        AttachRelay(vm);
         Active = vm;
         if (string.IsNullOrEmpty(eff.World.Host))
         {
@@ -350,6 +419,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (idx < 0) return;
 
         Companion.Detach(world);   // stop publishing and tell devices the session is gone
+        DetachRelay(world);        // a closed world must not keep relaying into the survivors
 
         if (ReferenceEquals(Active, world))               // choose a neighbour before removal
             Active = Worlds.Count > 1
@@ -378,6 +448,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
         Worlds.Add(vm);
         Companion.Attach(vm);
+        AttachRelay(vm);
         Active = vm;
         try { await vm.ConnectAsync(); }
         catch (System.Exception ex) { vm.AppendSystem($"connect failed: {ex.Message}"); }

@@ -35,6 +35,7 @@ public static class HudDrag
     private const double GripSize = 18;       // bottom-right resize corner, in from each edge
     private const double MinWidth = 140;      // resize floors: title + a usable widget column…
     private const double MinHeight = 64;      // …and the title strip + one row of content
+    private const double SnapRange = 10;      // how close an edge must come before it snaps
     private static int _topZ = 1;             // bring-to-front counter
 
     static HudDrag()
@@ -147,8 +148,20 @@ public static class HudDrag
                 if (control.DataContext is HudPanelViewModel rvm)
                 {
                     Point delta = e.GetPosition(canvas) - resizeAnchor;
-                    rvm.UserWidth = Math.Max(MinWidth, resizeStart.Width + delta.X);
-                    rvm.UserHeight = Math.Max(MinHeight, resizeStart.Height + delta.Y);
+                    double w = Math.Max(MinWidth, resizeStart.Width + delta.X);
+                    double h = Math.Max(MinHeight, resizeStart.Height + delta.Y);
+                    if (!Freehand(e.KeyModifiers))
+                    {
+                        // resizing moves the far edge only, so snap that edge and read the
+                        // size back off it — the panel's top-left must not drift
+                        double left = Canvas.GetLeft(item), top = Canvas.GetTop(item);
+                        if (!double.IsNaN(left))
+                            w = Math.Max(MinWidth, SnapAxis(left + w, 0, EdgesOn(canvas, item, true)) - left);
+                        if (!double.IsNaN(top))
+                            h = Math.Max(MinHeight, SnapAxis(top + h, 0, EdgesOn(canvas, item, false)) - top);
+                    }
+                    rvm.UserWidth = w;
+                    rvm.UserHeight = h;
                 }
                 e.Handled = true;
                 return;
@@ -163,7 +176,13 @@ public static class HudDrag
                 return;
             }
             Point pos = e.GetPosition(canvas) - grabOffset;
-            (double x, double y) = Clamp(pos.X, pos.Y, control, canvas);
+            double px = pos.X, py = pos.Y;
+            if (!Freehand(e.KeyModifiers))
+            {
+                px = SnapAxis(px, item.Bounds.Width, EdgesOn(canvas, item, true));
+                py = SnapAxis(py, item.Bounds.Height, EdgesOn(canvas, item, false));
+            }
+            (double x, double y) = Clamp(px, py, control, canvas);
             Canvas.SetLeft(item, x);
             Canvas.SetTop(item, y);
             e.Handled = true;
@@ -207,6 +226,48 @@ public static class HudDrag
         }
         return null;
     }
+
+    // ---- snapping -------------------------------------------------------------
+
+    /// <summary>Candidate edge positions on one axis: the canvas's own margins, plus every
+    /// sibling panel's near and far edge. Returned in canvas coordinates.</summary>
+    private static List<double> EdgesOn(Canvas canvas, Control self, bool horizontal)
+    {
+        double extent = horizontal ? canvas.Bounds.Width : canvas.Bounds.Height;
+        var edges = new List<double> { Margin, extent - Margin };
+        foreach (Control child in canvas.Children)
+        {
+            if (ReferenceEquals(child, self)) continue;
+            double near = horizontal ? Canvas.GetLeft(child) : Canvas.GetTop(child);
+            double size = horizontal ? child.Bounds.Width : child.Bounds.Height;
+            if (double.IsNaN(near) || size <= 0) continue;      // not laid out yet
+            edges.Add(near);
+            edges.Add(near + size);
+        }
+        return edges;
+    }
+
+    /// <summary>Nudge a panel's near edge so that either it or the far edge lands on a
+    /// candidate. Both edges compete and the closest wins, so a panel can be aligned
+    /// flush-left with a neighbour or butted up against its right side, whichever the
+    /// drag was closer to. Returns <paramref name="near"/> untouched when nothing is
+    /// within <see cref="SnapRange"/>.</summary>
+    private static double SnapAxis(double near, double size, List<double> edges)
+    {
+        double best = near, bestGap = SnapRange;
+        foreach (double edge in edges)
+        {
+            double gapNear = Math.Abs(edge - near);
+            if (gapNear < bestGap) { bestGap = gapNear; best = edge; }
+            double gapFar = Math.Abs(edge - (near + size));
+            if (gapFar < bestGap) { bestGap = gapFar; best = edge - size; }
+        }
+        return best;
+    }
+
+    /// <summary>True when the drag should place freely: holding Alt suppresses snapping
+    /// for pixel-exact positioning.</summary>
+    private static bool Freehand(KeyModifiers mods) => mods.HasFlag(KeyModifiers.Alt);
 
     /// <summary>Keep at least a 60 px sliver and the title strip reachable inside the canvas,
     /// so a panel can never be dragged (or restored) fully off-screen.</summary>

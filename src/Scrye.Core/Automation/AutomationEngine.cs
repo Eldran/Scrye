@@ -38,6 +38,19 @@ public sealed class AutomationEngine
             return list;
         }
     }
+    /// <summary>Every trigger with its live enabled state and its Notify flag. The companion
+    /// panel needs the ones that are NOT notifying too — you cannot switch a notification on
+    /// from a list that only shows what is already on.</summary>
+    public IReadOnlyList<(TriggerDef Def, bool Enabled)> AllTriggers
+    {
+        get
+        {
+            var list = new List<(TriggerDef, bool)>();
+            foreach (Trig t in _triggers) list.Add((t.Def, t.Enabled));
+            return list;
+        }
+    }
+
     public int AliasCount => _aliases.Count;
     public int TimerCount => _timers.Count;
 
@@ -76,6 +89,24 @@ public sealed class AutomationEngine
     public void ClearTriggers() => _triggers.Clear();
     public void ClearAliases() => _aliases.Clear();
     public void ClearTimers() => _timers.Clear();
+
+    /// <summary>Flip a trigger's Notify flag on the live rule set, so a change made in the
+    /// companion panel takes effect without a reconnect. Matched by reference first (the panel
+    /// hands back the very def it was given) and by name only as a fallback, so two triggers
+    /// sharing a name cannot swap places. Returns false when the trigger is no longer loaded.
+    ///
+    /// <para><see cref="TriggerDef"/> is an immutable record, so this replaces the def rather
+    /// than mutating it — the compiled pattern is untouched, since Notify does not affect
+    /// matching.</para></summary>
+    public bool SetTriggerNotify(TriggerDef def, bool notify)
+    {
+        Trig? t = _triggers.Find(x => ReferenceEquals(x.Def, def));
+        if (t is null && !string.IsNullOrWhiteSpace(def.Name))
+            t = _triggers.Find(x => x.Def.Name == def.Name);
+        if (t is null) return false;
+        t.Def = t.Def with { Notify = notify };
+        return true;
+    }
 
     public bool EnableTrigger(string name, bool enabled) => SetEnabled(_triggers.Find(t => t.Def.Name == name), enabled, x => x.Enabled = enabled);
     public bool EnableAlias(string name, bool enabled) => SetEnabled(_aliases.Find(a => a.Def.Name == name), enabled, x => x.Enabled = enabled);

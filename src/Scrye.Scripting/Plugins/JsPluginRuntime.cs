@@ -484,6 +484,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
             hoverId = "a" + _nextActionId++;
             _actions[hoverId] = hover;
         }
+        // 'onRightClick' (colorgrid / button / buttonrow, 1.9): the secondary activation.
+        string? contextId = null;
+        JsValue context = Get(w, "onRightClick");
+        if (IsFn(context))
+        {
+            contextId = "a" + _nextActionId++;
+            _actions[contextId] = context;
+        }
         // buttonrow children: buttons = [ {text, action}, ... ]
         JsValue btns = Get(w, "buttons");
         List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns) : null;
@@ -504,6 +512,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Align = Str(w, "align"),
             Action = actionId,
             HoverAction = hoverId,
+            ContextAction = contextId,
             Children = children,
         };
     }

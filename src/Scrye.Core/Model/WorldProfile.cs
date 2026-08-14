@@ -46,6 +46,40 @@ public sealed class WorldProfile
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>
     public string MipClientId { get; set; } = "";
 
+    /// <summary>
+    /// Which of this world's chat channels are relayed into whatever world tab is in FRONT, so a
+    /// tell to a character on another MUD is not missed while you are playing elsewhere. A
+    /// comma-separated list of channel names as <c>ChannelMessage</c> reports them —
+    /// <c>"Tell"</c> for direct messages, otherwise the MUD's own channel name.
+    ///
+    /// <para><c>"*"</c> relays every channel; empty relays nothing. The default relays tells
+    /// only: channel chatter from a MUD you are not looking at is noise, but a tell is the one
+    /// thing worth interrupting you.</para>
+    ///
+    /// <para>This is a property of the SOURCE world — "what may this world interrupt me with" —
+    /// which is why it resolves through the cascade like any other setting rather than being one
+    /// app-wide switch. Set it once on the Global layer for a default across every world.</para>
+    /// </summary>
+    public string RelayChannels { get; set; } = "Tell";
+
+    /// <summary>True when <paramref name="channel"/> is one this world may relay. Case-insensitive,
+    /// tolerant of spaces around the commas, and never true for a blank channel name.</summary>
+    public bool ShouldRelay(string? channel)
+    {
+        if (string.IsNullOrWhiteSpace(channel)) return false;
+        if (string.IsNullOrWhiteSpace(RelayChannels)) return false;
+
+        string wanted = channel.Trim();
+        foreach (string raw in RelayChannels.Split(','))
+        {
+            string entry = raw.Trim();
+            if (entry.Length == 0) continue;
+            if (entry == "*") return true;
+            if (string.Equals(entry, wanted, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
     public Encoding ResolveEncoding()
     {
         try { return Encoding.GetEncoding(EncodingName); }

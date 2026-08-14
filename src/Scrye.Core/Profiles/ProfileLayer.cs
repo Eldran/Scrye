@@ -51,6 +51,13 @@ public sealed class ProfileLayer
     /// <summary>Idle limit in seconds, clamped to 60..7200. Null inherits, then defaults to 600.</summary>
     public int? IdleGuardSeconds { get; set; }
 
+    /// <summary>Chat channels this world may relay into whichever world tab is in front, so a
+    /// tell on one MUD reaches you while you are playing another. Comma-separated channel names,
+    /// <c>"*"</c> for all, empty for none. Null inherits; see
+    /// <see cref="Scrye.Core.Model.WorldProfile.RelayChannels"/>, which defaults to tells only.
+    /// Set it on the Global layer to change the default for every world at once.</summary>
+    public string? RelayChannels { get; set; }
+
     // ---- collections, merged by name ----
     public List<TriggerDef> Triggers { get; set; } = new();
     public List<AliasDef> Aliases { get; set; } = new();

@@ -29,6 +29,16 @@ public interface IPluginRuntime : IDisposable
 
     /// <summary>A structured MIP chat message: (channel, message); tells use channel "Tell".</summary>
     void DispatchChannel(string channel, string message);
+
+    /// <summary>Chat RELAYED from another open world, because this world's tab is the one in
+    /// front: (sourceWorld, channel, message). Fires this world's <c>scrye.onRelay</c> hooks.
+    ///
+    /// <para>Deliberately NOT <see cref="DispatchChannel"/>. A plugin that treated foreign chat
+    /// as its own would notify a second time (the source world already did), write another MUD's
+    /// lines into its own log, and fold them into its own history. A separate hook lets a chat
+    /// pane show the line — which is the point — while leaving all of that alone. Default no-op
+    /// (API 1.10), so a runtime that predates it still compiles.</para></summary>
+    void DispatchRelay(string sourceWorld, string channel, string message) { }
     void Tick(double dtSeconds);
     void DispatchConnect();
     void DispatchDisconnect();

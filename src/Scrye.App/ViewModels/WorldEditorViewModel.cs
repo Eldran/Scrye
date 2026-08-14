@@ -72,6 +72,12 @@ public sealed class WorldEditorViewModel : ViewModelBase
     private bool _enableMsp;
     public bool EnableMsp { get => _enableMsp; set => SetField(ref _enableMsp, value); }
 
+    /// <summary>Chat channels this world may relay into whichever tab is in front: a
+    /// comma-separated list, "*" for all, blank for none. Empty here means "inherit"; the
+    /// resolved default is "Tell". See WorldProfile.RelayChannels.</summary>
+    private string _relayChannels = "";
+    public string RelayChannels { get => _relayChannels; set => SetField(ref _relayChannels, value); }
+
     // ---- rule collections (master/detail) ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
@@ -117,6 +123,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _enableMip = _layer.EnableMip ?? false;
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
         _enableMsp = _layer.EnableMsp ?? true;   // on by default; !!SOUND lines are unambiguous
+        _relayChannels = _layer.RelayChannels ?? "";   // blank = inherit (resolves to "Tell")
 
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
@@ -179,6 +186,12 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.EnableMip = EnableMip ? true : null;
         _layer.EnableMxp = EnableMxp ? null : false;   // default-on: only an explicit OFF is stored
         _layer.EnableMsp = EnableMsp ? null : false;   // same default-on rule
+        // Blank means inherit, so it stores null. "none" is how you say an explicit OFF that a
+        // shallower layer cannot un-say — an empty string would read as "inherit" on reload.
+        _layer.RelayChannels = string.IsNullOrWhiteSpace(RelayChannels)
+            ? null
+            : (RelayChannels.Trim().Equals("none", StringComparison.OrdinalIgnoreCase)
+                ? "" : RelayChannels.Trim());
 
         _layer.Triggers = BuildTriggers();
         _layer.Aliases = BuildAliases();

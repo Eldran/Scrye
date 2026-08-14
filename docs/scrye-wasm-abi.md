@@ -143,7 +143,7 @@ down.
     { "type": "gauge", "bind": "character.hp", "max": "100" },
     { "type": "button", "text": "Go", "action": 7 },
     { "type": "colorgrid", "bind": "map.grid", "weave": true,
-      "palette": { "#": "#00ff00" }, "onClick": 8, "onHover": 9 },
+      "palette": { "#": "#00ff00" }, "onClick": 8, "onHover": 9, "onRightClick": 10 },
     { "type": "buttonrow", "buttons": [ { "text": "A", "action": 10 } ] },
     { "type": "table", "columns": ["Item", "Qty"], "bind": "market.rows" }
   ],
@@ -151,7 +151,7 @@ down.
 }
 ```
 
-Where Lua embeds a function (`action`/`onClick`/`onHover`/`onSubmit`), wasm embeds a
+Where Lua embeds a function (`action`/`onClick`/`onHover`/`onRightClick`/`onSubmit`), wasm embeds a
 **hook id** from `register_action` (a JSON number). Rebuilding a panel with the same title
 replaces it and retires the previous build's action ids, same as Lua — after a rebuild the
 old ids are dead (dispatches to them are dropped).

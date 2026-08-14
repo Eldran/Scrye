@@ -50,6 +50,7 @@ public static class ProfileResolver
 
             if (layer.IdleGuard is not null) idleGuard = layer.IdleGuard.Value;
             if (layer.IdleGuardSeconds is not null) idleSeconds = layer.IdleGuardSeconds.Value;
+            if (layer.RelayChannels is not null) world.RelayChannels = layer.RelayChannels;
 
             if (layer.FontFamily is not null) font = layer.FontFamily;
             if (layer.FontSize is not null) fontSize = layer.FontSize;

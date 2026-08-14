@@ -39,6 +39,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
     private readonly List<int> _lineHooks = new();
     private readonly List<(string chan, int fn)> _channelHooks = new();
+    private readonly List<(string chan, int fn)> _relayHooks = new();
     private readonly List<(string pkg, int fn)> _gmcpHooks = new();
     private readonly List<int> _connectHooks = new();
     private readonly List<int> _disconnectHooks = new();
@@ -139,6 +140,16 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
     }
 
+    public void DispatchRelay(string sourceWorld, string channel, string message)
+    {
+        for (int i = 0; i < _relayHooks.Count; i++)
+        {
+            (string chan, int fn) = _relayHooks[i];
+            if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
+                CallRef("onRelay", fn, sourceWorld, channel, message);
+        }
+    }
+
     public void DispatchGmcp(string package, string json)
     {
         for (int i = 0; i < _gmcpHooks.Count; i++)
@@ -203,6 +214,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         _timers.Clear();
         _lineHooks.Clear();
         _channelHooks.Clear();
+        _relayHooks.Clear();
         _gmcpHooks.Clear();
         _connectHooks.Clear();
         _disconnectHooks.Clear();
@@ -394,6 +406,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // scrye.onChannel(fn)  OR  scrye.onChannel("Party", fn)
         Bind("onChannel", cl => AddFilteredHook(cl, _channelHooks));
+        // scrye.onRelay(fn)  OR  scrye.onRelay("Tell", fn) — chat from ANOTHER open world (1.10)
+        Bind("onRelay", cl => AddFilteredHook(cl, _relayHooks));
         // scrye.onGmcp(fn)  OR  scrye.onGmcp("Char.Vitals", fn)
         Bind("onGmcp", cl => AddFilteredHook(cl, _gmcpHooks));
 
@@ -651,6 +665,18 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
         else cl.Pop(1);
 
+        // 'onRightClick' (colorgrid / button / buttonrow, 1.9) is a THIRD callback: the
+        // secondary activation — right-click on the desktop, long-press on the phone.
+        string? contextId = null;
+        cl.GetField(w, "onRightClick");
+        if (cl.IsFunction(-1))
+        {
+            contextId = "a" + _nextActionId++;
+            _actions[contextId] = cl.Ref(LuaRegistry.Index);      // pops
+            _buildingActions?.Add(contextId);
+        }
+        else cl.Pop(1);
+
         // colorgrid palette: { ["char"] = "#RRGGBB", ... }
         Dictionary<string, string>? palette = null;
         cl.GetField(w, "palette");
@@ -742,6 +768,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Align = Field(cl, w, "align"),
             Action = actionId,
             HoverAction = hoverId,
+            ContextAction = contextId,
             Children = children,
         };
     }

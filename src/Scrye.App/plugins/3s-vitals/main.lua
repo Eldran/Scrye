@@ -11,6 +11,7 @@
 scrye.addPanel{
   title = "Vitals",
   width = 240,
+  accent = "#D855B8",          -- signature: vitals rose (validated accent set)
   widgets = {
     -- dim = true: the bar darkens as the value drops (green base for stats)
     { type = "gauge", text = "HP",   value = "character.health.current", max = "character.health.max", dim = true },

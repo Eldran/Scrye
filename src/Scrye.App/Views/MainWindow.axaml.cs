@@ -34,6 +34,19 @@ public partial class MainWindow : Window
     {
         if (e.Handled) return;
 
+        // Enter in a companion "add" box (a watched name, a notifying channel) submits it, the
+        // same as pressing Add. Handled here rather than with KeyDown= in the template because
+        // that box lives inside NESTED DataTemplates, which the Avalonia 11 XAML compiler
+        // cannot compile handlers for (see OnPanePointerPressed).
+        if (e.Key == Key.Enter && e.Source is TextBox { DataContext: PluginNotifyRow row } box
+            && row.Add is not null)
+        {
+            row.Add.Execute(box.Text ?? "");
+            box.Text = "";                   // the value moved into the list; don't leave it staged
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.F11)
         {
             WindowState = WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;

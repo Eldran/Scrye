@@ -18,24 +18,74 @@ public sealed record NotifySourceRow(string Name, string Pattern, string Group, 
 {
     public string Detail => string.IsNullOrEmpty(Group) ? Pattern : $"[{Group}] {Pattern}";
     public string StateLabel => Enabled ? "" : "disabled";
+
+    /// <summary>Does this trigger currently raise a notification? Bound two-way to the tick box,
+    /// so setting it persists and re-applies through <see cref="SetNotify"/>.</summary>
+    public bool Notify { get; init; }
+
+    /// <summary>Applies a new Notify state: persist to the profile and re-apply to the live
+    /// session. Null when the trigger cannot be edited from here — see <see cref="Why"/>.</summary>
+    public Action<bool>? SetNotify { get; init; }
+
+    /// <summary>Empty when editable; otherwise why not, shown beside the row. An unnamed trigger
+    /// inherited from a shallower layer is the case: the cascade merges rules by NAME, so there
+    /// is no way to write an override that would find its way back to this one.</summary>
+    public string Why { get; init; } = "";
+
+    public bool CanEdit => SetNotify is not null;
+    public bool HasWhy => Why.Length > 0;
+
+    /// <summary>Two-way binding target for the tick box. The getter is the flag as loaded; the
+    /// setter routes through <see cref="SetNotify"/>, which persists and re-applies, then
+    /// rebuilds the list — so the row you are looking at is replaced rather than mutated.</summary>
+    public bool NotifyChecked
+    {
+        get => Notify;
+        set { if (value != Notify) SetNotify?.Invoke(value); }
+    }
 }
 
 /// <summary>One notification source a plugin reported via the <c>plugin.&lt;id&gt;.notify</c>
 /// state convention (see the guide): newline-joined rows of
-/// <c>label \t detail \t on|off \t toggleCommand</c>. The toggle command runs through the
-/// normal input pipeline, so the plugin's own alias handles it — the panel never needs to
-/// know what the command means.</summary>
+/// <c>label \t detail \t state \t command</c>. The command runs through the normal input
+/// pipeline, so the plugin's own alias handles it — the panel never needs to know what the
+/// command means, which is the whole reason the convention is text.
+///
+/// <para>Four row kinds, by <c>state</c>:</para>
+/// <list type="bullet">
+/// <item><c>on</c> / <c>off</c> with a command — a switch.</item>
+/// <item><c>add</c> — an editable list's entry field. The command is a TEMPLATE containing
+/// <c>{}</c>, replaced by what the user types (e.g. <c>chat watch {}</c>).</item>
+/// <item><c>item</c> — one entry of such a list, with a command that removes it.</item>
+/// <item>anything else — informational, rendered as plain text.</item>
+/// </list>
+/// </summary>
 public sealed record PluginNotifyRow(string Label, string Detail, string State, RelayCommand? Toggle)
 {
+    /// <summary>Substituted with the user's text in an <c>add</c> row's command template.</summary>
+    public const string Placeholder = "{}";
+
+    /// <summary>Set on an <c>add</c> row: runs the template with the argument substituted.
+    /// Separate from <see cref="Toggle"/> because it needs the text the user typed.</summary>
+    public RelayCommand<string>? Add { get; init; }
+
     /// <summary>Rows whose state isn't literally on/off (e.g. "watching: Goran") are
     /// informational; they render without a toggle even if a command was supplied.</summary>
     public bool CanToggle => Toggle is not null;
 
-    // The view shows one of three affordances; these partition cleanly because Toggle is
-    // only non-null when State is literally on/off.
-    public bool IsOn => CanToggle && string.Equals(State, "on", StringComparison.OrdinalIgnoreCase);
-    public bool IsOff => CanToggle && !IsOn;
+    public bool IsAdd => Add is not null;
+    /// <summary>An <c>item</c> row: one entry in a list, removable with the ✕.</summary>
+    public bool IsItem => Toggle is not null
+        && string.Equals(State, "item", StringComparison.OrdinalIgnoreCase);
+
+    // The view shows one of these affordances; they partition cleanly because Toggle is
+    // non-null only for a literal on/off or an item, and Add only for an add row.
+    public bool IsOn => CanToggle && !IsItem && string.Equals(State, "on", StringComparison.OrdinalIgnoreCase);
+    public bool IsOff => CanToggle && !IsItem && !IsOn;
     public bool HasDetail => !string.IsNullOrEmpty(Detail);
+
+    /// <summary>Informational rows: no affordance at all, just label and detail.</summary>
+    public bool IsPlain => !CanToggle && !IsAdd;
 }
 
 /// <summary>A plugin's reported notification sources, grouped under its id.</summary>
@@ -59,6 +109,12 @@ public sealed class CompanionViewModel : ViewModelBase
     private readonly Func<CompanionController?> _controller;
     private readonly Func<string> _sessionId;
     private readonly Func<IReadOnlyList<(TriggerDef Def, bool Enabled)>> _notifyingTriggers;
+    /// <summary>Persist a trigger's Notify flag and re-apply it live.</summary>
+    private readonly Action<TriggerDef, bool>? _setTriggerNotify;
+    /// <summary>Whether a change would actually be saved. Asked each refresh rather than once at
+    /// construction, because the shell assigns the persistence hook AFTER building this panel —
+    /// a snapshot taken in the constructor would always read "no".</summary>
+    private readonly Func<bool>? _canPersistTriggers;
     private readonly Action<string> _copy;
     private readonly Action<Action<IReadOnlyList<(string PluginId, string Rows)>>>? _collectPluginSources;
     private readonly Action<string>? _runCommand;
@@ -83,11 +139,15 @@ public sealed class CompanionViewModel : ViewModelBase
                               Func<IReadOnlyList<(TriggerDef, bool)>> notifyingTriggers,
                               Action<string> copyToClipboard,
                               Action<Action<IReadOnlyList<(string PluginId, string Rows)>>>? collectPluginSources = null,
+                              Action<TriggerDef, bool>? setTriggerNotify = null,
+                              Func<bool>? canPersistTriggers = null,
                               Action<string>? runCommand = null)
     {
         _controller = controller;
         _sessionId = sessionId;
         _notifyingTriggers = notifyingTriggers;
+        _setTriggerNotify = setTriggerNotify;
+        _canPersistTriggers = canPersistTriggers;
         _copy = copyToClipboard;
         // Both are session-loop couriers: collect posts a state snapshot back to the UI
         // thread; runCommand submits through the input pipeline so plugin aliases fire.
@@ -289,21 +349,29 @@ public sealed class CompanionViewModel : ViewModelBase
                 string state = f.Length > 2 ? f[2].Trim() : "";
                 string command = f.Length > 3 ? f[3].Trim() : "";
 
-                // Only a literal on/off with a command is a switch; anything else is
-                // information. An unknown state with a command would be a mystery button.
-                bool toggleable = command.Length > 0
+                // A command alone is never enough to earn an affordance: the state has to say
+                // what KIND of control it is, or an unrecognised row would render as a mystery
+                // button. Only on/off and item become clickable; only 'add' takes typed text.
+                bool clickable = command.Length > 0
                     && (state.Equals("on", StringComparison.OrdinalIgnoreCase)
-                        || state.Equals("off", StringComparison.OrdinalIgnoreCase));
-                RelayCommand? toggle = toggleable
-                    ? new RelayCommand(() =>
+                        || state.Equals("off", StringComparison.OrdinalIgnoreCase)
+                        || state.Equals("item", StringComparison.OrdinalIgnoreCase));
+                bool addable = command.Length > 0
+                    && state.Equals("add", StringComparison.OrdinalIgnoreCase)
+                    && command.Contains(PluginNotifyRow.Placeholder, StringComparison.Ordinal);
+
+                RelayCommand? toggle = clickable ? new RelayCommand(() => RunAndRefresh(command)) : null;
+                RelayCommand<string>? add = addable
+                    ? new RelayCommand<string>(text =>
                     {
-                        _runCommand?.Invoke(command);
-                        // FIFO mailbox: this collect is queued after the command, so the
-                        // snapshot it takes already reflects the plugin's alias having run.
-                        RefreshPluginSources();
+                        // The typed text is a command ARGUMENT, so a newline in it would submit a
+                        // second line of the user's choosing. Flatten it and refuse a blank.
+                        string arg = (text ?? "").Replace('\r', ' ').Replace('\n', ' ').Trim();
+                        if (arg.Length == 0) return;
+                        RunAndRefresh(command.Replace(PluginNotifyRow.Placeholder, arg, StringComparison.Ordinal));
                     })
                     : null;
-                parsed.Add(new PluginNotifyRow(label, detail, state, toggle));
+                parsed.Add(new PluginNotifyRow(label, detail, state, toggle) { Add = add });
             }
             if (parsed.Count > 0) PluginSources.Add(new PluginNotifyGroup(pluginId, parsed));
         }
@@ -311,17 +379,53 @@ public sealed class CompanionViewModel : ViewModelBase
         OnPropertyChanged(nameof(NotifySummary));
     }
 
+    /// <summary>Send a command the way a plugin's own alias expects, then re-read the sources.
+    /// The session mailbox is FIFO, so the collect queued here runs after the alias did and the
+    /// snapshot already shows the result — no polling, no guessed delay.</summary>
+    private void RunAndRefresh(string command)
+    {
+        _runCommand?.Invoke(command);
+        RefreshPluginSources();
+    }
+
     public bool HasPluginSources => PluginSources.Count > 0;
 
     private void RefreshNotifySources()
     {
         NotifySources.Clear();
-        foreach ((TriggerDef def, bool enabled) in _notifyingTriggers())
+        // Notifying first: the list answers "what will buzz my phone", and the rest are here
+        // so you can switch one ON without leaving for the world editor.
+        var all = new List<(TriggerDef Def, bool Enabled)>(_notifyingTriggers());
+        all.Sort((a, b) =>
+        {
+            if (a.Def.Notify != b.Def.Notify) return a.Def.Notify ? -1 : 1;
+            return string.Compare(a.Def.Name, b.Def.Name, StringComparison.OrdinalIgnoreCase);
+        });
+
+        foreach ((TriggerDef def, bool enabled) in all)
+        {
+            bool editable = _setTriggerNotify is not null && (_canPersistTriggers?.Invoke() ?? true);
+            string why = !editable ? "read-only — a quick-connect world has no profile to save to"
+                : string.IsNullOrWhiteSpace(def.Name) ? "unnamed — name it to change this here"
+                : "";
+            TriggerDef captured = def;
             NotifySources.Add(new NotifySourceRow(
                 string.IsNullOrWhiteSpace(def.Name) ? "(unnamed)" : def.Name,
                 def.Pattern,
                 def.Group ?? "",
-                enabled));
+                enabled)
+            {
+                Notify = def.Notify,
+                Why = why,
+                SetNotify = why.Length > 0 ? null : on =>
+                {
+                    _setTriggerNotify!(captured, on);
+                    // Rebuilding the list destroys the row whose setter is still on the stack,
+                    // so let the binding finish first.
+                    Dispatcher.UIThread.Post(RefreshNotifySources);
+                },
+            });
+        }
 
         OnPropertyChanged(nameof(NotifySummary));
     }
@@ -334,9 +438,11 @@ public sealed class CompanionViewModel : ViewModelBase
     {
         get
         {
-            string triggers = NotifySources.Count == 0
+            int on = 0;
+            foreach (NotifySourceRow r in NotifySources) if (r.Notify) on++;
+            string triggers = on == 0
                 ? "No triggers in this world are set to Notify."
-                : $"{NotifySources.Count} trigger(s) set to Notify.";
+                : $"{on} trigger(s) set to Notify.";
             return HasPluginSources
                 ? triggers + " Plugin sources below; plugins that don't report may still notify."
                 : triggers + " Plugins may still notify on their own.";

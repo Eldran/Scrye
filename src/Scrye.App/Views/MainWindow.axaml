@@ -321,6 +321,7 @@
                                                         <controls:ColorGridView GridText="{Binding GridText}" Palette="{Binding Palette}"
                                                                                 CellCommand="{Binding CellCommand}"
                                                                                 HoverCommand="{Binding HoverCommand}"
+                                                                                ContextCommand="{Binding ContextCommand}"
                                                                                 LabelChars="{Binding LabelChars}"
                                                                                 Icons="{Binding Icons}"
                                                                                 MaxCell="{Binding MaxCell}"
@@ -339,6 +340,7 @@
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
+                                                                behaviors:RightClick.Command="{Binding ContextCommand}"
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:InputWidgetViewModel">
@@ -373,6 +375,7 @@
                                                             <ItemsControl.ItemTemplate>
                                                                 <DataTemplate x:DataType="vm:ButtonWidgetViewModel">
                                                                     <Button Content="{Binding Text}" Command="{Binding Command}"
+                                                                            behaviors:RightClick.Command="{Binding ContextCommand}"
                                                                             HorizontalAlignment="Stretch" Margin="1" Padding="8,3" FontSize="11" />
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>
@@ -593,11 +596,18 @@
                                                                         <!-- TODO(theme): bespoke colour below, intent unclear. Left as-is pending a decision on whether it should be a semantic token. -->
                                                                         <TextBlock DockPanel.Dock="Right" Text="{Binding StateLabel}" FontSize="9"
                                                                                    Foreground="#C08A5A" VerticalAlignment="Center" Margin="4,0,0,0" />
+                                                                        <CheckBox DockPanel.Dock="Left" IsChecked="{Binding NotifyChecked, Mode=TwoWay}"
+                                                                                  IsEnabled="{Binding CanEdit}" VerticalAlignment="Center"
+                                                                                  Margin="0,0,6,0" MinWidth="0"
+                                                                                  ToolTip.Tip="Raise a notification (desktop toast and, when the companion is running, your phone)" />
                                                                         <StackPanel>
                                                                             <TextBlock Text="{Binding Name}" FontSize="10"
                                                                                        Foreground="{DynamicResource ScryeText}" />
                                                                             <TextBlock Text="{Binding Detail}" FontSize="9" TextTrimming="CharacterEllipsis"
                                                                                        Foreground="{DynamicResource ScryeTextDim}" />
+                                                                            <TextBlock Text="{Binding Why}" FontSize="9" TextWrapping="Wrap"
+                                                                                       IsVisible="{Binding HasWhy}"
+                                                                                       Foreground="{DynamicResource ScryeTextDim}" FontStyle="Italic" />
                                                                         </StackPanel>
                                                                     </DockPanel>
                                                                 </DataTemplate>
@@ -642,14 +652,35 @@
                                                                                                 ToolTip.Tip="Tap to turn on" />
                                                                                         <TextBlock DockPanel.Dock="Right" Text="{Binding State}" FontSize="9"
                                                                                                    Foreground="{DynamicResource ScryeTextDim}"
-                                                                                                   IsVisible="{Binding !CanToggle}"
+                                                                                                   IsVisible="{Binding IsPlain}"
                                                                                                    VerticalAlignment="Center" Margin="4,0,0,0" />
+                                                                                        <!-- one entry of an editable list: the ✕ runs the plugin's own remove alias -->
+                                                                                        <Button DockPanel.Dock="Right" Content="✕"
+                                                                                                Command="{Binding Toggle}"
+                                                                                                IsVisible="{Binding IsItem}"
+                                                                                                Foreground="{DynamicResource ScryeTextDim}"
+                                                                                                FontSize="9" Padding="6,1"
+                                                                                                VerticalAlignment="Center" Margin="4,0,0,0"
+                                                                                                ToolTip.Tip="Remove" />
                                                                                         <StackPanel>
                                                                                             <TextBlock Text="{Binding Label}" FontSize="10"
                                                                                                        Foreground="{DynamicResource ScryeText}" />
                                                                                             <TextBlock Text="{Binding Detail}" FontSize="9" TextWrapping="Wrap"
                                                                                                        Foreground="{DynamicResource ScryeTextDim}"
                                                                                                        IsVisible="{Binding HasDetail}" />
+                                                                                            <!-- an "add" row: type a value, Enter or the button runs the
+                                                                                                 plugin's command template with {} substituted -->
+                                                                                            <DockPanel IsVisible="{Binding IsAdd}" Margin="0,2,0,0">
+                                                                                                <Button DockPanel.Dock="Right" Content="Add"
+                                                                                                        Command="{Binding Add}"
+                                                                                                        CommandParameter="{Binding #AddBox.Text}"
+                                                                                                        FontSize="9" Padding="8,1" Margin="4,0,0,0" />
+                                                                                                <!-- No KeyDown= here on purpose: this TextBox is inside NESTED
+                                                                                                     DataTemplates, and the Avalonia 11 XAML compiler crashes on
+                                                                                                     handlers there (same reason the pane menu is code-behind).
+                                                                                                     Enter is picked up by the window-level handler instead. -->
+                                                                                                <TextBox Name="AddBox" FontSize="9" Padding="4,1" />
+                                                                                            </DockPanel>
                                                                                         </StackPanel>
                                                                                     </DockPanel>
                                                                                 </DataTemplate>
@@ -887,6 +918,10 @@
                                     <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
                                               ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
                                 </StackPanel>
+                                <TextBlock Text="Relay chat to the front tab" Margin="0,8,0,0" />
+                                <TextBox Text="{Binding Editor.RelayChannels}"
+                                         PlaceholderText="inherit (Tell)"
+                                         ToolTip.Tip="Comma-separated channels from this world to show in whichever world tab is in front, so a tell here is not missed while you play elsewhere. Blank inherits (tells only), * relays every channel, 'none' relays nothing." />
                             </StackPanel>
                         </TabItem>
 

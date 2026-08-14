@@ -131,6 +131,12 @@ public sealed class MipProcessor
         VikingData?.Invoke(key, val);
     }
 
+    /// <summary>Prefix the tell text carries when the message is one YOU sent rather than one you
+    /// received. Public because the cross-world relay filters on it: echoing your own outgoing
+    /// tells into another world's pane is noise. Kept here, beside the one place that writes it,
+    /// so the two cannot drift apart.</summary>
+    public const string OutgoingTellPrefix = "To ";
+
     // BAB: marker~source~message
     private void HandleBAB(string data)
     {
@@ -138,7 +144,7 @@ public sealed class MipProcessor
         if (p.Length < 3) return;
         string marker = p[0], source = p[1], msg = p[2];
         if (source is "0" or "") return;
-        Tell?.Invoke(marker == "x" ? $"To {source}: {msg}" : $"{source}: {msg}");
+        Tell?.Invoke(marker == "x" ? $"{OutgoingTellPrefix}{source}: {msg}" : $"{source}: {msg}");
     }
 
     // CAA: command~channel~source~message

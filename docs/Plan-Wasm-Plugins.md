@@ -86,7 +86,7 @@ Strings pass as `(ptr, len)` into guest memory; returns that carry strings go th
 - Events: `emit(name, data)`
 - Registration (all return `hook_id`): `on_line`, `on_channel(filter)`, `on_gmcp(filter)`, `on_connect`, `on_disconnect`, `on_prompt`, `on_idle`, `on_command`, `on_event(name)`, `after(secs) -> hook_id`, `every(secs) -> hook_id`, `cancel(hook_id)`
 - Rules: `add_trigger(json) -> hook_id?`, `add_alias(json) -> hook_id?` — same `{pattern, regex, ignoreCase, send}` shape; a rule with a `run` callback passes `"run": true` and receives wildcards through `scrye_hook`
-- Panels: `add_panel(json)` — widget callbacks (`action`/`onClick`/`onSubmit`/`onHover`) are hook_ids the guest obtained from `register_action() -> hook_id` and embedded in the JSON where Lua embeds functions
+- Panels: `add_panel(json)` — widget callbacks (`action`/`onClick`/`onSubmit`/`onHover`/`onRightClick`) are hook_ids the guest obtained from `register_action() -> hook_id` and embedded in the JSON where Lua embeds functions
 - Data files: `get_data() -> json` (the manifest-declared `scrye.data`, serialized once at init)
 
 ### Dispatch payloads

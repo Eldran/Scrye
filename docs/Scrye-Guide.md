@@ -63,7 +63,45 @@ Scrye also lifts any near‑black text the MUD sends so it stays legible on the 
 
 ## HUD panels
 
-Plugins can contribute **HUD panels** — small floating widgets (status bars, gauges, maps, buttons) that sit over the output and stay in sync with game state. You can **drag panels** by their title to reposition them so they don't overlap, and **resize** them by dragging the grip in the bottom-right corner — a panel smaller than its content scrolls, and **double-clicking the grip** snaps it back to auto-size. Positions and sizes are remembered per world.
+Plugins can contribute **HUD panels** — small floating widgets (status bars, gauges, maps, buttons) that sit over the output and stay in sync with game state. You can **drag panels** by their title to reposition them so they don't overlap, and **resize** them by dragging the grip in the bottom-right corner — a panel smaller than its content scrolls, and **double-clicking the grip** snaps it back to auto-size. Both dragging and resizing **snap to alignment** — the edges of the output area and the edges of the other panels — so stacks line up without pixel-hunting; **hold Alt** while dragging for free, pixel-exact placement. Positions and sizes are remembered per world.
+
+## Chat from your other worlds
+
+With several worlds open, a tell to a character on one MUD is easy to miss while you're
+playing another. Scrye relays it: a chat line from a world you're **not** looking at is drawn
+in whichever tab **is** in front, prefixed with the world it came from.
+
+```
+[Aardwolf] Bob: you around?          <- a tell, from the Aardwolf tab
+[Aardwolf/Guild] raid in 10          <- a channel, when you've asked for that channel
+```
+
+It also lands in the **Chats pane** (`3s-chat`) of the tab you're in, so it doesn't scroll away
+in the middle of a fight — timestamped and labelled with the world it came from, alongside this
+world's own chat.
+
+By default only **tells** relay — channel chatter from a MUD you aren't reading is noise, but
+a tell is worth interrupting you. To change it, set **Relay chat to the front tab** in the
+world's settings: a comma-separated list of channel names (`Tell, Guild`), `*` for everything,
+or `none` for nothing. It's a normal cascade setting, so putting it on the **Global** layer
+sets the default for every world, and a single character can then override it.
+
+It's a property of the world the chat comes *from* — "what may this world interrupt me with" —
+not of the tab you happen to be in.
+
+Three things it deliberately does not do:
+
+- **You can't reply from the other tab.** What you type goes to the world you're in. Routing a
+  reply somewhere else based on the last line you happened to see is how a private message
+  ends up on the wrong MUD. Switch tabs to answer.
+- **A relayed line is not MUD output.** It never reaches the current world's triggers or
+  session transcript — a foreign line tripping a local trigger and firing automation would be a
+  bad surprise, and your Aardwolf log should not contain 3Scapes chat. It reaches the Chats pane
+  only because `3s-chat` asks for it explicitly, through a hook (`scrye.onRelay`) kept separate
+  from the one carrying this world's own chat: the pane shows it, but it isn't notified a second
+  time, isn't written to this world's chat log, and isn't replayed into this world's history
+  next session.
+- **Your own outgoing tells don't relay.** You know what you just sent.
 
 ## Capture panes
 
@@ -83,7 +121,9 @@ Scrye can serve a small web app to your phone so you can read output, send comma
 
 ### Turning it on
 
-Click **📱 Companion** in the bottom bar. The panel shows whether the server is running, a **QR code** to point your phone's camera at, the access token, and a list of everything in this world that can raise a notification. Start and stop it from there.
+Click **📱 Companion** in the bottom bar. The panel shows whether the server is running, a **QR code** to point your phone's camera at, the access token, and everything in this world that can raise a notification — and lets you change it. Triggers have a **Notify tick box** (the change saves to the connected character's profile and applies immediately, no reconnect); plugin settings appear underneath with live switches, and where a plugin reports a list — the chat plugin's watched names and notifying channels — you can add entries and remove them with the ✕. Start and stop the server from there.
+
+Two triggers can't be edited from the panel: an **unnamed** one inherited from a shallower profile layer, because the cascade merges rules by name and there'd be nothing to attach the override to, and any trigger in a **quick-connect** world, which has no profile to save into. Both say so on the row.
 
 The token is deliberately only shown in the panel. It used to be printed into the output pane, which meant session logging wrote a live credential to disk — the panel avoids that entirely.
 
@@ -357,7 +397,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.8.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.10.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -481,6 +521,7 @@ The **state tree** is a shared key/value space the whole app reads from. Game fe
 | `scrye.onConnect(fn)` / `scrye.onDisconnect(fn)` | Connection opens / closes. |
 | `scrye.onGmcp(function(json, package) ... end)` or `scrye.onGmcp("Char.Vitals", fn)` | A GMCP message (optionally filtered by package). |
 | `scrye.onChannel(function(channel, message) ... end)` or `scrye.onChannel("Party", fn)` | A MIP chat message. Tells arrive with channel `"Tell"`. |
+| `scrye.onRelay(function(world, channel, message) ... end)` or `scrye.onRelay("Tell", fn)` *(1.10)* | Chat from **another open world**, delivered here because this world's tab is in front. Same filtering as `onChannel`, with the source world as an extra first argument. |
 | `scrye.onCommand(function(command) ... end)` | *(1.6)* A command went out to the MUD — **any** origin: typed input (after aliases), macros, sequences, triggers, other plugins. Observe-only; the send already happened, nothing you return changes it. **Never `scrye.send` from inside the handler** — that send re-fires every onCommand hook, including yours. This is the hook that makes an automapper possible: it sees moves it didn't originate. |
 
 ### Timers
@@ -567,17 +608,32 @@ newline-joined rows to exactly `plugin.<id>.notify`, one source per row, four ta
 fields:
 
 ```
-label \t detail \t on|off \t toggle-command
+label \t detail \t state \t command
 ```
 
-The panel renders a state of literally `on`/`off` (with a command) as a **live toggle
-button** — clicking it runs the command through the normal input pipeline, so your own
-alias handles it; any other state text makes the row informational (the chat plugin lists
-its watched names this way). Re-publish the rows from every place the settings change and
-once at load, and persist the flag in `scrye.store` — whether a phone buzzes is a
-preference about the player, not about one session. Needs `state.write` (and
-`notifications.show` for the notifying itself). The convention is voluntary, which is why
-the panel still admits that non-reporting plugins may notify on their own.
+The `state` field decides what the panel draws, and there are four kinds:
+
+| `state` | Renders as | `command` is |
+|---|---|---|
+| `on` / `off` | a live toggle button | the command that flips it |
+| `add` | a text box + **Add** button | a **template** containing `{}`, replaced by what the user types |
+| `item` | one list entry with a **✕** | the command that *removes* that entry |
+| anything else | plain informational text | ignored |
+
+Together `add` and `item` make an editable list. The chat plugin reports its watched names
+that way — one `add` row (`chat watch {}`) plus an `item` row per name (`chat unwatch Goran`)
+— so the whole thing is editable from the panel without typing a command.
+
+Every command runs through the normal input pipeline, so **your own alias handles it** and
+the panel never learns what a channel or a watched name is. One trap worth knowing: an
+`item`'s command must genuinely *remove*. If your add command is a setter rather than a
+toggle, reusing it for the ✕ gives you a button that silently does nothing.
+
+Re-publish the rows from every place the settings change and once at load, and persist the
+flag in `scrye.store` — whether a phone buzzes is a preference about the player, not about
+one session. Needs `state.write` (and `notifications.show` for the notifying itself). The
+convention is voluntary, which is why the panel still admits that non-reporting plugins may
+notify on their own.
 
 ### HUD panels
 `scrye.addPanel{ ... }` contributes a declarative panel. The host renders it and keeps bound widgets in sync with state.
@@ -606,10 +662,10 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `text` | A multi‑line monospaced block (reports/tables). | `bind`; `color` |
 | `gauge` | A labeled bar; auto‑colors green→amber→red by ratio unless `color` set. | `text`, `value`, `max` (state paths or numbers); `color` |
 | `progress` | A labeled bar with an explicit color. | `text`, `value`, `max`; `color` |
-| `button` | A clickable button. | `text`, `action = function() ... end` |
-| `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=}, ... }` |
+| `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)* |
+| `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
-| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)* |
+| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
 
@@ -621,6 +677,8 @@ Notes:
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
 - `colorgrid` `onClick` gives you the clicked cell's `col`, `row`, and character — map that back to your data.
 - `colorgrid` `onHover` *(1.6)* fires when the pointer moves onto a **different** cell (never per pixel), and once with `(-1, -1, "")` when it leaves the grid so you can clear whatever you were previewing. Hover is desktop-only — the companion's touch screen never fires it — so use it to *enrich* (a room-name readout beside the map), never for anything `onClick` can't also reach.
+- **`onRightClick` *(1.9)* is a second action, not a variant of the first.** A right-click runs it and `onClick` does *not* also fire; a left click runs `onClick` and never this. It works on `colorgrid` (same `col, row, ch` as `onClick`), `button` and `buttonrow` (no arguments). Unlike `onHover` it may gate real behaviour, because the companion maps a **long-press (~500 ms)** onto it — so anything reachable by right-click on the desktop is reachable by touch on the phone. Use it for the secondary thing a cell or button obviously affords: left-click a map square to travel there, right-click to inspect it.
+- **Behaviour change in 1.9:** colorgrid cell clicks used to fire `onClick` on *any* pointer button, so a right-click silently ran it. Left click now runs `onClick` and nothing else. If a plugin relied on that, it was relying on an accident.
 - `input` seeds its field from `bind`; refresh it by `setState`‑ing that key.
 - `table` sizes each column to its widest cell. `align` takes one character per column — `l`, `r`, `c` — and right‑aligning numeric columns is worth doing; without it a table of quantities reads worse than the blob it replaced.
 - Rows with too few cells render blank in the missing columns, so a "nothing here" row can just be one cell.

@@ -822,6 +822,7 @@ scrye.addAlias{ pattern = [[^stepexport (\w+)$]], regex = true, run = function(n
 scrye.addPanel{
   title = "3S Stepper",
   width = 340,   -- four 12-char area columns; the default 220 clipped the list
+  accent = "#B866FA",          -- signature: stepper violet (validated accent set)
   tabs = {
     { title = "Bot", widgets = {
         { type = "text", bind = P .. "status" },

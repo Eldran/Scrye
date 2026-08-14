@@ -145,6 +145,20 @@ public sealed record WidgetSpec
     /// <c>onClick</c> can't reach.
     /// </summary>
     public string? HoverAction { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c>, <c>button</c> and <c>buttonrow</c> (API 1.9): an opaque action id the
+    /// host calls back with on a <b>secondary</b> activation — right-click on the desktop, a
+    /// long-press on the mobile companion. Set by the runtime from the widget's
+    /// <c>onRightClick</c> function, not by authors.
+    ///
+    /// <para>This is a second action, not a variant of the first: a grid fires it with the same
+    /// <c>(col, row, ch)</c> as <see cref="Action"/>, a button with no arguments, and
+    /// <see cref="Action"/> does not also fire. Because touch reaches it through long-press,
+    /// it may gate real behaviour — the restriction that binds <see cref="HoverAction"/> to
+    /// enrichment only does not apply here.</para>
+    /// </summary>
+    public string? ContextAction { get; init; }
 }
 
 /// <summary>One tab in a tabbed panel: a title and its widgets.</summary>

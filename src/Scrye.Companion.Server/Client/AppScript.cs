@@ -569,7 +569,40 @@ function buildBarList(rows) {
   return host;
 }
 
-function buildGrid(text, palette, panelId, action) {
+// Secondary activation (plugin API 1.9's onRightClick). A phone has no right button, so a
+// long press stands in for one -- that is what lets a plugin put real behaviour behind it
+// instead of the enrich-only rule that binds onHover. A desktop browser hitting the same
+// client uses the real thing via 'contextmenu'.
+//
+// The returned function reports whether the secondary just fired AND clears the flag, so the
+// primary click handler can swallow the click a touch release synthesises. 'contextmenu'
+// deliberately does not set it: a right-click emits no click event to swallow, and arming the
+// flag there would eat the user's next left click.
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_SLOP = 10;   // px of drift allowed before it reads as a scroll, not a press
+function onSecondary(node, fire) {
+  let timer = null, sx = 0, sy = 0, fired = false;
+  const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  node.addEventListener('contextmenu', e => { e.preventDefault(); fire(); });
+  node.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') return;              // a mouse gets the real context menu
+    cancel(); fired = false; sx = e.clientX; sy = e.clientY;
+    timer = setTimeout(() => {
+      timer = null; fired = true;
+      if (navigator.vibrate) navigator.vibrate(15);     // the press landed, without a menu to show it
+      fire();
+    }, LONG_PRESS_MS);
+  });
+  node.addEventListener('pointermove', e => {
+    if (timer && (Math.abs(e.clientX - sx) > LONG_PRESS_SLOP
+               || Math.abs(e.clientY - sy) > LONG_PRESS_SLOP)) cancel();
+  });
+  node.addEventListener('pointerup', cancel);
+  node.addEventListener('pointercancel', () => { cancel(); fired = false; });
+  return () => { const f = fired; fired = false; return f; };
+}
+
+function buildGrid(text, palette, panelId, action, contextAction) {
   const host = el('div', 'grid');
   const lines = (text || '').split('\n');
   for (let r = 0; r < lines.length; r++) {
@@ -580,13 +613,19 @@ function buildGrid(text, palette, panelId, action) {
       const cell = el('span', null, ch);
       const colour = palette && palette[ch];
       if (colour) cell.style.color = colour;
-      if (action) {
+      if (action || contextAction) {
         // Coordinates go back verbatim; only the plugin knows what a cell means.
         cell.style.cursor = 'pointer';
         cell.dataset.c = String(c);
         cell.dataset.r = String(r);
-        cell.addEventListener('click', () =>
-          send({ type:'hud.cell', sessionId, panelId, action, col:c, row:r, ch }));
+        const secondary = contextAction
+          ? onSecondary(cell, () => send({ type:'hud.cell', sessionId, panelId,
+                                           action: contextAction, col:c, row:r, ch }))
+          : null;
+        if (action) cell.addEventListener('click', () => {
+          if (secondary && secondary()) return;         // the long press already answered
+          send({ type:'hud.cell', sessionId, panelId, action, col:c, row:r, ch });
+        });
       }
       row.appendChild(cell);
     }
@@ -639,9 +678,15 @@ function buildWidget(panelId, w, panelFg) {
       const kids = type === 'button' ? [w] : (w.children || []);
       for (const b of kids) {
         const btn = el('button', null, b.text || 'Button');
-        if (b.action) btn.addEventListener('click', () =>
-          send({ type:'hud.action', sessionId, panelId, action: b.action }));
-        else btn.disabled = true;
+        const secondary = b.contextAction
+          ? onSecondary(btn, () => send({ type:'hud.action', sessionId, panelId,
+                                          action: b.contextAction }))
+          : null;
+        if (b.action) btn.addEventListener('click', () => {
+          if (secondary && secondary()) return;         // the long press already answered
+          send({ type:'hud.action', sessionId, panelId, action: b.action });
+        });
+        else if (!b.contextAction) btn.disabled = true;
         box.appendChild(btn);
       }
       return box;
@@ -709,7 +754,7 @@ function buildWidget(panelId, w, panelFg) {
     case 'colorgrid': {
       const host = el('div');
       const pal = resolvePalette(w.palette);
-      bind(w.bind, v => { host.replaceChildren(buildGrid(v, pal, panelId, w.action)); });
+      bind(w.bind, v => { host.replaceChildren(buildGrid(v, pal, panelId, w.action, w.contextAction)); });
       return host;
     }
 
