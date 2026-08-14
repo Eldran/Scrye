@@ -51,6 +51,15 @@ public sealed class ProfileLayer
     /// <summary>Idle limit in seconds, clamped to 60..7200. Null inherits, then defaults to 600.</summary>
     public int? IdleGuardSeconds { get; set; }
 
+    /// <summary>Start a transcript automatically on connect. Null inherits; see
+    /// <see cref="Scrye.Core.Model.WorldProfile.AutoLog"/>. Set it on a Character layer to log
+    /// that character's sessions only.</summary>
+    public bool? AutoLog { get; set; }
+
+    /// <summary>"text" or "html" for the automatic transcript. Null inherits, then defaults to
+    /// text.</summary>
+    public string? AutoLogFormat { get; set; }
+
     /// <summary>Chat channels this world may relay into whichever world tab is in front, so a
     /// tell on one MUD reaches you while you are playing another. Comma-separated channel names,
     /// <c>"*"</c> for all, empty for none. Null inherits; see

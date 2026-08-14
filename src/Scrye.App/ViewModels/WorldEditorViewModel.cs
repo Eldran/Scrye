@@ -72,6 +72,14 @@ public sealed class WorldEditorViewModel : ViewModelBase
     private bool _enableMsp;
     public bool EnableMsp { get => _enableMsp; set => SetField(ref _enableMsp, value); }
 
+    /// <summary>Write a transcript automatically whenever this world connects.</summary>
+    private bool _autoLog;
+    public bool AutoLog { get => _autoLog; set => SetField(ref _autoLog, value); }
+
+    /// <summary>True for HTML (colours preserved), false for plain text.</summary>
+    private bool _autoLogHtml;
+    public bool AutoLogHtml { get => _autoLogHtml; set => SetField(ref _autoLogHtml, value); }
+
     /// <summary>Chat channels this world may relay into whichever tab is in front: a
     /// comma-separated list, "*" for all, blank for none. Empty here means "inherit"; the
     /// resolved default is "Tell". See WorldProfile.RelayChannels.</summary>
@@ -124,6 +132,8 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
         _enableMsp = _layer.EnableMsp ?? true;   // on by default; !!SOUND lines are unambiguous
         _relayChannels = _layer.RelayChannels ?? "";   // blank = inherit (resolves to "Tell")
+        _autoLog = _layer.AutoLog ?? false;
+        _autoLogHtml = (_layer.AutoLogFormat ?? "").StartsWith("htm", StringComparison.OrdinalIgnoreCase);
 
         foreach (TriggerDef t in _layer.Triggers) Triggers.Add(new TriggerRowViewModel(t));
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
@@ -188,6 +198,10 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.EnableMsp = EnableMsp ? null : false;   // same default-on rule
         // Blank means inherit, so it stores null. "none" is how you say an explicit OFF that a
         // shallower layer cannot un-say — an empty string would read as "inherit" on reload.
+        // Off is the inherited default, so only an explicit ON is stored; the format only
+        // matters when logging is on, so it is not written otherwise.
+        _layer.AutoLog = AutoLog ? true : null;
+        _layer.AutoLogFormat = AutoLog ? (AutoLogHtml ? "html" : "text") : null;
         _layer.RelayChannels = string.IsNullOrWhiteSpace(RelayChannels)
             ? null
             : (RelayChannels.Trim().Equals("none", StringComparison.OrdinalIgnoreCase)

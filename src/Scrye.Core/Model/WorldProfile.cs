@@ -46,6 +46,16 @@ public sealed class WorldProfile
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>
     public string MipClientId { get; set; } = "";
 
+    /// <summary>Start a transcript automatically when this world connects, without having to
+    /// remember ".log". Off unless asked for. Resolved through the cascade like any other
+    /// setting, so putting it on a Character layer is what makes it per-character — which is
+    /// also what makes the file name meaningful, since the log is named after the character.</summary>
+    public bool AutoLog { get; set; } = false;
+
+    /// <summary>Format for the automatic transcript: "text" (default) or "html", the latter
+    /// keeping the MUD's colours. Anything unrecognised reads as text.</summary>
+    public string AutoLogFormat { get; set; } = "text";
+
     /// <summary>
     /// Which of this world's chat channels are relayed into whatever world tab is in FRONT, so a
     /// tell to a character on another MUD is not missed while you are playing elsewhere. A

@@ -29,6 +29,52 @@ Each connected world gets its own tab with an output pane and a command line.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
 
+## Client commands
+
+A handful of commands are handled by Scrye itself rather than sent to the MUD. They all start
+with a dot, and they're intercepted before plugins see them, so a plugin can't shadow one.
+
+| Command | What it does |
+|---|---|
+| `.log` | **Start logging this session's output to a file.** Everything that appears in the output pane, as plain text. |
+| `.log html` | Same, but a self-contained HTML file that keeps the colours. |
+| `.log off` | Stop logging. A bare `.log` while already logging also stops it. |
+| `.walk north;north;east x3;wait 2` | Run an ad-hoc walk. `x3` repeats a step, `wait N` pauses. |
+| `.seq <name>` | Run a saved sequence. |
+| `.stop` · `.pause` · `.resume` | Control the running walk or sequence. |
+| `.all <command>` | Send one command to **every** connected world. |
+| `.idle` | Show or set the idle guard (`.idle on`, `.idle off`, `.idle 300`). |
+| `.tts` | Toggle text-to-speech (Windows only). |
+| `.ts` / `.timestamps` | Toggle the HH:mm:ss gutter in the output and capture panes. |
+| `.companion` | The mobile companion — see its own section below. |
+| `.mip` | Audit the MIP feed for structural drift — see below. |
+
+Logs are written to the logs folder (`%APPDATA%/Scrye/logs`, or `~/.config/Scrye/logs` on
+Linux and macOS). The log captures **displayed output only** — it is a transcript of what you
+saw, so out-of-band protocol traffic like MIP and GMCP is not in it, and neither is anything
+you type.
+
+### Logging every session automatically
+
+Rather than remembering `.log`, tick **Log every session** in a profile's settings (with
+**as HTML** beside it if you want the colours kept). It's a normal cascade setting, so setting
+it on a **Character** is what makes it per-character — and that's the useful place for it,
+because the file is named after the character:
+
+```
+2026-08-14-Bjorn.log
+2026-08-14-Bjorn-2.log     <- a second session the same day
+2026-08-14-Freya.html
+```
+
+Date first, so a folder sorted by name is also sorted by day. A second session on the same day
+gets `-2`, `-3` and so on rather than overwriting the first.
+
+Two things it deliberately does: an **auto-reconnect keeps writing to the same file** instead of
+starting a fragment per dropped connection, and **`.log off` stays off** for the rest of the
+session — a blip on the link won't turn logging back on after you've explicitly stopped it.
+A later `.log` re-arms both.
+
 ## Profiles and the cascade
 
 Settings resolve through a four‑layer cascade, from most general to most specific:
@@ -137,6 +183,16 @@ The same things are available from the command line, which is quicker mid-fight:
 | `.companion notify` | List everything in this world that can raise a notification. |
 | `.companion notify test` | Send a test notification to every registered phone. |
 | `.companion off` | Stop the server. |
+
+There's one more diagnostic worth knowing:
+
+| Command | What it does |
+|---|---|
+| `.mip` | Audit the MIP viking feed's **structure** against what the parsers expect, and report anything that looks like it has drifted. |
+
+The feeds are positional — `BATTLE` is eleven pipe-separated fields, each unit record nine comma-separated ones — so if the server inserts a field, nothing errors. The parser just reads the wrong slot from then on and the numbers quietly go wrong. `.mip` watches every key that arrives and flags two things: a key whose layout no longer matches a **recorded expectation**, and a key whose shape **changes mid-session**, which is drift no matter what any table claims.
+
+Two honest limits. It can only speak for keys the server actually sent, so run it after visiting whatever exercises the feeds (and with the right `vtoggle` flags on). And only a handful of keys have a recorded expectation — the ones whose layout was read directly off a parser. Everything else is listed as "no recorded expectation" with its observed shape, which still catches a later change but has never been checked against anything.
 
 The server binds to **loopback only**. On the same machine that's `http://127.0.0.1:4747`; to reach it from a phone you need [Tailscale](https://tailscale.com) in front of it, which also gives you HTTPS (iOS won't allow notifications or home‑screen install without it). `.companion tailscale` prints the one command you need; the full walkthrough — including the login and consent steps that aren't obvious — is in **`docs/Scrye-Companion-Setup.md`**.
 

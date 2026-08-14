@@ -49,20 +49,44 @@ public sealed class SessionLogger : IDisposable
         WriteHeader();
     }
 
-    /// <summary>Open a fresh log file <c>&lt;world&gt;-&lt;yyyy-MM-dd_HHmmss&gt;.log|.html</c>
-    /// under <paramref name="directory"/> (created if missing) and return the logger.</summary>
+    /// <summary>Open a fresh log file under <paramref name="directory"/> (created if missing)
+    /// and return the logger.
+    ///
+    /// <para>The default name is <c>&lt;world&gt;-&lt;yyyy-MM-dd_HHmmss&gt;</c>. Pass
+    /// <paramref name="fileStem"/> to choose your own — the automatic per-character transcript
+    /// uses <c>&lt;yyyy-MM-dd&gt;-&lt;character&gt;</c>, which reads better in a sorted folder
+    /// but is no longer unique, so a stem already taken gets <c>-2</c>, <c>-3</c> and so on.
+    /// Silently overwriting yesterday's transcript because you reconnected would be the worst
+    /// possible failure for a file whose whole job is to still be there later.</para></summary>
     public static SessionLogger CreateFile(string directory, string world, LogFormat format = LogFormat.Text,
-                                           bool timestamps = true, Func<DateTimeOffset>? clock = null)
+                                           bool timestamps = true, Func<DateTimeOffset>? clock = null,
+                                           string? fileStem = null)
     {
         Directory.CreateDirectory(directory);
         Func<DateTimeOffset> clk = clock ?? (() => DateTimeOffset.Now);
         string stamp = clk().ToString("yyyy-MM-dd_HHmmss");
         string ext = format == LogFormat.Html ? ".html" : ".log";
-        string file = Sanitize(world) + "-" + stamp + ext;
-        string full = System.IO.Path.Combine(directory, file);
+        string stem = Sanitize(string.IsNullOrWhiteSpace(fileStem) ? world + "-" + stamp : fileStem!);
+        string full = UniquePath(directory, stem, ext);
         var writer = new StreamWriter(new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.Read),
                                       new UTF8Encoding(false));
         return new SessionLogger(world, writer, format, timestamps, clk, full);
+    }
+
+    /// <summary>The first free path for this stem: <c>stem.ext</c>, then <c>stem-2.ext</c>,
+    /// <c>stem-3.ext</c>… The loop is bounded because an unbounded one on a full or read-only
+    /// disk would spin forever; past the cap it falls back to a name that includes the clock,
+    /// which is unique in practice.</summary>
+    private static string UniquePath(string directory, string stem, string ext)
+    {
+        string first = System.IO.Path.Combine(directory, stem + ext);
+        if (!File.Exists(first)) return first;
+        for (int n = 2; n <= 99; n++)
+        {
+            string candidate = System.IO.Path.Combine(directory, stem + "-" + n + ext);
+            if (!File.Exists(candidate)) return candidate;
+        }
+        return System.IO.Path.Combine(directory, stem + "-" + DateTime.Now.ToString("HHmmssfff") + ext);
     }
 
     /// <summary>Append one displayed line to the transcript.</summary>

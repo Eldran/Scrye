@@ -672,7 +672,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         host.PluginEventSink = _plugins.DispatchPluginEvent;
         _session.StateChanged += s =>                          // plugin lifecycle hooks
         {
-            if (s == ConnectionState.Connected) _plugins.DispatchConnect();
+            if (s == ConnectionState.Connected)
+            {
+                _plugins.DispatchConnect();
+                // Hopped to the UI thread on purpose: _logging and _loggingDeclined are otherwise
+                // only touched by the ".log" command, and keeping every write on one thread is
+                // cheaper than reasoning about a race whose prize is a duplicate notice.
+                Dispatcher.UIThread.Post(MaybeAutoLog);
+            }
             else if (s == ConnectionState.Disconnected) _plugins.DispatchDisconnect();
         };
 
@@ -757,6 +764,21 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
+
+    /// <summary>".mip" — report whether the viking feed still has the shape the parsers assume.
+    /// The audit runs on the session loop as messages arrive, so this only reads its findings;
+    /// the hop is because the report is a snapshot of loop-owned state.</summary>
+    private void HandleMipCommand()
+    {
+        _session.Post(() =>
+        {
+            IReadOnlyList<string> lines = _session.MipAudit.Report();
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (string l in lines) AppendSystem(l);
+            });
+        });
+    }
 
     /// <summary>A chat line from ANOTHER world, shown here because this is the tab in front.
     /// Raised by <see cref="ChannelRelayed"/> on the source world and routed by the shell.</summary>
@@ -1045,6 +1067,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".idle": HandleIdleCommand(arg); return true;
             case ".tts": HandleTtsCommand(arg); return true;
             case ".companion": HandleCompanionCommand(arg); return true;
+            case ".mip": HandleMipCommand(); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
                 AppendSystem(ShowTimestamps ? "timestamps on" : "timestamps off");
@@ -1418,20 +1441,49 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     /// <summary>Handle <c>.log</c> / <c>.log html</c> / <c>.log off</c>. Bare <c>.log</c> toggles.</summary>
+    /// <summary>Start the automatic transcript on connect, when the profile asks for one.
+    ///
+    /// <para>Two deliberate restraints. It never restarts a log that is already running, so an
+    /// auto-reconnect continues the same file rather than littering the folder with a fragment
+    /// per dropped connection. And <c>.log off</c> stays off for the rest of the session —
+    /// switching logging back on because the link blipped would ignore an explicit instruction,
+    /// on a feature whose entire point is the user deciding what gets written to disk.</para></summary>
+    private void MaybeAutoLog()
+    {
+        if (!_session.Profile.AutoLog || _logging || _loggingDeclined) return;
+        try
+        {
+            string path = _session.StartLogging(_session.AutoLogFormat(), fileStem: _session.AutoLogStem());
+            _logging = true;
+            AppendSystem($"logging to {path}");
+        }
+        catch (System.Exception ex)
+        {
+            // A full disk or a read-only logs folder must not stop you playing.
+            AppendSystem($"could not start the session log: {ex.Message}");
+        }
+    }
+
+    /// <summary>Set once ".log off" is used, so auto-logging does not undo that on reconnect.</summary>
+    private bool _loggingDeclined;
+
     private void HandleLogCommand(string arg)
     {
         string a = arg.Trim().ToLowerInvariant();
         if (a is "off" or "stop")
         {
+            _loggingDeclined = true;          // and stay off, even across a reconnect
             if (_logging) { _session.StopLogging(); _logging = false; AppendSystem("logging stopped"); }
             else AppendSystem("not currently logging");
             return;
         }
         if (_logging && a.Length == 0)   // bare .log while logging → toggle off
         {
+            _loggingDeclined = true;
             _session.StopLogging(); _logging = false; AppendSystem("logging stopped"); return;
         }
         LogFormat fmt = a.Contains("htm") ? LogFormat.Html : LogFormat.Text;
+        _loggingDeclined = false;         // asking for it back re-arms auto-logging too
         string path = _session.StartLogging(fmt);
         _logging = true;
         AppendSystem($"logging ({fmt.ToString().ToLowerInvariant()}) to {path}");

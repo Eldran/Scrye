@@ -918,6 +918,19 @@
                                     <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
                                               ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
                                 </StackPanel>
+                                <TextBlock Text="Session log" Margin="0,10,0,0" />
+                                <StackPanel Orientation="Horizontal" Spacing="16">
+                                    <CheckBox Content="Log every session"
+                                              IsChecked="{Binding Editor.AutoLog}"
+                                              ToolTip.Tip="Start a transcript automatically on connect. Set this on a Character to log that character only; the file is named &lt;date&gt;-&lt;character&gt;." />
+                                    <CheckBox Content="as HTML (keeps colours)"
+                                              IsChecked="{Binding Editor.AutoLogHtml}"
+                                              IsEnabled="{Binding Editor.AutoLog}"
+                                              ToolTip.Tip="Off = plain text. HTML keeps the MUD's colours and opens in a browser." />
+                                </StackPanel>
+                                <TextBlock Text="Logs are written to the Scrye logs folder as &lt;date&gt;-&lt;name&gt;; a second session the same day gets -2, -3 and so on."
+                                           FontSize="10" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ScryeTextDim}" />
                                 <TextBlock Text="Relay chat to the front tab" Margin="0,8,0,0" />
                                 <TextBox Text="{Binding Editor.RelayChannels}"
                                          PlaceholderText="inherit (Tell)"

@@ -51,6 +51,8 @@ public static class ProfileResolver
             if (layer.IdleGuard is not null) idleGuard = layer.IdleGuard.Value;
             if (layer.IdleGuardSeconds is not null) idleSeconds = layer.IdleGuardSeconds.Value;
             if (layer.RelayChannels is not null) world.RelayChannels = layer.RelayChannels;
+            if (layer.AutoLog is not null) world.AutoLog = layer.AutoLog.Value;
+            if (layer.AutoLogFormat is not null) world.AutoLogFormat = layer.AutoLogFormat;
 
             if (layer.FontFamily is not null) font = layer.FontFamily;
             if (layer.FontSize is not null) fontSize = layer.FontSize;

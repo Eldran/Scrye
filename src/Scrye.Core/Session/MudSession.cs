@@ -74,6 +74,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private CancellationTokenSource? _cts;
 
     public WorldProfile Profile { get; }
+
+    /// <summary>Watches the viking feed for structural drift — a field inserted into a record
+    /// silently re-indexes everything after it, so nothing throws and the numbers just go wrong.
+    /// Fed from the BBE handler below; read by the ".mip" command.</summary>
+    public Scrye.Core.Mip.MipShapeAudit MipAudit { get; } = new();
     public ConnectionState State => _connection.State;
     public AutomationEngine Automation => _automation;
     public SequenceEngine Sequences => _sequences;
@@ -215,7 +220,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         };
         _mipProc.VitalsUpdated += () => { MapMipVitals(); MipVitalsUpdated?.Invoke(); };
         // the raw viking (BBE) feed becomes watchable state: vik.<key>
-        _mipProc.VikingData += (k, v) => _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
+        _mipProc.VikingData += (k, v) =>
+        {
+            _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
+            MipAudit.Observe(k, v);        // structural drift watch; see MipShapeAudit
+        };
         _mipProc.Notice += text => Echo(text);
         // These used to also RaiseLine a "[Channel] text" copy into the output pane. They no
         // longer do: 3Scapes prints every tell and channel message to the screen itself, so
@@ -308,12 +317,24 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     /// <summary>Start writing this world's transcript to a timestamped file. Any
     /// existing log is closed first. Returns the file path.</summary>
-    public string StartLogging(LogFormat format = LogFormat.Text, string? directory = null)
+    public string StartLogging(LogFormat format = LogFormat.Text, string? directory = null,
+                               string? fileStem = null)
     {
-        var logger = SessionLogger.CreateFile(directory ?? DefaultLogDirectory(), Profile.Name, format);
+        var logger = SessionLogger.CreateFile(directory ?? DefaultLogDirectory(), Profile.Name, format,
+                                              fileStem: fileStem);
         _mailbox.Writer.TryWrite(new SessionMessage.LoggingControl(logger));
         return logger.Path ?? "";
     }
+
+    /// <summary>The file stem the automatic transcript uses: <c>yyyy-MM-dd</c> then this world's
+    /// name, which for a character connection IS the character (ProfileResolver sets Name from
+    /// the deepest named layer). Date first so a folder sorted by name is also sorted by day.</summary>
+    public string AutoLogStem() => $"{DateTime.Now:yyyy-MM-dd}-{Profile.Name}";
+
+    /// <summary>The log format the profile asked for; anything unrecognised reads as text.</summary>
+    public LogFormat AutoLogFormat() =>
+        Profile.AutoLogFormat.Trim().StartsWith("htm", StringComparison.OrdinalIgnoreCase)
+            ? LogFormat.Html : LogFormat.Text;
 
     /// <summary>Stop and finalize the current transcript (no-op if not logging).</summary>
     public void StopLogging() => _mailbox.Writer.TryWrite(new SessionMessage.LoggingControl(null));
