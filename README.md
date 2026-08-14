@@ -1,7 +1,5 @@
 # Scrye
 
-[![CI](https://github.com/Eldran/Scrye/actions/workflows/ci.yml/badge.svg)](https://github.com/Eldran/Scrye/actions/workflows/ci.yml)
-
 A modern MUD client — the clean-room successor to MUSHclient, built in C# / .NET with an [Avalonia](https://avaloniaui.net/) UI.
 
 Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin compatibility with it. It reimagines the client for today: Unicode-native, GMCP-first, async, and testable, with a redesigned scripting and plugin model.
@@ -58,15 +56,23 @@ dotnet run --project src/Scrye.Cli -- --selftest     # offline pipeline demo
 dotnet run --project src/Scrye.App                   # the GUI
 ```
 
-To produce a self-contained Windows build zipped for sharing:
+To produce a self-contained build packed for sharing:
 
 ```
-./publish-win.ps1              # or: ./publish-win.ps1 -Rid win-arm64
+./publish-win.ps1                    # Windows x64 (default) -> dist/Scrye-win-x64.zip
+./publish-win.ps1 -Rid linux-x64     # Linux x64            -> dist/Scrye-linux-x64.tar.gz
+./publish-win.ps1 -Rid win-arm64     # any RID with a matching .pubxml
 ```
 
-The recipient unzips and runs `Scrye.App.exe` with nothing installed. Unsigned builds show a SmartScreen warning on first launch.
+The recipient needs nothing installed. On Windows they unzip and run `Scrye.App.exe`; unsigned builds show a SmartScreen warning on first launch. On Linux they extract and `chmod +x Scrye.App` first — NTFS has no executable bit, so nothing packed on Windows carries one.
 
-**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction, and the only Windows-specific piece is text-to-speech (guarded at runtime). But `Scrye.App` currently targets `WinExe` and only Windows builds are produced and tested, so treat macOS and Linux as untested rather than supported.
+**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction, and the only Windows-specific piece is text-to-speech (guarded at runtime, so it declines rather than crashes elsewhere).
+
+- **Windows** is the primary platform: developed, built and played on daily.
+- **Linux** works. The `linux-x64` self-contained build has been run on Ubuntu and renders identically to Windows, fonts included. It is smoke-tested when something platform-sensitive changes, not on every commit, so treat it as working-but-lightly-exercised.
+- **macOS** compiles (CI builds it weekly) but has never been run. Untested.
+
+CI compiles the whole solution on Linux and Windows per push, so a build break surfaces within minutes on any of them. `WinExe` in `Scrye.App.csproj` is not an obstacle to a non-Windows build: it only sets the Windows PE subsystem and is ignored for other RIDs.
 
 ## Plugins
 
