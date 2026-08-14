@@ -117,6 +117,9 @@ jobs:
           name: test-results-${{ matrix.os }}
           path: test-results/
           retention-days: 14
+          # A build failure never reaches the test step, so there is nothing to upload and
+          # the default 'warn' just adds a red herring to an already-failing run.
+          if-no-files-found: ignore
 
   # A single job to point branch protection at, so the required check does not have to be
   # renamed every time the matrix changes shape.

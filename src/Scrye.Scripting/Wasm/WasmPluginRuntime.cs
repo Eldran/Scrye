@@ -651,7 +651,6 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         // Where Lua embeds functions, wasm embeds hook ids from register_action (numbers).
         string? actionId = ActionRef(w, created, "action") ?? ActionRef(w, created, "onClick") ?? ActionRef(w, created, "onSubmit");
         string? hoverId = ActionRef(w, created, "onHover");
-        string? contextId = ActionRef(w, created, "onRightClick");   // 1.9: secondary activation
 
         Dictionary<string, string>? palette = null;
         if (w.TryGetProperty("palette", out JsonElement pal) && pal.ValueKind == JsonValueKind.Object)
@@ -712,7 +711,6 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Align = Str(w, "align"),
             Action = actionId,
             HoverAction = hoverId,
-            ContextAction = contextId,
             Children = children,
         };
     }
