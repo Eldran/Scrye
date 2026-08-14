@@ -1,0 +1,132 @@
+name: CI
+
+# Scrye claims to be cross-platform but has only ever been built and run on Windows. The
+# point of this workflow is to stop that claim drifting further from the truth: a compile
+# error on Linux or macOS should surface within minutes of the push that caused it, not
+# when someone finally tries a build there.
+#
+# Cost shapes the schedule. GitHub bills macOS runner minutes at 10x Linux on private
+# repos, so running all three on every push would burn the monthly allowance in about
+# forty pushes. Linux and Windows therefore run on every push and PR; macOS runs weekly,
+# and on demand from the Actions tab when a release is about to go out.
+
+on:
+  push:
+    branches: [main]
+    # Documentation-only commits cannot break a build, and this repo gets a lot of them.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  schedule:
+    # Mondays 06:00 UTC — a fresh macOS result waiting at the start of the week.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      include_macos:
+        description: 'Include the macOS runner'
+        type: boolean
+        default: true
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  # Every job is a fresh machine, so the first-run welcome message and its sentinel file
+  # are pure noise in the logs.
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+
+jobs:
+  # Which runners to use is a decision, not a constant, so it gets computed once here
+  # rather than repeated as an `if:` on every step. Costs a few seconds on the cheapest
+  # runner and keeps the build job below completely straightforward.
+  plan:
+    name: Pick runners
+    runs-on: ubuntu-latest
+    outputs:
+      runners: ${{ steps.pick.outputs.runners }}
+    steps:
+      - id: pick
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ] || \
+             [ "${{ inputs.include_macos }}" = "true" ]; then
+            echo 'runners=["ubuntu-latest","windows-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'runners=["ubuntu-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
+          fi
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.os }}
+    needs: plan
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Without this, the first platform to fail cancels the others — and "did it break
+      # everywhere or only on macOS?" is the single most useful thing to know.
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.plan.outputs.runners) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Keyed on the lock-free project files, since this repo has no packages.lock.json.
+      # A stale key only costs a restore, never a wrong build.
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore
+
+      # Separate from restore so a genuine compile error is not buried under package noise,
+      # and warnings are visible: Scrye.App pulls in the Windows-only System.Speech, and
+      # CA1416 complaints on Linux and macOS are exactly the kind of thing worth reading
+      # even when the build succeeds.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      # The test project references Core, Protocol, Server and Scripting — no Avalonia —
+      # so this runs identically on all three platforms with no display server needed.
+      - name: Test
+        run: >
+          dotnet test --no-build --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ${{ github.workspace }}/test-results
+
+      # Only on failure: a green run's artifacts are never opened, and uploading them on
+      # every push just fills the storage quota.
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: test-results/
+          retention-days: 14
+
+  # A single job to point branch protection at, so the required check does not have to be
+  # renamed every time the matrix changes shape.
+  ci:
+    name: CI
+    if: always()
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          echo "build result: ${{ needs.build.result }}"
+          [ "${{ needs.build.result }}" = "success" ]

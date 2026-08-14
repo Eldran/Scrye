@@ -1,5 +1,7 @@
 # Scrye
 
+[![CI](https://github.com/Eldran/Scrye/actions/workflows/ci.yml/badge.svg)](https://github.com/Eldran/Scrye/actions/workflows/ci.yml)
+
 A modern MUD client — the clean-room successor to MUSHclient, built in C# / .NET with an [Avalonia](https://avaloniaui.net/) UI.
 
 Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin compatibility with it. It reimagines the client for today: Unicode-native, GMCP-first, async, and testable, with a redesigned scripting and plugin model.
