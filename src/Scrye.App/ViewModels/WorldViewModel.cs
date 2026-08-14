@@ -214,6 +214,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     private void ClosePane(CapturePaneViewModel pane)
     {
+        _closedPanes.Add(pane.Name);      // so a declaring plugin does not re-create it next start
         BottomPanes.Remove(pane);
         RightPanes.Remove(pane);
         if (_floatWindows.Remove(pane, out Window? open)) open.Close();
@@ -270,6 +271,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         if (_restoringLayout) return;
         var layout = new Services.WorldLayout { ShowTimestamps = ShowTimestamps };
+        layout.ClosedPanes.AddRange(_closedPanes);
         foreach (CapturePaneViewModel p in _allPanes)
             layout.Panes.Add(new Services.PaneLayoutEntry { Name = p.Name, Dock = p.Dock.ToString() });
         if (Hud is not null)
@@ -293,6 +295,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         try
         {
             ShowTimestamps = layout.ShowTimestamps;
+            foreach (string closed in layout.ClosedPanes) _closedPanes.Add(closed);
             foreach (Services.PaneLayoutEntry entry in layout.Panes)
             {
                 if (string.IsNullOrWhiteSpace(entry.Name)) continue;
@@ -302,6 +305,34 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             }
         }
         finally { _restoringLayout = false; }
+    }
+
+    /// <summary>Names the user closed by hand; see <c>WorldLayout.ClosedPanes</c>.</summary>
+    private readonly HashSet<string> _closedPanes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Create any capture pane a loaded plugin declares in its manifest, so the pane
+    /// is there as soon as the plugin is enabled rather than the first time something is
+    /// routed into it. Re-run after enable/reload/rescan, and idempotent.
+    ///
+    /// <para>Skips a pane the user closed by hand — that choice outlives a restart. A line
+    /// actually routed to it still recreates it through the normal path, which is right: at
+    /// that point there is something in it to read.</para></summary>
+    private void EnsureDeclaredPanes()
+    {
+        bool made = false;
+        foreach (PluginInfo p in _plugins.ListPlugins())
+        {
+            if (!p.Loaded || p.Panes is null) continue;
+            foreach (string name in p.Panes)
+            {
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                string pane = name.Trim();
+                if (_closedPanes.Contains(pane) || FindPane(pane) is not null) continue;
+                CreatePane(pane, PaneDock.Bottom);      // docking bottom also opens the zone
+                made = true;
+            }
+        }
+        if (made) SaveLayout();
     }
 
     private CapturePaneViewModel? FindPane(string name)
@@ -529,7 +560,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
 
         // command sequences: status strip driven by the session; controls route back to it.
-        Sequence = new SequenceViewModel(_session.PauseSequence, _session.ResumeSequence, _session.StopSequence);
+        Sequence = new SequenceViewModel(_session.PauseSequence, _session.ResumeSequence,
+                                         _session.StopSequence, _session.RunSequence);
         _session.SequenceStatusChanged += Sequence.Update;
 
         // HUD: plugins add declarative panels during load (below); this owns them.
@@ -601,14 +633,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (id, enabled) => Dispatcher.UIThread.Post(() => PersistPluginEnable?.Invoke(id, enabled)));
         Plugins = new PluginsViewModel(
             () => _plugins.ListPlugins(),
-            (id, done) => _session.Post(() => { _plugins.Reload(id); Dispatcher.UIThread.Post(done); }),
+            (id, done) => _session.Post(() => { _plugins.Reload(id); Dispatcher.UIThread.Post(() => { EnsureDeclaredPanes(); done(); }); }),
             (id, enable, done) => _session.Post(() =>
             {
                 if (enable) _plugins.Enable(id); else _plugins.Disable(id);
-                Dispatcher.UIThread.Post(done);
+                Dispatcher.UIThread.Post(() => { EnsureDeclaredPanes(); done(); });
             }),
             (id, done) => _session.Post(() => { _plugins.Remove(id); Dispatcher.UIThread.Post(done); }),
-            done => _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }),
+            done => _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(() => { EnsureDeclaredPanes(); done(); }); }),
             done => { ScaffoldNewPlugin(userPluginRoot); _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }); },
             () => OpenPluginsFolder(userPluginRoot),
             () => _plugins.Diagnostics.Snapshot());   // immutable snapshot — safe to read from the UI thread
@@ -703,8 +735,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         SubmitCommand = new RelayCommand(Submit);
 
-        // bring back this world's saved pane setup (docks + timestamp toggle)
+        // bring back this world's saved pane setup (docks + timestamp toggle), then add any
+        // pane a loaded plugin declares but the saved layout does not have yet — the fresh-
+        // machine case, where there is no layout at all.
         RestoreLayout();
+        EnsureDeclaredPanes();
 
         _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
         _flushTimer.Tick += (_, _) => Flush();
@@ -716,6 +751,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         _session.LoadProfileData(eff);
         LoadMacros(eff.Macros);
+        // Names come from the resolved profile rather than the live SequenceEngine: the engine's
+        // registry is loop-owned, and this runs on the UI thread.
+        Sequence.SetAvailable(eff.Sequences.Select(x => x.Name).Where(n => !string.IsNullOrWhiteSpace(n)));
         if (!string.IsNullOrWhiteSpace(eff.FontFamily)) OutputFontFamily = new Avalonia.Media.FontFamily(eff.FontFamily);
         if (eff.FontSize is > 0) OutputFontSize = eff.FontSize.Value;
     }
@@ -761,7 +799,31 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     {
         _session.ReloadAutomation(eff);
         LoadMacros(eff.Macros);   // keybindings re-resolve with the rest of the cascade
+        Sequence.SetAvailable(eff.Sequences.Select(x => x.Name).Where(n => !string.IsNullOrWhiteSpace(n)));
     }
+
+    /// <summary>The idle guard, as a bottom-bar toggle. It stops all automation when it fires,
+    /// which is worth being able to see and switch without remembering ".idle" — the command
+    /// stays for setting a limit, which a toggle cannot express.</summary>
+    public bool IdleGuardEnabled
+    {
+        get => _session.IdleGuard.Enabled;
+        set
+        {
+            if (_session.IdleGuard.Enabled == value) return;
+            _session.IdleGuard.Enabled = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IdleGuardTip));
+            AppendSystem(value
+                ? $"idle guard on — automation stops after {IdleGuard.Describe(_session.IdleGuard.Seconds)} with nothing from you"
+                : "idle guard off");
+        }
+    }
+
+    /// <summary>Tooltip for that toggle: the limit is the part a checkbox cannot show.</summary>
+    public string IdleGuardTip =>
+        $"Idle guard: stop automation after {IdleGuard.Describe(_session.IdleGuard.Seconds)} "
+      + "with no input from you. Set the limit with .idle <seconds|Nm>.";
 
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
 
@@ -897,6 +959,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             if (pane is null)
             {
                 pane = CreatePane(item.Pane, PaneDock.Bottom);
+                _closedPanes.Remove(item.Pane);   // traffic overrules an earlier close
                 created = true;
             }
             // Wrap long chat lines to a readable measure BEFORE they hit the buffer: the
@@ -999,13 +1062,6 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (isScript && !origin.MayRunScripts)
             return CommandSubmitResult.RejectedScriptingNotPermitted;
 
-        if (text == "mipstart")
-        {
-            _pending.Enqueue(Line.FromText("> " + text, EchoColour));
-            _session.StartMip();
-            return CommandSubmitResult.Accepted;
-        }
-
         // client "." commands (sequences, logging, tts); unknown dot-input falls through to
         // the MUD. Deliberately NOT gated: a sequence is a command list this desktop already
         // authored, and firing a walk route from a phone is a core companion use case.
@@ -1100,6 +1156,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (arg is "on" or "off")
         {
             guard.Enabled = arg == "on";
+            OnPropertyChanged(nameof(IdleGuardEnabled));
             AppendSystem(guard.Enabled
                 ? $"idle guard on — automation stops after {IdleGuard.Describe(guard.Seconds)} with nothing from you"
                 : "idle guard off");
@@ -1112,6 +1169,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         {
             guard.Seconds = n * mult;
             guard.Enabled = true;
+            OnPropertyChanged(nameof(IdleGuardEnabled));
+            OnPropertyChanged(nameof(IdleGuardTip));
             AppendSystem($"idle guard on, limit {IdleGuard.Describe(guard.Seconds)}"
                 + (n * mult != guard.Seconds
                     ? $" (clamped to {IdleGuard.MinSeconds}-{IdleGuard.MaxSeconds}s)" : ""));

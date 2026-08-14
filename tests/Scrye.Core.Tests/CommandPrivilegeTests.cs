@@ -26,7 +26,7 @@ public class CommandPrivilegeTests
     [InlineData(" /foo")]          // console never claims it; MUD input
     [InlineData("north")]
     [InlineData(".walk n;n;e")]
-    [InlineData("mipstart")]
+    [InlineData("look north")]
     [InlineData("")]
     [InlineData(null)]
     public void NonScriptTextIsNotPrivileged(string? text) =>

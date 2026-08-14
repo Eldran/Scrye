@@ -28,6 +28,7 @@ Each connected world gets its own tab with an output pane and a command line.
   - **Tab** — complete the word under the caret from words seen in the output.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
+- **F11** — fullscreen on and off.
 
 ## Client commands
 
@@ -40,14 +41,17 @@ with a dot, and they're intercepted before plugins see them, so a plugin can't s
 | `.log html` | Same, but a self-contained HTML file that keeps the colours. |
 | `.log off` | Stop logging. A bare `.log` while already logging also stops it. |
 | `.walk north;north;east x3;wait 2` | Run an ad-hoc walk. `x3` repeats a step, `wait N` pauses. |
-| `.seq <name>` | Run a saved sequence. |
-| `.stop` · `.pause` · `.resume` | Control the running walk or sequence. |
+| `.seq <name>` | Run a saved sequence — or pick it from the **sequence strip** above the input line and press Run. |
+| `.stop` · `.pause` · `.resume` | Control the running walk or sequence. The same three buttons appear in the sequence strip while one is running. |
 | `.all <command>` | Send one command to **every** connected world. |
-| `.idle` | Show or set the idle guard (`.idle on`, `.idle off`, `.idle 300`). |
+| `.idle` | Show or set the idle guard (`.idle on`, `.idle off`, `.idle 300`, `.idle 10m`). The **Idle** toggle in the bottom bar switches it; the command is how you set the limit. |
 | `.tts` | Toggle text-to-speech (Windows only). |
-| `.ts` / `.timestamps` | Toggle the HH:mm:ss gutter in the output and capture panes. |
+| `.ts` / `.timestamps` | Toggle the HH:mm:ss gutter in the output and capture panes (or the **⏱ Time** toggle in the bottom bar). |
 | `.companion` | The mobile companion — see its own section below. |
 | `.mip` | Audit the MIP feed for structural drift — see below. |
+
+Separately, anything starting with **`/`** is Lua rather than a MUD command — see
+[The script console](#the-script-console).
 
 Logs are written to the logs folder (`%APPDATA%/Scrye/logs`, or `~/.config/Scrye/logs` on
 Linux and macOS). The log captures **displayed output only** — it is a transcript of what you
@@ -74,6 +78,46 @@ Two things it deliberately does: an **auto-reconnect keeps writing to the same f
 starting a fragment per dropped connection, and **`.log off` stays off** for the rest of the
 session — a blip on the link won't turn logging back on after you've explicitly stopped it.
 A later `.log` re-arms both.
+
+## The script console
+
+Anything you type starting with **`/`** is run as Lua on this world's session loop instead of
+being sent to the MUD. It's the quickest way to poke at a world without opening Settings:
+
+```
+/world.Send("look")
+/world.Note("hello from Lua")
+/world.SetVariable("tank", "Bjorn")
+/world.AddAlias("greet", "hi *", "say hello %1")
+```
+
+The `world` table is small and deliberate — these eight functions, nothing else:
+
+| Call | What it does |
+|---|---|
+| `world.Send(text)` | Send a command to the MUD, exactly as if you'd typed it. |
+| `world.Note(text)` | Print a local line in the output pane. Never reaches the MUD. |
+| `world.GetVariable(name)` | Read a variable; `nil` when unset. |
+| `world.SetVariable(name, value)` | Write a variable. |
+| `world.AddTrigger(name, pattern, send)` | Add a trigger that sends a command on a match. |
+| `world.AddAlias(name, pattern, send)` | Add an alias. |
+| `world.DeleteTrigger(name)` | Remove one by name; returns `true` if it existed. |
+| `world.DeleteAlias(name)` | Same for aliases. |
+
+Rules added this way are **session-only** — they vanish on restart. To keep one, put it in
+Settings, where it becomes part of the profile cascade.
+
+It runs on the session loop, so a script never executes concurrently with trigger processing,
+and it's **sandboxed exactly like a plugin**: native Lua 5.4 with the standard library, but no
+`io`, no `os.execute`, no `require`, no `load`, no `debug`. A runaway loop hits the same
+dispatch budget a plugin does and is aborted rather than freezing the client.
+
+> **This is the one privileged input.** A command from your phone can do everything else —
+> walk a route, fire a sequence, send to the MUD — but `/` script is refused unless that
+> device was explicitly granted scripting, which it is not by default. That's why it's the
+> only prefix checked before anything is echoed: a rejected command leaves no trace of having
+> half-run. If you're wondering why `.walk` isn't gated the same way, it's because a sequence
+> is a command list this desktop already authored, whereas `/` is arbitrary code.
 
 ## Profiles and the cascade
 
@@ -151,7 +195,19 @@ Three things it deliberately does not do:
 
 ## Capture panes
 
-A **capture pane** is a separate scrolling pane that collects specific lines — for example, all chat channels and tells routed into one "Chats" pane. Plugins (and triggers) can route lines into named panes.
+A **capture pane** is a separate scrolling pane that collects specific lines — for example, all chat channels and tells routed into one "Chats" pane. Plugins (and triggers) can route lines into named panes. Show and hide the pane area with the **Panes** toggle in the bottom bar.
+
+Panes appear on their own. A plugin that captures into one declares it in its manifest, so enabling the plugin creates the pane there and then — you don't have to open the Panes area and wait for something to arrive. A pane a trigger routes into is created the first time a line lands in it. Either way the layout is remembered per world, so it comes back where you left it.
+
+**Close a pane and it stays closed** — including across restarts, even if a plugin declares it. It only returns if a line is actually routed into it, at which point there's something in it worth reading.
+
+**Right-click a pane's tab** for the things you can't do any other way:
+
+- **Move to bottom** / **Move to right side** — dock the pane along the bottom or down the right edge.
+- **Float as window** — pop it out into its own window, handy on a second monitor.
+- **Close pane**.
+
+A floated pane can be re-docked from the same menu on its tab once it's back.
 
 ## Plugins
 
@@ -322,7 +378,8 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
   "data": { "areas": "areas.json", "badwords": "badwords.txt" },
   "enabled": true,
   "requires": { "scryeApi": ">=1.1 <2.0" },
-  "permissions": ["output.read", "commands.send", "ui.panels"]
+  "permissions": ["output.read", "commands.send", "ui.panels"],
+  "panes": ["Chats"]
 }
 ```
 
@@ -338,6 +395,29 @@ Drop the folder into `%APPDATA%/Scrye/plugins/` (or the `plugins` folder next to
 | `enabled` | Whether it's a candidate to load. Users still opt in per character. |
 | `requires` | Compatibility constraints. See below. Optional. |
 | `permissions` | What the plugin intends to do, shown to the user. See below. Optional. |
+| `panes` | Capture panes the plugin writes to. The host creates them when it loads. See below. Optional. |
+
+## Declaring capture panes — `panes` (API 1.11)
+
+A capture pane normally appears the first time something is routed into it. That is fine once
+you've used the plugin for a while — the pane is in your saved layout and comes back on every
+start — but it reads as a bug the first time: enable the chat plugin on a new machine, see
+nothing, and wonder whether it worked. The pane only turns up when somebody eventually speaks.
+
+List the panes your plugin captures into and the host creates them at load instead:
+
+```json
+"panes": ["Chats"]
+```
+
+Names are matched to `scrye.capture` case-insensitively, so declare them exactly as you use them.
+The field is optional and additive — an older client ignores it, so you can add it without raising
+your `requires` range.
+
+Two things it deliberately does **not** do. It won't resurrect a pane you closed by hand: that
+choice is remembered per world and survives restarts, and only a line actually routed into the
+pane brings it back (at which point there's something in it to read). And disabling the plugin
+leaves the pane alone rather than deleting it along with whatever it had captured.
 
 ## Shipping data with a plugin — `data`
 
@@ -453,7 +533,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.10.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.11.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -476,7 +556,10 @@ cells still shrink to fit the panel width. And the **`row` container**
 side, each at its measured width — the escape hatch from the panel's vertical stack. The
 viking sea chart uses it to put the resolve choices beside the chart instead of below it.
 The companion renders rows side by side too, wrapping children onto the next line when the
-screen is too narrow for them.
+screen is too narrow for them. **1.9 adds `onRightClick`** as a second, distinct action on
+`colorgrid`, `button` and `buttonrow` (the companion maps a long-press onto it); **1.10 adds
+`scrye.onRelay`**, chat arriving from another open world; **1.11 adds the manifest `panes`
+field**, so a plugin's capture panes exist as soon as it loads instead of on first traffic.
 
 ## Permissions
 
@@ -655,7 +738,7 @@ that changes nothing writes nothing.
 |---|---|
 | `scrye.notify(text)` | Toast notification (+ taskbar flash when unfocused; pushed to registered phones). |
 | `scrye.sound("beep")` | Play `"beep"`, a path, or a file in the sounds folder. |
-| `scrye.capture(pane, text)` | Route a line into a named capture pane. |
+| `scrye.capture(pane, text)` | Route a line into a named capture pane. Declare the pane in the manifest's `panes` *(1.11)* so it exists from load rather than from the first line. |
 
 **Reporting notification sources — the `plugin.<id>.notify` convention.** A plugin that
 calls `scrye.notify()` should also *say so*, so the Companion panel can show the user what

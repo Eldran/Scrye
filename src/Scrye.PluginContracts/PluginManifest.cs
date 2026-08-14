@@ -70,4 +70,19 @@ public sealed record PluginManifest
     /// manager has nothing to show; it does not restrict the plugin.</para>
     /// </summary>
     public string[] Permissions { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Capture panes this plugin writes to, e.g. <c>["Chats"]</c>. The host creates them when
+    /// the plugin loads, so the pane is there from the start instead of appearing the first
+    /// time a line happens to be routed into it.
+    ///
+    /// <para>This exists because lazy creation reads as a bug on a fresh install: enable the
+    /// chat plugin on a new machine, see nothing, and the pane only turns up when somebody
+    /// eventually speaks. Declaring it makes "this plugin has a Chats pane" true at load
+    /// rather than on first traffic.</para>
+    ///
+    /// <para>Optional and additive: an older host ignores the field, and a pane the user has
+    /// explicitly closed is not resurrected — see the layout's closed-pane list.</para>
+    /// </summary>
+    public string[] Panes { get; init; } = Array.Empty<string>();
 }

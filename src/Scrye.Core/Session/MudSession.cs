@@ -498,15 +498,6 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>Raise a notification toast (plugin parity with trigger Notify).</summary>
     public void RequestNotify(Line line) => NotifyRequested?.Invoke(line);
 
-    /// <summary>Force the MIP handshake now (manual `mipstart`).</summary>
-    public void StartMip()
-    {
-        if (!Profile.EnableMip) { RaiseLine(Line.FromText("[MIP] not enabled for this world", SysColour)); return; }
-        _mipId = EnsureMipId();
-        _mipPending = false; _mipGotData = false; _mipRetries = 0;
-        SendMipHandshake();
-    }
-
     void IWorldActions.Send(string text) => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
     void IWorldActions.Echo(string text) => Echo(text);
     string? IWorldActions.GetVariable(string name) => _variables.Get(name);

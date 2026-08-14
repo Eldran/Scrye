@@ -102,6 +102,14 @@
                                         <ToggleButton DockPanel.Dock="Right" Content="⇉ All"
                                                       IsChecked="{Binding IsBroadcast}" Margin="4,0,0,0"
                                                       ToolTip.Tip="Broadcast: send typed commands to every connected world (. and / commands stay local). One-off: .all &lt;command&gt;" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="⏱ Time"
+                                                      IsChecked="{Binding ShowTimestamps}" Margin="4,0,0,0"
+                                                      AutomationProperties.Name="Timestamps"
+                                                      ToolTip.Tip="Show an HH:mm:ss gutter in the output and capture panes (.ts)" />
+                                        <ToggleButton DockPanel.Dock="Right" Content="Idle"
+                                                      IsChecked="{Binding IdleGuardEnabled}" Margin="4,0,0,0"
+                                                      AutomationProperties.Name="Idle guard"
+                                                      ToolTip.Tip="{Binding IdleGuardTip}" />
                                         <ToggleButton DockPanel.Dock="Right" Content="🔊 TTS"
                                                       IsChecked="{Binding TtsEnabled}" Margin="4,0,0,0"
                                                       AutomationProperties.Name="Text to speech"
@@ -113,15 +121,31 @@
                                     </DockPanel>
 
                                     <!-- running-sequence status strip (visible while a sequence runs) -->
-                                    <Border DockPanel.Dock="Bottom" IsVisible="{Binding Sequence.IsActive}"
+                                    <!-- Sequence strip: a picker + Run when nothing is running, the live
+                                         status + transport once something is. Hidden entirely for a world
+                                         with no sequences, so it costs a row only when it can be used. -->
+                                    <Border DockPanel.Dock="Bottom" IsVisible="{Binding Sequence.IsVisible}"
                                             Margin="4,0,4,0" Padding="8,4" Background="{DynamicResource ScryePanelAlt}"
                                             BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1" CornerRadius="5">
-                                        <DockPanel>
-                                            <Button DockPanel.Dock="Right" Content="Stop" Command="{Binding Sequence.StopCommand}" Margin="4,0,0,0" Padding="10,2" />
-                                            <Button DockPanel.Dock="Right" Content="Resume" Command="{Binding Sequence.ResumeCommand}" Margin="4,0,0,0" Padding="10,2" />
-                                            <Button DockPanel.Dock="Right" Content="Pause" Command="{Binding Sequence.PauseCommand}" Margin="4,0,0,0" Padding="10,2" />
-                                            <TextBlock Text="{Binding Sequence.StatusText}" VerticalAlignment="Center" Foreground="{DynamicResource ScryeText}" />
-                                        </DockPanel>
+                                        <Panel>
+                                            <DockPanel IsVisible="{Binding Sequence.IsActive}">
+                                                <Button DockPanel.Dock="Right" Content="Stop" Command="{Binding Sequence.StopCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                                <Button DockPanel.Dock="Right" Content="Resume" Command="{Binding Sequence.ResumeCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                                <Button DockPanel.Dock="Right" Content="Pause" Command="{Binding Sequence.PauseCommand}" Margin="4,0,0,0" Padding="10,2" />
+                                                <TextBlock Text="{Binding Sequence.StatusText}" VerticalAlignment="Center" Foreground="{DynamicResource ScryeText}" />
+                                            </DockPanel>
+                                            <DockPanel IsVisible="{Binding Sequence.IsIdle}">
+                                                <Button DockPanel.Dock="Right" Content="Run" Command="{Binding Sequence.RunCommand}"
+                                                        IsEnabled="{Binding Sequence.CanRun}"
+                                                        Margin="4,0,0,0" Padding="10,2"
+                                                        ToolTip.Tip="Run the selected sequence (same as .seq &lt;name&gt;)" />
+                                                <TextBlock DockPanel.Dock="Left" Text="Sequence" VerticalAlignment="Center"
+                                                           Margin="0,0,8,0" Foreground="{DynamicResource ScryeTextDim}" />
+                                                <ComboBox ItemsSource="{Binding Sequence.Available}"
+                                                          SelectedItem="{Binding Sequence.Selected}"
+                                                          HorizontalAlignment="Stretch" />
+                                            </DockPanel>
+                                        </Panel>
                                     </Border>
 
                                     <!-- find-in-scrollback bar (Ctrl+F) -->

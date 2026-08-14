@@ -23,5 +23,8 @@
     "timers.manage",
     "aliases.manage"
   ],
+  "panes": [
+    "Chats"
+  ],
   "enabled": true
 }

@@ -103,7 +103,17 @@ public static class ScryeApi
     //        treated foreign chat as its own would notify twice (the source world already did),
     //        write another MUD's lines into its own log, and fold them into its own history.
     //        Additive: a plugin that registers no handler never sees a relay.
-    public static readonly Version Current = new(1, 10);
+    // 1.11 — manifest "panes": ["Chats"]. Capture panes a plugin writes to, created when it
+    //        loads instead of the first time a line happens to be routed into one.
+    //
+    //        Lazy creation reads as a bug on a fresh machine: enable the chat plugin, see
+    //        nothing, and the pane only turns up when somebody eventually speaks. Declaring it
+    //        makes "this plugin has a Chats pane" true at load.
+    //
+    //        Additive both ways: an older host ignores the field, and a pane the user closed by
+    //        hand is not resurrected (the world layout remembers which). Traffic still wins - a
+    //        line routed to a closed pane recreates it, because then it has content to show.
+    public static readonly Version Current = new(1, 11);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

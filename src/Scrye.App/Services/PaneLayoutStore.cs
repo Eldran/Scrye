@@ -29,6 +29,12 @@ public sealed class WorldLayout
     public List<PaneLayoutEntry> Panes { get; set; } = new();
     public bool ShowTimestamps { get; set; }
     public List<HudPanelLayout> HudPanels { get; set; } = new();
+
+    /// <summary>Panes the user closed by hand. A plugin that declares a pane in its manifest
+    /// gets it created on load — but not if the name is in here, or closing the Chats pane
+    /// would be undone every restart. Real traffic still wins: a line routed to a closed pane
+    /// recreates it, because at that point the pane has something in it to read.</summary>
+    public List<string> ClosedPanes { get; set; } = new();
 }
 
 /// <summary>

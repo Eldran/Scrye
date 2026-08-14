@@ -131,7 +131,8 @@ public sealed class PluginManager : IDisposable
                                         loaded.Contains(d.Manifest.Id), IsRemovable(d),
                                         d.Permissions, d.Manifest.Requires?.ScryeApi,
                                         d.IsApiCompatible(out string why) ? null : why,
-                                        _runtimes.FirstOrDefault(r => r.Id == d.Manifest.Id)?.EngineName))
+                                        _runtimes.FirstOrDefault(r => r.Id == d.Manifest.Id)?.EngineName,
+                                        d.Manifest.Panes))
             .ToArray();
     }
 
@@ -415,4 +416,5 @@ public readonly record struct PluginInfo(
     IReadOnlyList<string> Permissions,
     string? RequiresApi,
     string? IncompatibleReason,
-    string? Engine = null);
+    string? Engine = null,
+    IReadOnlyList<string>? Panes = null);
