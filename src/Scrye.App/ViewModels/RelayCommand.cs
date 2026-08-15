@@ -31,5 +31,14 @@ public sealed class RelayCommand<T> : ICommand
     public bool CanExecute(object? parameter) => true;
     public void Execute(object? parameter) { if (parameter is T t) _execute(t); }
 
-    public event EventHandler? CanExecuteChanged;
+    /// <summary>Required by <see cref="ICommand"/>, and deliberately inert: this command
+    /// takes no can-execute predicate, so <see cref="CanExecute"/> is unconditionally true
+    /// and there is never anything to announce. The empty accessors say that on purpose —
+    /// a plain field event would raise CS0067 ("never used") on every build, and a warning
+    /// that is expected is a warning nobody reads.
+    ///
+    /// <para>If a parameterised command ever needs to disable itself, give this class a
+    /// <c>Func&lt;T, bool&gt;</c> and a real backing event, the way the non-generic
+    /// <see cref="RelayCommand"/> has.</para></summary>
+    public event EventHandler? CanExecuteChanged { add { } remove { } }
 }
