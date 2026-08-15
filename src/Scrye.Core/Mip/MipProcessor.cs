@@ -90,6 +90,15 @@ public sealed class MipProcessor
         for (int i = 0; i + 1 < t.Length; i += 2)
         {
             string key = t[i], val = t[i + 1];
+
+            // A stray caret in the stream leaks into the next key: an extra '^' before the
+            // separator makes "^^^THRALLS^^" split into a key literally named "^THRALLS". Seen
+            // live — the shape audit reported THRALLS and ^THRALLS side by side with identical
+            // shapes. Left alone it is worse than cosmetic: the two are different state keys, so
+            // every caret-prefixed arrival updates a key nothing reads and leaves vmip_THRALLS
+            // holding the previous value. No MIP key legitimately starts with one.
+            key = key.TrimStart('^');
+
             if (key.Length == 0) continue;
 
             Match cm = ChunkKey.Match(key);

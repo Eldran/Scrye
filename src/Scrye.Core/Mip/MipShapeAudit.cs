@@ -77,6 +77,15 @@ public sealed class MipShapeAudit
         // draw_bonds()/standings: lineage records id|name|score|standing|own
         new("STANDINGS", 0, '\0', "nille-viking standings()",
             new MipRecordExpectation(1, ';', '|', new[] { 5 })),
+
+        // WSTOCK: effective warehouse capacity, then good|amount|quality with an optional
+        // qualifier ("7367;furs|301|100;mead|60|100|aged"). The 1 is that leading capacity
+        // field, and it is in the list on purpose: not knowing it was there made
+        // 3s-viking-status draw a stock row called "7367", and not knowing what it meant left
+        // both plugins sizing the warehouse from a base-per-tier table that is only right until
+        // the character raises a storage skill.
+        new("WSTOCK", 0, '\0', "3s-viking-status warehouse() + 3s-market at_warehouse()/stock",
+            new MipRecordExpectation(1, ';', '|', new[] { 1, 3, 4 })),
     };
 
     private readonly Dictionary<string, MipShapeExpectation> _expected =
@@ -103,6 +112,13 @@ public sealed class MipShapeAudit
         if (string.IsNullOrEmpty(key) || value is null) return;
 
         string shape = Shape(value);
+
+        // An empty value means the list is empty right now, not that its structure moved. Check()
+        // has always known this ("an empty list is not drift"); the stability detector did not,
+        // so a cart queue draining and refilling reported drift on every transition. Neither
+        // recorded nor compared: the next real value sets or checks the shape.
+        if (shape == "empty") return;
+
         if (_firstSeen.TryGetValue(key, out (string Shape, string Sample) prev))
         {
             // A key whose shape moves mid-session is drift by definition — no table needed, and
@@ -157,27 +173,77 @@ public sealed class MipShapeAudit
         return null;
     }
 
-    /// <summary>A compact structural fingerprint: the top-level delimiter and field count, plus
-    /// the record layout when the value is a list. Two values with the same fingerprint parse
-    /// the same way, which is the only property being tracked.</summary>
+    /// <summary>
+    /// A compact structural fingerprint: the record delimiter and the distinct per-record field
+    /// counts. Two values with the same fingerprint parse the same way, which is the only
+    /// property being tracked.
+    ///
+    /// <para><b>What it deliberately does not encode is how many records there are.</b> That was
+    /// the original version's mistake: it counted delimiters across the whole payload, so a
+    /// building list that went from three entries to two changed fingerprint and was reported as
+    /// drift. Nearly every viking feed is a list whose length changes constantly — buildings,
+    /// map POIs, carts, stock, status effects — so the detector reported drift for all of them
+    /// and real drift would have been invisible in the noise.</para>
+    ///
+    /// <para>Known limit: for a list whose records are legitimately of several widths (WSTOCK,
+    /// where a qualified good has an extra field), the fingerprint is the SET of widths, so a
+    /// server change that moved a record onto a width the set already contains would slip
+    /// through. Catching that needs per-record-type expectations, which is what the
+    /// <see cref="Known"/> table is for.</para>
+    /// </summary>
     public static string Shape(string value)
     {
         if (value.Length == 0) return "empty";
 
-        // '|' wins when both are present: the 3Scapes feeds put pipes at the top level and use
-        // ';' for records INSIDE a field (BATTLE is exactly this shape).
-        if (value.Contains('|')) return "|" + value.Split('|').Length;
-        if (value.Contains(';'))
+        // A whitespace-separated list of k:v tokens — STFX is "[aeg:293 skad:682 ...]gray:",
+        // one token per active effect. Handled first because splitting THAT on ':' just counts
+        // the effects, which is exactly the number that is supposed to move.
+        if (PairListShape(value) is { } pairs) return pairs;
+
+        // Everything else is one or more ';'-separated records — one record when there is no
+        // ';' at all, which is what makes a single-entry list fingerprint the same as a
+        // multi-entry one. The sub-delimiter is chosen once for the whole value rather than per
+        // record, so a header line and its record list stay comparable (BATTLE is that shape:
+        // an 11-field header whose last field runs into a ';' list of comma records, giving a
+        // stable "|1/11" however many units are on the field).
+        char sub = value.Contains('|') ? '|' : value.Contains(',') ? ',' : ':';
+        var counts = new SortedSet<int>();
+        foreach (string r in value.Split(';'))
+            if (r.Length > 0) counts.Add(r.Split(sub).Length);
+
+        if (counts.Count == 0) return "empty";                       // ";;;" and friends
+
+        // Chunks with no sub-delimiter at all are dropped once any chunk has one. They carry no
+        // field structure to check, and keeping them made the fingerprint depend on list length
+        // again by the back door: BATTLE's header runs into its first unit record, so a single
+        // unit gives widths {11} and two give {11,1}. WSTOCK has the same shape the other way up,
+        // a bare stock total ahead of its goods. Dropping them makes both count-independent.
+        if (counts.Max > 1) counts.Remove(1);
+        if (counts.Max == 1) return "flat";        // no delimiters anywhere, list of scalars or not
+
+        return sub + string.Join("/", counts);
+    }
+
+    /// <summary>Fingerprint a whitespace-separated list of <c>name:value</c> tokens, or null when
+    /// the value is not one. Returns the distinct per-token field counts, so the fingerprint is
+    /// the same whether eight effects are active or thirteen.</summary>
+    private static string? PairListShape(string value)
+    {
+        if (!value.Contains(' ')) return null;
+        string[] tokens = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2) return null;
+
+        var counts = new SortedSet<int>();
+        int withColon = 0;
+        foreach (string tok in tokens)
         {
-            var counts = new SortedSet<int>();
-            char sub = value.Contains(',') ? ',' : value.Contains('|') ? '|' : ':';
-            foreach (string r in value.Split(';'))
-                if (r.Length > 0) counts.Add(r.Split(sub).Length);
-            return counts.Count == 0 ? ";0" : $";*{sub}{string.Join("/", counts)}";
+            int n = tok.Split(':').Length;
+            if (n > 1) withColon++;
+            counts.Add(n);
         }
-        if (value.Contains(',')) return "," + value.Split(',').Length;
-        if (value.Contains(':')) return ":" + value.Split(':').Length;
-        return "flat";
+        // Most tokens carrying a colon is what makes this a pair list rather than prose that
+        // happens to contain a space.
+        return withColon * 2 >= tokens.Length ? "sp:" + string.Join("/", counts) : null;
     }
 
     private void Add(string severity, string key, string detail, string sample)
@@ -225,8 +291,18 @@ public sealed class MipShapeAudit
             lines.Add("");
             lines.Add($"  No recorded expectation ({notes.Count}) - shape logged so a later change");
             lines.Add("  would still be caught, but nothing here has been checked against a parser:");
-            foreach (MipShapeFinding f in notes)
-                lines.Add($"    {f.Key}: {f.Detail}");
+            // Packed several to a line. One line per key meant a real feed buried the drift
+            // section - the part you actually came for - under two hundred lines of inventory.
+            var cells = notes
+                .Select(f => f.Key + "=" + f.Detail[(f.Detail.LastIndexOf(' ') + 1)..])
+                .ToList();
+            var row = new System.Text.StringBuilder("   ");
+            foreach (string cell in cells)
+            {
+                if (row.Length + cell.Length + 2 > 88) { lines.Add(row.ToString()); row.Clear().Append("   "); }
+                row.Append(' ').Append(cell);
+            }
+            if (row.Length > 3) lines.Add(row.ToString());
         }
 
         if (drift.Count == 0)
