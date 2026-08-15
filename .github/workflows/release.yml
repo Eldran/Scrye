@@ -147,8 +147,9 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # Checksums matter more than usual here: the builds are unsigned, so this is the
-      # only way a cautious downloader can tell they got what the workflow produced.
+      # GitHub shows a sha256 beside each asset by itself, so this is for convenience
+      # rather than coverage: one file the downloader can hand to `sha256sum -c` instead
+      # of comparing three hex strings by eye.
       - name: Checksums
         run: |
           cd dist
@@ -165,7 +166,22 @@ jobs:
           # deep, so the relative links that work in a README do not resolve here.
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
-          sed "s|{{REPO}}|${REPO_URL}|g" .github/release-body.md > body.md
+          # The comment block at the top is guidance for whoever edits the template, not
+          # release content. Strip it first: it is invisible once rendered, but it ships in
+          # the body's source, and leaving it in means the paragraph explaining the
+          # placeholders gets its own placeholders substituted and reads as nonsense.
+          sed '/^<!--$/,/^-->$/d' .github/release-body.md > body.raw.md
+
+          sed -e "s|{{REPO}}|${REPO_URL}|g" \
+              -e "s|{{VERSION}}|${GITHUB_REF_NAME}|g" \
+              body.raw.md > body.md
+
+          # A leftover placeholder means a typo'd name or a new one nobody wired up, and
+          # it would ship as literal braces on a public page. Cheaper to fail here.
+          if grep -n '{{[A-Z_]*}}' body.md; then
+            echo "::error::unsubstituted placeholder in release-body.md (see above)"
+            exit 1
+          fi
 
           # A tag like v0.9.0-beta1 is a prerelease; v0.9.0 is not.
           case "${GITHUB_REF_NAME}" in
