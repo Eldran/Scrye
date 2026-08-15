@@ -111,8 +111,10 @@ Check it took:
 
 ## 5. Open it on the phone
 
-Browse to the URL from step 3 — `https://desktop-abc.tail1234.ts.net/` — paste the token,
-connect, pick your session, subscribe.
+Browse to the URL from step 3 — `https://desktop-abc.tail1234.ts.net/` — then connect, pick
+your session, subscribe. Reaching it through the Tailscale proxy authenticates you by tailnet
+identity, so there is nothing to type: the token screen only appears when the server says a
+token is needed (plain loopback, or no Tailscale).
 
 A real certificate means **no browser warning**, and more importantly a genuine *secure
 context*, which is what a service worker needs. That is the whole reason this step exists
@@ -141,8 +143,10 @@ If it says Tailscale is stopped, connect from the tray icon or run `tailscale up
 is not running. Run `.companion status` in Scrye — the proxy is happy to forward to a port
 with nothing behind it.
 
-**Connects but immediately drops.** Wrong token. Each `.companion` start mints a new one,
-so a token from an earlier run will not work. Re-run `.companion status` to reprint it.
+**The handshake fails with "connection failed".** Wrong token. Each `.companion` start mints
+a new one, so a token from an earlier run will not work — the server answers 401 before the
+socket is upgraded, so it never opens at all. Open the Companion panel in the bottom bar and
+copy the current token from there; `.companion status` deliberately does not print it.
 
 **The certificate consent page never appears.** Some tailnets already have HTTPS enabled,
 in which case there is nothing to consent to. Verify with `tailscale serve status`.
@@ -165,10 +169,12 @@ application server.
 
 ## A note on what comes next
 
-`tailscale serve` adds identity headers to proxied requests, identifying which tailnet user
-made the request. When per-device pairing lands (design §10 step 4), that is a stronger
-signal than the shared token this setup uses — worth looking at before building device
-authentication from scratch.
+Tailnet identity is already the credential here, not future work. `tailscale serve` strips any
+client-supplied identity header and sets its own, and Scrye reads its own login from
+`tailscale status` at startup and trusts exactly that one — so a phone on your tailnet types
+nothing. The shared token survives as the fallback for loopback testing and for setups without
+Tailscale. Per-device pairing (design §10 step 4) is still to come, and is the answer for
+devices that are *not* on the tailnet rather than the primary mechanism.
 
 ---
 

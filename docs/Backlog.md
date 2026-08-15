@@ -1,77 +1,68 @@
-# Scrye — Status & Backlog
+# Scrye — known gaps and ideas
 
-*Compiled 2026-08-11, after the phone-markup work. Three lists: what needs finishing,
-what we consciously parked, and what the recent infrastructure makes newly possible.*
+*Last reviewed 2026-08-15.*
+
+An honest list of what Scrye does **not** do yet, and of ideas the recent work made
+practical. Nothing here is a promise — it is here so you can find out what is missing
+without reading the source, and so anyone who wants to contribute can see where the
+loose ends are.
 
 ---
 
-## 1 · Needs finishing now
+## Known gaps
 
-- [x] **Commit & push.** Landed as `6df3f34` (36 files) and pushed.
-- [x] **Verify the phone client after rebuild.** Confirmed working in-game 2026-08-11.
-- [x] **Run the test suite once** (`dotnet test`): passed, no failures.
-- [x] **Give notifications something to say.** The bundled bots now notify at their
-  natural moments (see below) and the Companion panel's PLUGIN SOURCES section shows and
-  toggles all of it. Trigger Notify flags remain available on top for anything custom.
-- [x] **Docs catch-up** in `Scrye-Guide.md`: `chat sound` in the notification table + a
-  debug-in-this-order section, the `PushOutcome` test readout, phone markup + `row`
-  rendering, and the `inverse`-is-desktop-only note.
+**Platform**
 
-## 2 · Parked deliberately (known gaps, agreed to live with for now)
+- **macOS has never been run.** It compiles in CI, and nothing structural blocks it —
+  every native dependency ships macOS binaries — but nobody here owns a Mac. Handing a
+  build to someone else additionally needs a `.app` bundle, a Developer ID certificate
+  and notarization, or Gatekeeper refuses to open it. That pipeline is the real cost,
+  not the code. Releases are Windows and Linux only for this reason.
+- **Text-to-speech is Windows-only.** It uses `System.Speech`, guarded so it declines
+  rather than crashes elsewhere. macOS has `say` and Linux has `spd-say`/`espeak`, both a
+  shell-out away if anyone wants it — the same shape the sound player already uses.
+- **Saved auto-login passwords: Windows and Linux only.** Windows uses Credential Manager,
+  Linux the Secret Service via `secret-tool` (from `libsecret-tools`). **macOS is open**: it
+  wants Security.framework, because the `security` CLI takes the password in `argv`, where
+  any other process can read it off `ps`. Note libsecret's own C API is variadic, which is
+  why the Linux side went through the CLI rather than P/Invoke — the same reasoning applies
+  to any future rewrite.
 
-- **Barlist order parity.** The desktop refinery bars were flipped to raw-amber LEFT /
-  refined-green RIGHT; the phone's `buildBarList` still draws refined first. Small fix,
-  purely cosmetic, but the two hosts currently disagree.
-- **Refinery quality breakdown is pointer-only.** The hover tooltip (field 6 of a barlist
-  row) can't fire on a touch screen, so the phone never shows it — see list 3 for the fix.
-- **Colorgrid icons & weave are desktop-only.** The phone deliberately falls back to
-  letter/colour tiles (documented in the WidgetSpec). Fine until you use the maps on the
-  phone a lot.
-- **`inverse` markup flag is ignored on the phone.** It needs resolved base colours; the
-  web client only inherits them. No bundled plugin uses it.
-- ~~**Theme switches don't recolour live plugin panels.**~~ — FIXED (2026-08-11): see the
-  live re-theme entry in list 3.
-- **Panels can be dragged over the output/chat panes.** A clamp-to-free-space option was
-  discussed and parked — the overlap is sometimes wanted.
-- **CS0067 warning** (`RelayCommand<T>.CanExecuteChanged` never used) — cosmetic, harmless.
-- ~~**Auto-login passwords are Windows-only.**~~ — Linux DONE (2026-08-14): the Secret
-  Service via `secret-tool`, verified end to end against a live gnome-keyring. **macOS is
-  still open**: it wants Security.framework, because the `security` CLI takes the password
-  in argv where `ps` can read it. Note libsecret's own C API is variadic, which is why the
-  Linux side went through the CLI rather than P/Invoke — the same reasoning applies to any
-  future rewrite.
-- **Text-to-speech is Windows-only.** `System.Speech`, guarded so it declines rather than
-  crashes. macOS has `say` and Linux has `spd-say`/`espeak`, both a shell-out away if anyone
-  wants it — the same shape the sound player now uses.
-- **macOS has never been run.** It compiles weekly in CI, and nothing structural blocks it
-  (every native dependency ships macOS binaries), but nobody here owns a Mac. Handing a build
-  to someone else additionally needs a `.app` bundle, a Developer ID certificate and
-  notarization, or Gatekeeper refuses to open it — that pipeline is the real cost, not the code.
+**Mobile companion vs. desktop**
 
-## 3 · Newly possible — ideas unlocked by recent work
+- **Barlist order differs.** The desktop draws refinery bars raw-amber left, refined-green
+  right; the phone's `buildBarList` still draws refined first. Small, cosmetic, but the two
+  disagree.
+- **Refinery quality breakdown is pointer-only.** It lives in a hover tooltip, which a touch
+  screen cannot fire, so the phone never shows it. The text already crosses the wire in the
+  barlist row — a tap-to-expand toggle would close this.
+- **Colorgrid icons and weave are desktop-only.** The phone deliberately falls back to
+  letter/colour tiles. Fine unless you use the maps on the phone a lot.
+- **The `inverse` markup flag is ignored on the phone.** It needs resolved base colours and
+  the web client only inherits them. No bundled plugin uses it.
+- **Capture panes do not resume.** A phone that reconnects gets the main scrollback back,
+  but not pane history.
+- **Per-device pairing is not built.** Access is by tailnet identity (through
+  `tailscale serve`) or by a shared token. A device that is on neither path has no way in.
 
-*Push actually reaching the iPhone + the phone understanding markup + the 1.8 API
-(events, icons, row, cell sizing) opens doors that were pointless before.*
+**Desktop**
 
-- ~~**Plugin push notifications**~~ — DONE (2026-08-11): raid fleet-returns + dispatches,
-  chaossea pauses/finds/out-of-rooms/idle-guard, stepper route-done/arrived/idle-guard,
-  market per-dispatch; all reported and toggleable in the Companion panel's PLUGIN SOURCES
-  section via the `plugin.<id>.notify` state convention (documented in the guide).
-- **Tap-to-expand barlist rows on the phone.** The quality-breakdown text already crosses
-  the wire in row field 6; a tap toggle showing it under the bar gives the phone what
-  desktop hover has.
-- **Phone micro-icons.** The 21-glyph vocabulary is plain SVG path data — portable to the
-  web client nearly verbatim, upgrading the phone's letter-grid maps to the same terrain
-  look as the desktop.
-- ~~**Live re-theme of plugin panels**~~ — DONE (2026-08-11): an `IReThemable` walk swaps
-  freshly-resolved immutable brushes into every token-coloured widget on `ThemeService.Changed`
-  (no spec replay — no state-watch churn, works on disconnected tabs, keeps input drafts and
-  tab selection). Text-widget markup re-parses, colorgrid palettes re-resolve, and the
-  theme-following `list`/`table` renderer invalidates itself.
+- **HUD panels can be dragged over the output and chat panes.** A clamp-to-free-space option
+  was considered and parked — the overlap is sometimes what you want.
+
+## Ideas
+
+- **Phone micro-icons.** The 21-glyph vocabulary is plain SVG path data, portable to the web
+  client nearly verbatim — it would upgrade the phone's letter-grid maps to the desktop's
+  terrain look.
 - **Custom notification sounds.** `SoundService` already resolves named `.wav` files from
-  `%APPDATA%/Scrye/sounds/<mud>/` — the chat plugin could take `chat sound tell.wav` and
-  distinct sounds per category (tell / watch / channel).
-- **`.companion status` could show the last push outcome** — `LastError` is stored now;
-  surfacing it in status would answer "did last night's notify actually send?" without a test.
-- **Quick Connect recent-hosts list** — the new dialog is a natural home for the last few
-  host/port combos.
+  `%APPDATA%/Scrye/sounds/<mud>/`; the chat plugin could take `chat sound tell.wav` and use
+  distinct sounds per category.
+- **`.companion status` could show the last push outcome.** `LastError` is already stored;
+  surfacing it would answer "did last night's notification actually send?" without a test send.
+- **Quick Connect recent-hosts list.** The dialog is a natural home for the last few
+  host/port combinations.
+- **A `⋮` affordance on capture-pane tabs.** Right-click is documented but is still the only
+  way to move, float or close a pane.
+- **A one-off `.log` toggle button.** Low priority now that "Log every session" exists in the
+  profile settings.

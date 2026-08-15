@@ -77,7 +77,7 @@ close to a direct serialization of one node in that tree. The companion server i
 a *tap* on flows that already exist, not new plumbing.
 
 **ANSI output is already modelled as styled spans.** `OutputView` renders styled runs
-(foreground/background/bold) today. An `output.line` message with a `spans` array maps
+(foreground/background/bold) today. An `output.batch` message whose lines carry a `spans` array maps
 onto the existing line model — there is no need to parse ANSI a second time for the wire.
 
 **The HUD panel spec is already a serializable UI description.** Plugins build panels
@@ -156,11 +156,13 @@ Command from the phone:
 HUD panel spec (streamed, then updated in place):
 
 ```json
-{ "type": "hud.panel", "sessionId": "...", "panelId": "viking-status",
+{ "type": "hud.panel", "sessionId": "...", "panelId": "3s-viking-status|Viking Status",
   "spec": { "title": "Viking Status", "accent": "#46B45A", "widgets": [ ... ] } }
-{ "type": "hud.state", "sessionId": "...", "panelId": "viking-status",
-  "bind": "vik.refinery", "value": [ ... ] }
 ```
+
+Widget bindings are not a separate message type: `bind`, `value` and `max` are state paths, so
+their updates arrive as ordinary `state.update` frames and the client re-renders whichever
+widgets are bound to the path that changed.
 
 Capture-pane output — a **separate stream** from the main batch, because a trigger can
 capture *and* gag, so a routed chat line often never reaches the main output at all (§3.4):
@@ -174,7 +176,7 @@ Panel button, client → desktop. Carries only an id the desktop itself publishe
 grants a device nothing beyond firing its own plugins' callbacks:
 
 ```json
-{ "type": "hud.action", "sessionId": "...", "panelId": "3s-raid|Auto Raid", "action": "btn-arm" }
+{ "type": "hud.action", "sessionId": "...", "panelId": "3s-raid|Auto-Raid", "action": "btn-arm" }
 ```
 
 Push registration, client → desktop (§7.2):
@@ -188,7 +190,7 @@ Session state:
 
 ```json
 { "type": "session.state", "sessionId": "...", "connected": true,
-  "character": "Eldran", "world": "ThreeScapes", "room": "Megacity" }
+  "character": "Eldran", "world": "ThreeScapes" }
 ```
 
 ### 3.1 Throughput matters
@@ -240,13 +242,13 @@ public sealed record LinkDto(string Action, bool IsUrl, bool Prompt, string? Hin
 public sealed record StateUpdateMessage(
     string SessionId, string Path, StateKind Kind, string Text, bool Removed);
 
-// Source is what lets the server apply per-device permissions (§7.3).
+// No source field: the server derives the origin from which device sent the frame (§7.3).
 public sealed record SendCommandMessage(string SessionId, string Command);
 
 public sealed record SessionStateMessage(
     string SessionId, bool IsConnected, string? CharacterName, string? WorldName);
 
-public sealed record HudPanelMessage(string SessionId, string PanelId, PanelSpecDto Spec);
+public sealed record HudPanelMessage(string SessionId, string PanelId, PanelSpec Spec);
 ```
 
 `RunFlags` and `StateKind` are reused from `Scrye.Core` rather than redeclared, so
@@ -316,9 +318,10 @@ names below were verified against the source on 2026-08-02.
 - **State out:** `StateStore.Changed` (an `Action<StateChange>` carrying path, value and a
   `Removed` flag) is a better tap than `Watch`, because it fires for every leaf without
   needing a subscription per subtree. This is the same channel `scrye.watch` sits on.
-- **HUD out:** serialize `PanelSpec` on panel build and stream `setState` bindings as
-  `hud.state` deltas. `PanelSpec`/`WidgetSpec` live in `Scrye.Core.Plugins` and are pure
-  records with no Avalonia dependency — including `Tabs` and `buttonrow` children — so
+- **HUD out:** serialize `PanelSpec` on panel build (`hud.panel`) and let bound values flow as
+  ordinary `state.update` deltas — a widget's `bind` is a state path, so no separate HUD-value
+  message is needed. `PanelSpec`/`WidgetSpec` live in `Scrye.PluginContracts` (namespace
+  `Scrye.Core.Plugins`) and are pure records with no Avalonia dependency — including `Tabs` and `buttonrow` children — so
   this needs no adapter layer at all. §2's central claim holds up in full.
 - **MXP links (free win):** `Line.Links` already computes clickable spans from MXP
   `<SEND>`/`<A>` runs and auto-detected URLs, and `WorldViewModel.HandleCommandLink(
@@ -344,7 +347,7 @@ names below were verified against the source on 2026-08-02.
 - **Sessions:** the companion enumerates `MainWindowViewModel.Worlds` (an
   `ObservableCollection<WorldViewModel>`); switching the active session on the phone just
   changes which `sessionId` it subscribes to. The desktop keeps every world connected
-  regardless. Note `MainWindowViewModel.Broadcast` / `WorldViewModel.ReceiveBroadcast`
+  regardless. Note `MainWindowViewModel.SendBroadcast` (handed to each world as its `Broadcast` callback) / `WorldViewModel.ReceiveBroadcast`
   already exist for send-to-all-worlds; expose that as an explicit companion action rather
   than letting the phone toggle `IsBroadcast` behind its own back.
 
@@ -444,7 +447,7 @@ ever exposes the *active* session.
 Per-device permissions, e.g.:
 
 ```
-Joakim's iPhone may:
+Your phone may:
   ✓ View output   ✓ Send commands   ✓ Run aliases
   ✓ Switch sessions   ✓ View maps
   ✗ Edit scripts   ✗ Install plugins   ✗ Change saved passwords
@@ -534,11 +537,10 @@ disconnected, low health, script paused, route completed, login finished.
 
 The permission table above promises `✓ Send commands` and `✗ Edit scripts` are separable.
 In the current code they are not, and §4's rule ("phone input lands on the same hook as
-typed input") is what fuses them. `WorldViewModel.Submit()` dispatches on the text before
+typed input") is what fuses them. `WorldViewModel.SubmitText()` dispatches on the text before
 it ever reaches the MUD:
 
 ```csharp
-if (text == "mipstart") { _session.StartMip(); return; }
 if (TryClientCommand(text)) { ... }                              // "." client commands / sequences
 if (text.StartsWith('/') && text.Length > 1) { _session.RunScript(text[1..]); return; }
 ```
@@ -694,7 +696,7 @@ Resist a big reorg of the existing assemblies. The genuinely new pieces are only
 Scrye.Companion.Protocol   NEW — shared DTO records (§3.2); referenced by app and phone
 Scrye.Companion.Server     NEW — Kestrel + WebSocket host; runs INSIDE Scrye.App
 Scrye.App                  existing — hosts the server, taps output/state/HUD/commands
-Scrye.Core / Scrye.Scripting   existing — unchanged
+Scrye.Core / Scrye.PluginContracts / Scrye.Scripting   existing — unchanged
 Scrye.Companion.Mobile     LATER — Avalonia-mobile app (only if native is pursued)
 ```
 
@@ -779,7 +781,7 @@ operate — see §7.2 for the mechanism and §7.1/§5 for the certificate conseq
 Cost of the decision: the browser MVP must be an installable PWA (manifest + service
 worker), and it needs a browser-trusted certificate, which is why Tailscale is promoted to
 the primary transport tier. Both are cheap; neither involves running a service. A webhook
-notifier (`scrye.notify(...)` → ntfy / Pushover / Discord / Telegram) ships alongside as
+notifier (ntfy / Pushover / Discord / Telegram) was *not* built — Web Push made it unnecessary for the tailnet case — and remains the answer if a non-PWA client ever needs one. It would sit alongside as
 the fallback for users who never install to the home screen.
 
 ### 11.2 Native at all — **not yet; re-evaluate on one specific signal**
@@ -798,7 +800,7 @@ desktop browser at once, so the server must not bake in a single-connection assu
 From the first commit of `Scrye.Companion.Server`:
 
 - per-connection sequence cursors, not one global cursor;
-- broadcast fan-out of `output.line`, `state.update` and `hud.*` to all subscribers;
+- broadcast fan-out of `output.batch`, `state.update` and `hud.*` to all subscribers;
 - commands echoed to **every** connected client, not just the sender — which follows
   naturally from §4's rule that phone input lands on the same hook as typed input;
 - the paired-devices list (§7) is already per-device, so nothing new is needed there.

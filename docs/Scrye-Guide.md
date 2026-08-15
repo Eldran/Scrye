@@ -23,6 +23,7 @@ Each connected world gets its own tab with an output pane and a command line.
 ## The main window
 
 - **Output pane** — the MUD's text, with ANSI colors, MXP links, and clickable command links. It has its own scrollback; scroll up to read history, and it snaps back to the bottom on new output.
+  Drag to select, then **Ctrl+C** or right-click to copy. The menu also offers **Copy as ANSI** and **Copy as HTML**, which keep the colours — useful for pasting a fight into a forum or a bug report. **Ctrl+A** selects the whole scrollback.
 - **Command line** — type a command and press **Enter** to send it. Handy keys:
   - **Up / Down** — walk back and forth through command history.
   - **Tab** — complete the word under the caret from words seen in the output.
@@ -55,8 +56,9 @@ Separately, anything starting with **`/`** is Lua rather than a MUD command — 
 
 Logs are written to the logs folder (`%APPDATA%/Scrye/logs`, or `~/.config/Scrye/logs` on
 Linux and macOS). The log captures **displayed output only** — it is a transcript of what you
-saw, so out-of-band protocol traffic like MIP and GMCP is not in it, and neither is anything
-you type.
+saw, so out-of-band protocol traffic like MIP and GMCP is not in it. Commands you send to the
+MUD *are* recorded, as `> command` lines, the same way they are echoed to the screen; client
+`.` commands and `/` script lines are not, because they never reach the session.
 
 ### Logging every session automatically
 
@@ -216,6 +218,7 @@ Plugins add commands and HUD panels. Manage them in the **Plugins** panel for a 
 - Plugins are **opt‑in per character** — enabling one for a character doesn't add it to every character.
 - Each plugin can be **enabled / disabled / reloaded / removed**.
 - **Reload** re‑reads the plugin's script from disk, so you can edit a Lua plugin and reload it live — no restart needed (this works for script‑only changes; changes to Scrye itself need a rebuild).
+- **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye.
 
 ## Mobile companion
 
@@ -246,7 +249,7 @@ There's one more diagnostic worth knowing:
 |---|---|
 | `.mip` | Audit the MIP viking feed's **structure** against what the parsers expect, and report anything that looks like it has drifted. |
 
-The feeds are positional — `BATTLE` is eleven pipe-separated fields, each unit record nine comma-separated ones — so if the server inserts a field, nothing errors. The parser just reads the wrong slot from then on and the numbers quietly go wrong. `.mip` watches every key that arrives and flags two things: a key whose layout no longer matches a **recorded expectation**, and a key whose shape **changes mid-session**, which is drift no matter what any table claims.
+The feeds are positional — `BATTLE` is eleven pipe-separated fields, and each unit record is six or nine comma-separated ones depending on whether the unit is in reserve or fielded — so if the server inserts a field, nothing errors. The parser just reads the wrong slot from then on and the numbers quietly go wrong. `.mip` watches every key that arrives and flags two things: a key whose layout no longer matches a **recorded expectation**, and a key whose shape **changes mid-session**, which is drift no matter what any table claims.
 
 Two honest limits. It can only speak for keys the server actually sent, so run it after visiting whatever exercises the feeds (and with the right `vtoggle` flags on). And only a handful of keys have a recorded expectation — the ones whose layout was read directly off a parser. Everything else is listed as "no recorded expectation" with its observed shape, which still catches a later change but has never been checked against anything.
 
@@ -312,10 +315,10 @@ command, so you flip sources without remembering any syntax. The bundled sources
 | 3s-raid | Fleet returns; each auto-dispatch | off | `araid notify fleet\|send on\|off` |
 | 3s-chaossea | Bot pauses: goal found, wimpy, out of rooms, idle guard | on | `cs notify on\|off` |
 | 3s-stepper | Route done / arrived home / idle guard | on | `.set notify on\|off` |
-| 3s-market | Each cart the auto-trader sends | off | `atrade notify on\|off` |
+| 3s-viking-status | Each cart the auto-trader sends | off | `atrade notify on\|off` |
 
 The bot plugins default **on** because their notifies fire exactly when the bot has stopped
-and is waiting for you; the raid and market ones default **off** because they fire during
+and is waiting for you; the raid and auto-trade ones default **off** because they fire during
 routine operation.
 
 **If nothing arrives**, debug in this order:
@@ -488,7 +491,7 @@ night must never look like someone at the keyboard; that is the whole point.
 Scrye suspends its own profile timers and pauses a running sequence, and fires `scrye.onIdle` in
 every plugin so each one stops what it is driving. Your next command resumes the timers and the
 sequence automatically, because the hazard was being away and you are back. Plugins stay stopped
-until you restart them deliberately — `.resume` for the stepper, `cs auto on` for the chaos sea —
+until you restart them deliberately — `..` for the stepper, `cs auto on` for the chaos sea —
 since a bot silently resuming because you typed `look` is exactly the surprise this feature exists
 to prevent.
 
@@ -799,14 +802,16 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `label` | Static (or bound) text. | `text`, or `bind`; `color` |
 | `value` | A prefix plus a live value. | `text` (prefix), `bind`; `color` |
 | `text` | A multi‑line monospaced block (reports/tables). | `bind`; `color` |
-| `gauge` | A labeled bar; auto‑colors green→amber→red by ratio unless `color` set. | `text`, `value`, `max` (state paths or numbers); `color` |
+| `gauge` | A labeled bar; auto‑colors cyan→amber→red by ratio unless `color` set. | `text`, `value`, `max` (state paths or numbers); `color`; `dim = true` (darken toward black as the value falls, using `color` as the base hue — green when unset — instead of the ratio ramp) |
 | `progress` | A labeled bar with an explicit color. | `text`, `value`, `max`; `color` |
 | `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)* |
 | `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
-| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)* |
+| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
+| `barlist` | A list of labelled bars from one bound value — a compact way to show several quantities against a common maximum. | `bind`; `color` |
+| `row` | A horizontal container *(1.8)*: its children lay out side by side at their measured widths, the escape hatch from the panel's vertical stack. | `widgets = { ... }` (ordinary widget tables) |
 
 Notes:
 
@@ -864,7 +869,7 @@ and `colorgrid` palette values — you can pass either a `#RRGGBB` literal **or 
 | `info` | Neutral informational highlight |
 
 **Prefer tokens over literals.** A literal like `"#202020"` hard‑codes one colour scheme into a
-client that ships six including a light one, and the mobile companion has its own palette — the
+client that ships eight including a light one, and the mobile companion has its own palette — the
 same token resolves correctly in all of them, a literal doesn't. Tokens are part of the API and
 won't be renamed without a major version bump.
 
@@ -909,7 +914,7 @@ mismatch is reported there explicitly rather than looking like a plugin that qui
 
 - **Install:** drop the plugin folder into `%APPDATA%/Scrye/plugins/`, enable it for a character in the Plugins panel.
 - **Reload:** after editing the script, click **Reload** — it re‑reads from disk live.
-- **Share:** zip the plugin folder (the `plugin.json` must be at the archive root or in a single top folder). The recipient unzips it into their plugins folder.
+- **Share:** zip the plugin folder and name it `<something>.scryeplugin` — the `plugin.json` must be at the archive root or inside a single top-level folder. The recipient drops the file straight into their plugins folder and presses **↻**: Scrye extracts it to `<plugins>/<id>/` and deletes the archive. A plain `.zip` still works if they unzip it themselves.
 
 ## Lua gotchas (worth knowing)
 

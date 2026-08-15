@@ -1,6 +1,6 @@
 # Scrye
 
-A modern MUD client — the clean-room successor to MUSHclient, built in C# / .NET with an [Avalonia](https://avaloniaui.net/) UI.
+A modern MUD client in the spirit of MUSHclient, built in C# / .NET with an [Avalonia](https://avaloniaui.net/) UI.
 
 Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin compatibility with it. It reimagines the client for today: Unicode-native, GMCP-first, async, and testable, with a redesigned scripting and plugin model.
 
@@ -47,6 +47,15 @@ Building from source is only necessary if you want to change something — see *
 
 If you only read one, read the guide — it assumes no prior MUSHclient knowledge.
 
+Also in `docs/`, for anyone working *on* Scrye rather than with it: [the plugin colour
+system](docs/Plugin-Color-System.md) (the validated accents and how they were checked),
+[the wasm plugin ABI](docs/scrye-wasm-abi.md), a [command-surface audit](docs/Command-Surface-Audit.md),
+[known gaps](docs/Backlog.md), and two design/planning records —
+[the KeraLua migration](docs/Plan-KeraLua-Migration.md) and [wasm plugins](docs/Plan-Wasm-Plugins.md).
+**Those last two are working documents written before the work landed**, kept for the reasoning
+rather than as a description of the code today; each carries a status header saying what actually
+shipped.
+
 ## Status
 
 Scrye is a working client in daily use on [3Scapes](https://www.3scapes.org/). Connecting, automation, scripting, plugins, HUD panels and profiles are all implemented and exercised in real play — not scaffolding.
@@ -72,7 +81,7 @@ A strict engine/UI split, a staged receive pipeline (bytes → telnet → decode
 |---|---|
 | `Scrye.PluginContracts` | The plugin-facing contract: the `IPluginHost` API surface, declarative `PanelSpec` widgets, the semantic theme-token vocabulary, the manifest schema, and the plugin API version. No NuGet, no engine — a plugin can reference this alone. |
 | `Scrye.Core` | The UI-free engine: connection, telnet, MCCP, ANSI/MXP parsing, automation, state store, profiles, plugins host, logging, replay. Depends only on the base framework and `Scrye.PluginContracts` — **no NuGet references**. |
-| `Scrye.Scripting` | The Lua host (MoonSharp) and JavaScript host (Jint), the `world.*` facade, and the plugin manager. |
+| `Scrye.Scripting` | The Lua host (native Lua 5.4 via KeraLua), the JavaScript host (Jint), the WebAssembly host (Wasmtime), the `world.*` facade, and the plugin manager. |
 | `Scrye.App` | The Avalonia MVVM UI: world tabs, output view, HUD panels, settings, profile tree, debugger. |
 | `Scrye.Cli` | A dependency-free harness; `--selftest` runs canned bytes through the telnet + ANSI pipeline and prints the parsed lines. |
 | `Scrye.Companion.Protocol` | The mobile-companion wire contract: message DTOs, batching and JSON config. References `Scrye.Core` only — no NuGet. |
@@ -90,7 +99,7 @@ so nothing else in the solution had to change.
 
 ## Build & run
 
-Requires the **.NET 10 SDK**. First build restores NuGet packages (Avalonia 12, MoonSharp, Jint, xUnit).
+Requires the **.NET 10 SDK**. First build restores NuGet packages (Avalonia 12, KeraLua, Jint, Wasmtime, xUnit).
 
 ```
 dotnet build
@@ -144,7 +153,7 @@ The **plugin API is versioned independently of the client** (currently 1.11, and
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
-Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Several 3Scapes plugins ship bundled (`3s-chaossea`, `3s-chat`, `3s-raid`, `3s-viking-status`). `3s-build` and `3s-market` are still in the folder but are now only notices: the build planner is the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader are its **Trade** tabs.
+Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Seven 3Scapes plugins ship bundled: `3s-chaossea`, `3s-chat`, `3s-map`, `3s-raid`, `3s-stepper`, `3s-viking-status` and `3s-vitals`. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader its **Trade** tabs.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:
 

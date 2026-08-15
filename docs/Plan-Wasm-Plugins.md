@@ -28,7 +28,7 @@ A third value for the manifest's `lang` field — `"wasm"` — whose entry is a 
   "version": "1.0.0",
   "lang": "wasm",
   "entry": "main.wasm",
-  "permissions": ["send", "state", "store"]
+  "permissions": ["commands.send", "state.read", "state.write", "storage.private"]
 }
 ```
 
@@ -51,8 +51,6 @@ Rust is the first-class authoring language (via a published `scrye-plugin` crate
 Scrye.Scripting/
   Wasm/
     WasmPluginRuntime.cs    IPluginRuntime over a Wasmtime Instance
-    WasmAbi.cs              import bindings + memory/string helpers
-    WasmLimits.cs           epoch deadlines, memory caps, fuel config
 ```
 
 `PluginRuntimeFactory` (created in the KeraLua migration, Phase 2 of that plan) gains a `lang == "wasm"` branch. `PluginManager`, diagnostics, quarantine, panels, store, timers: all unchanged. **Sequencing dependency:** do the factory refactor first; otherwise this plan starts by touching `PluginManager.LoadOne` itself.
@@ -105,7 +103,7 @@ Strings pass as `(ptr, len)` into guest memory; returns that carry strings go th
 
 ### 4.2 Execution limits (the quarantine story, upgraded)
 
-- **Epoch interruption:** a per-dispatch deadline (default ~50 ms; generous — Lua plugins get no limit at all today). The app ticks the engine epoch from a timer; a guest that exceeds the deadline traps, the trap becomes `PluginDiagnostics.RecordFailure`, and repeated offenders quarantine exactly like a repeatedly-erroring Lua plugin. Epoch beats fuel here: near-zero overhead on the `ProcessLine` hot path.
+- **Epoch interruption:** a per-dispatch deadline (default ~100 ms, and 4x that for `scrye_init`; generous — Lua plugins get no limit at all today). The app ticks the engine epoch from a timer; a guest that exceeds the deadline traps, the trap becomes `PluginDiagnostics.RecordFailure`, and repeated offenders quarantine exactly like a repeatedly-erroring Lua plugin. Epoch beats fuel here: near-zero overhead on the `ProcessLine` hot path.
 - **Memory cap:** `StoreLimits` (default 64 MB, maybe manifest-raisable with user consent surfaced in the plugins manager). Exceeding it traps.
 - **Traps are errors, not crashes:** every host→guest call goes through one `SafeDispatch` helper that catches `TrapException`/`WasmtimeException` and routes to the existing `Print` + diagnostics path — the wasm twin of `LuaPluginRuntime.Safe`.
 
@@ -115,7 +113,7 @@ A hook handler may call `send`, which fires `DispatchCommand` on every plugin �
 
 ### 4.4 Enforced permissions
 
-For `lang: "wasm"`, the linker binds only imports covered by the manifest's `permissions` declarations (undeclared → bind a stub that traps with a clear "plugin did not declare permission 'send'" message, so authors find out at first use rather than by instantiation failure — friendlier for additive API growth). Document loudly that this makes wasm the first runtime where the plugins-manager permission list is a contract, not a courtesy. Lua/JS keep declaration-only semantics.
+For `lang: "wasm"`, the linker binds only imports covered by the manifest's `permissions` declarations (undeclared → bind a stub that traps with a clear "scrye.send requires the 'commands.send' permission, which this plugin does not declare" message, so authors find out at first use rather than by instantiation failure — friendlier for additive API growth). Document loudly that this makes wasm the first runtime where the plugins-manager permission list is a contract, not a courtesy. Lua/JS keep declaration-only semantics.
 
 ### 4.5 Compilation caching
 
@@ -170,7 +168,7 @@ Ship with a `cargo generate` template (manifest + lib.rs + release profile tuned
 
 **Phase W2 — Rust SDK (medium).** `scrye-plugin` crate + template; port one real bundled plugin scenario (a self-contained one — `3s-raid` or a subset of `3s-map`'s pathfinding) as the reference example and integration test. *Exit: reference plugin builds from the template and runs in the app.*
 
-**Phase W3 — Full surface + enforcement (medium).** Panels/widget callbacks (`register_action`, cell/hover/submit/choice), `scrye.data`, emit/on, permission-gated linking, compilation cache decision, memory-cap UX. *Exit: parity checklist against the API 1.7 surface (minus explicit non-goals) all green.*
+**Phase W3 — Full surface + enforcement (medium).** Panels/widget callbacks (`register_action`, cell/hover/submit/choice), `scrye.data`, emit/on, permission-gated linking, compilation cache decision, memory-cap UX. *Exit: parity checklist against the API 1.11 surface (1.10's `onRelay` has no wasm import yet) (minus explicit non-goals) all green.*
 
 **Phase W4 — Ship experimental (small).** Feature-flag "experimental wasm plugins" in settings; docs section; publish crate + template; solicit one external author. Graduate the flag after a soak cycle.
 

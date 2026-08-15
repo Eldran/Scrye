@@ -11,8 +11,15 @@
 > 2026-08-08: a lua_sethook count hook raising a Lua error (the one sanctioned exception
 > to the no-lua_error rule — see LuaHost.EnableDispatchBudget's boundary note), armed in
 > both Lua hosts, catchable-by-pcall limitation documented. Still out of scope: the formal
-> MoonSharp-vs-native perf benchmark (§7.5; MoonSharp is gone, moot).
+> MoonSharp-vs-native perf benchmark (§7 item 5; MoonSharp is gone, moot).
 > Kept sections below are the rationale record.
+>
+> **Read everything after this header in the past tense.** It is the plan as written on
+> 2026-08-06, kept for *why* the decision was made, not as a description of the tree today.
+> Sections 3 and 5 in particular describe files that no longer exist (`LuaPluginRuntime.cs`,
+> `LuaJson.cs`), a `lua-ms` language tag that was removed, and an engine toggle that is gone.
+> MoonSharp is not a dependency of any project any more; the ~29 remaining mentions across
+> `src/` are deliberate parity notes in doc-comments.
 
 **Decisions already made:** target **KeraLua directly** (the raw P/Invoke binding to native Lua 5.4, not the NLua wrapper), and stage the cutover **side-by-side** — the new runtime lands as a parallel `IPluginRuntime` behind a switch, bundled plugins get validated on it, and MoonSharp is deleted only after a release cycle of proven parity.
 
@@ -20,13 +27,13 @@
 
 ## 1. Why, and why now
 
-MoonSharp 2.0.0 is a pure-managed Lua interpreter, effectively unmaintained for years, implementing roughly Lua 5.2 semantics. It was the right bootstrap choice (`Scrye.Scripting.csproj` even says so: *"Swap for NLua later if perf demands"*). The costs today:
+MoonSharp 2.0.0 is a pure-managed Lua interpreter implementing roughly Lua 5.2 semantics; its most recent release predates this work by several years. It was the right bootstrap choice (`Scrye.Scripting.csproj` even says so: *"Swap for NLua later if perf demands"*). The costs today:
 
-- **Performance.** MoonSharp is an AST-walking interpreter; real Lua 5.4 is typically 10–50× faster on script-heavy workloads. `PluginManager.ProcessLine` is the hot path — every plugin, every line, on the session loop — and the big bundled plugins (`3s-viking-status` at 78 KB, `3s-market` at 55 KB, `3s-map` at 50 KB of Lua) all hang hooks and triggers off it.
-- **Correctness/longevity.** Bugs in MoonSharp will never be fixed upstream — and Scrye is already paying for them: `3s-market/main.lua` alone carries three documented MoonSharp-bug workarounds (a `"pattern too complex"` abort on patterns real Lua handles fine, a nested-loop codegen quirk requiring a normalize step, and an uninitialised-local-aliasing bug needing explicit `nil` inits). Native Lua 5.4 is the reference implementation; those workarounds become removable.
+- **Performance.** MoonSharp is an AST-walking interpreter; real Lua 5.4 is typically 10–50× faster on script-heavy workloads. `PluginManager.ProcessLine` is the hot path — every plugin, every line, on the session loop — and the big bundled plugins (`3s-viking-status`, `3s-market` and `3s-map`, tens of kilobytes of Lua each at the time of writing) all hang hooks and triggers off it.
+- **Correctness/longevity.** We cannot rely on upstream fixes, and Scrye is already working around behaviours it does not share with reference Lua: the market plugin (then `3s-market/main.lua`, since merged into the Trade tabs of `3s-viking-status`) carried three documented workarounds — a `"pattern too complex"` abort on patterns real Lua handles fine, a nested-loop codegen quirk needing a normalize step, and an uninitialised-local-aliasing bug needing explicit `nil` inits. Native Lua 5.4 is the reference implementation, so those become removable. *(In the event two were dropped and the pattern split was kept on merit — it reads better.)*
 - **New capability.** The Lua C API gives us `lua_sethook` instruction budgets — a real answer to runaway plugin scripts that `PluginDiagnostics` quarantine can only approximate today (it catches *failing* plugins, not *spinning* ones).
 
-**Non-goals:** no change to the `scrye.*` API surface (currently API 1.7 in `ScryeApi.cs`), no change to `IPluginRuntime`/`IPluginHost` contracts, no change to plugin manifests beyond an optional engine override, and the Jint JS runtime is untouched.
+**Non-goals:** no change to the `scrye.*` API surface (API 1.7 in `ScryeApi.cs` at the time; 1.11 today), no change to `IPluginRuntime`/`IPluginHost` contracts, no change to plugin manifests beyond an optional engine override, and the Jint JS runtime is untouched.
 
 ## 2. Why KeraLua direct (recorded rationale)
 
@@ -40,7 +47,7 @@ Package: **KeraLua 1.4.9** on NuGet (NLua org), Lua 5.4, ships native binaries f
 
 ## 3. What has to change — inventory
 
-MoonSharp appears in exactly one project, `Scrye.Scripting`:
+MoonSharp appeared in exactly one project, `Scrye.Scripting` (it appears in none today):
 
 | File | MoonSharp surface used | Fate |
 |---|---|---|
@@ -159,7 +166,7 @@ Scrye.Scripting/
 **Phase 4a — Ship opt-in.** Settings toggle (default MoonSharp), engine shown in plugins manager, release notes ask plugin authors to flip the toggle and report. Optionally land the instruction-budget hook here.
 **Phase 4b — Default flip.** Next release: default Native, `lua-ms` escape hatch documented for stragglers. Soak for a full release cycle.
 
-**Phase 5 — Removal (small, satisfying).** Delete `LuaPluginRuntime`, MoonSharp reference, `lua-ms`, and the toggle; sweep the doc-comments that name MoonSharp outside Scrye.Scripting (`PluginAssets`, `TimerWheel`, `IPluginHost`, `PluginManifest`, `PluginPermissions` all mention it in prose); remove the now-unneeded MoonSharp workarounds in `3s-market/main.lua`; `KeraLuaPluginRuntime` becomes *the* Lua runtime. No `ScryeApi` bump needed — the script surface is unchanged — but add a release-notes line and a `ScryeApi.cs` history comment noting the engine change and Lua version (authors may now use 5.3/5.4 features: integer division `//`, bitwise operators, `goto`, `utf8`).
+**Phase 5 — Removal (small, satisfying).** Delete `LuaPluginRuntime`, MoonSharp reference, `lua-ms`, and the toggle; sweep the doc-comments that name MoonSharp outside Scrye.Scripting (`PluginAssets`, `TimerWheel`, `IPluginHost`, `PluginManifest`, `PluginPermissions` all mention it in prose); `KeraLuaPluginRuntime` becomes *the* Lua runtime. No `ScryeApi` bump needed — the script surface is unchanged — but add a release-notes line and a `ScryeApi.cs` history comment noting the engine change and Lua version (authors may now use 5.3/5.4 features: integer division `//`, bitwise operators, `goto`, `utf8`).
 
 ## 9. Risks
 
@@ -169,7 +176,7 @@ Scrye.Scripting/
 | User plugin depends on a MoonSharp quirk we didn't anticipate | Side-by-side soak + `lang: "lua-ms"` per-plugin escape hatch until Phase 5 |
 | GC collects a callback delegate → native crash | Keep-alive list in `LuaHost`, done once, tested; the only place delegates are created |
 | longjmp/exception mismatch corrupts state | All boundaries go through the two helpers in §4.3; code review rule: no naked `lua_call`, no uncaught C# code in a `LuaFunction` |
-| Marshalling overhead eats the interpreter win (string copies per line) | Hot path passes one string in, gets bool/string out — trivially cheaper than MoonSharp's DynValue allocation per call; benchmark in §7.5 verifies |
+| Marshalling overhead eats the interpreter win (string copies per line) | Hot path passes one string in, gets bool/string out — trivially cheaper than MoonSharp's DynValue allocation per call; benchmark in §7 item 5 verifies |
 | Test runner can't find native lib | Phase 0 exit criterion; KeraLua nupkg handles this via standard runtimes/ resolution |
 
 ## 10. Relationship to the Wasm plan

@@ -23,7 +23,7 @@ authoritative; the runtime (`Scrye.Scripting/Wasm/WasmPluginRuntime.cs`) impleme
 appear in any Scrye release, and modules that don't import them are unaffected (wasm links
 only what a module declares). A breaking change would bump `scrye_abi_version` to 2; the
 host refuses a module whose version it doesn't speak, by name, at load. The *semantic* API
-(state paths, widget vocabulary, JSON shapes) is the plugin API (`ScryeApi`, currently 1.7)
+(state paths, widget vocabulary, JSON shapes) is the plugin API (`ScryeApi`, currently 1.11)
 and is shared with the Lua/JS runtimes; `requires.scryeApi` gates it as usual.
 
 ## Conventions

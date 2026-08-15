@@ -3,8 +3,8 @@
 Status: **M1–M4 + M6 shipped**, plus the weave-grid rendering upgrade (API 1.7)
 (`src/Scrye.App/plugins/3s-map`, acceptance tests in
 `tests/Scrye.Core.Tests/MapPluginTests.cs`; on-device look/companion checks are manual) ·
-Target: plugin-only, `scrye` API **>=1.7 <2.0** · Language: Lua (MoonSharp) · Next: M5 (ship
-it — MoonSharp hygiene pass, cost review, a user-docs section in Scrye-Guide.md, and starter
+Target: plugin-only, `scrye` API **>=1.7 <2.0** · Language: Lua (native 5.4, via KeraLua) · Next: M5 (ship
+it — cost review, a user-docs section in Scrye-Guide.md, and starter
 maps.json entries: `pinnacle` plus the three hub boundary rooms would give every user the
 top-level world for free) · Later: M7 (cross-area goto — route through the link graph
 between areas; deliberately out until the boundaries have soaked)
@@ -238,7 +238,7 @@ and the write pattern both simplify:
   "lang": "lua",
   "data": { "maps": "maps.json" },
   "enabled": true,
-  "requires": { "scryeApi": ">=1.6 <2.0" },
+  "requires": { "scryeApi": ">=1.7 <2.0" },
   "permissions": [
     "output.read", "commands.send", "aliases.manage", "triggers.manage",
     "timers.manage", "state.write", "storage.private", "ui.panels"
@@ -273,8 +273,7 @@ the mapper's events (`scrye.emit`): `map.room` on each arrival and `map.walk.sta
 the stepper and chaos-sea can listen (`scrye.on`) to know where they are without parsing
 anything, and future plugins get a position feed for free.
 
-**M5 — Ship it.** MoonSharp hygiene pass (initialized locals, `:find` gates before patterns —
-the guide's gotchas); slow-callback and quarantine review against the 50 ms budget; user docs
+**M5 — Ship it.** Slow-callback and quarantine review against the 50 ms budget; user docs
 section in `Scrye-Guide.md`; a starter `maps.json` for one or two real areas.
 
 **M6 — Stitch the world** *(shipped)*. Compass-direction links (`map link n = fantasy 0 0 0`,
