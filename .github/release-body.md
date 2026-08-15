@@ -49,10 +49,14 @@ please open an issue with what happened.
 
 ## What's bundled
 
-Six 3Scapes plugins ship in the `plugins` folder next to the executable (`3s-build`,
-`3s-chaossea`, `3s-chat`, `3s-market`, `3s-raid`, `3s-viking-status`). Plugins are **opt-in
+Four 3Scapes plugins ship in the `plugins` folder next to the executable
+(`3s-chaossea`, `3s-chat`, `3s-raid`, `3s-viking-status`). Plugins are **opt-in
 per character**, so if you play elsewhere they simply sit there unused — and they double as
 worked examples if you want to write your own.
+
+`3s-build` and `3s-market` are also in the folder, but only as notices: the build planner is
+now the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader are its
+**Trade** tabs. If you had either enabled before, enable `3s-viking-status` and disable them.
 
 ## Getting started
 

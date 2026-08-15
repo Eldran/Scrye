@@ -114,7 +114,7 @@ The **plugin API is versioned independently of the client** (currently 1.11, and
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
-Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Several 3Scapes plugins ship bundled (`3s-build`, `3s-chaossea`, `3s-chat`, `3s-market`, `3s-raid`, `3s-viking-status`).
+Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Several 3Scapes plugins ship bundled (`3s-chaossea`, `3s-chat`, `3s-raid`, `3s-viking-status`). `3s-build` and `3s-market` are still in the folder but are now only notices: the build planner is the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader are its **Trade** tabs.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:
 

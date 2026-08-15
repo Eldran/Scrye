@@ -30,13 +30,21 @@ a categorical set on the panel surface `#1B212B`: all six checks pass (worst pai
 
 | Plugin | Accent |
 |---|---|
-| 3s-build | `#5AAC47` green |
 | 3s-chaossea | `#0B9DB3` teal |
-| 3s-market | `#AC811E` gold |
 | 3s-raid | `#E7574E` red |
 | 3s-viking-status | `#6288E1` steel-blue |
 | 3s-vitals | `#D855B8` rose |
 | 3s-stepper | `#B866FA` violet |
+
+Two accents came free when their plugins merged into 3s-viking-status: `#5AAC47` green (the
+build planner, now the Builds tab) and `#AC811E` gold (the market, now the Trade tabs). Both
+were validated against this set, so reuse one for a new plugin rather than picking an
+unchecked hue.
+
+The gold has not disappeared entirely: the Trade tab's status line still wears it, because
+the market scan reads as its own subsystem inside the panel rather than as more viking
+status. A tab keeping a second accent is the exception, not a pattern to copy — it is
+justified here only because that line reports on an external scan with its own lifecycle.
 
 (3s-map has no fixed signature — its border wears the current realm's colour, falling
 back to the theme accent outside the realms.)
@@ -65,7 +73,7 @@ contrast. tell `#4BE4FF` · main `#FD2083` · party `#93F64E` · newbie `#2EB88F
 shout `#FFFFFF` · admin `#CA90FB` · events `#DEB218` · viking `#DF6E1B` ·
 whine `#7263FD` · gamers `#F2A3C1` · lottery/poll `#A0A7BB`.
 
-## Tiers T1–T5 (3s-build, 3s-viking-status)
+## Tiers T1–T5 (3s-viking-status)
 
 Game-rarity convention (multi-hue), re-stepped and validated in sequence order
 (worst adjacent ΔE 9.5 CVD / 18.4 normal); the printed tier number is the fallback.

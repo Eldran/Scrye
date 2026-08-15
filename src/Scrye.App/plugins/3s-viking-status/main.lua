@@ -718,6 +718,300 @@ local function build_city()
   return table.concat(L, "\n")
 end
 
+-- ======================================================================================
+-- Build planner (merged in from the 3s-build plugin, which is now a deprecation stub).
+--
+-- It was always reading the same vik.* feed this panel reads and rendering the same
+-- buildings with the same tier palette, so it was a second window onto one dataset. The
+-- Builds tab now shows the planner rows INSTEAD of the old two-column tier grid: every
+-- row already carries the current tier, so the grid was saying the same thing with less
+-- information.
+--
+-- Ported as-is where it matters. It keeps its own split/num/comma rather than borrowing
+-- this file's: this panel's split() drops a trailing empty field and its num() will not
+-- read a digit out of "1,234 daler", and the planner's serialization and cost parsing
+-- depend on the other behaviour. Two small functions is a cheaper price than a parsing
+-- bug that only shows up on a building whose cost list happens to end in a separator.
+-- ======================================================================================
+
+local function bsplit(s, sep)
+  local t = {}
+  for part in (s .. sep):gmatch("([^" .. sep .. "]*)" .. sep) do t[#t + 1] = part end
+  return t
+end
+local function bnum(s) return tonumber((tostring(s or ""):match("%-?%d+"))) or 0 end
+local function comma(n)
+  local s, sign = tostring(math.floor(n)), ""
+  if s:sub(1, 1) == "-" then sign, s = "-", s:sub(2) end
+  while true do
+    local a, b = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+    s = a; if b == 0 then break end
+  end
+  return sign .. s
+end
+
+local function bnote(s) scrye.print("@{accent,bold}[build]@{} " .. s) end
+
+-- C(daler, {resource = amount, ...}) ; tier index = build/upgrade target tier
+local function C(d, r) return { d = d, r = r or {} } end
+-- Built-in fallback costs. A live 'build scan' replaces these with what the game says,
+-- and the result is persisted, so these matter only on a fresh profile.
+local BLD = {
+  { key="warehouse",     name="Warehouse",       req={},
+    cost={ C(1840,{timber=10}), C(6440,{iron=10,timber=25}), C(36800,{sunstone=20,iron=40,timber=100}),
+           C(151800,{sunstone=40,iron=70,runestones=10,timber=180}), C(515200,{sunstone=80,iron=120,runestones=30,timber=300}) } },
+  { key="trading_post",  name="Trading Post",    req={},
+    cost={ C(460,{}), C(4600,{iron=15,timber=20}), C(27600,{sunstone=20,iron=50,runestones=10,timber=80}),
+           C(115920,{sunstone=40,iron=90,runestones=20,timber=140}), C(404800,{sunstone=80,iron=140,runestones=40,timber=240}) } },
+  { key="dock",          name="Dock",            req={},
+    cost={ C(0,{}), C(4140,{timber=20}), C(23920,{iron=20,timber=80}),
+           C(104880,{iron=40,timber=140}), C(368000,{iron=80,timber=240}) } },
+  { key="lumber_yard",   name="Lumber Yard",     req={{"warehouse",1}},
+    cost={ C(1104,{iron=5}), C(3680,{iron=15}), C(22080,{iron=60,timber=20}),
+           C(96600,{iron=110,timber=40}), C(331200,{iron=180,timber=70}) } },
+  { key="smithy",        name="Smithy",          req={{"warehouse",1}},
+    cost={ C(1840,{timber=15}), C(5060,{iron=5,timber=25}), C(33120,{iron=40,timber=80}),
+           C(138000,{iron=80,timber=140}), C(460000,{iron=140,timber=240}) } },
+  { key="tannery",       name="Tannery",         req={{"warehouse",1}},
+    cost={ C(1380,{timber=5}), C(4600,{furs=10,timber=15}), C(25760,{iron=20,furs=40,timber=60}),
+           C(110400,{iron=40,furs=80,timber=110}), C(368000,{iron=70,furs=140,timber=180}) } },
+  { key="fishery",       name="Fishery",         req={{"warehouse",1}},
+    cost={ C(1104,{timber=10}), C(3680,{iron=5,timber=20}), C(22080,{iron=30,timber=80}),
+           C(96600,{iron=60,timber=140}), C(331200,{iron=100,timber=240}) } },
+  { key="farm",          name="Farm",            req={{"warehouse",1}},
+    cost={ C(920,{timber=5}), C(3220,{grain=20,timber=15}), C(18400,{mead=20,grain=80,timber=60}),
+           C(77280,{mead=40,grain=140,timber=110}), C(257600,{mead=70,grain=240,timber=180}) } },
+  { key="brewery",       name="Brewery",         req={{"warehouse",1},{"farm",1}},
+    cost={ C(2300,{grain=15}), C(7360,{timber=10,grain=30}), C(46000,{sunstone=10,mead=30,timber=40,grain=120}),
+           C(193200,{sunstone=20,mead=60,timber=70,grain=200}), C(644000,{sunstone=40,timber=120,mead=100,grain=320}) } },
+  { key="mead_cellar",   name="Mead Cellar",     req={{"brewery",1}},
+    cost={ C(2760,{grain=10,timber=15}), C(9200,{iron=5,grain=25,timber=30}), C(55200,{sunstone=10,iron=20,grain=80,timber=90}),
+           C(230000,{sunstone=20,iron=40,grain=140,timber=160}), C(736000,{sunstone=40,iron=70,grain=220,timber=260}) } },
+  { key="longhouse",     name="Longhouse",       req={{"warehouse",1}},
+    cost={ C(1840,{timber=20}), C(6440,{iron=10,timber=40}), C(40480,{sunstone=10,iron=40,timber=140}),
+           C(165600,{sunstone=20,iron=80,timber=240}), C(552000,{sunstone=40,iron=140,timber=400}) } },
+  { key="garrison",      name="Garrison",        req={{"longhouse",1}},
+    cost={ C(1656,{iron=10,timber=15}), C(5520,{iron=20,timber=30}), C(33120,{sunstone=10,iron=70,timber=100}),
+           C(138000,{sunstone=20,iron=120,timber=180}), C(460000,{sunstone=40,iron=200,timber=300}) } },
+  { key="palisade",      name="Palisade",        req={{"warehouse",1}},
+    cost={ C(1380,{timber=25}), C(5060,{iron=15,timber=50}), C(29440,{iron=60,timber=160}),
+           C(124200,{iron=110,timber=280}), C(423200,{iron=180,timber=460}) } },
+  { key="watchtower",    name="Watchtower",      req={{"palisade",1}},
+    cost={ C(1104,{iron=5,timber=10}), C(3680,{iron=10,timber=20}), C(22080,{sunstone=10,iron=40,timber=70}),
+           C(96600,{sunstone=20,iron=70,timber=120}), C(331200,{sunstone=40,iron=120,timber=200}) } },
+  { key="mead_hall",     name="Mead-Hall",       req={{"longhouse",1}},
+    cost={ C(2300,{timber=15,grain=20}), C(8280,{timber=25,mead=10,grain=40}), C(51520,{sunstone=20,timber=80,mead=50,grain=120}),
+           C(215280,{sunstone=40,mead=100,timber=140,grain=200}), C(717600,{sunstone=80,mead=160,timber=240,grain=320}) } },
+  { key="thrall_pen",    name="Thrall Pen",      req={{"longhouse",1}},
+    cost={ C(1656,{iron=10,timber=15}), C(5520,{iron=20,timber=30}), C(33120,{sunstone=10,iron=70,timber=100}),
+           C(138000,{sunstone=20,iron=120,timber=180}), C(460000,{sunstone=40,iron=200,timber=300}) } },
+  { key="muster_ground", name="Muster Ground",   req={{"garrison",1}},
+    cost={ C(2300,{iron=10,timber=20}), C(7360,{iron=20,timber=40}), C(46000,{sunstone=10,iron=60,timber=120}),
+           C(193200,{sunstone=20,iron=110,timber=200}), C(644000,{sunstone=40,iron=180,timber=320}) } },
+  { key="settler_plots", name="Settler Plots",   req={{"warehouse",1}},
+    cost={ C(2760,{iron=5,timber=20}), C(11040,{iron=15,grain=20,timber=40}), C(64400,{iron=60,mead=20,grain=80,timber=140}),
+           C(248400,{iron=110,grain=140,mead=40,timber=240}), C(736000,{iron=180,grain=240,mead=70,timber=400}) } },
+  { key="well",          name="Well",            req={{"warehouse",1}},
+    cost={ C(736,{iron=5,timber=5}), C(2300,{iron=10,timber=15}), C(12880,{iron=40,timber=50}),
+           C(55200,{iron=70,timber=80}), C(184000,{iron=120,timber=140}) } },
+  { key="salting_house", name="Salting House",   req={{"fishery",1}},
+    cost={ C(2760,{iron=10,timber=15}), C(9200,{iron=20,timber=30}), C(55200,{sunstone=10,iron=45,timber=90}),
+           C(230000,{sunstone=20,iron=90,timber=160}), C(736000,{sunstone=40,iron=150,timber=260}) } },
+  { key="bakehouse",     name="Bakehouse",       req={{"farm",1}},
+    cost={ C(2760,{iron=10,timber=15}), C(9200,{iron=20,timber=30}), C(55200,{sunstone=10,iron=45,timber=90}),
+           C(230000,{sunstone=20,iron=90,timber=160}), C(736000,{sunstone=40,iron=150,timber=260}) } },
+  { key="furriers_lodge",name="Furrier's Lodge", req={{"tannery",1}},
+    cost={ C(2760,{iron=10,timber=15}), C(9200,{iron=20,timber=30}), C(55200,{sunstone=10,iron=45,timber=90}),
+           C(230000,{sunstone=20,iron=90,timber=160}), C(736000,{sunstone=40,iron=150,timber=260}) } },
+  { key="mine",          name="Mine",            req={{"warehouse",1}},
+    cost={ C(1288,{iron=6,timber=12}), C(4416,{iron=15,timber=26}), C(24840,{sunstone=8,iron=35,timber=75}),
+           C(105800,{sunstone=16,iron=70,timber=135}), C(349600,{sunstone=32,iron=120,timber=220}) } },
+  { key="smelter",       name="Smelter",         req={{"mine",1}},
+    cost={ C(2760,{iron=10,timber=15}), C(9200,{iron=20,timber=30}), C(55200,{sunstone=10,iron=45,timber=90}),
+           C(230000,{sunstone=20,iron=90,timber=160}), C(736000,{sunstone=40,iron=150,timber=260}) } },
+}
+
+local plan = BLD          -- active cost table; replaced by a live 'vbuild list' scan when available
+local NAME = {}
+local function rebuild_names() NAME = {}; for _, b in ipairs(plan) do NAME[b.key] = b.name end end
+rebuild_names()
+
+-- preferred order for listing resources; any others are appended alphabetically
+local RESORDER = { "iron", "timber", "sunstone", "runestones", "furs", "fine_furs", "grain", "mead", "gemstones" }
+local function res_keys(r)
+  local out, seen = {}, {}
+  for _, k in ipairs(RESORDER) do if r[k] then out[#out + 1] = k; seen[k] = true end end
+  local extra = {}
+  for k in pairs(r) do if not seen[k] then extra[#extra + 1] = k end end
+  table.sort(extra)
+  for _, k in ipairs(extra) do out[#out + 1] = k end
+  return out
+end
+
+-- plan serialization: one building per line; TAB-separated fields:
+--   key \t name \t req(k=t,k=t) \t tier:daler:res=amt,res=amt \t ...
+local function serialize_plan(p)
+  local lines = {}
+  for _, b in ipairs(p) do
+    local req = {}
+    for _, r in ipairs(b.req) do req[#req + 1] = r[1] .. "=" .. r[2] end
+    local parts = { b.key, b.name, table.concat(req, ",") }
+    local tiers = {}
+    for t in pairs(b.cost) do tiers[#tiers + 1] = t end
+    table.sort(tiers)
+    for _, t in ipairs(tiers) do
+      local c = b.cost[t]
+      local rs = {}
+      for k, v in pairs(c.r) do rs[#rs + 1] = k .. "=" .. v end
+      table.sort(rs)
+      parts[#parts + 1] = t .. ":" .. c.d .. ":" .. table.concat(rs, ",")
+    end
+    lines[#lines + 1] = table.concat(parts, "\t")
+  end
+  return table.concat(lines, "\n")
+end
+
+local function deserialize_plan(str)
+  local p = {}
+  for _, line in ipairs(bsplit(str or "", "\n")) do
+    if line ~= "" then
+      local f = bsplit(line, "\t")
+      if f[1] and f[1] ~= "" and f[2] and f[2] ~= "" then
+        local b = { key = f[1], name = f[2], req = {}, cost = {} }
+        if f[3] and f[3] ~= "" then
+          for _, part in ipairs(bsplit(f[3], ",")) do
+            local k, t = part:match("^(.-)=(%d+)$")
+            if k and k ~= "" then b.req[#b.req + 1] = { k, tonumber(t) } end
+          end
+        end
+        for i = 4, #f do
+          local t, d, rs = f[i]:match("^(%d+):(%d+):(.*)$")
+          if t then
+            local c = { d = tonumber(d) or 0, r = {} }
+            for _, part in ipairs(bsplit(rs, ",")) do
+              local k, a = part:match("^(.-)=(%d+)$")
+              if k and k ~= "" then c.r[k] = tonumber(a) end
+            end
+            b.cost[tonumber(t)] = c
+          end
+        end
+        p[#p + 1] = b
+      end
+    end
+  end
+  return p
+end
+
+-- restore scanned plan + toggle from the store. Note these now live under the
+-- 3s-viking-status store rather than 3s-build's, so the first run after the merge
+-- re-scans; 'build scan' on connect handles that without being asked.
+local show_max = (scrye.store.get("bp_showmax") == "1")
+do
+  local saved = scrye.store.get("bp_plan")
+  if saved and saved ~= "" then
+    local ok, p = pcall(deserialize_plan, saved)
+    if ok and p and #p > 0 then plan = p; rebuild_names() end
+  end
+end
+
+-- returns rows (sorted for display) + current daler
+local function compute()
+  local daler = bnum(gv("DALER"))
+  -- warehouse stock, summed per good
+  local stock = {}
+  for _, e in ipairs(bsplit(gv("WSTOCK") or "", ";")) do
+    local f = bsplit(e, "|")
+    -- f[2] required: WSTOCK's leading field is the warehouse capacity, not a good.
+    if f[1] and f[1] ~= "" and f[2] then stock[f[1]] = (stock[f[1]] or 0) + bnum(f[2]) end
+  end
+  -- current tiers
+  local tier = {}
+  for _, e in ipairs(bsplit(gv("BUILDINGS") or "", ",")) do
+    local k, t = e:match("^(.-):(%d+)$")
+    if k then tier[k] = tonumber(t) end
+  end
+  -- in-progress builds (normalise name -> key form)
+  local building = {}
+  for _, e in ipairs(bsplit(gv("BUILDS") or "", ";")) do
+    local nm = (bsplit(e, "|")[1] or ""):lower():gsub("[%s%-]", "_")
+    if nm ~= "" then building[nm] = true end
+  end
+
+  -- match a scanned building key to the game's feed key, tolerating a dropped possessive 's'
+  -- (display "Goldsmith's" -> goldsmiths but the feed uses "goldsmith").
+  local function feed_key(k)
+    if tier[k] ~= nil or building[k] then return k end
+    local ks = k:gsub("s(_)", "%1"):gsub("s$", "")
+    if tier[ks] ~= nil or building[ks] then return ks end
+    for fk in pairs(tier)     do if ks:sub(1, #fk + 1) == fk .. "_" then return fk end end
+    for fk in pairs(building) do if ks:sub(1, #fk + 1) == fk .. "_" then return fk end end
+    return k
+  end
+
+  local rows = {}
+  for _, b in ipairs(plan) do
+    local cur   = tier[feed_key(b.key)] or 0
+    local nextt = cur + 1
+    local row = { b = b, cur = cur, nextt = nextt }
+
+    if cur >= 5 then
+      row.cat, row.locked = 4, "MAX (T5)"
+    elseif building[feed_key(b.key)] then
+      row.cat, row.locked = 3, "building..."
+    else
+      local unmet = {}
+      for _, p in ipairs(b.req) do
+        if (tier[feed_key(p[1])] or 0) < p[2] then unmet[#unmet + 1] = (NAME[p[1]] or p[1]) .. " T" .. p[2] end
+      end
+      local c = b.cost[nextt]
+      row.cost = c
+      if #unmet > 0 then
+        row.cat, row.locked = 2, "needs " .. table.concat(unmet, ", ")
+      elseif not c then
+        row.cat, row.locked = 2, "no cost data (build scan)"
+      else
+        local toks = {}
+        local dok  = daler >= c.d
+        toks[#toks + 1] = { text = comma(c.d) .. "d", ok = dok }
+        local allok, missing = dok, (dok and 0 or 1)
+        for _, res in ipairs(res_keys(c.r)) do
+          local need = c.r[res]
+          if need then
+            local ok = (stock[res] or 0) >= need
+            toks[#toks + 1] = { text = need .. " " .. res, ok = ok }
+            if not ok then allok = false; missing = missing + 1 end
+          end
+        end
+        row.toks, row.buildable = toks, allok
+        row.cat, row.missing, row.dcost = (allok and 0 or 1), missing, c.d
+      end
+    end
+    rows[#rows + 1] = row
+  end
+
+  -- buildable first, then closest-to-affordable (fewest missing, then cheapest)
+  table.sort(rows, function(a, b)
+    if a.cat ~= b.cat then return a.cat < b.cat end
+    if a.cat == 1 and a.missing ~= b.missing then return a.missing < b.missing end
+    local ad, bd = a.dcost or (a.cost and a.cost.d) or 0, b.dcost or (b.cost and b.cost.d) or 0
+    if ad ~= bd then return ad < bd end
+    return a.b.name < b.b.name
+  end)
+  return rows, daler
+end
+
+local function cost_str(c)
+  local parts = { comma(c.d) .. "d" }
+  for _, res in ipairs(res_keys(c.r)) do
+    if c.r[res] then parts[#parts + 1] = c.r[res] .. " " .. res end
+  end
+  return table.concat(parts, " +")
+end
+
+-- last rendered planner rows, so the "build" command can echo the tab into the output
+-- window without recomputing and without the section header.
+local planner_lines = {}
+
 local function build_builds()
   local L = {}
   -- section headers ("-- Foo --") take the accent colour in every tab, for free
@@ -726,28 +1020,49 @@ local function build_builds()
     if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
     L[#L + 1] = s
   end
-  add("-- Buildings   Daler " .. q("DALER") .. " --")
-  local blist = {}
-  for entry in gv("BUILDINGS"):gmatch("[^,]+") do
-    local name, tier = entry:match("^(.-):(%d+)$")
-    if name then blist[#blist + 1] = { label = titlecase(name) .. " T" .. tier,
-                                       name = titlecase(name), tier = tier } end
-  end
-  table.sort(blist, function(a, b) return a.label < b.label end)
-  if #blist == 0 then add("none")
-  else
-    -- pad on the undecorated label, then colour only the tier token, so the two
-    -- columns still line up
-    local function bcell(e, width)
-      if not e then return "" end
-      local padding = width and string.rep(" ", math.max(0, width - #e.label)) or ""
-      return esc(e.name) .. " " .. colb(tiercol(e.tier), "T" .. e.tier) .. padding
+
+  local ok, rows, daler = pcall(compute)
+  if not ok then rows, daler = {}, bnum(gv("DALER")) end
+
+  add(string.format("-- Buildings   Daler %s   %s --",
+      comma(daler), show_max and "[all]" or "[+max]"))
+
+  -- filter maxed unless show_max
+  local shown = {}
+  for _, r in ipairs(rows) do if show_max or r.cat ~= 4 then shown[#shown + 1] = r end end
+
+  local plines = {}
+  for _, r in ipairs(shown) do
+    local mark, body
+    if r.cat == 4 then
+      mark, body = "@{accent,bold}max@{}", "@{dim}" .. esc(r.locked) .. "@{}"
+    elseif r.cat == 3 then
+      mark, body = "@{info,bold}wip@{}", "@{dim}" .. esc(r.locked) .. "@{}"
+    elseif r.cat == 2 then
+      mark, body = "@{dim}req@{}", "@{dim}" .. esc(r.locked) .. "@{}"
+    else
+      mark = r.buildable and "@{success,bold}OK @{}" or "   "   -- short: the red says it
+      local toks = {}
+      for _, t in ipairs(r.toks) do
+        -- every cost token is coloured: green when you can afford it, red+bold when short
+        -- (bold is the colour-blind fallback)
+        toks[#toks + 1] = t.ok
+          and ("@{success}" .. esc(t.text) .. "@{}")
+          or  ("@{error,bold}" .. esc(t.text) .. "@{}")
+      end
+      body = table.concat(toks, "  ")
     end
-    local rows = math.ceil(#blist / 2)
-    for i = 1, rows do
-      add(bcell(blist[i], 30) .. " " .. bcell(blist[i + rows]))
-    end
+    local tierstr = (r.nextt <= 5) and string.format("T%d>%d", r.cur, r.nextt) or ("T" .. r.cur)
+    local tc = tiercol(r.nextt <= 5 and r.nextt or r.cur)
+    plines[#plines + 1] = string.format("%s %s @{%s}%s@{} %s",
+      mark, padesc(r.b.name, 15), tc, padesc(tierstr, 5), body)
   end
+  planner_lines = plines
+
+  if #plines == 0 then add("no buildings known yet - run 'build scan'")
+  else for _, l in ipairs(plines) do add(l) end end
+
+  -- what the yard is actually working on right now, kept from the original tab
   local builds = split(gv("BUILDS"), ";")
   if #builds > 0 then
     add("")
@@ -760,8 +1075,182 @@ local function build_builds()
       add(string.format("constr: %-16s %s", f[1] or "?", rem))
     end
   end
+
+  -- how many are affordable right now, for the value line above the text
+  local ready = 0
+  for _, r in ipairs(shown) do if r.cat == 0 and r.buildable then ready = ready + 1 end end
+  scrye.setState(P .. "buildsummary", string.format("%d ready  |  %s daler", ready, comma(daler)))
+
   return table.concat(L, "\n")
 end
+
+-- ---------------- live 'vbuild list' scan (keeps costs in sync with the game) ----------
+local KNOWN = { timber = true, iron = true, sunstone = true, runestones = true, furs = true,
+                fine_furs = true, grain = true, mead = true, gemstones = true }
+local function nkey(s)
+  s = tostring(s or "")
+  s = s:gsub("^%s+", ""):gsub("%s+$", "")
+  s = s:lower():gsub("'", ""):gsub("[%s%-]+", "_")
+  return s
+end
+local function parse_req(txt)
+  local req = {}
+  if not txt or txt:find("none") then return req end
+  for part in (txt .. ","):gmatch("%s*(.-)%s*,") do
+    local nm, t = part:match("^(.-)%s+tier%s+(%d+)")
+    if nm and nm ~= "" then req[#req + 1] = { nkey(nm), tonumber(t) } end
+  end
+  return req
+end
+
+local bp_parse, bp_cur, bp_cur_tier, bp_scanning = {}, nil, nil, false
+local scan_active = false          -- emulates the enabled/disabled "vblist" trigger group
+local scan_timer = nil
+
+-- redraw through the panel's own dirty/flush cycle rather than setting state directly,
+-- so a scan finishing coalesces with whatever feed traffic arrives alongside it
+local function bp_redraw() dirty.builds = true; schedule_flush() end
+
+local function bp_scan_done()
+  if not bp_scanning and not scan_active then return end
+  bp_scanning, scan_active = false, false
+  if scan_timer then scrye.cancel(scan_timer); scan_timer = nil end
+  -- drop any unnamed placeholder entries (a building whose header we couldn't read)
+  local clean_rows = {}
+  for _, b in ipairs(bp_parse) do if b.key ~= "" and b.name ~= "?" then clean_rows[#clean_rows + 1] = b end end
+  bp_parse = clean_rows
+  if #bp_parse > 0 then
+    plan = bp_parse
+    rebuild_names()
+    scrye.store.set("bp_plan", serialize_plan(plan))   -- persist scanned costs
+    bnote("scanned " .. #bp_parse .. " buildings from vbuild list")
+  else
+    bnote("vbuild list scan found nothing - using built-in costs")
+  end
+  bp_redraw()
+end
+
+-- called per decorated line during a scan; runs a small state machine
+local function bp_scan_line(cap)
+  -- drop the closing *~- marker (and anything after it) before trimming; on a wrapped
+  -- header line the marker is absent, which is fine.
+  local c = (cap or ""):gsub("%*~%-.*$", ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if c == "" then return end
+  if c:find("Available Buildings") then bp_parse, bp_cur, bp_cur_tier, bp_scanning = {}, nil, nil, true; return end
+  if not bp_scanning then return end
+  if c:match("^Commands") or c:find("'vbuild") then bp_scan_done(); return end
+  -- building header:  "<Name>   Req: <req>"
+  local nm, req = c:match("^(.-)%s+Req:%s*(.*)$")
+  if nm and nm ~= "" then
+    bp_cur = { key = nkey(nm), name = nm, req = parse_req(req), cost = {} }
+    bp_parse[#bp_parse + 1] = bp_cur; bp_cur_tier = nil
+    return
+  end
+  -- tier line:  "Tier N: X daler"
+  local tn, dal = c:match("^Tier (%d+):%s*([%d,]+)%s*daler")
+  if tn and bp_cur then
+    local t = tonumber(tn)
+    -- safety net: if tiers stop increasing, a new building's header was missed -- start a
+    -- fresh (unnamed) entry rather than overwriting the current building's costs.
+    if bp_cur_tier and t <= bp_cur_tier then
+      bp_cur = { key = "", name = "?", req = {}, cost = {} }
+      bp_parse[#bp_parse + 1] = bp_cur
+    end
+    bp_cur_tier = t
+    bp_cur.cost[bp_cur_tier] = { d = tonumber((dal:gsub(",", ""))) or 0, r = {} }
+    return
+  end
+  -- resource line:  "+ 10 Iron, 25 Timber"  (or a bare continuation line when a cost wraps).
+  if bp_cur and bp_cur_tier and bp_cur.cost[bp_cur_tier] then
+    local body = c:match("^%+%s*(.+)$")
+    if not body and c:match("^%d") then            -- wrapped continuation of a resource list
+      local okc = true
+      for item in (c .. ","):gmatch("%s*(.-)%s*,") do
+        local a, m = item:match("^(%d+)%s+([%a][%a ]*)$")
+        if not (a and KNOWN[nkey(m)]) then okc = false; break end
+      end
+      if okc then body = c end
+    end
+    if body then
+      for item in (body .. ","):gmatch("%s*(.-)%s*,") do
+        local a, m = item:match("^(%d+)%s+([%a][%a ]*)$")
+        if a and m then bp_cur.cost[bp_cur_tier].r[nkey(m)] = tonumber(a) end
+      end
+    end
+  end
+end
+
+local function bp_scan()
+  bp_parse, bp_cur, bp_cur_tier, bp_scanning = {}, nil, nil, true
+  scan_active = true
+  scrye.send("vbuild list")
+  if scan_timer then scrye.cancel(scan_timer) end
+  scan_timer = scrye.after(8, bp_scan_done)   -- safety finalize if the closing line is missed
+end
+
+-- captures 'vbuild list' output (decorated -~* ... *~- lines); active only during a scan.
+-- Match on the opening -~* marker alone: a long header line can wrap so its closing *~-
+-- falls on the next physical line; requiring both markers would drop that header.
+scrye.addTrigger{
+  pattern = [[^-~\*(.*)]],
+  regex   = true,
+  run     = function(cap)
+    if not scan_active then return end
+    pcall(bp_scan_line, cap)
+  end,
+}
+
+-- gag the decorated lines while a scan is active
+scrye.onLine(function(line)
+  if scan_active and line:match("^%-~%*") then return false end
+end)
+
+local function bp_toggle_all()
+  show_max = not show_max
+  scrye.store.set("bp_showmax", show_max and "1" or "0")
+  bnote(show_max and "showing maxed buildings" or "hiding maxed buildings")
+  bp_redraw()
+end
+
+-- print the planner to the output window (the tab is the primary view; this is for
+-- when the panel is closed or you want it in the scrollback)
+local function bp_print()
+  scrye.setState(P .. "builds", build_builds())
+  for _, l in ipairs(planner_lines) do bnote(l) end
+  bnote("commands: build all | build refresh | build scan | build start <name>")
+end
+
+-- "build start <name>": affordability-checked replacement for click-to-build
+local function bp_start(arg)
+  local k = nkey(arg)
+  if k == "" then bnote("usage: build start <building>"); return end
+  local rows = compute()
+  local target
+  for _, r in ipairs(rows) do
+    if r.b.key == k or nkey(r.b.name) == k then target = r; break end
+  end
+  if not target then bnote("unknown building: " .. arg); return end
+  if target.cat == 4 then bnote(target.b.name .. " is already MAX (T5)"); return end
+  if target.cat == 3 then bnote(target.b.name .. " is already building"); return end
+  if target.cat == 2 then bnote(target.b.name .. ": " .. target.locked); return end
+  if not target.buildable then
+    bnote("cannot afford " .. target.b.name .. " T" .. target.nextt ..
+          (target.cost and (":  " .. cost_str(target.cost)) or ""))
+    return
+  end
+  scrye.send("vbuild start " .. target.b.key)
+  bnote("vbuild start " .. target.b.key)
+  scrye.after(2, bp_redraw)   -- refresh after the build registers
+end
+
+scrye.addAlias{ pattern = [[^build$]],            regex = true, run = function() bp_print() end }
+scrye.addAlias{ pattern = [[^build all$]],        regex = true, run = function() bp_toggle_all() end }
+scrye.addAlias{ pattern = [[^build refresh$]],    regex = true, run = function() bp_redraw() end }
+scrye.addAlias{ pattern = [[^build scan$]],       regex = true, run = function() bp_scan() end }
+scrye.addAlias{ pattern = [[^build start (.+)$]], regex = true, run = function(w1) bp_start(w1) end }
+
+-- re-scan costs on connect, after a delay so we're logged in first
+scrye.onConnect(function() scrye.after(20, bp_scan) end)
 
 local function build_production()
   local L = {}
@@ -825,13 +1314,28 @@ local function build_production()
   end
   add("")
   -- warehouse with freshness
+  --
+  -- WSTOCK opens with a bare number before the goods -- "7367;furs|301|100;mead|60|100|aged"
+  -- -- and that number is the warehouse's EFFECTIVE capacity. Two bugs came out of not knowing
+  -- that: it rendered as a stock row called "7367" holding 0 at q100%, and the capacity shown
+  -- beside the total came from the tier table below.
+  --
+  -- That table is not wrong, which is why it is still here: it is the BASE capacity per
+  -- warehouse tier, and it is exactly right for a character who has raised none of the skills
+  -- that increase storage. Raise one and the server's number climbs above it -- a tier-5 hold
+  -- reads 5250 from the table and 7367 from the feed. So the feed wins whenever it is present,
+  -- and the table serves as the floor before WSTOCK has arrived. Do not delete it.
   local wb = gv("BUILDINGS") .. ","
   local tier = wb:match("warehouse:(%d+),") or "1"
-  local wmax = ({ ["1"] = 400, ["2"] = 1000, ["3"] = 1750, ["4"] = 3000, ["5"] = 5250 })[tier] or 400
+  local wmax = tonumber(split(gv("WSTOCK"), ";")[1] or "")
+             or ({ ["1"] = 400, ["2"] = 1000, ["3"] = 1750, ["4"] = 3000, ["5"] = 5250 })[tier]
+             or 400
   local byg, tot = {}, 0
   for _, e in ipairs(split(gv("WSTOCK"), ";")) do
     local f = split(e, "|")
-    if f[1] and f[1] ~= "amber" then
+    -- A real stock record always carries an amount; the capacity field does not. Keying off
+    -- that rather than off the name means no list of non-goods has to be maintained.
+    if f[1] and f[2] and f[1] ~= "amber" then
       local amt, qq = num(f[2]), tonumber(f[3]) or 100
       local g = byg[f[1]]
       if not g then g = { amt = 0, qsum = 0, minq = 100, stale = 0 }; byg[f[1]] = g end
@@ -1632,7 +2136,9 @@ keymap("stats", "god_power god_power_focus god_power_next raid blot lin glvl sub
   .. "vis soe vkxp vmnew vmreg nexttick weather dcycle stfx fury threk mthrek chain bsdepth "
   .. "rndz ldng mldng patrol")
 keymap("city", "ships carts refinery")
-keymap("builds", "buildings builds daler")
+-- wstock joined this list with the planner: affordability is half resources, so a stock
+-- change moves rows between "OK" and short exactly as a daler change does.
+keymap("builds", "buildings builds daler wstock")
 keymap("production", "production routes buildings wstock")
 keymap("people", "thralls thrall_follower garrison mthrek hird staff bonds")
 keymap("settlers", "blot sproj settlers sevents upkeep nexttick scivics sconsume")
@@ -1944,6 +2450,1232 @@ build_panel = function()
 for _, w in ipairs(map_widgets) do
   if w.type == "colorgrid" then w.icons = icons_on and MAP_ICONS or nil end
 end
+-- ======================================================================================
+-- Trade (merged in from the 3s-market plugin, which is now a deprecation stub).
+--
+-- Wrapped in an immediately-called function rather than spliced in flat, and that is not
+-- style: Lua allows at most 200 local variables live at once in a function, and a file's
+-- top level IS a function. This panel already declares ~136 and the market code declares
+-- ~91, so a flat merge fails to compile outright with "too many local variables". A nested
+-- function gets its own register window, so the market body keeps its own ~91 and costs the
+-- outer chunk exactly one local: MK.
+--
+-- It is otherwise a faithful port -- same scan, same auto-trader, same commands (mkref,
+-- mkdispatch, mkunits, atrade ...), same three tabs, now Trade / Trade Auto / Trade Log.
+-- It declares its own P, esc, comma and friends inside the wrapper, so it borrows nothing
+-- from this file and there are no upvalues to keep in step.
+--
+-- The state keys are unchanged in shape but now live under plugin.3s-viking-status.*;
+-- none of them collided with this panel's own (checked key by key at merge time).
+-- ======================================================================================
+
+local MK = (function()
+-- 3S Market -- 3Scapes Viking market arbitrage finder (Scrye port of ThreeS_Market)
+--
+-- `mkref` (or the panel's Refresh button) runs `vtrade goods <resource>` for every
+-- good with the output gagged, parses the buy/sell prices per town, and renders the
+-- best trade route per good -- buy cheap in one town, sell dear in another -- ranked
+-- by profit per unit, in the HUD panel. Results persist across restarts.
+--
+-- NOTE: dropped / simplified vs the MUSHclient original:
+--   * `markwin` show/hide alias DROPPED -- the HUD manages panel visibility.
+--   * The entire auto-trader subsystem DROPPED (the `atrade` alias and config,
+--     scalper/restock/flush/clearing logic, cart-dispatch cooldown handling,
+--     session stats, Log/Stats tabs, 3s_autotrade.log file) -- it relied on
+--     click hotspots, inputboxes, io.* log files, os.time and the MIP companion
+--     plugin's broadcasts, and is outside this port's scope (market scan + report).
+--   * Town-click dispatch is BACK (inline click markup): every town cell in the
+--     report dispatches the configured Units of that row's good (buy side blue,
+--     sell side green), and clicking a GOOD's name toggles it held/released --
+--     held goods show amber and are never auto-traded. Units/Escort live in the
+--     panel inputs.
+--   * The "updated HH:MM" stamp DROPPED (no clock in the sandbox); the status line
+--     says whether data is from this session or restored from the last one.
+--   * Low-stock towns were orange in the miniwindow; here they are marked with "*"
+--     (the 2nd/3rd-best town is still shown when the better ones are low, as before).
+--   * Scan sends were spaced 0.4 s apart; scrye.after has 1 s granularity, so they
+--     go out 1 s apart. The settle check (finish when output goes quiet, hard cap)
+--     is kept, plus an early finish once the last good's reply has been seen.
+--   * The auto-refresh on the "[Viking-Trade] ... %" market tick is kept (debounced,
+--     quiet), but only after the first manual refresh this session -- the original
+--     gated it on "window visible or auto-trader on", neither of which exists here.
+--   * Best sell prices are still published for other plugins: world variable
+--     "prices" (same "cmd=price;..." format) and state plugin.3s-market.prices.
+
+local P = "plugin." .. scrye.id .. "."
+
+-- the tradeable goods (command word for `vtrade goods <word>`)
+local RES = {
+  { name = "Timber",      cmd = "timber"     },
+  { name = "Iron",        cmd = "iron"       },
+  { name = "Grain",       cmd = "grain"      },
+  { name = "Furs",        cmd = "furs"       },
+  { name = "Fish",        cmd = "fish"       },
+  { name = "Mead",        cmd = "mead"       },
+  { name = "Sunstone",    cmd = "sunstone"   },
+  { name = "Runestones",  cmd = "runestones" },
+  { name = "Spoils",      cmd = "spoils"     },
+  { name = "Ore",         cmd = "ore"        },
+  { name = "Salted Fish", cmd = "salted"     },
+  { name = "Bread",       cmd = "bread"      },
+  { name = "Fine Furs",   cmd = "fine"       },
+  { name = "Tools",       cmd = "tools"      },
+  { name = "Gemstones",   cmd = "gems"       },
+  { name = "Finery",      cmd = "finery"     },
+}
+local DISPLAY = {}                       -- lower cmd -> nice name
+for _, r in ipairs(RES) do DISPLAY[r.cmd] = r.name end
+local LAST_NAME = RES[#RES].name:lower() -- header of the final reply => scan nearly done
+
+local LOWSTOCK = 100   -- below this stock, also show the next-best town (marked *)
+
+-- ====================== auto-trader constants ======================
+local DCMD = {}                          -- market header name (lowercased) -> short vtrade word
+for _, r in ipairs(RES) do DCMD[r.name:lower()] = r.cmd end
+local function disp_cmd(res) return DCMD[res] or res end
+
+-- display town name -> the word vtrade expects (default: first word lowercased)
+local TOWNCMD = { ["lodbrok's hold"] = "lodbrok", ["lodbrok's hol"] = "lodbrok" }
+local function town_cmd(town)
+  local key = (town or ""):lower()
+  return TOWNCMD[key] or key:match("^%a+") or key
+end
+
+local function comma(n)
+  local s = tostring(math.floor(tonumber(n) or 0))
+  while true do local a, b = s:gsub("^(%d+)(%d%d%d)", "%1,%2"); s = a; if b == 0 then break end end
+  return s
+end
+
+-- refined goods (towns only buy these) - matched by market-key name and by cmd
+local REFINED = { ["salted fish"] = true, salted = true, ["fine furs"] = true, fine = true,
+                  bread = true, finery = true, tools = true }
+-- special commodities (not raw materials): sellable, but keep a small reserve
+local SPECIAL = { runestones = true, gemstones = true, gems = true }
+-- raw materials the auto-buyer will restock up to the Raw> buffer when they run low
+local RAWBUILD = { timber = true, iron = true, furs = true, grain = true, mead = true,
+                   fish = true, sunstone = true, spoils = true }
+
+local function trim(s) return (s or ""):gsub("^%s+", ""):gsub("%s+$", "") end
+-- escape MUD-sourced text before embedding it in colour markup
+local function esc(x) return (tostring(x or ""):gsub("@", "@@")) end
+local function titlecase(s)
+  return (s:gsub("(%a)([%w]*)", function(a, b) return a:upper() .. b:lower() end))
+end
+
+-- ====================== captured market data ======================
+local market  = {}      -- market[resource][town] = { buy=, sup=, sell=, dem=, aff= }
+local results = {}      -- computed arbitrage rows, sorted by profit desc
+local cur_res = nil     -- resource currently being parsed
+
+local scanning       = false  -- a refresh is in flight (gag window open)
+local quiet          = false  -- suppress the refresh notes (auto/background refreshes)
+local got_data       = false  -- new market lines arrived since the last settle check
+local checks         = 0      -- settle-check counter (hard cap)
+local settle_running = false
+local scan_token     = 0      -- invalidates timers from an abandoned scan
+local update_pending = false  -- a market-tick refresh is already queued (debounce)
+local user_refreshed = false  -- at least one manual refresh this session
+
+local mk_refreshed_at = 0     -- os.time() the market data was last finalised (for the auto-trader)
+local connected = true        -- tracked via onConnect/onDisconnect. Starts true: a plugin
+                              -- (re)load mid-session never receives an onConnect, and the
+                              -- auto-trader must not sit idle waiting for one.
+local mk_last_dispatch = 0    -- os.time() of the last auto-dispatch (self-rescan guard)
+local last_status = ""        -- last status line passed to mk_render (for re-rendering in place)
+
+-- ====================== auto-trader settings (persisted via scrye.store) ======================
+local function sget(k) local x = scrye.store.get(k); if x == nil or x == "" then return nil end; return x end
+local function sset(k, v) scrye.store.set(k, tostring(v)) end
+
+local at = {
+  on      = (sget("at_on") == "1"),                 -- default OFF (safety)
+  reserve = tonumber(sget("at_reserve")) or 5000,   -- keep-back daler (scalper won't spend below this)
+  margin  = tonumber(sget("at_margin"))  or 1,      -- min profit/unit for arbitrage buys
+  stock   = tonumber(sget("at_stock"))   or 300,    -- Raw> buffer to keep for raw building materials
+  carts   = tonumber(sget("at_carts"))   or 0,      -- cap (0 = auto from Trading Post tier)
+  refined = (sget("at_refined") ~= "0"),            -- also sell refined goods (default yes)
+  min_pct = tonumber(sget("at_minpct")) or 70,      -- min % of cart capacity before sending a cart
+  min_rel = tonumber(sget("at_minrel")) or 40,      -- min % of the best available load's value
+  keep    = tonumber(sget("at_keep"))   or 20,      -- units of EVERY good to keep (mission reserve)
+  scalp   = (sget("at_scalp") ~= "0"),              -- buy-low/sell-high scalp (default on)
+  restock = (sget("at_restock") == "1"),            -- actively buy raws to top up Raw> (default off)
+  flush   = tonumber(sget("at_flush")) or 500,      -- pile >= this jumps the queue, ignores value floor (0=off)
+  soft    = tonumber(sget("at_soft"))     or 70,    -- % full: rank by biggest pile, stop scalping
+  full    = tonumber(sget("at_full"))     or 90,    -- % full that switches to clearing mode
+  clear_pct = tonumber(sget("at_clearpct")) or 25,  -- min cart fill % while clearing
+  escort  = tonumber(sget("at_escort")) or 5,       -- escort size for auto-dispatched carts
+  notify  = (sget("at_notify") == "1"),             -- buzz the phone per auto-dispatch (default off)
+  pending = 0, last_carts = nil, cd_wait = false, pending_check = false,
+  stats = { buys = 0, sells = 0, spent = 0, earned = 0, since = os.time(), recent = {} },
+  exempt = {},
+}
+for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
+
+-- manual dispatch cart size (the MUSHclient window had a Units hotspot, 20-350)
+local MK_UNITS_MIN, MK_UNITS_MAX = 20, 350
+local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk_units")) or 100))
+
+-- forward declarations (mk_finish / the feed watch call these before they're defined)
+local at_schedule, at_draw, auto_trade_tick, publish_dispatch
+
+-- ---------- phone notifications (plugin.<id>.notify convention) ----------
+-- One source, default OFF: a healthy auto-trader dispatches all day, and a phone that
+-- buzzes per cart is a phone that gets muted. Turn it on to watch the bot from afar.
+local function publish_notify_state()
+  scrye.setState(P .. "notify",
+    string.format("Auto-trade dispatches\teach cart the auto-trader sends\t%s\tatrade notify %s",
+      at.notify and "on" or "off", at.notify and "off" or "on"))
+end
+
+-- forward declaration (mk_header schedules an early finish)
+local start_settle
+
+local function mk_header(res)
+  cur_res = trim(res):lower()
+  market[cur_res] = {}             -- fresh data for this good
+  got_data = true
+  if cur_res == LAST_NAME then     -- last good replying: finish as soon as it settles
+    start_settle(scan_token)
+  end
+end
+
+local function mk_row(kind, town, price, qty, aff)
+  if not cur_res then return end
+  got_data = true
+  town = trim(town)
+  if town == "" then return end
+  local m = market[cur_res]
+  m[town] = m[town] or {}
+  if kind == "buy" then
+    m[town].buy = tonumber(price); m[town].sup = tonumber(qty)
+  else
+    m[town].sell = tonumber(price); m[town].dem = tonumber(qty)
+  end
+  m[town].aff = trim(aff)
+end
+
+-- rank towns to buy (cheapest) and to sell (dearest) per good, keeping stock.
+-- ties break toward more stock so the headline town is also the best supplied.
+local function mk_compute()
+  results = {}
+  for res, towns in pairs(market) do
+    local buys, sells = {}, {}
+    for town, d in pairs(towns) do
+      if d.buy  then buys[#buys + 1]   = { price = d.buy,  town = town, qty = d.sup or 0 } end
+      if d.sell then sells[#sells + 1] = { price = d.sell, town = town, qty = d.dem or 0 } end
+    end
+    if #sells > 0 then      -- include sell-only goods (produced, no town supplies them)
+      table.sort(sells, function(a, b)
+        if a.price ~= b.price then return a.price > b.price end return a.qty > b.qty end)
+      local profit = nil
+      if #buys > 0 then
+        table.sort(buys, function(a, b)
+          if a.price ~= b.price then return a.price < b.price end return a.qty > b.qty end)
+        profit = sells[1].price - buys[1].price
+      end
+      -- profit is nil for sell-only goods (no buys), a number otherwise.
+      results[#results + 1] = {
+        res = DISPLAY[res] or titlecase(res), cmd = res, buys = buys, sells = sells, profit = profit,
+      }
+    end
+  end
+  -- arbitrage goods (with a buy side) first by profit; sell-only goods after, by sell price
+  table.sort(results, function(a, b)
+    if a.profit and b.profit then return a.profit > b.profit end
+    if a.profit ~= nil then return true end
+    if b.profit ~= nil then return false end
+    return a.sells[1].price > b.sells[1].price
+  end)
+end
+
+-- ====================== persistence (scrye.store, strings only) ======================
+local function mk_serialize()
+  local out = {}
+  for res, towns in pairs(market) do
+    for town, d in pairs(towns) do
+      out[#out + 1] = table.concat({
+        res, town,
+        d.buy and tostring(d.buy) or "", d.sup and tostring(d.sup) or "",
+        d.sell and tostring(d.sell) or "", d.dem and tostring(d.dem) or "",
+        (d.aff or ""):gsub("[\t\n]", " "),
+      }, "\t")
+    end
+  end
+  return table.concat(out, "\n")
+end
+
+local function mk_deserialize(s)
+  local m = {}
+  for line in s:gmatch("[^\n]+") do
+    local res, town, buy, sup, sell, dem, aff =
+      line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t(.*)$")
+    if res and res ~= "" and town and town ~= "" then
+      m[res] = m[res] or {}
+      m[res][town] = {
+        buy = tonumber(buy), sup = tonumber(sup),
+        sell = tonumber(sell), dem = tonumber(dem), aff = aff,
+      }
+    end
+  end
+  return m
+end
+
+-- ====================== report rendering (HUD text widget) ======================
+local FMT = "%-11s %4s %-14s %6s  %4s %-14s %6s  %s"
+
+local function cell(e)                 -- price, town, stock strings for one side
+  if not e then return "-", "", "" end
+  local q = tostring(e.qty) .. (e.qty < LOWSTOCK and "*" or "")
+  return tostring(e.price), e.town:sub(1, 14), q
+end
+
+-- extra towns to show for a side: 2nd if the 1st is low (<100), 3rd if the 1st two are both low
+local function extra_towns(list)
+  local t1 = list and list[1]
+  if not t1 then return nil, nil end
+  local t2 = (t1.qty < LOWSTOCK) and list[2] or nil
+  local t3 = (t2 and t2.qty < LOWSTOCK) and list[3] or nil
+  return t2, t3
+end
+
+local function mk_render(status)
+  last_status = status or last_status
+  scrye.setState(P .. "status", last_status)
+  local lines = {}
+  lines[#lines + 1] = string.format(FMT, "Good", "Buy", "Town", "Stk", "Sell", "Town", "Stk", "Profit")
+  if #results == 0 then
+    lines[#lines + 1] = "No data - click Refresh (or type mkref)."
+  else
+    -- Markup characters are invisible to the renderer, so cells are padded on the
+    -- RAW text and wrapped in markup AFTER -- never string.format over markup.
+    local function padl(v, w) v = tostring(v or ""); return string.rep(" ", math.max(0, w - #v)) .. v end
+    local function padr(v, w) v = tostring(v or ""); return v .. string.rep(" ", math.max(0, w - #v)) end
+    -- a town cell dispatches the configured Units of this row's good there on click
+    -- (buy side blue = daler out, sell side green = daler in). cell() truncates the
+    -- display name to 14; TOWNCMD knows the truncated forms, so the click still lands.
+    local function town_link(town, side, cmd)
+      if town == "" then return padr("", 14) end
+      return string.format("@{%s,click=mkdispatch %s %s %s}%s@{}%s",
+        side == "buy" and "info" or "success", side, cmd, town_cmd(town),
+        esc(town), string.rep(" ", math.max(0, 14 - #town)))
+    end
+    for _, r in ipairs(results) do
+      local cmd = disp_cmd(r.cmd)
+      local bp, bt, bq = cell(r.buys[1])
+      local sp, st, sq = cell(r.sells[1])
+      local profit
+      if r.profit then
+        profit = (r.profit >= 0 and "+" or "") .. r.profit
+      else
+        profit = "sell"          -- sell-only good, no buy side
+      end
+      -- the good's name toggles held/released on click; held goods wear amber
+      -- (the MUSHclient window tinted them blue -- same idea, theme-aware colour)
+      local goodcell = string.format("@{%s,click=atrade exempt %s}%s@{}",
+        at.exempt[cmd] and "warning" or "text", cmd, padr(esc(r.res), 11))
+      local function row(label, b)
+        return label .. " " .. padl(b.bp, 4) .. " " .. town_link(b.bt, "buy", cmd) .. " "
+          .. padl(b.bq, 6) .. "  " .. padl(b.sp, 4) .. " " .. town_link(b.st, "sell", cmd) .. " "
+          .. padl(b.sq, 6) .. "  " .. (b.profit or "")
+      end
+      lines[#lines + 1] = row(goodcell, { bp = bp, bt = bt, bq = bq, sp = sp, st = st, sq = sq, profit = profit })
+      local b2, b3 = extra_towns(r.buys)
+      local s2, s3 = extra_towns(r.sells)
+      if b2 or s2 then
+        local xbp, xbt, xbq = "", "", ""
+        if b2 then xbp, xbt, xbq = cell(b2) end
+        local xsp, xst, xsq = "", "", ""
+        if s2 then xsp, xst, xsq = cell(s2) end
+        lines[#lines + 1] = row(padr("  or", 11), { bp = xbp, bt = xbt, bq = xbq, sp = xsp, st = xst, sq = xsq })
+      end
+      if b3 or s3 then
+        local xbp, xbt, xbq = "", "", ""
+        if b3 then xbp, xbt, xbq = cell(b3) end
+        local xsp, xst, xsq = "", "", ""
+        if s3 then xsp, xst, xsq = cell(s3) end
+        lines[#lines + 1] = row(padr("  or", 11), { bp = xbp, bt = xbt, bq = xbq, sp = xsp, st = xst, sq = xsq })
+      end
+    end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "@{dim}* stock under " .. LOWSTOCK .. " (next-best town shown)@{}"
+    lines[#lines + 1] = "@{dim}click a good to hold it (@{}@{warning}held@{}@{dim} = never auto-traded) - click a town to send Units@{}"
+  end
+  scrye.setState(P .. "report", table.concat(lines, "\n"))
+  if publish_dispatch then publish_dispatch() end
+end
+
+-- ====================== refresh scan ======================
+local mk_finish
+
+-- keep waiting while new market data is still arriving; finalize when it settles
+start_settle = function(tok)
+  if settle_running then return end
+  settle_running = true
+  local function step()
+    if not scanning or tok ~= scan_token then settle_running = false; return end
+    checks = checks + 1
+    if got_data and checks < 25 then     -- output still flowing: wait another beat
+      got_data = false
+      scrye.after(2, step)
+    else
+      settle_running = false
+      mk_finish()
+    end
+  end
+  scrye.after(2, step)
+end
+
+mk_finish = function()
+  if not scanning then return end
+  scanning = false                       -- close the gag window
+  mk_compute()
+  -- publish best sell prices for other plugins (e.g. Viking Status settler upkeep)
+  local px = {}
+  for _, r in ipairs(results) do
+    local p = (r.sells and r.sells[1] and r.sells[1].price)
+           or (r.buys and r.buys[1] and r.buys[1].price)
+    if p then px[#px + 1] = r.cmd .. "=" .. p end
+  end
+  scrye.setVariable("prices", table.concat(px, ";"))
+  scrye.setState(P .. "prices", table.concat(px, ";"))
+  scrye.store.set("market", mk_serialize())     -- survive restarts
+  mk_refreshed_at = os.time()
+  mk_render("updated this session - " .. #results .. " goods")
+  if not quiet then scrye.print("refreshed " .. #results .. " goods") end
+  if at.on and at_schedule then at_schedule() end   -- dispatch on the freshly-refreshed prices
+end
+
+local function mk_refresh(is_quiet)
+  if scanning then
+    if not is_quiet then scrye.print("refresh already in progress") end
+    return
+  end
+  scanning = true
+  quiet = is_quiet and true or false
+  if not is_quiet then user_refreshed = true end
+  cur_res = nil
+  market = {}            -- drop stale data so a good that stops responding disappears
+  got_data = false
+  checks = 0
+  settle_running = false
+  scan_token = scan_token + 1
+  local tok = scan_token
+  -- space the sends out (original throttled at 0.4 s; scrye.after ticks at 1 s)
+  for i, r in ipairs(RES) do
+    local cmd = "vtrade goods " .. r.cmd
+    if i == 1 then
+      scrye.send(cmd)
+    else
+      scrye.after(i - 1, function()
+        if scanning and tok == scan_token then scrye.send(cmd) end
+      end)
+    end
+  end
+  -- settle fallback in case the last good's header never arrives
+  scrye.after(#RES + 2, function()
+    if scanning and tok == scan_token then start_settle(tok) end
+  end)
+  -- absolute hard cap: never leave the gag window open forever
+  scrye.after(#RES + 45, function()
+    if scanning and tok == scan_token then mk_finish() end
+  end)
+  scrye.setState(P .. "status", "refreshing market...")
+  if not quiet then scrye.print("refreshing market...") end
+end
+
+-- ====================== gag + parse (replaces the "market" trigger group) ======================
+-- while a scan is in flight, the vtrade-goods block is parsed and gagged
+-- (return false), exactly like the original's omit_from_output trigger group,
+-- which was only enabled during a refresh.
+--
+-- The whole vtrade block is wrapped in a "-~*  ...  *~-" decoration frame, e.g.
+--   -~*   Timber - Market Overview                       *~-
+--   -~*  Lodbrok's Hol    22  413 avail export++ Vinur    *~-
+-- The MUSHclient regexes were unanchored, so they matched the town/price/qty
+-- substring inside the frame. We strip the frame first, then match on the
+-- clean text, and gag every framed line (the block is all ours during a scan).
+
+-- remove the leading "-~*" and trailing "*~-" decoration (and the padding spaces)
+local function strip_frame(s)
+  s = s:gsub("^%s*%-~%*%s*", "")   -- leading  "-~*" + spaces
+  s = s:gsub("%s*%*~%-%s*$", "")   -- trailing "*~-" + spaces
+  return s
+end
+
+-- match a market row on frame-stripped text: town, price, qty, then the keyword
+-- ("avail"/"wants") on a word boundary, then the affinity remainder.
+--
+-- Structure: a cheap plain-text find gates out the lines that can't match (most of the
+-- block), then small separate patterns pick the pieces apart — faster and easier to
+-- reason about than one monolithic backtracking pattern. (Originally split to dodge a
+-- MoonSharp "pattern too complex" abort; kept on native Lua 5.4 because it's simply
+-- the better shape.)
+local function rowmatch(line, word)
+  if not line:find(word, 1, true) then return nil end             -- cheap gate: keyword must be present
+  local price, qty, tail = line:match("(%d+)%s+(%d+)%s+" .. word .. "(.*)$")
+  if not price then return nil end
+  local town = line:match("^%s*([%a][%a' ]*)%s+%d") or ""          -- leading letters/'/space run before the price
+  town = (town:gsub("%s+$", ""))                                    -- drop the greedy town's trailing spaces
+  if tail == "" then return town, price, qty, "" end
+  local aff = tail:match("^[^%w](.*)$")   -- word boundary: "available" (tail "able...") is rejected
+  if aff == nil then return nil end
+  return town, price, qty, aff
+end
+
+scrye.onLine(function(line)
+  if not scanning then return end
+  -- our own scan commands, if echoed
+  if line:match("^%s*vtrade goods %a") then return false end
+  -- only touch the framed vtrade block; leave everything else (tells, etc.) alone
+  if not line:match("^%s*%-~%*") then return end
+  local clean = strip_frame(line)
+  -- "<Good> - Market Overview" header (plain-find gate first: skips the backtracking
+  -- pattern on the long all-letter column-header lines it can never match)
+  if clean:find("Market Overview", 1, true) then
+    local res = clean:match("^([%a][%a ]*)%s*%-%s*Market Overview")
+    if res then
+      pcall(mk_header, res)
+      return false
+    end
+  end
+  -- buy row:  Town  <price>  <qty> avail [affinity]
+  local town, price, qty, aff = rowmatch(clean, "avail")
+  if town then
+    pcall(mk_row, "buy", town, price, qty, aff)
+    return false
+  end
+  -- sell row: Town  <price>  <qty> wants [affinity]
+  town, price, qty, aff = rowmatch(clean, "wants")
+  if town then
+    pcall(mk_row, "sell", town, price, qty, aff)
+    return false
+  end
+  -- The remaining vtrade decoration. Only the lines the MUSHclient version gagged are
+  -- hidden here: a blanket `return false` also swallowed unrelated framed output (channel
+  -- banners, `vbuild list`) whenever a background auto-trader scan happened to be running.
+  if clean:find("price", 1, true) and clean:match("price%s+%d+%s+daler") then return false end
+  if clean:find("Trading Post tier", 1, true) then return false end
+  if clean:find("Best places to", 1, true) then return false end
+  if clean:find("Settlement", 1, true) and clean:match("Settlement%s+Price") then return false end
+  if clean:match("^[%s%-=~%*%+_|]*$") then return false end   -- separators / empty frame lines
+  return
+end)
+
+-- market tick: the periodic price-update line carries percentages (e.g. "Mead +3%").
+-- Other [Viking-Trade] lines (cart returns etc.) have no percentages and are ignored.
+-- Debounced (the trade update is a burst of lines); quiet background refresh; only
+-- after the user has refreshed once this session (stand-in for the original's
+-- "window visible or auto-trader on" gate).
+scrye.addTrigger{
+  pattern = [[\[Viking-Trade\].*\d%]],
+  regex = true,
+  run = function()
+    if not user_refreshed then return end
+    -- our own `vtrade dispatch` echo comes back as a [Viking-Trade] line with a
+    -- percentage in it; without this guard every auto-dispatch kicks off a full rescan.
+    if os.time() - mk_last_dispatch < 10 then return end
+    if update_pending or scanning then return end
+    update_pending = true
+    scrye.after(2, function()
+      update_pending = false
+      if not scanning then mk_refresh(true) end
+    end)
+  end,
+}
+
+-- ====================== auto-trader ======================
+local function note(s) scrye.print("@{#DEB218,bold}[auto]@{} " .. s) end
+
+-- read the shared viking feed (daler / warehouse / carts / buildings) from vik.* state
+local function feed(k) return scrye.getState("vik." .. k) end
+local function at_getvars()
+  return {
+    DALER = feed("daler"), WSTOCK = feed("wstock"), CARTS = feed("carts"),
+    CIDLE = feed("cidle"), CUPG = feed("cupg"), CDTIME = feed("cdtime"),
+    BUILDINGS = feed("buildings"),
+  }
+end
+
+-- Trading Post tier -> (max carts = tier, largest cart capacity seen in the feed)
+local WCAP = { 400, 1000, 1750, 3000, 5250 }   -- warehouse unit cap, tier 1..5
+local function at_capacity(v)
+  local tier = tonumber((v.BUILDINGS or ""):match("trading_post:(%d+)")) or 1
+  local function nth(s, n)
+    local i = 0
+    for p in (s .. "|"):gmatch("([^|]*)|") do i = i + 1; if i == n then return tonumber(p) end end
+  end
+  local cap = 0
+  for e in (v.CIDLE or ""):gmatch("[^;]+") do local c = nth(e, 4);  if c and c > cap then cap = c end end
+  for e in (v.CARTS or ""):gmatch("[^;]+") do local c = nth(e, 11); if c and c > cap then cap = c end end
+  if cap <= 0 then cap = ({ 20, 30, 65, 90, 125 })[tier] or 20 end
+  return tier, cap
+end
+local function at_warehouse(v)
+  local used = 0
+  for entry in (v.WSTOCK or ""):gmatch("[^;]+") do
+    local a = entry:match("^[^|]+|(%d+)"); if a then used = used + tonumber(a) end
+  end
+  local tier = tonumber((v.BUILDINGS or ""):match("warehouse:(%d+)")) or 3
+  -- WSTOCK's leading field (before the first good) is the EFFECTIVE capacity, and it is the one
+  -- to believe. WCAP is the base capacity per tier -- correct only for a character who has
+  -- raised none of the storage skills, which add on top of it. A tier-5 hold reads 5250 from
+  -- the table and 7367 from the feed once those skills are in.
+  --
+  -- This mattered beyond display: the auto-trader stops buying as it approaches capacity, so
+  -- trusting the base table made it stop roughly 2000 units early for any skilled character --
+  -- silently refusing to fill space that was there. WCAP stays as the pre-feed fallback.
+  local fed = tonumber((v.WSTOCK or ""):match("^(%d+);"))
+  return used, fed or WCAP[tier] or 1750, tier
+end
+
+-- ---------- trade log + stats ----------
+local function at_record(side, qty, cmd, town, amount)
+  amount = amount or 0
+  local s = at.stats
+  if side == "sell" then s.sells = s.sells + 1; s.earned = s.earned + amount
+  else s.buys = s.buys + 1; s.spent = s.spent + amount end
+  local line = string.format("[%s] %-4s %4d %-11s %-4s %-14s ~%dd",
+    os.date("%Y-%m-%d %H:%M:%S"), side:upper(), qty, cmd,
+    (side == "buy") and "from" or "to", town, amount)
+  s.recent[#s.recent + 1] = line
+  while #s.recent > 40 do table.remove(s.recent, 1) end
+  scrye.log(line)
+  -- the one choke point every auto-dispatch passes through, so the phone notify
+  -- lives here instead of at the three send sites
+  if at.notify then
+    scrye.notify(string.format("auto-trade: %s %d %s %s %s (~%dd)",
+      side, qty, cmd, (side == "buy") and "from" or "to", town, amount))
+  end
+  if at_draw then at_draw() end
+end
+
+local at_cd_retry
+
+-- one dispatch pass: pick the single most worthwhile cart to send (restock > sells/scalps)
+auto_trade_tick = function()
+  at.pending_check = false
+  if not at.on then return end
+  if not connected then return end
+  if scanning then return end   -- a refresh is in flight; mk_finish re-runs us on fresh data
+
+  local v = at_getvars()
+  local maxc, cap = at_capacity(v)
+  if at.carts and at.carts > 0 then maxc = math.min(maxc, at.carts) end
+
+  if v.CARTS ~= at.last_carts then at.pending = 0; at.last_carts = v.CARTS end
+  local active = 0
+  for _ in (v.CARTS or ""):gmatch("[^;]+") do active = active + 1 end
+  local upgrading = 0
+  for _ in (v.CUPG or ""):gmatch("[^;]+") do upgrading = upgrading + 1 end
+  local free = maxc - active - upgrading - (at.pending or 0)
+  if free <= 0 then return end
+  local cd = tonumber(v.CDTIME) or 0
+  if cd > 0 then
+    if not at.cd_wait then at.cd_wait = true; scrye.after(cd + 1, at_cd_retry) end
+    return
+  end
+  free = math.min(free, 1)   -- one dispatch per pass (each starts a fresh cooldown)
+
+  if #results == 0 or (os.time() - mk_refreshed_at) > 60 then
+    mk_refresh(true); return   -- prices stale: refresh, mk_finish re-runs us
+  end
+
+  -- warehouse stock per good (normalise "fine_furs" -> "fine furs")
+  local stock = {}
+  for entry in (v.WSTOCK or ""):gmatch("[^;]+") do
+    local g, a = entry:match("^([^|]+)|(%d+)")
+    if g then local k = trim(g):lower():gsub("_", " "); stock[k] = (stock[k] or 0) + tonumber(a) end
+  end
+  local function have_of(r)
+    return stock[(r.cmd or ""):gsub("_", " ")] or stock[(r.res or ""):lower():gsub("_", " ")] or 0
+  end
+
+  -- goods already inbound on a BUY cart: don't double up
+  local inbound = {}
+  for entry in (v.CARTS or ""):gmatch("[^;]+") do
+    local kind, good = entry:match("^(%a+)|([^|]+)")
+    if kind == "buy" and good then inbound[trim(good):lower()] = true end
+  end
+
+  local used, wcap = at_warehouse(v)
+  local fillpct  = (wcap > 0) and (used * 100 / wcap) or 0
+  local pressure = fillpct >= (at.soft or 70)
+  local clearing = fillpct >= (at.full or 90)
+  local fillmin  = clearing and (at.clear_pct or 25) or (at.min_pct or 70)
+  local need = math.max(1, math.min(cap, math.ceil(cap * fillmin / 100)))
+
+  -- SELL: offload warehouse stock to its best-paying town. Candidates are ranked
+  -- by CART VALUE (units x best sell price) -- the market report's Profit column is
+  -- never consulted here; profit is an arbitrage number and these are goods we
+  -- already own. A small cart of something expensive legitimately outranks a full
+  -- cart of something cheap.
+  local cand = {}
+  for _, r in ipairs(results) do
+    if not at.exempt[disp_cmd(r.cmd)] and r.sells and r.sells[1] then
+      local have  = have_of(r)
+      local isref = REFINED[r.cmd] and true or false
+      local reserve = at.keep or 20
+      if not (isref or SPECIAL[r.cmd]) then reserve = math.max(reserve, at.stock or 300) end
+      local avail = have - reserve
+      if isref and not at.refined then avail = 0 end
+      -- Candidacy needs only a dispatchable amount (the game minimum), NOT the cart
+      -- fill-minimum: gating sells on `need` starved high-price goods -- finery had
+      -- to pile up past 70% of a cart before it could even enter the race, while
+      -- cheap bulk qualified every pass. Junk carts still stay off the road: the
+      -- value floor below refuses anything under min_rel% of the best load.
+      if avail >= MK_UNITS_MIN then
+        local best, bestq = nil, nil
+        for _, s in ipairs(r.sells) do
+          local dem = tonumber(s.qty)
+          local qty = math.min(avail, cap, (dem and dem > 0) and dem or cap)
+          if qty >= MK_UNITS_MIN then   -- below the game's dispatch minimum isn't a cart
+            local val = qty * (s.price or 0)
+            if not best or val > best.value then best = { town = s.town, qty = qty, value = val } end
+            if not bestq or qty > bestq.qty or (qty == bestq.qty and val > bestq.value) then
+              bestq = { town = s.town, qty = qty, value = val }
+            end
+          end
+        end
+        local isflush = (at.flush and at.flush > 0 and have >= at.flush) or false
+        local pick = isflush and bestq or best
+        if pick then
+          cand[#cand + 1] = { kind = "sell", cmd = r.cmd, town = pick.town, qty = pick.qty,
+                              value = pick.value, avail = avail, flush = isflush }
+        end
+      end
+    end
+  end
+
+  -- SCALPER: buy low / sell high (competes on value with the sells above)
+  local daler  = tonumber(v.DALER) or 0
+  local budget = math.max(0, daler - (at.reserve or 0))
+  local space  = math.max(0, wcap - used - 200)
+  if at.scalp and not pressure and budget > 0 and space >= need then
+    for _, r in ipairs(results) do
+      if not at.exempt[disp_cmd(r.cmd)] and not inbound[disp_cmd(r.cmd)]
+         and r.buys and r.buys[1] and r.sells and r.sells[1] then
+        local buy, sell = r.buys[1], r.sells[1]
+        local per = (sell.price or 0) - (buy.price or 0)
+        if per >= (at.margin or 1) and (buy.price or 0) > 0 then
+          local supply = tonumber(buy.qty)  or cap
+          local demand = tonumber(sell.qty) or cap
+          local afford = math.floor(budget / buy.price)
+          local qty = math.min(cap, supply, demand, afford, space)
+          if qty >= need then
+            cand[#cand + 1] = { kind = "buy", cmd = r.cmd, town = buy.town, qty = qty,
+                                value = qty * per, cost = qty * buy.price, unit = buy.price, per = per }
+          end
+        end
+      end
+    end
+  end
+
+  -- RESTOCK (top priority): buy raws back up to Raw> when low
+  local restock = {}
+  if at.restock and not clearing and budget > 0 and space >= need then
+    for _, r in ipairs(results) do
+      if RAWBUILD[r.cmd] and not at.exempt[disp_cmd(r.cmd)]
+         and not inbound[disp_cmd(r.cmd)] and r.buys and r.buys[1] then
+        local buy = r.buys[1]
+        local have = have_of(r)
+        if have < (at.stock or 300) and (buy.price or 0) > 0 then
+          local supply = tonumber(buy.qty) or cap
+          local afford = math.floor(budget / buy.price)
+          local qty = math.min(cap, supply, afford, space)
+          if qty >= need then
+            restock[#restock + 1] = { cmd = r.cmd, town = buy.town, qty = qty,
+                                      cost = qty * buy.price, unit = buy.price, have = have }
+          end
+        end
+      end
+    end
+    table.sort(restock, function(a, b) return a.have < b.have end)
+  end
+
+  -- rank sell/scalp candidates by cart value; flush piles jump the queue
+  table.sort(cand, function(a, b)
+    if (a.flush or false) ~= (b.flush or false) then return a.flush or false end
+    return a.value > b.value
+  end)
+  local bestnf = 0
+  for _, c in ipairs(cand) do if not c.flush and c.value > bestnf then bestnf = c.value end end
+  local floor = pressure and 0 or (bestnf * (at.min_rel or 40) / 100)
+
+  local sent, seen = 0, {}
+  -- restock first: keep raw building materials topped up
+  for _, c in ipairs(restock) do
+    if sent >= free then break end
+    if not seen[c.cmd] then
+      local q = math.min(c.qty, space)
+      local cost = q * (c.unit or 0)
+      if q >= need and cost <= budget then
+        scrye.send(string.format("vtrade dispatch buy %d %s %s escort %d",
+          q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
+        note(string.format("restock buy %d %s from %s (-%dd, had %d)", q, c.cmd, c.town, cost, c.have))
+        at_record("buy", q, disp_cmd(c.cmd), c.town, cost)
+        budget = budget - cost; space = space - q; seen[c.cmd] = true
+        at.pending = (at.pending or 0) + 1; sent = sent + 1
+      end
+    end
+  end
+  -- then the most valuable sell/scalp carts
+  for _, c in ipairs(cand) do
+    if sent >= free then break end
+    if not c.flush and c.value < floor then break end
+    if not seen[c.cmd] then
+      if c.kind == "buy" then
+        local q = math.min(c.qty, space)
+        local cost = q * (c.unit or 0)
+        if q >= need and cost <= budget then
+          scrye.send(string.format("vtrade dispatch buy %d %s %s escort %d",
+            q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
+          note(string.format("scalp buy %d %s from %s (-%dd, ~+%dd margin)",
+            q, c.cmd, c.town, cost, math.floor(q * (c.per or 0))))
+          at_record("buy", q, disp_cmd(c.cmd), c.town, cost)
+          budget = budget - cost; space = space - q; seen[c.cmd] = true
+          at.pending = (at.pending or 0) + 1; sent = sent + 1
+        end
+      else
+        scrye.send(string.format("vtrade dispatch sell %d %s %s escort %d",
+          c.qty, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
+        note(string.format("sell %d %s to %s (~%dd cart)", c.qty, c.cmd, c.town, c.value))
+        at_record("sell", c.qty, disp_cmd(c.cmd), c.town, c.value)
+        seen[c.cmd] = true; at.pending = (at.pending or 0) + 1; sent = sent + 1
+      end
+    end
+  end
+
+  if sent > 0 then
+    mk_last_dispatch = os.time()
+    if not at.cd_wait then at.cd_wait = true; scrye.after(10, at_cd_retry) end
+  end
+end
+
+at_schedule = function()
+  if at.pending_check then return end
+  at.pending_check = true
+  scrye.after(1, function() auto_trade_tick() end)
+end
+
+at_cd_retry = function()
+  at.cd_wait = false
+  auto_trade_tick()
+end
+
+local function at_driver() if at.on then at_schedule() end end
+
+-- react to the live feed: dispatch when the warehouse gains goods or a cart frees up
+local at_last_free, at_last_stock = -1, -1
+local function at_on_feed()
+  if not at.on then return end
+  local v = at_getvars()
+  local maxc = at_capacity(v)
+  if at.carts and at.carts > 0 then maxc = math.min(maxc, at.carts) end
+  local active = 0
+  for _ in (v.CARTS or ""):gmatch("[^;]+") do active = active + 1 end
+  local free = maxc - active
+  local total = 0
+  for e in (v.WSTOCK or ""):gmatch("[^;]+") do local a = e:match("|(%d+)"); if a then total = total + tonumber(a) end end
+  local trig = (at_last_stock >= 0 and total > at_last_stock)
+            or (at_last_free  >= 0 and free  > at_last_free)
+  at_last_free, at_last_stock = free, total
+  if trig then at_schedule() end
+end
+
+-- ---------- held / exempt goods ----------
+local function at_save_exempt()
+  local list = {}
+  for k, on in pairs(at.exempt) do if on then list[#list + 1] = k end end
+  table.sort(list); sset("at_exempt", table.concat(list, ",")); return list
+end
+local function at_toggle_exempt(word)
+  word = trim(word or ""):lower(); word = DCMD[word] or word
+  if word == "" then return end
+  at.exempt[word] = (not at.exempt[word]) or nil
+  at_save_exempt()
+  mk_render(nil)          -- refresh the "#" held markers in the Market report
+end
+
+-- ---------- numeric settings ----------
+local AT_KEY   = { reserve="at_reserve", margin="at_margin", stock="at_stock", flush="at_flush",
+                   min="at_minpct", rel="at_minrel", keep="at_keep", soft="at_soft",
+                   full="at_full", clear="at_clearpct", carts="at_carts", escort="at_escort" }
+local AT_FIELD = { reserve="reserve", margin="margin", stock="stock", flush="flush",
+                   min="min_pct", rel="min_rel", keep="keep", soft="soft",
+                   full="full", clear="clear_pct", carts="carts", escort="escort" }
+-- clamps for settings the game itself bounds; everything else is just floored at 0
+local AT_RANGE = { escort = { 1, 20 } }
+local function at_setnum(name, val)
+  local field, key = AT_FIELD[name], AT_KEY[name]
+  if not field then note("unknown setting: " .. tostring(name)); return end
+  local n = tonumber(val)
+  if not n then note("not a number: " .. tostring(val)); return end
+  n = math.floor(n)
+  local r = AT_RANGE[name]
+  if r then n = math.max(r[1], math.min(r[2], n)) else n = math.max(0, n) end
+  at[field] = n; sset(key, n); at_draw()
+  note(string.format("%s = %d%s", name, n, (n ~= math.floor(tonumber(val))) and " (clamped)" or ""))
+end
+
+-- ---------- status + drawing the Auto / Log tabs ----------
+local function at_modeline(v)
+  local used, wcap, wtier = at_warehouse(v or at_getvars())
+  local pct = (wcap > 0) and (used * 100 / wcap) or 0
+  local pressure, clearing = pct >= (at.soft or 70), pct >= (at.full or 90)
+  local mode = clearing and "CLEARING - biggest piles, buying paused"
+            or (pressure and "PRESSURE - biggest piles, scalping paused" or "normal - best value first")
+  return used, wcap, wtier, pct, mode
+end
+
+at_draw = function()
+  local v = at_getvars()
+  local used, wcap, wtier, pct, mode = at_modeline(v)
+  local cd = tonumber(v.CDTIME) or 0
+  local L = {}
+  L[#L+1] = string.format("Auto-trade: %s     Scalp: %s   Restock: %s   Refined: %s",
+    at.on and "ON" or "OFF", at.scalp and "on" or "off", at.restock and "on" or "off", at.refined and "on" or "off")
+  L[#L+1] = string.format("Warehouse %s / %s  (%d%%, tier %d)   Daler %s%s",
+    comma(used), comma(wcap), math.floor(pct), wtier, comma(tonumber(v.DALER) or 0),
+    cd > 0 and ("   cart cooldown " .. cd .. "s") or "")
+  L[#L+1] = "mode: " .. mode
+  local held = {}
+  for k, on in pairs(at.exempt) do if on then held[#held+1] = k end end
+  table.sort(held)
+  if #held > 0 then L[#L+1] = "held (never sold): " .. table.concat(held, ", ") end
+  scrye.setState(P .. "atstatus", table.concat(L, "\n"))
+
+  scrye.setState(P .. "v_keep",    tostring(at.keep))
+  scrye.setState(P .. "v_stock",   tostring(at.stock))
+  scrye.setState(P .. "v_reserve", tostring(at.reserve))
+  scrye.setState(P .. "v_carts",   tostring(at.carts))
+  scrye.setState(P .. "v_min",     tostring(at.min_pct))
+  scrye.setState(P .. "v_rel",     tostring(at.min_rel))
+  scrye.setState(P .. "v_margin",  tostring(at.margin))
+  scrye.setState(P .. "v_flush",   tostring(at.flush))
+  scrye.setState(P .. "v_soft",    tostring(at.soft))
+  scrye.setState(P .. "v_full",    tostring(at.full))
+  scrye.setState(P .. "v_clear",   tostring(at.clear_pct))
+  scrye.setState(P .. "v_escort",  tostring(at.escort))
+  scrye.setState(P .. "v_units",   tostring(mk_units))
+
+  local s = at.stats
+  local mins = math.floor((os.time() - (s.since or os.time())) / 60)
+  local lg = {}
+  lg[#lg+1] = string.format("this session (%dm):  sold %d (~+%s d)   bought %d (-%s d)",
+    mins, s.sells, comma(s.earned), s.buys, comma(s.spent))
+  lg[#lg+1] = ""
+  if #s.recent == 0 then lg[#lg+1] = "(no auto-trades yet)"
+  else for i = #s.recent, math.max(1, #s.recent - 25), -1 do lg[#lg+1] = s.recent[i] end end
+  scrye.setState(P .. "atlog", table.concat(lg, "\n"))
+end
+
+local function at_status()
+  local v = at_getvars()
+  local used, wcap, wtier, pct, mode = at_modeline(v)
+  note(string.format("auto %s | scalp %s | restock %s | refined %s | keep %d | raw>%d | reserve %s | carts %s",
+    at.on and "ON" or "OFF", at.scalp and "on" or "off", at.restock and "on" or "off",
+    at.refined and "yes" or "no", at.keep, at.stock, comma(at.reserve),
+    (at.carts > 0) and tostring(at.carts) or "auto"))
+  note(string.format("warehouse %s/%s (%d%%, tier %d) | mode: %s",
+    comma(used), comma(wcap), math.floor(pct), wtier, mode))
+end
+
+local function at_show_stats()
+  local s = at.stats
+  local mins = math.floor((os.time() - (s.since or os.time())) / 60)
+  note(string.format("this session (%dm): sold %d (~+%s d)  bought %d (-%s d)",
+    mins, s.sells, comma(s.earned), s.buys, comma(s.spent)))
+end
+
+local function at_show_log()
+  local s = at.stats
+  if #s.recent == 0 then note("no trades this session (full history is in the plugin log file)"); return end
+  note("recent auto-trades:")
+  for i = math.max(1, #s.recent - 14), #s.recent do scrye.print("  " .. s.recent[i]) end
+end
+
+-- panel toggles
+local function at_toggle_on()      at.on = not at.on; sset("at_on", at.on and "1" or "0"); if at.on then at_schedule() end; at_draw(); at_status() end
+local function at_toggle_scalp()   at.scalp = not at.scalp; sset("at_scalp", at.scalp and "1" or "0"); if at.on and at.scalp then at_schedule() end; at_draw() end
+local function at_toggle_restock() at.restock = not at.restock; sset("at_restock", at.restock and "1" or "0"); if at.on and at.restock then at_schedule() end; at_draw() end
+local function at_toggle_refined() at.refined = not at.refined; sset("at_refined", at.refined and "1" or "0"); at_draw() end
+
+-- ---------- `atrade` command ----------
+local function at_config(rest)
+  rest = trim(rest or ""):lower()
+  local key, val = rest:match("^(%a+)%s+(%-?%d+)$")
+  if rest == "" or rest == "status" then at_status(); return
+  elseif rest == "on"  then at.on = true;  sset("at_on", "1"); at_schedule(); at_draw()
+  elseif rest == "off" then at.on = false; sset("at_on", "0"); at_draw()
+  elseif rest == "refined on"  then at.refined = true;  sset("at_refined", "1"); at_draw()
+  elseif rest == "refined off" then at.refined = false; sset("at_refined", "0"); at_draw()
+  elseif rest == "scalp on"    then at.scalp = true;  sset("at_scalp", "1"); if at.on then at_schedule() end; at_draw()
+  elseif rest == "scalp off"   then at.scalp = false; sset("at_scalp", "0"); at_draw()
+  elseif rest == "restock on"  then at.restock = true;  sset("at_restock", "1"); if at.on then at_schedule() end; at_draw()
+  elseif rest == "restock off" then at.restock = false; sset("at_restock", "0"); at_draw()
+  elseif rest == "notify on"   then at.notify = true;  sset("at_notify", "1"); publish_notify_state(); note("phone notify per auto-dispatch: on")
+  elseif rest == "notify off"  then at.notify = false; sset("at_notify", "0"); publish_notify_state(); note("phone notify per auto-dispatch: off")
+  elseif rest == "stats"       then at_show_stats(); return
+  elseif rest == "stats reset" then at.stats = { buys=0, sells=0, spent=0, earned=0, since=os.time(), recent={} }; note("session stats reset"); at_draw(); return
+  elseif rest == "log"         then at_show_log(); return
+  elseif rest == "exempt"       then local l={}; for k,on in pairs(at.exempt) do if on then l[#l+1]=k end end; table.sort(l); note("held: " .. (#l>0 and table.concat(l, ", ") or "(none)")); return
+  elseif rest == "exempt clear" then at.exempt = {}; sset("at_exempt", ""); note("held list cleared"); mk_render(nil); at_draw(); return
+  elseif rest:match("^exempt%s+") then at_toggle_exempt(rest:gsub("^exempt%s+", "")); at_draw(); return
+  elseif key and AT_FIELD[key] then at_setnum(key, val); return
+  else
+    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | stats | log")
+    return
+  end
+  at_status()
+end
+
+
+-- ====================== manual dispatch ======================
+-- Restores the MUSHclient window's click-a-town action: it sent
+--   vtrade dispatch <side> <units> <good> <town> escort <n>
+-- Here it is a command instead, since panel widgets are built once at load and the
+-- ranked town list changes on every refresh.
+local function mnote(t) scrye.print("@{#DEB218,bold}[market]@{} " .. t) end
+
+-- every town name present in the current market data
+local function known_towns()
+  local seen, out = {}, {}
+  for _, towns in pairs(market) do
+    for town in pairs(towns) do
+      if not seen[town] then seen[town] = true; out[#out + 1] = town end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
+-- exact, then prefix, then substring -- so "lodbrok" finds "Lodbrok's Hold"
+local function resolve_town(str)
+  local q = trim(str or ""):lower()
+  if q == "" then return nil end
+  local towns = known_towns()
+  for _, t in ipairs(towns) do if t:lower() == q then return t end end
+  for _, t in ipairs(towns) do if t:lower():sub(1, #q) == q then return t end end
+  for _, t in ipairs(towns) do if t:lower():find(q, 1, true) then return t end end
+  return nil
+end
+
+-- pull a leading good name off "<good> <town>". Goods can be two words ("fine furs",
+-- "salted fish"), so the longest matching name or command word wins.
+local function split_good_town(str)
+  str = trim(str or "")
+  local low = str:lower()
+  local cmd, len = nil, 0
+  for _, r in ipairs(RES) do
+    for _, form in ipairs({ r.name:lower(), r.cmd }) do
+      if #form > len and low:sub(1, #form) == form then
+        local nxt = low:sub(#form + 1, #form + 1)
+        if nxt == "" or nxt == " " then cmd, len = r.cmd, #form end
+      end
+    end
+  end
+  if not cmd then return nil, nil end
+  return cmd, trim(str:sub(len + 1))
+end
+
+local function mk_setunits(val)
+  local n = tonumber(val)
+  if not n then mnote("not a number: " .. tostring(val)); return end
+  n = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, math.floor(n)))
+  mk_units = n; sset("mk_units", n)
+  scrye.setState(P .. "v_units", tostring(n))
+  mnote(string.format("manual dispatch units = %d", n))
+end
+
+-- ---------- quick dispatch (the window's click-a-town action, as buttons) ----------
+-- The original let you click a town in the market window to send a cart there. A bound
+-- buttonrow is the equivalent: the options are recomputed from the live feed, and the
+-- click carries the index back so we dispatch the exact cart the label described rather
+-- than re-parsing it.
+-- The carts are clickable TEXT, not buttons. That matters for more than looks: a text widget
+-- is driven by bound state, so refreshing the list never rebuilds the panel -- which is what
+-- used to threaten the twelve settings fields and forced the carts into a panel of their own.
+-- Clicking sends "mkdispatch ...", the plugin's own alias, so it goes through mk_dispatch and
+-- gets the same clamping, logging and rescan-guard as a typed command.
+publish_dispatch = function()
+  local labels = {}
+  local ok = pcall(function()
+    local v = at_getvars()
+    -- warehouse stock per good (same normalisation the auto-trader uses)
+    local stock = {}
+    for entry in (v.WSTOCK or ""):gmatch("[^;]+") do
+      local g, a = entry:match("^([^|]+)|(%d+)")
+      if g then
+        local k = trim(g):lower():gsub("_", " ")
+        stock[k] = (stock[k] or 0) + tonumber(a)
+      end
+    end
+    local _, cap = at_capacity(v)
+    if not cap or cap <= 0 then return end
+
+    -- one candidate per good: what you hold, sold to its best-paying town
+    local cand = {}
+    for _, r in ipairs(results) do
+      local best = r.sells[1]
+      if best then
+        local have = (stock[(r.cmd or ""):gsub("_", " ")] or stock[(r.res or ""):lower()] or 0)
+                     - (at.keep or 0)                       -- respect the mission reserve
+        if have > 0 and not at.exempt[disp_cmd(r.cmd)] then  -- and the held list
+          local qty = math.floor(math.min(have, cap, best.qty))
+          if qty >= MK_UNITS_MIN then
+            cand[#cand + 1] = {
+              side = "sell", qty = qty, cmd = disp_cmd(r.cmd), town = best.town,
+              value = qty * best.price,
+              label = string.format("%d %s>%s", qty, r.res, best.town:sub(1, 10)),
+            }
+          end
+        end
+      end
+    end
+    table.sort(cand, function(a, b) return a.value > b.value end)
+    while #cand > 8 do table.remove(cand) end   -- keep the panel a sensible height
+    for _, c in ipairs(cand) do
+      -- the click runs the plugin's own alias; disp_cmd/town_cmd give the words vtrade wants
+      labels[#labels + 1] = string.format(
+        "@{success,click=mkdispatch sell %d %s %s}%4d %-12s %s %-12s@{} @{dim}~%sd@{}",
+        c.qty, c.cmd, town_cmd(c.town),
+        c.qty, esc(DISPLAY[c.cmd] or c.cmd), ">", esc(c.town:sub(1, 12)), esc(comma(c.value)))
+    end
+  end)
+  if not ok then labels = {} end
+
+  if #labels == 0 then
+    labels[1] = "@{dim}nothing worth sending - Refresh to update@{}"
+  end
+  scrye.setState(P .. "carts", table.concat(labels, "\n"))
+end
+
+local MK_USAGE = "usage: mkdispatch buy|sell [qty] <good> <town>   (qty defaults to the Units setting)"
+
+local function mk_dispatch(rest)
+  local side, tail = trim(rest or ""):match("^(%a+)%s+(.+)$")
+  side = side and side:lower()
+  if side ~= "buy" and side ~= "sell" then mnote(MK_USAGE); return end
+
+  local qty = mk_units
+  local n, remainder = tail:match("^(%d+)%s+(.+)$")
+  if n then qty = tonumber(n); tail = remainder end
+  qty = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, math.floor(qty)))
+
+  local cmd, townstr = split_good_town(tail)
+  if not cmd then mnote("don\'t recognise a good in: " .. tail); mnote(MK_USAGE); return end
+  if townstr == "" then mnote("no town given. " .. MK_USAGE); return end
+
+  -- fall back to the word as typed when there is no scan data to match against
+  local town = resolve_town(townstr) or townstr
+  local escort = math.max(1, math.min(20, at.escort or 5))
+
+  scrye.send(string.format("vtrade dispatch %s %d %s %s escort %d",
+    side, qty, disp_cmd(cmd), town_cmd(town), escort))
+  mnote(string.format("dispatch %s %d %s %s %s (escort %d)",
+    side, qty, DISPLAY[cmd] or cmd, (side == "buy") and "from" or "to", town, escort))
+
+  -- record it in the Log tab, but keep it out of the auto-trader's counters
+  local line = string.format("[%s] MAN  %-4s %4d %-11s %-4s %-14s",
+    os.date("%Y-%m-%d %H:%M:%S"), side:upper(), qty, disp_cmd(cmd),
+    (side == "buy") and "from" or "to", town)
+  scrye.log(line)
+  local rec = at.stats.recent
+  rec[#rec + 1] = line
+  while #rec > 40 do table.remove(rec, 1) end
+
+  mk_last_dispatch = os.time()   -- don't let our own echo trigger a rescan
+  if at_draw then at_draw() end
+end
+
+-- ====================== aliases ======================
+scrye.addAlias{
+  pattern = "^mkref$", regex = true,
+  run = function() mk_refresh(false) end,
+}
+
+-- manual dispatch:  mkdispatch buy 200 mead lodbrok   /   mkdispatch sell bread eirik
+scrye.addAlias{
+  pattern = "^mkdispatch$", regex = true,
+  run = function() mnote(MK_USAGE) end,
+}
+scrye.addAlias{
+  pattern = "^mkdispatch (.+)$", regex = true,
+  run = function(rest) mk_dispatch(rest) end,
+}
+-- default cart size for manual dispatch
+scrye.addAlias{
+  pattern = "^mkunits$", regex = true,
+  run = function() mnote(string.format("manual dispatch units = %d (range %d-%d)",
+    mk_units, MK_UNITS_MIN, MK_UNITS_MAX)) end,
+}
+scrye.addAlias{
+  pattern = "^mkunits (.+)$", regex = true,
+  run = function(v) mk_setunits(v) end,
+}
+
+-- consumed, not passed to the MUD: the HUD owns panel visibility
+scrye.addAlias{
+  pattern = "^markwin$", regex = true,
+  run = function() mnote("the Market panel is managed by Scrye - show or hide it from the HUD.") end,
+}
+
+-- auto-trader command:  atrade | atrade <setting> <value> | atrade on|off | ...
+scrye.addAlias{
+  pattern = "^atrade$", regex = true,
+  run = function() at_config("") end,
+}
+scrye.addAlias{
+  pattern = "^atrade (.+)$", regex = true,
+  run = function(rest) at_config(rest) end,
+}
+
+-- ====================== HUD panel (Market / Auto / Log tabs) ======================
+
+-- ====================== init: restore the last scan ======================
+local saved = scrye.store.get("market")
+if saved and saved ~= "" then
+  local ok = pcall(function() market = mk_deserialize(saved) end)
+  if ok then
+    mk_compute()
+    mk_render("restored from previous session - " .. #results .. " goods (mkref to update)")
+  else
+    market = {}
+    mk_render("not loaded yet - click Refresh or type mkref")
+  end
+else
+  mk_render("not loaded yet - click Refresh or type mkref")
+end
+
+-- ====================== auto-trader wiring ======================
+-- connection tracking: dispatch any idle carts on connect (if auto is on)
+scrye.onConnect(function() connected = true; at_driver() end)
+scrye.onDisconnect(function() connected = false end)
+
+-- react to live warehouse/cart changes: only dispatch on a real edge (goods gained / cart freed)
+scrye.watch("vik", function() at_on_feed(); publish_dispatch() end)
+
+at_draw()   -- seed the Auto / Log tab state
+publish_notify_state()
+
+-- a (re)load mid-session gets no onConnect, so start the driver here as well
+if at.on then at_driver() end
+
+-- The panel lives in the outer chunk, so hand it the handful of entry points its widgets
+-- need. Everything else stays private to this block.
+return {
+  refresh        = function(quiet) mk_refresh(quiet) end,
+  setunits       = function(t) mk_setunits(t) end,
+  setnum         = function(field, t) at_setnum(field, t) end,
+  toggle_on      = function() at_toggle_on() end,
+  toggle_scalp   = function() at_toggle_scalp() end,
+  toggle_restock = function() at_toggle_restock() end,
+  toggle_refined = function() at_toggle_refined() end,
+}
+end)()
+
+
 scrye.addPanel{
   title = "Viking Status",
   width = 560,
@@ -1963,7 +3695,12 @@ scrye.addPanel{
         { type = "barlist", bind = P .. "refinery" },
     } },
     { title = "Builds", widgets = {
+        -- semantic colour: the count of buildings you can start right now
+        { type = "value", text = "", bind = P .. "buildsummary", color = "success" },
         { type = "text", bind = P .. "builds" },
+        -- one button: the rows redraw themselves on every feed change, so a manual
+        -- refresh would do nothing Scan does not do better ('build refresh' still exists).
+        { type = "button", text = "Scan costs", action = function() bp_scan() end },
     } },
     { title = "Production", widgets = {
         { type = "text", bind = P .. "production" },
@@ -2024,6 +3761,45 @@ scrye.addPanel{
         { type = "text", bind = P .. "mission" },
         { type = "button", text = "Fetch",  action = function() scrye.send("vmission newbie fetch") end },
         { type = "button", text = "Submit", action = function() scrye.send("vmission newbie submit") end },
+    } },
+    { title = "Trade", widgets = {
+        { type = "button", text = "Refresh", action = function() MK.refresh(false) end },
+        { type = "label",  bind = P .. "status", color = "#AC811E" },   -- market gold, kept: it reads as its own subsystem
+        { type = "text",   bind = P .. "report" },
+        { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "dim" },
+        { type = "text",   bind = P .. "carts" },
+        { type = "input",  text = "Units (20-350) ", bind = P .. "v_units",
+          onSubmit = function(t) MK.setunits(t) end },
+        { type = "input",  text = "Escort (1-20) ",  bind = P .. "v_escort",
+          onSubmit = function(t) MK.setnum("escort", t) end },
+    } },
+    { title = "Trade Auto", widgets = {
+        { type = "text", bind = P .. "atstatus" },
+        { type = "buttonrow", buttons = {
+            { text = "Auto On/Off", action = function() MK.toggle_on() end },
+            { text = "Scalp On/Off", action = function() MK.toggle_scalp() end },
+        } },
+        { type = "buttonrow", buttons = {
+            { text = "Restock On/Off", action = function() MK.toggle_restock() end },
+            { text = "Refined On/Off", action = function() MK.toggle_refined() end },
+        } },
+        { type = "label", text = "Settings (type a value, Enter):", color = "dim" },
+        { type = "input", text = "Keep (every good) ",  bind = P .. "v_keep",    onSubmit = function(t) MK.setnum("keep", t) end },
+        { type = "input", text = "Raw> buffer ",        bind = P .. "v_stock",   onSubmit = function(t) MK.setnum("stock", t) end },
+        { type = "input", text = "Daler reserve ",      bind = P .. "v_reserve", onSubmit = function(t) MK.setnum("reserve", t) end },
+        { type = "input", text = "Cart cap (0=auto) ",  bind = P .. "v_carts",   onSubmit = function(t) MK.setnum("carts", t) end },
+        { type = "input", text = "Cart fill min % ",    bind = P .. "v_min",     onSubmit = function(t) MK.setnum("min", t) end },
+        { type = "input", text = "Value floor % ",      bind = P .. "v_rel",     onSubmit = function(t) MK.setnum("rel", t) end },
+        { type = "input", text = "Scalp margin/unit ",  bind = P .. "v_margin",  onSubmit = function(t) MK.setnum("margin", t) end },
+        { type = "input", text = "Flush cap (0=off) ",  bind = P .. "v_flush",   onSubmit = function(t) MK.setnum("flush", t) end },
+        { type = "input", text = "Pressure % ",         bind = P .. "v_soft",    onSubmit = function(t) MK.setnum("soft", t) end },
+        { type = "input", text = "Clearing % ",         bind = P .. "v_full",    onSubmit = function(t) MK.setnum("full", t) end },
+        { type = "input", text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) MK.setnum("clear", t) end },
+        { type = "input", text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) MK.setnum("escort", t) end },
+        { type = "label", text = "Hold a good: click its name in the Trade tab (or: atrade exempt <good>)", color = "dim" },
+    } },
+    { title = "Trade Log", widgets = {
+        { type = "text", bind = P .. "atlog" },
     } },
     { title = "Feeds", widgets = {
         { type = "text", bind = P .. "feeds" },

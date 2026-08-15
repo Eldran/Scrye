@@ -1,31 +1,19 @@
 {
   "id": "3s-market",
-  "name": "3S Market",
-  "version": "1.0.0",
+  "name": "3S Market (moved)",
+  "version": "2.0.0",
   "author": "Joakim",
-  "description": "3Scapes Viking market arbitrage finder (parses vtrade goods)",
+  "description": "DEPRECATED - the market scanner and auto-trader are now the Trade tabs of 3S Viking Status. This stub only says so; enable that plugin and disable this one.",
   "mudIds": [
     "*"
   ],
   "entry": "main.lua",
   "lang": "lua",
   "requires": {
-    "scryeApi": ">=1.3 <2.0"
+    "scryeApi": ">=1.2 <2.0"
   },
   "permissions": [
-    "commands.send",
-    "output.read",
-    "output.modify",
-    "state.read",
-    "state.write",
-    "notifications.show",
-    "variables.write",
-    "log.write",
-    "storage.private",
-    "timers.manage",
-    "triggers.manage",
-    "aliases.manage",
-    "ui.panels"
+    "output.modify"
   ],
   "enabled": true
 }

@@ -1,9 +1,9 @@
 {
   "id": "3s-build",
-  "name": "3S Build Planner",
-  "version": "1.0.0",
+  "name": "3S Build Planner (moved)",
+  "version": "2.0.0",
   "author": "Joakim",
-  "description": "3Scapes build planner: affordability for every building upgrade, from the live viking feed",
+  "description": "DEPRECATED - the build planner is now the Builds tab of 3S Viking Status. This stub only says so; enable that plugin and disable this one.",
   "mudIds": [
     "*"
   ],
@@ -13,16 +13,7 @@
     "scryeApi": ">=1.2 <2.0"
   },
   "permissions": [
-    "commands.send",
-    "output.read",
-    "output.modify",
-    "state.read",
-    "state.write",
-    "storage.private",
-    "timers.manage",
-    "triggers.manage",
-    "aliases.manage",
-    "ui.panels"
+    "output.modify"
   ],
   "enabled": true
 }
