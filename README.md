@@ -4,6 +4,26 @@ A modern MUD client — the clean-room successor to MUSHclient, built in C# / .N
 
 Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin compatibility with it. It reimagines the client for today: Unicode-native, GMCP-first, async, and testable, with a redesigned scripting and plugin model.
 
+## Screenshots
+
+![Scrye running on Windows: MUD output on the left, plugin HUD panels on the right, and a chat capture pane along the bottom](docs/images/desktop-main-window.png)
+
+A live session on 3Scapes. Output on the left; on the right, HUD panels drawn by plugins —
+Viking Status with its tab strip, an auto-raid controller, a chaos-sea map, an area stepper
+and vitals bars. Along the bottom, a **capture pane** collecting every chat channel so it
+can't scroll away, and the toggle bar for timestamps, TTS, the idle guard and the rest.
+
+### On your phone
+
+The **mobile companion** serves the same live session to a browser on your phone. The desktop
+keeps the connection, runs the triggers and drives the plugins; the phone is another view of
+it, so you can close it and pick up an hour later where you left off.
+
+| Output | Chat | HUD panels |
+|:--:|:--:|:--:|
+| ![The companion's output tab, showing coloured combat text and a vitals prompt](docs/images/companion-output.png) | ![The companion's chat tab, showing the Chats capture pane with channel messages](docs/images/companion-chat.png) | ![The companion's panels tab, rendering the chaos-sea map plugin panel](docs/images/companion-panels.png) |
+| Full colour, and the prompt as the MUD sends it | Your capture panes, kept separate from the main stream | The same plugin panels, rendered for the phone |
+
 ## Download
 
 **[Latest release](../../releases/latest)** — self-contained builds for Windows and Linux. Nothing to install: no .NET, no runtime. Unzip and run.
@@ -16,6 +36,16 @@ Scrye is *inspired by* MUSHclient but does **not** aim for binary or plugin comp
 The Windows build is unsigned, so first launch shows SmartScreen's "Windows protected your PC" — **More info → Run anyway**. `SHA256SUMS.txt` is attached to every release if you'd rather verify than trust. macOS isn't released; see [platforms](#build--run) below.
 
 Building from source is only necessary if you want to change something — see **Build & run**.
+
+## Documentation
+
+- **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** — the manual. Connecting, triggers, aliases,
+  timers, sequences, profiles, capture panes, logging, the script console, and a full plugin
+  authoring reference.
+- **[docs/Scrye-Companion-Setup.md](docs/Scrye-Companion-Setup.md)** — reaching Scrye from your phone.
+- **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)** — how the mobile companion works, and why.
+
+If you only read one, read the guide — it assumes no prior MUSHclient knowledge.
 
 ## Status
 
@@ -174,12 +204,6 @@ settings panel to replace the `.companion` command. A native Avalonia-mobile cli
 optional — the PWA has not yet run out of road. The full build order and the reasoning
 behind each decision are in
 **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)**.
-
-## Documentation
-
-- **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** — using Scrye, and writing plugins.
-- **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)** — mobile companion architecture and decisions.
-- **[docs/Scrye-Companion-Setup.md](docs/Scrye-Companion-Setup.md)** — reaching Scrye from your phone.
 
 ## License
 
