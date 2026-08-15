@@ -56,15 +56,15 @@ jobs:
             rid: linux-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
@@ -121,7 +121,7 @@ jobs:
             -C "src/Scrye.App/publish/${{ matrix.rid }}" .
 
       - name: Upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Scrye-${{ matrix.rid }}
           path: dist/*
@@ -130,19 +130,21 @@ jobs:
           # loudly rather than result in an empty release.
           if-no-files-found: error
 
+  # Runs on a manual dispatch too, not just on a tag. Everything here except the final
+  # gh call is safe to rehearse, and rehearsing it is the point: collecting the artifacts,
+  # checksumming them and rendering the notes were previously reachable ONLY by tagging,
+  # so a mistake in any of them was discovered on a public page. A dry run now renders the
+  # real notes into the job summary and stops one step short of creating anything.
   release:
     name: Draft the release
     needs: build
-    # Only a tag makes a release; a manual run stops after building, so the workflow can
-    # be exercised without inventing a version number.
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Collect the archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -157,15 +159,21 @@ jobs:
           cat SHA256SUMS.txt
 
       # The body lives in .github/release-body.md so the install instructions can be
-      # edited without touching workflow YAML. --generate-notes appends GitHub's own
-      # commit summary underneath it.
-      - name: Draft the release
+      # edited without touching workflow YAML.
+      - name: Render the release notes
         env:
-          GH_TOKEN: ${{ github.token }}
           # Links in the body are absolute: a release page sits several path segments
           # deep, so the relative links that work in a README do not resolve here.
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
         run: |
+          # A dispatch has no tag, and its archives are named "dev" to match.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="dev"
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
           # The comment block at the top is guidance for whoever edits the template, not
           # release content. Strip it first: it is invisible once rendered, but it ships in
           # the body's source, and leaving it in means the paragraph explaining the
@@ -173,7 +181,7 @@ jobs:
           sed '/^<!--$/,/^-->$/d' .github/release-body.md > body.raw.md
 
           sed -e "s|{{REPO}}|${REPO_URL}|g" \
-              -e "s|{{VERSION}}|${GITHUB_REF_NAME}|g" \
+              -e "s|{{VERSION}}|${VERSION}|g" \
               body.raw.md > body.md
 
           # A leftover placeholder means a typo'd name or a new one nobody wired up, and
@@ -183,16 +191,35 @@ jobs:
             exit 1
           fi
 
+          # Rendered into the job summary so the notes can be read in the Actions UI
+          # before a tag exists, which is the whole point of rehearsing this job.
+          {
+            echo "## Release notes as they will appear"
+            echo
+            cat body.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Draft the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
           # A tag like v0.9.0-beta1 is a prerelease; v0.9.0 is not.
-          case "${GITHUB_REF_NAME}" in
+          case "${VERSION}" in
             *-*) PRERELEASE="--prerelease" ;;
             *)   PRERELEASE="" ;;
           esac
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release create "${VERSION}" \
             dist/Scrye-*.zip dist/Scrye-*.tar.gz dist/SHA256SUMS.txt \
-            --title "Scrye ${GITHUB_REF_NAME}" \
+            --title "Scrye ${VERSION}" \
             --notes "$(cat body.md)" \
             --generate-notes \
             --draft \
             $PRERELEASE
           echo "Draft created. Review the assets, then press Publish release."
+
+      - name: Dry run — nothing published
+        if: github.ref_type != 'tag'
+        run: |
+          echo "No tag, so no release was created. The notes above are what a tag would publish."
+          ls -la dist
