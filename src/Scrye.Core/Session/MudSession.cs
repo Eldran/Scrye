@@ -322,6 +322,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         Str("enemy_name", "enemy.name");          Num("enemy_hp", "enemy.health");
         Num("round", "combat.round");
         Str("gline1", "character.gline1");        Str("gline2", "character.gline2");
+        // The colour-tagged originals. A watcher on "character.gline1" fires for its ".raw"
+        // child too, which is what you want: they always change together.
+        Str("gline1_raw", "character.gline1.raw"); Str("gline2_raw", "character.gline2.raw");
         Str("uptime", "server.uptime");           Str("lag", "server.lag");
     }
 
@@ -348,7 +351,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private static readonly string[] MipOwnedVariables =
     {
         "hp", "hpmax", "sp", "spmax", "gp1", "gp1max", "gp2", "gp2max",
-        "gline1", "gline2", "enemy_name", "enemy_hp", "round",
+        "gline1", "gline1_raw", "gline2", "gline2_raw", "enemy_name", "enemy_hp", "round",
     };
 
     /// <summary>

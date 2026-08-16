@@ -75,8 +75,14 @@ public sealed class MipProcessor
                 case 'F': _vars.Set("gp1max", val); break;
                 case 'G': _vars.Set("gp2", val); break;
                 case 'H': _vars.Set("gp2max", val); break;
-                case 'I': _vars.Set("gline1", ColorConv(val)); break;
-                case 'J': _vars.Set("gline2", ColorConv(val)); break;
+                // Both forms, because they are for different readers. The stripped one is what
+                // you display. The RAW one is the only structure a gline-only guild gives you:
+                // 3Scapes colours the labels and the values differently, so
+                // "<yEmit> : <r16>  <gForm>: <cTime>(<r1550>)" carries field boundaries that
+                // "Emit : 16  Form: Time(1550)" does not — and some guilds (the elemental one,
+                // measured) send no BBE keys at all, so their glines are all a plugin has.
+                case 'I': _vars.Set("gline1", ColorConv(val)); _vars.Set("gline1_raw", val); break;
+                case 'J': _vars.Set("gline2", ColorConv(val)); _vars.Set("gline2_raw", val); break;
                 case 'K':
                     if (val.Length > 0) _vars.Set("enemy_name", val);
                     else { _vars.Set("enemy_name", ""); _vars.Set("enemy_hp", ""); }

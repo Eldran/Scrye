@@ -300,6 +300,23 @@ Before you can write a plugin for a guild, you have to know what that guild's ch
 
 Every row carries a live sample, because a shape fingerprint tells you a value has four pipe-separated fields and a sample tells you what they mean.
 
+### Parsing a guild's status lines — `character.gline1.raw`
+
+Not every guild uses BBE. Measured on 3Scapes: a Viking character receives 238 feed keys, an elemental character receives **none** — everything that guild knows about itself is in its two gline strings. So for a gline-only guild, parsing those isn't one option, it's the only one.
+
+They arrive colour-tagged, and the tags are the field boundaries:
+
+```
+character.gline1        Emit : 16  Form: Time(1550)  Rating: 745
+character.gline1.raw    <yEmit> : <r16>  <gForm>: <cTime>(<r1550>)  <cRating>: <r745>
+```
+
+Labels in one colour, values in another. Pull every `<r…>` run out of the raw line and you have `16`, `1550`, `745` unambiguously; the stripped line offers only whitespace to guess at. Scrye publishes both — the plain one is what you show a player, the raw one is what you parse.
+
+A guild that uses no colour tags loses nothing: the viking glines delimit with brackets (`H[7044|7053] S[5319|5319]`), so their raw and plain forms are identical.
+
+Both appear in `.mip fields`, so you can see the parseable form without going looking for it.
+
 `.mip fields save` writes the same report as a markdown file in the log folder, named after the world and timestamped. That's the one to use when the person writing the plugin isn't the person with the character: run it on each character and send the files.
 
 Both only speak for what the server has actually sent this session, so play for a bit first — and on 3Scapes, turn the feeds on with `vtoggle`.
@@ -942,7 +959,8 @@ arbitrary — so a typo shows as "unstyled", not as an invisible widget.
 ## State namespaces you'll see
 
 - `plugin.<id>.*` — your own published state (bind widgets here).
-- `character.*` — vitals, mirrored from MIP (or GMCP) so a HUD binds to one spelling whatever the source: `character.health.current`/`.max`, `character.spell.current`/`.max`, `character.gold.a`/`.amax` and `character.gold.b`/`.bmax` (the two guild‑point slots), plus `character.gline1`/`.gline2`, the guild's own status lines as free text.
+- `character.*` — vitals, mirrored from MIP (or GMCP) so a HUD binds to one spelling whatever the source: `character.health.current`/`.max`, `character.spell.current`/`.max`, `character.gold.a`/`.amax` and `character.gold.b`/`.bmax` (the two guild‑point slots), plus `character.gline1`/`.gline2`, the guild's own status lines.
+- `character.gline1.raw` / `character.gline2.raw` — the same lines **before** their colour tags are stripped. Display the plain ones; parse the raw ones. See below.
 - `enemy.name`, `enemy.health` — current target.
 - Game‑specific feeds — on 3Scapes every guild's MIP key/value feed lands under `vik.*` (`vik.daler`, `vik.wstock`, `vik.carts`, `vik.buildings`, …), readable by any plugin via `scrye.getState("vik.<key>")` and watchable with `scrye.watch("vik", fn)`. The prefix is historical — the Viking guild was first to use the carrier, not the only one.
 - `mip.<tag>` — the raw payload of a MIP frame type Scrye has no decoder for, so a plugin can use a feed the client hasn't learned yet. Run `.mip fields` to see which tags a character receives.

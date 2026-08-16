@@ -106,4 +106,53 @@ public sealed class MipProcessorTests
         proc.Handle(Bbe("VMAPH^^row1row2"));             // unchanged value: stamp not rewritten
         Assert.Equal(stamp, vars.Get("vmaph_time"));
     }
+
+    // ---- glines: both forms, for two different readers ------------------------------------
+    //
+    // 3Scapes colours a gline's labels and values differently, so the colour tags ARE its field
+    // boundaries. Stripping them is right for display and destructive for a parser — and some
+    // guilds (the elemental one, measured) send no BBE keys at all, so their glines are the only
+    // thing a plugin has to work with.
+
+    /// <summary>A real elemental gline, colour tags intact.</summary>
+    private const string ColouredGline =
+        "<yEmit> : <r16>  <gForm>: <cTime>(<r1550>)  <cRating>: <r745>";
+
+    [Fact]
+    public void AGlineIsPublishedStrippedForDisplayAndRawForParsing()
+    {
+        (MipProcessor proc, VariableStore vars, _) = Make();
+
+        proc.Handle(new MipMessage("12345", "FFF", $"I~{ColouredGline}"));
+
+        Assert.Equal("Emit : 16  Form: Time(1550)  Rating: 745", vars.Get("gline1"));
+        Assert.Equal(ColouredGline, vars.Get("gline1_raw"));
+    }
+
+    [Fact]
+    public void TheRawGlineIsWhatMakesItsFieldsRecoverable()
+    {
+        (MipProcessor proc, VariableStore vars, _) = Make();
+        proc.Handle(new MipMessage("12345", "FFF", $"I~{ColouredGline}"));
+
+        string[] values = System.Text.RegularExpressions.Regex
+            .Matches(vars.Get("gline1_raw")!, "<r([^>]*)>")
+            .Select(m => m.Groups[1].Value).ToArray();
+
+        // The whole point: three unambiguous numbers, where the stripped form offers only
+        // whitespace to guess at.
+        Assert.Equal(new[] { "16", "1550", "745" }, values);
+    }
+
+    [Fact]
+    public void AGlineWithNoColourTagsLosesNothing()
+    {
+        (MipProcessor proc, VariableStore vars, _) = Make();
+
+        // The viking guild delimits with brackets instead, and sends no colour tags at all.
+        proc.Handle(new MipMessage("12345", "FFF", "I~H[7044|7053] S[5319|5319]~J~L[4|4]"));
+
+        Assert.Equal(vars.Get("gline1"), vars.Get("gline1_raw"));
+        Assert.Equal(vars.Get("gline2"), vars.Get("gline2_raw"));
+    }
 }
