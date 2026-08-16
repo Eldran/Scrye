@@ -49,8 +49,9 @@ please open an issue with what happened.
 
 ## What's bundled
 
-Four 3Scapes plugins ship in the `plugins` folder next to the executable
-(`3s-chaossea`, `3s-chat`, `3s-raid`, `3s-viking-status`). Plugins are **opt-in
+Seven 3Scapes plugins ship in the `plugins` folder next to the executable
+(`3s-chaossea`, `3s-chat`, `3s-map`, `3s-raid`, `3s-stepper`, `3s-viking-status`,
+`3s-vitals`). Plugins are **opt-in
 per character**, so if you play elsewhere they simply sit there unused — and they double as
 worked examples if you want to write your own.
 
