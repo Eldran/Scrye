@@ -195,6 +195,40 @@ Three things it deliberately does not do:
   next session.
 - **Your own outgoing tells don't relay.** You know what you just sent.
 
+## MXP — what the server can do
+
+MXP is markup a MUD can send inline: clickable commands, links, colours, and a few things that
+reach further into the client. Scrye turns it on only when the MUD negotiates it (telnet option
+91), so nothing changes on a MUD that doesn't use it.
+
+The whole design rests on **secure mode**. A MUD marks a line secure before sending anything
+powerful; on an ordinary line those tags are ignored. That's what stops another player's `say`
+from containing a clickable "quit" — Scrye refuses to make a link out of markup the server
+didn't vouch for, and in *locked* mode it doesn't even look for tags.
+
+| What the MUD sends | What you get |
+|---|---|
+| `<SEND href="kill troll" hint="attack it">troll</SEND>` | **Click the word** to send the command; the hint shows as a tooltip. With `PROMPT`, it goes into your input box instead of being sent. |
+| `<A href="https://…">site</A>` | A link that opens in your browser. |
+| `<B> <I> <U> <S>` | Bold, italic, underline, strikethrough. |
+| `<COLOR fore back>`, `<FONT color=>` | Inline colour, independent of ANSI. |
+| `<VAR hp>85</VAR>` | Sets **`${mxp.hp}`** — usable in triggers, aliases, timers and HUD panels. |
+| `<DEST chat>…</DEST>` | Routes those lines into the **capture pane** named `chat`, exactly as a trigger's capture would. |
+| `<GAUGE hp max=maxhp caption="Health">` | Publishes `mxp.gauge.hp.value` / `.max` / `.caption` to the state store, so a HUD gauge or `scrye.watch` can bind it. |
+| `<!ENTITY …>` and `<!ELEMENT …>` | The MUD's own shorthand, expanded to the tags above. |
+
+**Server variables are namespaced.** A `<VAR hp>` becomes `${mxp.hp}`, never `${hp}`. A MUD
+cannot redefine a variable your own aliases depend on — if you set `targ` with an alias, no
+server can touch it.
+
+`<IMAGE>` and `<SOUND>` are deliberately not supported: both mean fetching or playing something a
+remote server names, which is a poor trade in a text client. MSP already covers sound.
+
+If you write MUD code and want to add MXP to your game, two things matter more than the tag list.
+Emit `<SEND>` **inline** rather than defining custom elements — Scrye supports definitions, but
+support varies across clients. And **escape anything a player can influence** (`&` `<` `>` become
+`&amp;` `&lt;` `&gt;`), or a player-chosen name becomes markup on someone else's screen.
+
 ## Capture panes
 
 A **capture pane** is a separate scrolling pane that collects specific lines — for example, all chat channels and tells routed into one "Chats" pane. Plugins (and triggers) can route lines into named panes. Show and hide the pane area with the **Panes** toggle in the bottom bar.

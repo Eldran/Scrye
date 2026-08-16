@@ -203,6 +203,30 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _ansi.MxpResponse += reply =>
             _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(_encoding.GetBytes(reply)));
 
+        // <VAR name>value</VAR>. Namespaced under "mxp." on purpose: MXP variables come from
+        // the server, and dropping them into the same namespace as the user's own would let a
+        // MUD redefine the variable an alias depends on. ${mxp.roomname} is explicit about
+        // where the value came from, and no server can reach ${targ}.
+        _ansi.MxpVariable += (name, value) =>
+        {
+            string clean = SanitiseMxpName(name);
+            if (clean.Length == 0) return;
+            _variables.Set(MxpVarPrefix + clean, value);
+            _state.Set("mxp.var." + clean, StateValue.Str(value));
+        };
+
+        // <GAUGE> lands in the state store rather than inventing a second HUD mechanism: the
+        // existing gauge widget binds a state path, so a plugin (or a future built-in panel)
+        // renders a server gauge with nothing new written.
+        _ansi.MxpGauge += (name, value, max, caption) =>
+        {
+            string clean = SanitiseMxpName(name);
+            if (clean.Length == 0) return;
+            _state.Set($"mxp.gauge.{clean}.value", StateValue.Num(value));
+            if (max > 0) _state.Set($"mxp.gauge.{clean}.max", StateValue.Num(max));
+            if (caption.Length > 0) _state.Set($"mxp.gauge.{clean}.caption", StateValue.Str(caption));
+        };
+
         _automation.Hit += OnAutomationHit;
 
         // sequences: emitted commands go to the MUD via the mailbox; progress surfaces to the UI.
@@ -483,6 +507,24 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     // ---- plugin-facing routing/alert requests (call on the loop thread) -------
 
+    /// <summary>Prefix for server-set MXP variables, so <c>${mxp.hp}</c> can never collide with
+    /// a variable the user (or one of their aliases) owns.</summary>
+    public const string MxpVarPrefix = "mxp.";
+
+    /// <summary>MXP names come off the network and end up as state paths and variable names.
+    /// Keep them to something that cannot escape its namespace or break a path.</summary>
+    private static string SanitiseMxpName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        var sb = new System.Text.StringBuilder(Math.Min(name.Length, 48));
+        foreach (char c in name.Trim())
+        {
+            if (char.IsLetterOrDigit(c) || c == '_' || c == '-') sb.Append(char.ToLowerInvariant(c));
+            if (sb.Length >= 48) break;
+        }
+        return sb.ToString();
+    }
+
     /// <summary>Route a line to a named capture pane (plugin parity with trigger CapturePane).</summary>
     public void RoutePane(string pane, Line line)
     {
@@ -719,6 +761,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // Triggers run BEFORE display so capture/gag can route the line. (Ordering
         // note: engine triggers now fire before plugin onLine filters.)
         _lineCaptures.Clear();
+        // MXP <DEST> addressed this line at a pane. Seed it before triggers run so it goes
+        // through exactly the same routing they use -- a server-directed line and a
+        // trigger-captured one are indistinguishable downstream, which is the point.
+        if (!string.IsNullOrWhiteSpace(line.Destination)) _lineCaptures.Add(line.Destination!.Trim());
         _lineHighlights.Clear();
         _lineGagged = false;
         _lineNotify = false;

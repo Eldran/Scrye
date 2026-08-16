@@ -24,13 +24,20 @@ public sealed class Line
 
     public DateTimeOffset ReceivedUtc { get; }
 
+    /// <summary>Capture pane this line was addressed to by MXP <c>&lt;DEST&gt;</c>, or null.
+    /// The session routes it exactly as a trigger's CapturePane would, so a server-directed
+    /// line lands in the same pane machinery without a second mechanism.</summary>
+    public string? Destination { get; }
+
     private LinkSpan[]? _links;   // computed lazily; idempotent, so a benign race is fine
 
-    public Line(IReadOnlyList<StyledRun> runs, bool isPrompt, DateTimeOffset receivedUtc)
+    public Line(IReadOnlyList<StyledRun> runs, bool isPrompt, DateTimeOffset receivedUtc,
+                string? destination = null)
     {
         Runs = runs;
         IsPrompt = isPrompt;
         ReceivedUtc = receivedUtc;
+        Destination = destination;
     }
 
     /// <summary>Convenience factory for a single-run, single-colour line
@@ -74,7 +81,7 @@ public sealed class Line
             });
             if (b < rEnd) outRuns.Add(run with { Text = run.Text[(b - rStart)..] });
         }
-        return new Line(outRuns, IsPrompt, ReceivedUtc);
+        return new Line(outRuns, IsPrompt, ReceivedUtc, Destination);
     }
 
     /// <summary>True on the second and later segments produced by <see cref="Wrap"/> —
@@ -126,7 +133,7 @@ public sealed class Line
 
         var segments = new List<Line>(pieces.Count);
         for (int i = 0; i < pieces.Count; i++)
-            segments.Add(new Line(pieces[i].Runs, IsPrompt && i == pieces.Count - 1, ReceivedUtc)
+            segments.Add(new Line(pieces[i].Runs, IsPrompt && i == pieces.Count - 1, ReceivedUtc, Destination)
             { Continuation = pieces[i].Cont });
         return segments;
     }

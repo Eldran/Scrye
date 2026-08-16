@@ -24,7 +24,17 @@ public sealed class AnsiParser
     private enum State { Normal, Esc, Csi, MxpTag, MxpEntity }
 
     private const int MaxTagLength = 512;
-    private const int MaxEntityLength = 12;
+    private const int MaxEntityLength = 32;
+
+    // Custom <!ELEMENT>/<!ENTITY> definitions are a small template language driven by a
+    // remote server, so every dimension is bounded. These are generous for real MUDs and
+    // cheap insurance against a hostile or broken one.
+    private const int MaxDefinitions = 256;    // elements, and entities, each
+    private const int MaxExpandDepth = 4;      // an element whose body uses another element
+    private const int MaxExpandLength = 4096;  // total expanded text from one tag
+
+    /// <summary>A custom element defined by <c>&lt;!ELEMENT name '&lt;send ...&gt;' ATT='a b'&gt;</c>.</summary>
+    private sealed record MxpElement(string Definition, IReadOnlyList<string> Attributes, bool Open, bool Empty);
 
     private readonly Func<DateTimeOffset> _clock;
     private State _state = State.Normal;
@@ -46,6 +56,17 @@ public sealed class AnsiParser
     private string? _mxpLinkRawAction;             // raw href/command (may contain &text;)
     private bool _mxpLinkIsUrl, _mxpLinkPrompt;
     private string? _mxpLinkHint;
+    private string? _mxpLinkExpire;                // EXPIRE group name ("" = the unnamed group)
+
+    // <VAR>, <DEST>, <GAUGE> and custom <!ELEMENT>/<!ENTITY> state
+    private string? _mxpVarName;                   // open <VAR name>: collect text until </VAR>
+    private readonly StringBuilder _mxpVarText = new();
+    private string? _mxpDest;                      // open <DEST pane>: lines route there
+    private string? _mxpDestThisLine;              // a DEST opened on this line, even if already closed
+    private readonly Dictionary<string, string> _mxpEntities = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, MxpElement> _mxpElements = new(StringComparer.OrdinalIgnoreCase);
+    private int _mxpExpandDepth;                   // guards recursive element/entity expansion
+
     private int _mxpMode;                          // 0 open, 1 secure, 2 locked (this line)
     private int _mxpDefaultMode;                   // what mode resets to at each newline (5/6/7 locks)
     private bool _mxpTempSecure;                   // ESC[4z: next tag only
@@ -62,6 +83,14 @@ public sealed class AnsiParser
     /// <summary>A protocol reply the client must send to the server verbatim
     /// (responses to &lt;VERSION&gt; / &lt;SUPPORT&gt;). Includes trailing newline.</summary>
     public event Action<string>? MxpResponse;
+
+    /// <summary>A server-set MXP variable: <c>&lt;VAR name&gt;value&lt;/VAR&gt;</c>. Secure-only.
+    /// The host decides where these land; they are deliberately NOT written straight into the
+    /// user's own variables, so a MUD cannot redefine one their aliases depend on.</summary>
+    public event Action<string, string>? MxpVariable;
+
+    /// <summary>A server-set gauge: name, value, max (0 when absent) and caption.</summary>
+    public event Action<string, double, double, string>? MxpGauge;
 
     /// <summary>Client name/version used in the VERSION reply.</summary>
     public string ClientName { get; set; } = "Scrye";
@@ -161,6 +190,8 @@ public sealed class AnsiParser
     {
         _text.Append(c);
         if (_mxpLink is not null) _mxpLinkText.Append(c);
+        // <VAR name>value</VAR>: the value is the tag's text, so tee it while one is open.
+        if (_mxpVarName is not null && _mxpVarText.Length < MaxExpandLength) _mxpVarText.Append(c);
     }
 
     private void FlushRun()
@@ -174,7 +205,8 @@ public sealed class AnsiParser
     {
         if (_mxpLink is not null) CloseLink();   // a link never spans lines
         FlushRun();
-        var line = new Line(_runs.ToArray(), isPrompt, _clock());
+        var line = new Line(_runs.ToArray(), isPrompt, _clock(), _mxpDest ?? _mxpDestThisLine);
+        _mxpDestThisLine = null;   // the latch covers one line; an open <DEST> carries itself
         _runs.Clear();
         LineCompleted?.Invoke(line);
         _mxpMode = _mxpDefaultMode;              // per-line security modes reset at newline
@@ -221,10 +253,28 @@ public sealed class AnsiParser
         bool closing = content.StartsWith('/');
         if (closing) content = content[1..].Trim();
 
+        // <!ELEMENT ...> / <!ENTITY ...> definitions. Secure-only: a definition is a
+        // standing instruction to reinterpret later text, which is exactly the authority
+        // an open line must not have.
+        if (content.StartsWith('!'))
+        {
+            if (secure) HandleDefinition(content[1..].TrimStart());
+            return;
+        }
+
         (string name, List<(string key, string val)> attrs) = ParseTag(content);
         name = name.ToUpperInvariant();
 
-        if (closing) { HandleClose(name); return; }
+        if (closing)
+        {
+            // a custom element's closing tag ends whatever its definition opened
+            if (_mxpElements.ContainsKey(name)) { ExpandElement(name, null, closing: true); return; }
+            HandleClose(name);
+            return;
+        }
+
+        // a custom element expands to its definition, then falls through the normal path
+        if (_mxpElements.ContainsKey(name)) { ExpandElement(name, attrs, closing: false); return; }
 
         switch (name)
         {
@@ -232,7 +282,7 @@ public sealed class AnsiParser
             case "B": case "BOLD": case "STRONG": SetFlag(RunFlags.Bold, true); break;
             case "I": case "ITALIC": case "EM": SetFlag(RunFlags.Italic, true); break;
             case "U": case "UNDERLINE": SetFlag(RunFlags.Underline, true); break;
-            case "S": case "STRIKEOUT": case "STRIKE": break;   // no strike flag — strip
+            case "S": case "STRIKEOUT": case "STRIKE": SetFlag(RunFlags.Strikeout, true); break;
             case "C": case "COLOR": case "COLOUR": PushColor(attrs); break;
             case "FONT": _mxpColorStack.Push((_fore, _back)); ApplyFontColor(attrs); break;   // pop on </FONT>
             case "BR": EmitLine(isPrompt: false); break;
@@ -246,10 +296,30 @@ public sealed class AnsiParser
                 if (secure) MxpResponse?.Invoke($"\x1b[1z<VERSION MXP=1.0 CLIENT={ClientName} VERSION={ClientVersion}>\r\n");
                 break;
             case "SUPPORT":
-                if (secure) MxpResponse?.Invoke("\x1b[1z<SUPPORTS +send +a +b +bold +strong +i +italic +em +u +underline +s +color +c +font +br +sbr +version +support>\r\n");
+                // Advertise only what is actually implemented. This used to claim +s while
+                // <S> was stripped, so a server could use strikeout to mean "destroyed" and
+                // the meaning would vanish silently.
+                if (secure) MxpResponse?.Invoke(
+                    "\x1b[1z<SUPPORTS +send +a +b +bold +strong +i +italic +em +u +underline +s +strikeout"
+                    + " +color +c +font +br +sbr +hr +var +dest +gauge +version +support>\r\n");
                 break;
 
-            // everything else (custom elements, IMAGE, SOUND, GAUGE, ...): strip
+            case "VAR":
+                // Open a capture: the value is the tag's TEXT, closed by </VAR>.
+                if (secure) { _mxpVarName = FirstValue(attrs); _mxpVarText.Clear(); }
+                break;
+
+            case "DEST":
+                // Route the enclosed lines to a named capture pane -- the same panes triggers
+                // and plugins write to, so nothing new has to be built to display them.
+                // Latch it for the current line as well: <DEST chat>text</DEST> closes before
+                // the newline arrives, so the line would otherwise emit with no destination.
+                if (secure) { _mxpDest = FirstValue(attrs); _mxpDestThisLine ??= _mxpDest; }
+                break;
+
+            case "GAUGE": if (secure) HandleGauge(attrs); break;
+
+            // IMAGE / SOUND / FRAME and anything unrecognised: stripped on purpose.
         }
     }
 
@@ -260,10 +330,208 @@ public sealed class AnsiParser
             case "B": case "BOLD": case "STRONG": SetFlag(RunFlags.Bold, false); break;
             case "I": case "ITALIC": case "EM": SetFlag(RunFlags.Italic, false); break;
             case "U": case "UNDERLINE": SetFlag(RunFlags.Underline, false); break;
-            case "S": case "STRIKEOUT": case "STRIKE": break;
+            case "S": case "STRIKEOUT": case "STRIKE": SetFlag(RunFlags.Strikeout, false); break;
             case "C": case "COLOR": case "COLOUR": case "FONT": PopColor(); break;
             case "SEND": case "A": if (_mxpLink is not null) CloseLink(); break;
+            case "VAR":
+                if (_mxpVarName is not null)
+                {
+                    MxpVariable?.Invoke(_mxpVarName, _mxpVarText.ToString());
+                    _mxpVarName = null; _mxpVarText.Clear();
+                }
+                break;
+            case "DEST": _mxpDest = null; break;
         }
+    }
+
+    /// <summary>
+    /// <c>&lt;!ELEMENT name '&lt;send href="..."&gt;' ATT='a b' OPEN EMPTY&gt;</c> and
+    /// <c>&lt;!ENTITY name "value"&gt;</c>.
+    ///
+    /// <para>This is the one place a server gets to define new vocabulary, so it is bounded on
+    /// every axis (<see cref="MaxDefinitions"/>, <see cref="MaxExpandDepth"/>,
+    /// <see cref="MaxExpandLength"/>) and refuses to redefine a built-in tag — otherwise a MUD
+    /// could redefine B or SEND and change what every later line means.</para>
+    /// </summary>
+    private void HandleDefinition(string content)
+    {
+        bool isEntity = content.StartsWith("ENTITY", StringComparison.OrdinalIgnoreCase);
+        bool isElement = content.StartsWith("ELEMENT", StringComparison.OrdinalIgnoreCase)
+                      || content.StartsWith("EL", StringComparison.OrdinalIgnoreCase);
+        if (!isEntity && !isElement) return;
+
+        int i = 0;
+        ReadToken(content, ref i, out _);                       // the ELEMENT/ENTITY keyword
+        string name = ReadToken(content, ref i, out _);
+        if (name.Length == 0 || IsBuiltInTag(name)) return;
+
+        if (isEntity)
+        {
+            if (_mxpEntities.Count >= MaxDefinitions && !_mxpEntities.ContainsKey(name)) return;
+            string val = ReadToken(content, ref i, out _);
+            if (val.Equals("DELETE", StringComparison.OrdinalIgnoreCase)) { _mxpEntities.Remove(name); return; }
+            _mxpEntities[name] = Unquote(val);
+            return;
+        }
+
+        if (_mxpElements.Count >= MaxDefinitions && !_mxpElements.ContainsKey(name)) return;
+        string definition = ReadToken(content, ref i, out bool quoted);
+        if (!quoted && definition.Length == 0) return;
+
+        var atts = new List<string>();
+        bool open = false, empty = false;
+        while (i < content.Length)
+        {
+            string tok = ReadToken(content, ref i, out _);
+            if (tok.Length == 0) break;
+            if (tok.Equals("OPEN", StringComparison.OrdinalIgnoreCase)) { open = true; continue; }
+            if (tok.Equals("EMPTY", StringComparison.OrdinalIgnoreCase)) { empty = true; continue; }
+            if (tok.Equals("DELETE", StringComparison.OrdinalIgnoreCase)) { _mxpElements.Remove(name); return; }
+            if (tok.Equals("ATT", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i < content.Length && content[i] == '=') i++;
+                string list = ReadToken(content, ref i, out _);
+                foreach (string a in Unquote(list).Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    // "name=default" -- only the name matters for substitution
+                    int eq = a.IndexOf('=');
+                    atts.Add(eq > 0 ? a[..eq] : a);
+                    if (atts.Count >= 32) break;
+                }
+            }
+        }
+        _mxpElements[name] = new MxpElement(Unquote(definition), atts, open, empty);
+    }
+
+    /// <summary>Replay a custom element's definition through the tag handler, substituting
+    /// its attributes. Depth-bounded, because a definition may itself use another element.</summary>
+    private void ExpandElement(string name, List<(string key, string val)>? attrs, bool closing)
+    {
+        if (!_mxpElements.TryGetValue(name, out MxpElement? el)) return;
+        if (_mxpExpandDepth >= MaxExpandDepth) return;
+
+        if (closing)
+        {
+            // close whatever the definition opened, in reverse
+            _mxpExpandDepth++;
+            foreach (string tag in TagsIn(el.Definition).Reverse())
+                if (!tag.StartsWith('/')) HandleClose(TagNameOf(tag).ToUpperInvariant());
+            _mxpExpandDepth--;
+            return;
+        }
+
+        string body = el.Definition;
+        // positional and named attribute substitution: &name; inside the definition
+        if (attrs is not null && el.Attributes.Count > 0)
+        {
+            int positional = 0;
+            var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach ((string key, string val) in attrs)
+            {
+                if (key.Length > 0) values[key] = Unquote(val);
+                else if (positional < el.Attributes.Count) values[el.Attributes[positional++]] = Unquote(val);
+            }
+            foreach (string att in el.Attributes)
+            {
+                string v = values.TryGetValue(att, out string? got) ? got : "";
+                body = body.Replace("&" + att + ";", v, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        if (body.Length > MaxExpandLength) return;
+
+        // The definition is markup: run each tag in it through the normal handler. An element
+        // defined as OPEN is usable on an open line; otherwise its tags need secure, which
+        // they have, because a definition can only be made on a secure line.
+        _mxpExpandDepth++;
+        bool savedTemp = _mxpTempSecure;
+        foreach (string tag in TagsIn(body))
+        {
+            _mxpTempSecure = true;          // the definition itself was trusted when defined
+            HandleMxpTag(tag);
+        }
+        _mxpTempSecure = savedTemp;
+        _mxpExpandDepth--;
+    }
+
+    private static IEnumerable<string> TagsIn(string s)
+    {
+        int i = 0;
+        while (i < s.Length)
+        {
+            int lt = s.IndexOf('<', i);
+            if (lt < 0) yield break;
+            int gt = s.IndexOf('>', lt + 1);
+            if (gt < 0) yield break;
+            yield return s[(lt + 1)..gt];
+            i = gt + 1;
+        }
+    }
+
+    private static string TagNameOf(string tag)
+    {
+        int i = 0;
+        return ReadToken(tag.TrimStart('/'), ref i, out _);
+    }
+
+    private static bool IsBuiltInTag(string name) => name.ToUpperInvariant() switch
+    {
+        "B" or "BOLD" or "STRONG" or "I" or "ITALIC" or "EM" or "U" or "UNDERLINE"
+        or "S" or "STRIKEOUT" or "STRIKE" or "C" or "COLOR" or "COLOUR" or "FONT"
+        or "BR" or "SBR" or "HR" or "SEND" or "A" or "VERSION" or "SUPPORT"
+        or "VAR" or "DEST" or "GAUGE" => true,
+        _ => false,
+    };
+
+    /// <summary>First attribute value, named or positional — the shape <c>&lt;VAR hp&gt;</c> and
+    /// <c>&lt;DEST chat&gt;</c> both use.</summary>
+    private static string? FirstValue(List<(string key, string val)> attrs)
+    {
+        foreach ((string key, string val) in attrs)
+            if (val.Length > 0) return Unquote(val);
+        return null;
+    }
+
+    /// <summary>&lt;GAUGE value max caption&gt; — positional or named. Reported through
+    /// <see cref="MxpGauge"/>; the host decides where to put it.</summary>
+    private void HandleGauge(List<(string key, string val)> attrs)
+    {
+        string name = "", caption = ""; double value = 0, max = 0;
+        int positional = 0;
+        foreach ((string key, string val) in attrs)
+        {
+            string k = key.ToUpperInvariant();
+            string v = Unquote(val);
+            if (k == "MAX") { double.TryParse(v, System.Globalization.NumberStyles.Any,
+                                              System.Globalization.CultureInfo.InvariantCulture, out max); }
+            else if (k == "CAPTION") caption = v;
+            else if (k == "VALUE") { name = v; }
+            else if (key.Length == 0)
+            {
+                switch (positional++)
+                {
+                    case 0: name = v; break;
+                    case 1: double.TryParse(v, System.Globalization.NumberStyles.Any,
+                                            System.Globalization.CultureInfo.InvariantCulture, out max); break;
+                    case 2: caption = v; break;
+                }
+            }
+        }
+        if (name.Length == 0) return;
+        // The first argument is an entity NAME in the spec: resolve it if we know it, so
+        // "<GAUGE hp max=maxhp>" works after "<!ENTITY hp 100>".
+        value = ResolveNumber(name);
+        if (max == 0 && _mxpEntities.Count > 0) max = ResolveNumber("max" + name);
+        MxpGauge?.Invoke(name, value, max, caption);
+    }
+
+    private double ResolveNumber(string nameOrLiteral)
+    {
+        if (double.TryParse(nameOrLiteral, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out double direct)) return direct;
+        if (_mxpEntities.TryGetValue(nameOrLiteral, out string? ent)
+            && double.TryParse(ent, System.Globalization.NumberStyles.Any,
+                               System.Globalization.CultureInfo.InvariantCulture, out double v)) return v;
+        return 0;
     }
 
     private void SetFlag(RunFlags flag, bool on)
@@ -359,12 +627,21 @@ public sealed class AnsiParser
         foreach ((string key, string val) in attrs)
         {
             string k = key.ToUpperInvariant();
+
+            // Valueless flags arrive from ParseTag as ("", "PROMPT") — the same shape as a
+            // positional value. Match them by name FIRST, or `<SEND href="say " PROMPT>`
+            // takes "PROMPT" as its positional href and the real command is silently lost.
+            if (key.Length == 0 && val.Equals("PROMPT", StringComparison.OrdinalIgnoreCase))
+            { _mxpLinkPrompt = true; continue; }
+            if (key.Length == 0 && val.Equals("EXPIRE", StringComparison.OrdinalIgnoreCase))
+            { _mxpLinkExpire = ""; continue; }                       // bare EXPIRE = the unnamed group
+
             if (k == "HREF" || (key.Length == 0 && positional == 0 && val.Length > 0))
             { _mxpLinkRawAction = Unquote(val); if (key.Length == 0) positional++; }
             else if (k == "HINT" || (key.Length == 0 && positional == 1))
             { _mxpLinkHint = Unquote(val); if (key.Length == 0) positional++; }
             else if (k == "PROMPT") _mxpLinkPrompt = true;
-            // EXPIRE / other attrs: ignored in this pass
+            else if (k == "EXPIRE") _mxpLinkExpire = Unquote(val);
         }
 
         _mxpLinkText.Clear();
@@ -394,7 +671,9 @@ public sealed class AnsiParser
 
     private static string Unquote(string s)
     {
-        s = s.Trim();
+        // Deliberately does NOT trim. ParseTag has already stripped the quotes from a quoted
+        // value, so trimming here would eat whitespace the server meant: href="say " is a
+        // prompt prefix, and "say" without the space is a different command.
         if (s.Length >= 2 && (s[0] == '"' || s[0] == '\'') && s[^1] == s[0]) return s[1..^1];
         return s;
     }
@@ -465,6 +744,14 @@ public sealed class AnsiParser
                     code > 0 && code <= 0x10FFFF)
                 {
                     foreach (char c in char.ConvertFromUtf32(code)) AppendText(c);
+                }
+                else if (_mxpEntities.TryGetValue(name, out string? custom))
+                {
+                    // a server-defined <!ENTITY>. Its value is text, not markup: expanding it
+                    // through the tag handler would let an entity smuggle a <SEND> onto a line
+                    // the server did not mark secure.
+                    if (custom.Length <= MaxExpandLength)
+                        foreach (char c in custom) AppendText(c);
                 }
                 else
                 {

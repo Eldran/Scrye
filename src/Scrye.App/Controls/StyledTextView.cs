@@ -158,6 +158,11 @@ public class StyledTextView : Control
                     double uy = y + _lineHeight - 1;
                     context.DrawLine(new Pen(brush), new Point(x, uy), new Point(x + w, uy));
                 }
+                if ((run.Flags & RunFlags.Strikeout) != 0)
+                {
+                    double sy = y + _lineHeight * 0.5;
+                    context.DrawLine(new Pen(brush), new Point(x, sy), new Point(x + w, sy));
+                }
 
                 x += w;
             }

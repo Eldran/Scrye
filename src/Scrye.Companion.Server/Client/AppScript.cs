@@ -58,8 +58,13 @@ function styleOf(st) {
   if (st.bg && st.bg !== '#000000') css += `background:${st.bg};`;
   const f = (st.flags || '').toLowerCase();
   if (f.includes('bold')) css += 'font-weight:700;';
-  if (f.includes('underline')) css += 'text-decoration:underline;';
   if (f.includes('italic')) css += 'font-style:italic;';
+  // text-decoration is one property: underline and strikeout have to be combined into a
+  // single declaration or the second one silently wins.
+  const deco = [];
+  if (f.includes('underline')) deco.push('underline');
+  if (f.includes('strikeout')) deco.push('line-through');
+  if (deco.length) css += `text-decoration:${deco.join(' ')};`;
   return css;
 }
 

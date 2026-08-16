@@ -9,6 +9,7 @@ public enum RunFlags
     Italic    = 1 << 2,
     Blink     = 1 << 3,
     Inverse   = 1 << 4,
+    Strikeout = 1 << 5,
 }
 
 /// <summary>A clickable action attached to a run of text (MXP &lt;SEND&gt;/&lt;A&gt;, or an
