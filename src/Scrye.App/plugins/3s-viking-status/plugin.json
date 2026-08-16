@@ -1,7 +1,7 @@
 {
   "id": "3s-viking-status",
   "name": "3S Viking Status",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Joakim",
   "description": "Tabbed Viking HUD panel fed by the BBE viking feed: Stats / City / Builds / Production / People / Settlers / Holds / Sea / Voyage / Map / Travel / Plan / Mission / Trade / Trade Auto / Trade Log / Feeds. Includes the build planner and the market scanner + auto-trader, formerly the separate 3s-build and 3s-market plugins.",
   "mudIds": [

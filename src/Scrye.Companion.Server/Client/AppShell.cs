@@ -149,7 +149,10 @@ internal static class AppShell
   .barrow .top b { font-weight:600; }
   .barrow .top span { color:#9fb0c0; }
   .barrow .track { height:8px; border-radius:4px; background:#1c232c; overflow:hidden; display:flex; }
-  .barrow .track i { display:block; height:100%; }
+  .barrow .track i { display:block; height:100%; box-sizing:border-box; min-width:2px; }
+  /* hairline of track between quality stages, so two adjacent stages of similar quality
+     still read as two segments rather than one wide band (the desktop does the same) */
+  .barrow .track i + i { border-left:1px solid #1c232c; }
   .grid { font-size:11px; line-height:1.05; white-space:pre; overflow-x:auto; }
   .grid span { display:inline-block; min-width:0.62em; }
 

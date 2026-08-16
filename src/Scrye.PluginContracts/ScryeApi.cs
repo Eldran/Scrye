@@ -113,7 +113,19 @@ public static class ScryeApi
     //        Additive both ways: an older host ignores the field, and a pane the user closed by
     //        hand is not resurrected (the world layout remembers which). Traffic still wins - a
     //        line routed to a closed pane recreates it, because then it has content to show.
-    public static readonly Version Current = new(1, 11);
+    // 1.12 — a barlist row may carry a seventh field: "qty,pct;qty,pct;..." rawest first.
+    //        The fill is then drawn as one segment per quality stage — width from the
+    //        quantity, colour from where that quality lands on the raw->refined ramp —
+    //        instead of the single amber/green split the fifth field implies.
+    //
+    //        That split was always an average: a refinery holding 120 raw and 30 finished
+    //        units drew the same bar as one holding 150 units all half-done. The stages are
+    //        what the player is actually watching, so the bar now shows them.
+    //
+    //        Additive: a row without the field renders exactly as it did before, and a host
+    //        that predates it ignores the extra column. Ordering carries the meaning as much
+    //        as hue does — rawest is always leftmost — so the ramp is never the only encoding.
+    public static readonly Version Current = new(1, 12);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

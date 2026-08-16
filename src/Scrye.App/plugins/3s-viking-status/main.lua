@@ -682,11 +682,17 @@ local function build_city()
       add(string.format("%-4s %-10s -> %-16s %5s  x%s", f[1] or "?", f[2] or "?", f[3] or "?", eta, f[5] or "?"))
     end
   end
-  -- Refinery -> a barlist (label | caption | value | max | refined | tooltip): fill =
-  -- cur/max, the filled part splits into raw (amber, left) and refined (green, right).
-  -- refined = quality-weighted units = sum over stages of qty * pct/100. The sixth field
-  -- is the hover tooltip: the per-quality breakdown the MUSHclient miniwindow showed on
-  -- its hotspots, best quality first ('\n' becomes a line break host-side).
+  -- Refinery -> a barlist (label | caption | value | max | refined | tooltip | stages):
+  -- fill = cur/max. refined = quality-weighted units = sum over stages of qty * pct/100;
+  -- it is what the two-colour fallback splits on. The sixth field is the hover tooltip:
+  -- the per-quality breakdown the MUSHclient miniwindow showed on its hotspots, best
+  -- quality first ('\n' becomes a line break host-side).
+  --
+  -- The seventh field is the real thing: "qty,pct;qty,pct;..." RAWEST FIRST, so the host
+  -- can draw one segment per quality stage -- width = how many units, colour = how far
+  -- along the amber->green ramp that stage is. The single amber/green split was only ever
+  -- an average; this shows the stages themselves. Hosts that predate the field ignore it
+  -- and still get the two-colour bar from `refined`.
   local R = {}
   for _, r in ipairs(split(gv("REFINERY"), "|")) do
     local f = split(r, ":")
@@ -709,9 +715,15 @@ local function build_city()
           st.pct >= 100 and " (refined)" or st.pct == 0 and " (raw)" or "")
       end
       if #tip == 0 then tip[1] = "empty" end
-      R[#R + 1] = string.format("%s\tT%s %d/%d\t%d\t%d\t%d\t%s",
+      -- stages walked backwards: `stages` is sorted best-first for the tooltip, the bar
+      -- wants rawest-first so refining still reads left to right.
+      local seg = {}
+      for i = #stages, 1, -1 do
+        seg[#seg + 1] = string.format("%d,%d", stages[i].qty, stages[i].pct)
+      end
+      R[#R + 1] = string.format("%s\tT%s %d/%d\t%d\t%d\t%d\t%s\t%s",
         name, f[2] or "?", cur, max, cur, max, math.floor(refined + 0.5),
-        table.concat(tip, "\\n"))
+        table.concat(tip, "\\n"), table.concat(seg, ";"))
     end
   end
   scrye.setState(P .. "refinery", table.concat(R, "\n"))
@@ -3691,7 +3703,7 @@ scrye.addPanel{
     } },
     { title = "City", widgets = {
         { type = "text", bind = P .. "city" },
-        { type = "label", text = "-- Refinery --   raw (amber) refines left to right (green) - hover a bar for the quality breakdown", color = "dim" },
+        { type = "label", text = "-- Refinery --   one segment per quality stage, raw (amber) to refined (green) - hover a bar for the numbers", color = "dim" },
         { type = "barlist", bind = P .. "refinery" },
     } },
     { title = "Builds", widgets = {

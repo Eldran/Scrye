@@ -347,6 +347,16 @@ const panelTab = new Map();      // panelId -> selected tab index
 
 const GAUGE_HEALTHY = '#35c4d6', GAUGE_WARN = '#e0a830', GAUGE_CRIT = '#e05050';
 const BAR_REFINED = '#46b45a', BAR_RAW = '#e0a020';
+// Quality ramp raw -> refined, the same five stops BarListView uses on the desktop, so a
+// refinery bar looks the same on both. Ends are BAR_RAW / BAR_REFINED.
+const BAR_RAMP = ['#e0a020', '#d9b32a', '#c6c433', '#8fbe41', '#46b45a'];
+function qualityColour(pct) {
+  const t = Math.max(0, Math.min(1, (pct || 0) / 100)) * (BAR_RAMP.length - 1);
+  const i = Math.min(BAR_RAMP.length - 2, Math.floor(t)), k = t - i;
+  const a = parseInt(BAR_RAMP[i].slice(1), 16), b = parseInt(BAR_RAMP[i + 1].slice(1), 16);
+  const mix = s => Math.round(((a >> s) & 255) + (((b >> s) & 255) - ((a >> s) & 255)) * k);
+  return `rgb(${mix(16)},${mix(8)},${mix(0)})`;
+}
 
 // Semantic theme tokens (Scrye.Core.Plugins.ThemeToken). A plugin colour is either a #RRGGBB
 // literal or one of these names; the name resolves against whichever host is rendering, so the
@@ -552,8 +562,8 @@ function buildBarList(rows) {
   for (const raw of (rows || '').split('\n')) {
     if (!raw.trim()) continue;
     const parts = raw.split('\t');
-    // label \t caption \t value \t max \t refined — anything else is plain text, so
-    // headers and "none" rows still show, matching BarListView.
+    // label \t caption \t value \t max \t refined [\t tooltip [\t stages]] — anything else
+    // is plain text, so headers and "none" rows still show, matching BarListView.
     if (parts.length < 4) { host.appendChild(el('div', 'barrow', raw)); continue; }
     const [label, caption, v, m, ref] = parts;
     const max = parseFloat(m) || 0, val = parseFloat(v) || 0, refined = parseFloat(ref) || 0;
@@ -564,10 +574,29 @@ function buildBarList(rows) {
     row.appendChild(top);
     const track = el('div', 'track');
     const pct = x => max > 0 ? Math.max(0, Math.min(100, (x / max) * 100)) : 0;
-    const refPart = Math.min(refined, val);
-    const g = el('i'); g.style.width = pct(refPart) + '%'; g.style.background = BAR_REFINED;
-    const a = el('i'); a.style.width = pct(val - refPart) + '%'; a.style.background = BAR_RAW;
-    track.appendChild(g); track.appendChild(a);
+    // Seventh field: "qty,pct;..." rawest first -> one segment per quality stage, coloured
+    // by how far along the ramp that stage is. Widths are normalised over the stage total
+    // so they tile the fill exactly. Without it, the old two-colour split.
+    const stages = (parts[6] || '').split(';')
+      .map(s => s.split(','))
+      .filter(g => g.length === 2 && parseFloat(g[0]) > 0)
+      .map(g => ({ qty: parseFloat(g[0]), q: parseFloat(g[1]) || 0 }));
+    const totalQty = stages.reduce((n, s) => n + s.qty, 0);
+    if (totalQty > 0) {
+      for (const s of stages) {
+        const seg = el('i');
+        seg.style.width = pct(val) * (s.qty / totalQty) + '%';
+        seg.style.background = qualityColour(s.q);
+        track.appendChild(seg);
+      }
+    } else {
+      // raw enters on the left, refined comes out on the right -- same direction as the
+      // desktop bar, which this used to have backwards.
+      const refPart = Math.min(refined, val);
+      const a = el('i'); a.style.width = pct(val - refPart) + '%'; a.style.background = BAR_RAW;
+      const g = el('i'); g.style.width = pct(refPart) + '%'; g.style.background = BAR_REFINED;
+      track.appendChild(a); track.appendChild(g);
+    }
     row.appendChild(track);
     host.appendChild(row);
   }
