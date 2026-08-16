@@ -39,6 +39,9 @@ local idle_fight_prompts = 0   -- self-heal counter when combat fizzles out
 local armed = false            -- a room was parsed; ok to auto-step on next prompt
 local plan = nil               -- walking plan: one confirmed move at a time
 local last_dir = nil           -- last direction actually sent (avoid instant backtrack)
+local last_cmd = nil           -- command sent since the last prompt, lowercased (nil = none).
+                               -- Tells a REPRINTED room header ('look', 'finger') apart from
+                               -- an actual move, and an actual move apart from a wimpy retreat.
 local blind_steps = 0          -- consecutive re-orient steps after a maze shift
 local killname = "mutant"
 local goal = "cask portal"
@@ -455,6 +458,19 @@ end
 
 local function cs_on_room(short)
   if not enabled then return end
+  -- What produced this room header? Consume the answer: it is only valid for the
+  -- block of output the command generated, and the prompt clears it again.
+  local cmd = last_cmd
+  last_cmd = nil
+  if cmd and not DELTA[cmd] then
+    -- You typed something that REPRINTS the room header without moving you: 'look',
+    -- 'finger bob', 'exits'. Only a direction (or the server itself) can move you, so
+    -- this is a redisplay, whatever it is. Refresh the exits from it and touch nothing
+    -- else -- do not advance the walking plan, and do not call it a wimpy retreat,
+    -- which is what used to happen here.
+    if not paused then parse_exits(short); cs_draw() end
+    return
+  end
   if plan and plan.awaiting then
     -- the bot's own move arriving: always confirm it, even mid-pause
     local p2 = moved(pos, plan.dirs[plan.idx])
@@ -470,11 +486,17 @@ local function cs_on_room(short)
   elseif paused then
     return   -- frozen: rooms you walk through while paused are ignored
   elseif fighting then
-    -- the bot didn't order this move: wimpy kicked in (HP retreat)
+    -- A move the bot did not order, during a fight. Two different things:
+    if cmd then
+      note("You walked " .. cmd .. " during a fight - bot PAUSED. Walk back to the fight room,")
+      pnotify("Chaos sea: you moved mid-fight - bot paused")
+    else
+      -- nothing was typed, so the server moved us: wimpy kicked in (HP retreat)
+      note("WIMPY! Moved during combat - bot PAUSED. Walk back to the fight room,")
+      pnotify("Chaos sea: WIMPY - bot paused mid-fight")
+    end
     paused = true
-    note("WIMPY! Moved during combat - bot PAUSED. Walk back to the fight room,")
     note("then 'cs pause' to continue (or 'cs set x y z' if unsure where you are).")
-    pnotify("Chaos sea: WIMPY - bot paused mid-fight")
     cs_draw()
     return
   end
@@ -580,6 +602,10 @@ end
 
 -- ---------- prompt: goals + keep the plan moving ----------
 local function cs_on_prompt()
+  -- Before the guards: the prompt ends the block of output a command produced, so
+  -- anything after it that is not preceded by a command came from the server itself.
+  -- This is what makes a real wimpy retreat distinguishable at all.
+  last_cmd = nil
   if not enabled or paused or resting then return end
   -- whole room is printed now: if a goal item was here, act on the
   -- highest-priority one (cask before portal), ignoring print order.
@@ -1199,6 +1225,14 @@ scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true,
 
 -- the original's "^>\s*$" prompt trigger
 scrye.onPrompt(cs_on_prompt)
+
+-- Every command that goes to the MUD, whoever sent it -- you, an alias, the bot's own
+-- scrye.send. Observe-only. Records just the first word, lowercased, so 'finger bob' and
+-- 'look at chest' collapse to 'finger' / 'look' and a bare direction stays a direction.
+scrye.onCommand(function(text)
+  local first = tostring(text or ""):match("^%s*(%S+)")
+  last_cmd = first and first:lower() or nil
+end)
 
 -- ---------- alias ----------
 scrye.addAlias{ pattern = [[^cs(?:\s+(.*))?$]], regex = true,
