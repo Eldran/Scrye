@@ -249,6 +249,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             _state.Set("vik." + k.ToLowerInvariant(), StateValue.Str(v));
             MipAudit.Observe(k, v);        // structural drift watch; see MipShapeAudit
         };
+        // Every frame, decoded or not. Two jobs: the audit tallies it so ".mip fields" can name
+        // a tag this build has never heard of, and an undecoded payload is parked in state as
+        // mip.<tag> so a plugin can read a new guild's feed the day the MUD starts sending it,
+        // without waiting for the client to learn its structure.
+        _mipProc.TagSeen += (tag, data, handled) =>
+        {
+            MipAudit.ObserveTag(tag, data, handled);
+            if (!handled) _state.Set("mip." + tag.ToLowerInvariant(), StateValue.Str(data));
+        };
         _mipProc.Notice += text => Echo(text);
         // These used to also RaiseLine a "[Channel] text" copy into the output pane. They no
         // longer do: 3Scapes prints every tell and channel message to the screen itself, so
@@ -361,6 +370,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// guild-specific feed (3s-vitals picks its bars from <c>vik.*</c>) would keep drawing the
     /// wrong ones. Everything here is re-sent by the MUD within a prompt or two.</para>
     /// </summary>
+    /// <summary>The MIP-owned variables paired with their current values, in report order, for
+    /// <see cref="MipShapeAudit.FieldReport"/>. A null value means the server never sent that
+    /// field, which is a finding rather than a blank: Vikings never report SP.</summary>
+    public IReadOnlyList<(string Name, string? Value)> MipVitalsSnapshot()
+    {
+        var rows = new List<(string, string?)>(MipOwnedVariables.Length);
+        foreach (string name in MipOwnedVariables) rows.Add((name, _variables.Get(name)));
+        return rows;
+    }
+
     private void ReArmMipForNewLogin()
     {
         if (!Profile.EnableMip || _mipPending) return;   // already waiting to hand shake

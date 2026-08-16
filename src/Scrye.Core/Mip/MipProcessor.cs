@@ -27,8 +27,21 @@ public sealed class MipProcessor
     /// <summary>A broadcast-channel message (CAA): (channel, message).</summary>
     public event Action<string, string>? Channel;
 
+    /// <summary>
+    /// Every message that arrives, decoded or not: (tag, data, handled). <c>handled</c> is false
+    /// for a tag nothing above understands.
+    ///
+    /// <para>It exists because a MUD adds tags. When 3Scapes gives another guild its own feed,
+    /// the frames start arriving immediately and this decoder ignores them — which used to mean
+    /// the only trace was a raw line in the event log, gone as soon as it scrolled. Reporting
+    /// every tag is what makes "what does this guild actually send?" answerable, and it is the
+    /// question you have to answer before you can write a plugin for it.</para>
+    /// </summary>
+    public event Action<string, string, bool>? TagSeen;
+
     public void Handle(MipMessage m)
     {
+        bool handled = true;
         switch (m.Tag)
         {
             case "FFF": HandleFFF(m.Data); break;
@@ -39,7 +52,9 @@ public sealed class MipProcessor
             case "BAA": Notice?.Invoke(m.Data); break;
             case "BAB": HandleBAB(m.Data); break;
             case "CAA": HandleCAA(m.Data); break;
+            default: handled = false; break;
         }
+        TagSeen?.Invoke(m.Tag, m.Data, handled);
     }
 
     // FFF: FLAG~VALUE~FLAG~VALUE~... (single-tilde). Composite vitals.

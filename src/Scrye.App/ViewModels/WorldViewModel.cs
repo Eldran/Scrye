@@ -827,14 +827,61 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
 
-    /// <summary>".mip" — report whether the viking feed still has the shape the parsers assume.
-    /// The audit runs on the session loop as messages arrive, so this only reads its findings;
-    /// the hop is because the report is a snapshot of loop-owned state.</summary>
-    private void HandleMipCommand()
+    /// <summary>
+    /// <c>.mip</c> — report whether the viking feed still has the shape the parsers assume.
+    /// <c>.mip fields</c> — report what this character actually receives, which is the question
+    /// you have to answer before writing a plugin for a guild nobody here plays.
+    /// <c>.mip fields save</c> — the same, written to a markdown file you can hand to whoever
+    /// is writing it.
+    ///
+    /// <para>The audit runs on the session loop as messages arrive, so this only reads its
+    /// findings; the hop is because the report is a snapshot of loop-owned state.</para>
+    /// </summary>
+    private void HandleMipCommand(string arg)
+    {
+        string a = arg.Trim().ToLowerInvariant();
+        if (a.Length == 0) { PostMipLines(s => s.MipAudit.Report()); return; }
+        if (a is not ("fields" or "fields save" or "fields file"))
+        {
+            AppendSystem("usage: .mip | .mip fields | .mip fields save");
+            return;
+        }
+
+        bool save = a != "fields";
+        _session.Post(() =>
+        {
+            IReadOnlyList<(string, string?)> vitals = _session.MipVitalsSnapshot();
+            IReadOnlyList<string> lines = _session.MipAudit.FieldReport(vitals, markdown: save);
+            string? written = null, error = null;
+            if (save)
+            {
+                try
+                {
+                    string dir = MudSession.DefaultLogDirectory();
+                    Directory.CreateDirectory(dir);
+                    // The world name is in it because the whole point is running this on several
+                    // characters and comparing; a bare "mip-fields.md" would overwrite the last one.
+                    string safe = string.Join("_", Title.Split(Path.GetInvalidFileNameChars()));
+                    written = Path.Combine(dir,
+                        $"mip-fields-{safe}-{DateTime.Now:yyyyMMdd-HHmmss}.md");
+                    File.WriteAllLines(written, lines);
+                }
+                catch (Exception ex) { error = ex.Message; written = null; }
+            }
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!save) { foreach (string l in lines) AppendSystem(l); return; }
+                if (written is not null) AppendSystem($"MIP field report written to {written}");
+                else AppendSystem($"could not write the MIP field report: {error}");
+            });
+        });
+    }
+
+    private void PostMipLines(Func<MudSession, IReadOnlyList<string>> build)
     {
         _session.Post(() =>
         {
-            IReadOnlyList<string> lines = _session.MipAudit.Report();
+            IReadOnlyList<string> lines = build(_session);
             Dispatcher.UIThread.Post(() =>
             {
                 foreach (string l in lines) AppendSystem(l);
@@ -1123,7 +1170,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".idle": HandleIdleCommand(arg); return true;
             case ".tts": HandleTtsCommand(arg); return true;
             case ".companion": HandleCompanionCommand(arg); return true;
-            case ".mip": HandleMipCommand(); return true;
+            case ".mip": HandleMipCommand(arg); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
                 AppendSystem(ShowTimestamps ? "timestamps on" : "timestamps off");

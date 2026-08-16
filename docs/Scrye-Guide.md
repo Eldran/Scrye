@@ -50,6 +50,7 @@ with a dot, and they're intercepted before plugins see them, so a plugin can't s
 | `.ts` / `.timestamps` | Toggle the HH:mm:ss gutter in the output and capture panes (or the **⏱ Time** toggle in the bottom bar). |
 | `.companion` | The mobile companion — see its own section below. |
 | `.mip` | Audit the MIP feed for structural drift — see below. |
+| `.mip fields` | List what this character actually receives — every field, key and frame type. |
 
 Separately, anything starting with **`/`** is Lua rather than a MUD command — see
 [The script console](#the-script-console).
@@ -282,10 +283,26 @@ There's one more diagnostic worth knowing:
 | Command | What it does |
 |---|---|
 | `.mip` | Audit the MIP viking feed's **structure** against what the parsers expect, and report anything that looks like it has drifted. |
+| `.mip fields` | List every MIP field, feed key and frame type this character has received, each with a live sample. |
+| `.mip fields save` | The same as a markdown file in the log folder, to hand to whoever is writing the plugin. |
 
 The feeds are positional — `BATTLE` is eleven pipe-separated fields, and each unit record is six or nine comma-separated ones depending on whether the unit is in reserve or fielded — so if the server inserts a field, nothing errors. The parser just reads the wrong slot from then on and the numbers quietly go wrong. `.mip` watches every key that arrives and flags two things: a key whose layout no longer matches a **recorded expectation**, and a key whose shape **changes mid-session**, which is drift no matter what any table claims.
 
 Two honest limits. It can only speak for keys the server actually sent, so run it after visiting whatever exercises the feeds (and with the right `vtoggle` flags on). And only a handful of keys have a recorded expectation — the ones whose layout was read directly off a parser. Everything else is listed as "no recorded expectation" with its observed shape, which still catches a later change but has never been checked against anything.
+
+### Finding out what a guild sends — `.mip fields`
+
+Before you can write a plugin for a guild, you have to know what that guild's characters actually receive, and `.mip` won't tell you: it audits *structure*, for keys something already parses. `.mip fields` answers the earlier question, listing three different things because MIP carries three:
+
+- **Vitals (FFF)** — the fixed per-character slots every guild fills in: `hp`/`sp`/`gp1`/`gp2` and their maxima, plus `gline1`/`gline2`, the guild's own status lines as free text. Same eight numbers whatever you play; what they *mean* is the guild's business. A field the server never sent shows as `(not sent)` rather than blank, which is itself a finding — Vikings don't use SP, so it arrives as nonsense or not at all.
+- **Feed keys (BBE)** — key/value pairs, where a guild puts whatever it likes. Read from a plugin as `scrye.getState("vik.<key>")`, lower-cased. The `vik.` prefix is historical: BBE is the generic carrier and the Viking guild was simply first to use it, so *every* guild's keys land there.
+- **Tags** — the frame types themselves, listed whether or not Scrye decodes them. A tag with no decoder is the interesting case, and its raw payload is parked in state as **`mip.<tag>`** — so a plugin can use a new guild's feed the day the MUD starts sending it, without waiting for the client to learn its structure.
+
+Every row carries a live sample, because a shape fingerprint tells you a value has four pipe-separated fields and a sample tells you what they mean.
+
+`.mip fields save` writes the same report as a markdown file in the log folder, named after the world and timestamped. That's the one to use when the person writing the plugin isn't the person with the character: run it on each character and send the files.
+
+Both only speak for what the server has actually sent this session, so play for a bit first — and on 3Scapes, turn the feeds on with `vtoggle`.
 
 **Switching characters without reconnecting works.** MIP is registered per *login*, not per connection, so the handshake sent when you connect doesn't cover a second character who logs in on the same session. Scrye notices the password prompt, clears the previous character's `character.*`, `enemy.*` and `vik.*` state so none of their numbers linger in a HUD, and re-sends the handshake at the next prompt — you'll see `[MIP] new login - handshake will re-send` in the output. If a MUD lets you swap characters *without* re-authenticating, that isn't detectable and you'll need to reconnect.
 
@@ -927,7 +944,8 @@ arbitrary — so a typo shows as "unstyled", not as an invisible widget.
 - `plugin.<id>.*` — your own published state (bind widgets here).
 - `character.*` — vitals, mirrored from MIP (or GMCP) so a HUD binds to one spelling whatever the source: `character.health.current`/`.max`, `character.spell.current`/`.max`, `character.gold.a`/`.amax` and `character.gold.b`/`.bmax` (the two guild‑point slots), plus `character.gline1`/`.gline2`, the guild's own status lines as free text.
 - `enemy.name`, `enemy.health` — current target.
-- Game‑specific feeds — e.g. on 3Scapes the viking MIP feed lands under `vik.*` (`vik.daler`, `vik.wstock`, `vik.carts`, `vik.buildings`, …), readable by any plugin via `scrye.getState("vik.<key>")` and watchable with `scrye.watch("vik", fn)`.
+- Game‑specific feeds — on 3Scapes every guild's MIP key/value feed lands under `vik.*` (`vik.daler`, `vik.wstock`, `vik.carts`, `vik.buildings`, …), readable by any plugin via `scrye.getState("vik.<key>")` and watchable with `scrye.watch("vik", fn)`. The prefix is historical — the Viking guild was first to use the carrier, not the only one.
+- `mip.<tag>` — the raw payload of a MIP frame type Scrye has no decoder for, so a plugin can use a feed the client hasn't learned yet. Run `.mip fields` to see which tags a character receives.
 
 ## When a plugin misbehaves
 

@@ -95,6 +95,22 @@ public sealed class MipShapeAudit
     private readonly List<MipShapeFinding> _findings = new();
     private readonly HashSet<string> _reported = new(StringComparer.Ordinal);
 
+    /// <summary>Per-tag tally for the field report: how many frames, whether this build decodes
+    /// it, and the first payload seen (the sample a plugin author works backwards from).</summary>
+    private sealed class TagInfo
+    {
+        public int Count;
+        public bool Handled;
+        public string Sample = "";
+    }
+
+    private readonly Dictionary<string, TagInfo> _tags = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The latest value of every feed key, so the report can show what a key holds
+    /// right now rather than only what it held the first time. Keys are cheap; a feed is a few
+    /// dozen of them.</summary>
+    private readonly Dictionary<string, string> _latest = new(StringComparer.OrdinalIgnoreCase);
+
     public MipShapeAudit(IEnumerable<MipShapeExpectation>? expectations = null)
     {
         foreach (MipShapeExpectation e in expectations ?? Known) _expected[e.Key] = e;
@@ -106,11 +122,27 @@ public sealed class MipShapeAudit
     /// <summary>Everything noticed so far, in the order it was noticed.</summary>
     public IReadOnlyList<MipShapeFinding> Findings => _findings;
 
+    /// <summary>Tags seen at least once this session.</summary>
+    public int TagsSeen => _tags.Count;
+
+    /// <summary>Note one arriving MIP frame by tag. Cheap enough for every message; this is what
+    /// lets the field report name a tag this build has no decoder for.</summary>
+    public void ObserveTag(string tag, string data, bool handled)
+    {
+        if (string.IsNullOrEmpty(tag)) return;
+        if (!_tags.TryGetValue(tag, out TagInfo? info))
+            _tags[tag] = info = new TagInfo { Handled = handled, Sample = Truncate(data ?? "") };
+        info.Count++;
+        // A payload arriving empty first would otherwise leave the report with no sample at all.
+        if (info.Sample.Length == 0 && !string.IsNullOrEmpty(data)) info.Sample = Truncate(data);
+    }
+
     /// <summary>Feed one decoded viking key/value. Safe to call for every message.</summary>
     public void Observe(string key, string value)
     {
         if (string.IsNullOrEmpty(key) || value is null) return;
 
+        _latest[key] = value;
         string shape = Shape(value);
 
         // An empty value means the list is empty right now, not that its structure moved. Check()
@@ -245,6 +277,115 @@ public sealed class MipShapeAudit
         // happens to contain a space.
         return withColon * 2 >= tokens.Length ? "sp:" + string.Join("/", counts) : null;
     }
+
+    // ---- the field report ------------------------------------------------------------------
+
+    /// <summary>
+    /// What this session has actually seen, written for someone about to build a plugin for a
+    /// guild nobody here plays. <see cref="Report"/> answers "did the feed change?"; this answers
+    /// the prior question, "what does this character even get?".
+    ///
+    /// <para>Three sections, because MIP carries three different kinds of thing. The
+    /// <b>vitals</b> are the fixed per-character slots every guild fills in (FFF) — the same
+    /// eight numbers whatever you play, with the guild-specific meaning hidden behind names like
+    /// "gp1". The <b>feed keys</b> are BBE's key/value pairs, which is where a guild puts
+    /// whatever it likes. The <b>tags</b> are the frame types themselves, listed whether or not
+    /// this build decodes them: a tag nothing understands is exactly the interesting case, and
+    /// before this existed the only trace of one was a raw line scrolling past in the event log.
+    /// </para>
+    ///
+    /// <para>Every row carries a live sample, because a shape fingerprint tells you a value has
+    /// four pipe-separated fields and a sample tells you what they mean.</para>
+    /// </summary>
+    /// <param name="vitals">The MIP-owned variables, in the order to print them. Null values are
+    /// shown as "not sent", which is itself a finding — Vikings never report SP.</param>
+    /// <param name="markdown">Render as a markdown document to save and share, rather than as
+    /// lines for the output pane. The markdown form allows longer samples.</param>
+    public IReadOnlyList<string> FieldReport(
+        IReadOnlyList<(string Name, string? Value)> vitals, bool markdown = false)
+    {
+        int sampleWidth = markdown ? 400 : 52;
+        var lines = new List<string>();
+        void H(string plain, string md) => lines.Add(markdown ? md : plain);
+
+        H($"MIP field report: {TagsSeen} tag(s), {_latest.Count} feed key(s) seen this session.",
+          "# MIP field report");
+        if (markdown)
+        {
+            lines.Add("");
+            lines.Add($"{TagsSeen} tag(s) and {_latest.Count} feed key(s) seen this session. "
+                    + "Samples are live values, truncated.");
+        }
+
+        // --- vitals ---------------------------------------------------------------------
+        lines.Add("");
+        H("  VITALS (FFF) - the fixed slots every guild fills in:",
+          "## Vitals (FFF)\n\nThe fixed per-character slots every guild fills in.\n\n| field | value |\n|---|---|");
+        foreach ((string name, string? value) in vitals)
+        {
+            string shown = value is null ? "(not sent)" : value.Length == 0 ? "(empty)" : Clip(value, sampleWidth);
+            H($"    {name,-10} {shown}", $"| `{name}` | {Escape(shown)} |");
+        }
+
+        // --- feed keys ------------------------------------------------------------------
+        lines.Add("");
+        if (_latest.Count == 0)
+        {
+            H("  FEED KEYS: none yet - BBE carries these, so nothing arrives until the guild's",
+              "## Feed keys (BBE)\n\nNone seen yet. BBE carries these, so nothing arrives until the guild's");
+            H("  feeds are switched on server-side (on 3Scapes, 'vtoggle').",
+              "feeds are switched on server-side (on 3Scapes, `vtoggle`).");
+        }
+        else
+        {
+            H($"  FEED KEYS ({_latest.Count}) - read from a plugin as scrye.getState(\"vik.<key>\"):",
+              "## Feed keys (BBE)\n\nRead from a plugin as `scrye.getState(\"vik.<key>\")` — lower-cased. "
+            + "The `vik.` prefix is historical: BBE is the generic carrier and every guild's keys land there.\n"
+            + "\n| key | shape | sample |\n|---|---|---|");
+            foreach (string key in _latest.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+            {
+                string value = _latest[key];
+                string shape = _firstSeen.TryGetValue(key, out (string Shape, string Sample) f) ? f.Shape : "empty";
+                // The shape fingerprint is literally made of delimiters, so it needs escaping
+                // as much as the sample does — "|3" would otherwise split the table cell.
+                H($"    {key,-14} {shape,-8} {Clip(value, sampleWidth)}",
+                  $"| `{Escape(key)}` | `{Escape(shape)}` | {Escape(Clip(value, sampleWidth))} |");
+            }
+        }
+
+        // --- tags -----------------------------------------------------------------------
+        lines.Add("");
+        H("  TAGS - every frame type that arrived:",
+          "## Tags\n\nEvery frame type that arrived, decoded or not.\n"
+        + "\n| tag | frames | decoded | sample |\n|---|---|---|---|");
+        foreach (string tag in _tags.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase))
+        {
+            TagInfo t = _tags[tag];
+            string state = t.Handled ? "decoded" : $"NOT DECODED -> mip.{tag.ToLowerInvariant()}";
+            H($"    {tag,-5} x{t.Count,-6} {state}",
+              $"| `{tag}` | {t.Count} | {(t.Handled ? "yes" : $"**no** — `mip.{tag.ToLowerInvariant()}`")} "
+            + $"| {Escape(Clip(t.Sample, sampleWidth))} |");
+            if (!markdown && !t.Handled && t.Sample.Length > 0)
+                lines.Add($"      sample: {Clip(t.Sample, sampleWidth)}");
+        }
+
+        if (_tags.Values.Any(t => !t.Handled))
+        {
+            lines.Add("");
+            H("  An undecoded tag's raw payload is readable as state mip.<tag>, so a plugin can",
+              "\nAn undecoded tag's raw payload is readable as state `mip.<tag>`, so a plugin can "
+            + "use it before this client learns to decode it.");
+            if (!markdown)
+                lines.Add("  use it before this client learns to decode it.");
+        }
+        return lines;
+    }
+
+    private static string Clip(string s, int max) =>
+        s.Length <= max ? s : s[..max] + "...";
+
+    /// <summary>Markdown table cells cannot contain a raw pipe, and MIP is full of them.</summary>
+    private static string Escape(string s) => s.Replace("|", "\\|");
 
     private void Add(string severity, string key, string detail, string sample)
     {
