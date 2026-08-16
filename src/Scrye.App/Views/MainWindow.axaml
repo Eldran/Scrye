@@ -11,9 +11,23 @@
 
     <Grid>
         <DockPanel>
+            <!-- The collapse strip. Docked before the sidebar so it sits on the outer edge and
+                 stays put when the panel folds away — the control that brings the sidebar back
+                 must not disappear with it. -->
+            <Border DockPanel.Dock="Left" Width="18" Background="{DynamicResource ScryePanel}"
+                    BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0">
+                <Button Content="{Binding SidebarChevron}" Command="{Binding ToggleSidebarCommand}"
+                        ToolTip.Tip="{Binding SidebarToggleTip}"
+                        VerticalAlignment="Top" HorizontalAlignment="Stretch"
+                        Padding="0,8" Margin="0" FontSize="12"
+                        Background="Transparent" BorderThickness="0"
+                        Foreground="{DynamicResource ScryeTextDim}" />
+            </Border>
+
             <!-- profile tree sidebar: MUD -> account -> character -->
             <Border DockPanel.Dock="Left" Width="230" Background="{DynamicResource ScryePanel}" Padding="8"
-                    BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0">
+                    BorderBrush="{DynamicResource ScryeLine}" BorderThickness="0,0,1,0"
+                    IsVisible="{Binding !SidebarCollapsed}">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="MUDS" FontWeight="SemiBold" FontSize="11"
                                Foreground="{DynamicResource ScryeAccent}" Margin="2,0,0,8" />
@@ -913,8 +927,13 @@
 
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
                                 HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <!-- Save applies and stays open (add several triggers without reopening
+                             the form); Done applies and closes; Cancel leaves without writing. -->
                         <Button Content="Cancel" Command="{Binding CancelEditorCommand}" />
-                        <Button Content="Save" Command="{Binding SaveEditorCommand}" />
+                        <Button Content="Save" Command="{Binding SaveEditorCommand}"
+                                ToolTip.Tip="Save and keep editing" />
+                        <Button Content="Done" Command="{Binding DoneEditorCommand}"
+                                ToolTip.Tip="Save and close" />
                     </StackPanel>
 
                     <TabControl>
@@ -970,19 +989,37 @@
                                         <Button Content="Add" Command="{Binding Editor.AddTriggerCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveTriggerCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Editor.Triggers}" SelectedItem="{Binding Editor.SelectedTrigger}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TriggerRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TriggerList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Editor.TriggerList.Rows}" SelectedItem="{Binding Editor.TriggerList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:TriggerRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedTrigger}">
+                                <Border Grid.Column="1" DataContext="{Binding Editor.TriggerList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1079,19 +1116,37 @@
                                         <Button Content="Add" Command="{Binding Editor.AddAliasCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveAliasCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Editor.Aliases}" SelectedItem="{Binding Editor.SelectedAlias}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:AliasRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Editor.AliasList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Editor.AliasList.Rows}" SelectedItem="{Binding Editor.AliasList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:AliasRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedAlias}">
+                                <Border Grid.Column="1" DataContext="{Binding Editor.AliasList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:AliasRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1158,19 +1213,37 @@
                                         <Button Content="Add" Command="{Binding Editor.AddTimerCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveTimerCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Editor.Timers}" SelectedItem="{Binding Editor.SelectedTimer}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TimerRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TimerList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Editor.TimerList.Rows}" SelectedItem="{Binding Editor.TimerList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:TimerRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding IntervalText}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedTimer}">
+                                <Border Grid.Column="1" DataContext="{Binding Editor.TimerList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:TimerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1213,19 +1286,37 @@
                                         <Button Content="Add" Command="{Binding Editor.AddSequenceCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveSequenceCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Editor.Sequences}" SelectedItem="{Binding Editor.SelectedSequence}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:SequenceRowViewModel">
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Editor.SequenceList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Editor.SequenceList.Rows}" SelectedItem="{Binding Editor.SequenceList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:SequenceRowViewModel">
                                                 <StackPanel>
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Source}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Editor.SelectedSequence}">
+                                <Border Grid.Column="1" DataContext="{Binding Editor.SequenceList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:SequenceRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name — run in-game with  .seq &lt;name&gt;" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1295,8 +1386,13 @@
 
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
                                 HorizontalAlignment="Right" Margin="0,12,0,0">
+                        <!-- Same three as the profile editor: Save applies and stays, Done
+                             applies and closes, Cancel leaves without writing. -->
                         <Button Content="Cancel" Command="{Binding CancelSettingsCommand}" />
-                        <Button Content="Save" Command="{Binding SaveSettingsCommand}" />
+                        <Button Content="Save" Command="{Binding SaveSettingsCommand}"
+                                ToolTip.Tip="Save and keep editing" />
+                        <Button Content="Done" Command="{Binding DoneSettingsCommand}"
+                                ToolTip.Tip="Save and close" />
                     </StackPanel>
 
                     <TabControl>
@@ -1351,19 +1447,37 @@
                                         <Button Content="Add" Command="{Binding Settings.AddTriggerCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveTriggerCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Settings.Triggers}" SelectedItem="{Binding Settings.SelectedTrigger}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TriggerRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TriggerList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Settings.TriggerList.Rows}" SelectedItem="{Binding Settings.TriggerList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:TriggerRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedTrigger}">
+                                <Border Grid.Column="1" DataContext="{Binding Settings.TriggerList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1460,19 +1574,37 @@
                                         <Button Content="Add" Command="{Binding Settings.AddAliasCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveAliasCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Settings.Aliases}" SelectedItem="{Binding Settings.SelectedAlias}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:AliasRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Settings.AliasList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Settings.AliasList.Rows}" SelectedItem="{Binding Settings.AliasList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:AliasRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Pattern}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedAlias}">
+                                <Border Grid.Column="1" DataContext="{Binding Settings.AliasList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:AliasRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1539,19 +1671,37 @@
                                         <Button Content="Add" Command="{Binding Settings.AddTimerCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveTimerCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Settings.Timers}" SelectedItem="{Binding Settings.SelectedTimer}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:TimerRowViewModel">
-                                                <StackPanel>
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TimerList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Settings.TimerList.Rows}" SelectedItem="{Binding Settings.TimerList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:TimerRowViewModel">
+                                                <StackPanel Margin="10,0,0,0">
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding IntervalText}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedTimer}">
+                                <Border Grid.Column="1" DataContext="{Binding Settings.TimerList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:TimerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1594,19 +1744,37 @@
                                         <Button Content="Add" Command="{Binding Settings.AddSequenceCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveSequenceCommand}" />
                                     </StackPanel>
-                                    <ListBox ItemsSource="{Binding Settings.Sequences}" SelectedItem="{Binding Settings.SelectedSequence}"
-                                             Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                        <ListBox.ItemTemplate>
-                                            <DataTemplate x:DataType="vm:SequenceRowViewModel">
+                                    <TextBox DockPanel.Dock="Top" Text="{Binding Settings.SequenceList.Filter}"
+                                             PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                             Margin="0,0,0,4" />
+                                    <ListBox ItemsSource="{Binding Settings.SequenceList.Rows}" SelectedItem="{Binding Settings.SequenceList.Selected}"
+                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                        <ListBox.DataTemplates>
+                                        <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                             owns the selection the detail pane follows; the button is what collapses it. -->
+                                        <DataTemplate DataType="vm:RuleGroupHeader">
+                                          <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Left" Background="Transparent"
+                                                  BorderThickness="0" Padding="0,2">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                              <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                         Foreground="{DynamicResource ScryeAccent}" />
+                                            </StackPanel>
+                                          </Button>
+                                        </DataTemplate>
+
+                                            <DataTemplate DataType="vm:SequenceRowViewModel">
                                                 <StackPanel>
                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" />
                                                     <TextBlock Text="{Binding Source}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                             </DataTemplate>
-                                        </ListBox.ItemTemplate>
+                                        </ListBox.DataTemplates>
                                     </ListBox>
                                 </DockPanel>
-                                <Border Grid.Column="1" DataContext="{Binding Settings.SelectedSequence}">
+                                <Border Grid.Column="1" DataContext="{Binding Settings.SequenceList.SelectedRow}">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Spacing="4" x:DataType="vm:SequenceRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name — run in-game with  .seq &lt;name&gt;" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1640,16 +1808,34 @@
                                     <Button Content="Add" Command="{Binding Settings.AddVariableCommand}" />
                                     <Button Content="Remove" Command="{Binding Settings.RemoveVariableCommand}" />
                                 </StackPanel>
-                                <ListBox ItemsSource="{Binding Settings.Variables}" SelectedItem="{Binding Settings.SelectedVariable}"
-                                         Height="440" Background="{DynamicResource ScryeInsetBg}">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:VariableRowViewModel">
+                                <TextBox DockPanel.Dock="Top" Text="{Binding Settings.VariableList.Filter}"
+                                         PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                         Margin="0,0,0,4" />
+                                <ListBox ItemsSource="{Binding Settings.VariableList.Rows}" SelectedItem="{Binding Settings.VariableList.Selected}"
+                                         Height="412" Background="{DynamicResource ScryeInsetBg}">
+                                    <ListBox.DataTemplates>
+                                    <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                         owns the selection the detail pane follows; the button is what collapses it. -->
+                                    <DataTemplate DataType="vm:RuleGroupHeader">
+                                      <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                              HorizontalContentAlignment="Left" Background="Transparent"
+                                              BorderThickness="0" Padding="0,2">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                          <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                     Foreground="{DynamicResource ScryeAccent}" />
+                                          <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                     Foreground="{DynamicResource ScryeAccent}" />
+                                        </StackPanel>
+                                      </Button>
+                                    </DataTemplate>
+
+                                        <DataTemplate DataType="vm:VariableRowViewModel">
                                             <Grid ColumnDefinitions="*,*" Margin="0,1">
                                                 <TextBox Grid.Column="0" Text="{Binding Key}" PlaceholderText="name" Margin="0,0,4,0" />
                                                 <TextBox Grid.Column="1" Text="{Binding Value}" PlaceholderText="value" Margin="4,0,0,0" />
                                             </Grid>
                                         </DataTemplate>
-                                    </ListBox.ItemTemplate>
+                                    </ListBox.DataTemplates>
                                 </ListBox>
                             </DockPanel>
                         </TabItem>
@@ -1665,10 +1851,28 @@
                                     <Button Content="Add" Command="{Binding Settings.AddMacroCommand}" />
                                     <Button Content="Remove" Command="{Binding Settings.RemoveMacroCommand}" />
                                 </StackPanel>
-                                <ListBox ItemsSource="{Binding Settings.Macros}" SelectedItem="{Binding Settings.SelectedMacro}"
-                                         Height="420" Background="{DynamicResource ScryeInsetBg}">
-                                    <ListBox.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:MacroRowViewModel">
+                                <TextBox DockPanel.Dock="Top" Text="{Binding Settings.MacroList.Filter}"
+                                         PlaceholderText="filter by name, pattern or group" FontSize="11"
+                                         Margin="0,0,0,4" />
+                                <ListBox ItemsSource="{Binding Settings.MacroList.Rows}" SelectedItem="{Binding Settings.MacroList.Selected}"
+                                         Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                    <ListBox.DataTemplates>
+                                    <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
+                                         owns the selection the detail pane follows; the button is what collapses it. -->
+                                    <DataTemplate DataType="vm:RuleGroupHeader">
+                                      <Button Command="{Binding ToggleCommand}" HorizontalAlignment="Stretch"
+                                              HorizontalContentAlignment="Left" Background="Transparent"
+                                              BorderThickness="0" Padding="0,2">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                          <TextBlock Text="{Binding Glyph}" FontSize="10" VerticalAlignment="Center"
+                                                     Foreground="{DynamicResource ScryeAccent}" />
+                                          <TextBlock Text="{Binding Label}" FontSize="11" FontWeight="SemiBold"
+                                                     Foreground="{DynamicResource ScryeAccent}" />
+                                        </StackPanel>
+                                      </Button>
+                                    </DataTemplate>
+
+                                        <DataTemplate DataType="vm:MacroRowViewModel">
                                             <Grid ColumnDefinitions="120,*,Auto" Margin="0,1">
                                                 <TextBox Grid.Column="0" Text="{Binding Key}" PlaceholderText="F1" Margin="0,0,4,0" />
                                                 <TextBox Grid.Column="1" Text="{Binding Send}" PlaceholderText="command to send"
@@ -1678,7 +1882,7 @@
                                                           VerticalAlignment="Center" Margin="4,0,0,0" />
                                             </Grid>
                                         </DataTemplate>
-                                    </ListBox.ItemTemplate>
+                                    </ListBox.DataTemplates>
                                 </ListBox>
                             </DockPanel>
                         </TabItem>

@@ -13,8 +13,22 @@ public sealed class WorldEditorViewModel : ViewModelBase
 {
     private readonly ProfileLayer _layer;
 
-    public bool IsNew { get; }
-    public string OriginalName { get; }
+    // Both settable, because Save no longer closes the form. A second save of the same open
+    // editor must not re-create the layer or try to rename it from a name that is now stale:
+    // after the first save this IS the layer called OriginalName, and it is no longer new.
+    public bool IsNew { get; private set; }
+    public string OriginalName { get; private set; }
+
+    /// <summary>Called after a successful save so the still-open form describes what is now on
+    /// disk. Saving twice, or renaming twice in a row, then behaves like saving once.</summary>
+    public void MarkSaved(string savedName)
+    {
+        bool wasNew = IsNew;
+        IsNew = false;
+        OriginalName = savedName;
+        Name = savedName;                       // a blank name fell back to "New MUD" etc.
+        if (wasNew) OnPropertyChanged(nameof(Title));   // "New MUD" becomes "Edit MUD"
+    }
 
     public LayerKind TargetKind { get; }
     /// <summary>The MUD this account/character belongs to (null when editing a MUD).</summary>
@@ -92,14 +106,21 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public ObservableCollection<TimerRowViewModel> Timers { get; } = new();
     public ObservableCollection<SequenceRowViewModel> Sequences { get; } = new();
 
-    private TriggerRowViewModel? _selectedTrigger;
-    public TriggerRowViewModel? SelectedTrigger { get => _selectedTrigger; set => SetField(ref _selectedTrigger, value); }
-    private AliasRowViewModel? _selectedAlias;
-    public AliasRowViewModel? SelectedAlias { get => _selectedAlias; set => SetField(ref _selectedAlias, value); }
-    private TimerRowViewModel? _selectedTimer;
-    public TimerRowViewModel? SelectedTimer { get => _selectedTimer; set => SetField(ref _selectedTimer, value); }
-    private SequenceRowViewModel? _selectedSequence;
-    public SequenceRowViewModel? SelectedSequence { get => _selectedSequence; set => SetField(ref _selectedSequence, value); }
+    // Sorted / filterable / grouped views over the collections above — display only, so the
+    // saved order is untouched. Same shape as the global settings dialog.
+    public RuleListViewModel TriggerList { get; }
+    public RuleListViewModel AliasList { get; }
+    public RuleListViewModel TimerList { get; }
+    public RuleListViewModel SequenceList { get; }
+
+    public TriggerRowViewModel? SelectedTrigger
+    { get => TriggerList.SelectedRow as TriggerRowViewModel; set => TriggerList.Select(value); }
+    public AliasRowViewModel? SelectedAlias
+    { get => AliasList.SelectedRow as AliasRowViewModel; set => AliasList.Select(value); }
+    public TimerRowViewModel? SelectedTimer
+    { get => TimerList.SelectedRow as TimerRowViewModel; set => TimerList.Select(value); }
+    public SequenceRowViewModel? SelectedSequence
+    { get => SequenceList.SelectedRow as SequenceRowViewModel; set => SequenceList.Select(value); }
 
     public RelayCommand AddTriggerCommand { get; }
     public RelayCommand RemoveTriggerCommand { get; }
@@ -139,6 +160,18 @@ public sealed class WorldEditorViewModel : ViewModelBase
         foreach (AliasDef a in _layer.Aliases) Aliases.Add(new AliasRowViewModel(a));
         foreach (TimerDef tm in _layer.Timers) Timers.Add(new TimerRowViewModel(tm));
         foreach (SequenceSpec s in _layer.Sequences) Sequences.Add(new SequenceRowViewModel(s));
+
+        TriggerList  = new RuleListViewModel(Triggers,  o => ((TriggerRowViewModel)o).Name,
+                                             o => ((TriggerRowViewModel)o).Pattern,
+                                             o => ((TriggerRowViewModel)o).Group);
+        AliasList    = new RuleListViewModel(Aliases,   o => ((AliasRowViewModel)o).Name,
+                                             o => ((AliasRowViewModel)o).Pattern,
+                                             o => ((AliasRowViewModel)o).Group);
+        TimerList    = new RuleListViewModel(Timers,    o => ((TimerRowViewModel)o).Name,
+                                             o => ((TimerRowViewModel)o).Send,
+                                             o => ((TimerRowViewModel)o).Group);
+        SequenceList = new RuleListViewModel(Sequences, o => ((SequenceRowViewModel)o).Name,
+                                             o => ((SequenceRowViewModel)o).Source);
 
         AddTriggerCommand = new RelayCommand(() =>
         {

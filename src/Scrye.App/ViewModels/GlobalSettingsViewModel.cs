@@ -94,18 +94,31 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     public ObservableCollection<VariableRowViewModel> Variables { get; } = new();
     public ObservableCollection<MacroRowViewModel> Macros { get; } = new();
 
-    private TriggerRowViewModel? _selectedTrigger;
-    public TriggerRowViewModel? SelectedTrigger { get => _selectedTrigger; set => SetField(ref _selectedTrigger, value); }
-    private AliasRowViewModel? _selectedAlias;
-    public AliasRowViewModel? SelectedAlias { get => _selectedAlias; set => SetField(ref _selectedAlias, value); }
-    private TimerRowViewModel? _selectedTimer;
-    public TimerRowViewModel? SelectedTimer { get => _selectedTimer; set => SetField(ref _selectedTimer, value); }
-    private SequenceRowViewModel? _selectedSequence;
-    public SequenceRowViewModel? SelectedSequence { get => _selectedSequence; set => SetField(ref _selectedSequence, value); }
-    private VariableRowViewModel? _selectedVariable;
-    public VariableRowViewModel? SelectedVariable { get => _selectedVariable; set => SetField(ref _selectedVariable, value); }
-    private MacroRowViewModel? _selectedMacro;
-    public MacroRowViewModel? SelectedMacro { get => _selectedMacro; set => SetField(ref _selectedMacro, value); }
+    // The lists as the dialog shows them: sorted A-Z, filterable, and grouped where the rule
+    // type has a Group field (triggers, aliases and timers do; sequences, variables and macros
+    // do not). Display only — the collections above keep their order and are still what ToLayer
+    // writes out. See RuleListViewModel for why that separation matters.
+    public RuleListViewModel TriggerList { get; }
+    public RuleListViewModel AliasList { get; }
+    public RuleListViewModel TimerList { get; }
+    public RuleListViewModel SequenceList { get; }
+    public RuleListViewModel VariableList { get; }
+    public RuleListViewModel MacroList { get; }
+
+    // Selection lives on the list view-model (it is what the ListBox binds to); these stay as
+    // the typed way the Add/Remove commands reach it.
+    public TriggerRowViewModel? SelectedTrigger
+    { get => TriggerList.SelectedRow as TriggerRowViewModel; set => TriggerList.Select(value); }
+    public AliasRowViewModel? SelectedAlias
+    { get => AliasList.SelectedRow as AliasRowViewModel; set => AliasList.Select(value); }
+    public TimerRowViewModel? SelectedTimer
+    { get => TimerList.SelectedRow as TimerRowViewModel; set => TimerList.Select(value); }
+    public SequenceRowViewModel? SelectedSequence
+    { get => SequenceList.SelectedRow as SequenceRowViewModel; set => SequenceList.Select(value); }
+    public VariableRowViewModel? SelectedVariable
+    { get => VariableList.SelectedRow as VariableRowViewModel; set => VariableList.Select(value); }
+    public MacroRowViewModel? SelectedMacro
+    { get => MacroList.SelectedRow as MacroRowViewModel; set => MacroList.Select(value); }
 
     public RelayCommand AddTriggerCommand { get; }
     public RelayCommand RemoveTriggerCommand { get; }
@@ -144,6 +157,24 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         foreach (SequenceSpec s in _layer.Sequences) Sequences.Add(new SequenceRowViewModel(s));
         foreach (KeyValuePair<string, string> kv in _layer.Variables) Variables.Add(new VariableRowViewModel(kv.Key, kv.Value));
         foreach (MacroDef mc in _layer.Macros) Macros.Add(new MacroRowViewModel(mc));
+
+        // Built after the rows are loaded so each list starts populated. The second lambda is
+        // the dim line under the name — whatever identifies a rule at a glance in its own terms.
+        TriggerList  = new RuleListViewModel(Triggers,  o => ((TriggerRowViewModel)o).Name,
+                                             o => ((TriggerRowViewModel)o).Pattern,
+                                             o => ((TriggerRowViewModel)o).Group);
+        AliasList    = new RuleListViewModel(Aliases,   o => ((AliasRowViewModel)o).Name,
+                                             o => ((AliasRowViewModel)o).Pattern,
+                                             o => ((AliasRowViewModel)o).Group);
+        TimerList    = new RuleListViewModel(Timers,    o => ((TimerRowViewModel)o).Name,
+                                             o => ((TimerRowViewModel)o).Send,
+                                             o => ((TimerRowViewModel)o).Group);
+        SequenceList = new RuleListViewModel(Sequences, o => ((SequenceRowViewModel)o).Name,
+                                             o => ((SequenceRowViewModel)o).Source);
+        VariableList = new RuleListViewModel(Variables, o => ((VariableRowViewModel)o).Key,
+                                             o => ((VariableRowViewModel)o).Value);
+        MacroList    = new RuleListViewModel(Macros,    o => ((MacroRowViewModel)o).Key,
+                                             o => ((MacroRowViewModel)o).Send);
 
         AddTriggerCommand = new RelayCommand(() =>
         {

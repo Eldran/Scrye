@@ -31,10 +31,17 @@ public sealed class MainWindowViewModel : ViewModelBase
     public RelayCommand EditNodeCommand { get; }
     public RelayCommand DeleteNodeCommand { get; }
     public RelayCommand ConnectNodeCommand { get; }
+    // Save and Done are the same operation with a different ending. Both forms hold a whole
+    // page of settings, so saving one addition used to cost you the form: adding three triggers
+    // meant opening it three times. Save now applies and stays; Done applies and closes (what
+    // Save alone used to do); Cancel still leaves without writing anything.
     public RelayCommand SaveEditorCommand { get; }
+    public RelayCommand DoneEditorCommand { get; }
     public RelayCommand CancelEditorCommand { get; }
+    public RelayCommand ToggleSidebarCommand { get; }
     public RelayCommand OpenSettingsCommand { get; }
     public RelayCommand SaveSettingsCommand { get; }
+    public RelayCommand DoneSettingsCommand { get; }
     public RelayCommand CancelSettingsCommand { get; }
     public RelayCommand<WorldViewModel> CloseWorldCommand { get; }   // ✕ on a world tab
 
@@ -114,6 +121,34 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (toast is not null) Toasts.Remove(toast);
     }
 
+    // ---- the sidebar ---------------------------------------------------------
+    // The MUD list earns its width while you are setting characters up and stops earning it
+    // once you are playing, so it folds away to the thin strip that carries its own chevron —
+    // the control never vanishes with the panel it controls. Written straight to disk on every
+    // toggle rather than on some later Save, because a panel you collapsed should still be
+    // collapsed tomorrow without you having confirmed it anywhere.
+
+    private readonly Services.UiState _ui = Services.UiStateStore.Load();
+
+    public bool SidebarCollapsed
+    {
+        get => _ui.SidebarCollapsed;
+        set
+        {
+            if (_ui.SidebarCollapsed == value) return;
+            _ui.SidebarCollapsed = value;
+            Services.UiStateStore.Save(_ui);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(SidebarChevron));
+            OnPropertyChanged(nameof(SidebarToggleTip));
+        }
+    }
+
+    /// <summary>Points the way the click will move the panel: ‹ folds it away, › brings it back.</summary>
+    public string SidebarChevron => SidebarCollapsed ? "›" : "‹";
+
+    public string SidebarToggleTip => SidebarCollapsed ? "Show the MUD list" : "Hide the MUD list";
+
     private ProfileNodeViewModel? _selectedNode;
     public ProfileNodeViewModel? SelectedNode { get => _selectedNode; set => SetField(ref _selectedNode, value); }
 
@@ -145,10 +180,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         EditNodeCommand = new RelayCommand(EditNode);
         DeleteNodeCommand = new RelayCommand(DeleteNode);
         ConnectNodeCommand = new RelayCommand(ConnectNode);
-        SaveEditorCommand = new RelayCommand(SaveEditor);
+        SaveEditorCommand = new RelayCommand(() => SaveEditor(close: false));
+        DoneEditorCommand = new RelayCommand(() => SaveEditor(close: true));
         CancelEditorCommand = new RelayCommand(() => Editor = null);
+        ToggleSidebarCommand = new RelayCommand(() => SidebarCollapsed = !SidebarCollapsed);
         OpenSettingsCommand = new RelayCommand(() => Settings = new GlobalSettingsViewModel(_store.LoadGlobal()));
-        SaveSettingsCommand = new RelayCommand(SaveSettings);
+        SaveSettingsCommand = new RelayCommand(() => SaveSettings(close: false));
+        DoneSettingsCommand = new RelayCommand(() => SaveSettings(close: true));
         CancelSettingsCommand = new RelayCommand(() => Settings = null);
         CloseWorldCommand = new RelayCommand<WorldViewModel>(CloseWorld);
         Companion = new CompanionController(this);
@@ -224,7 +262,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         RefreshTree();
     }
 
-    private void SaveEditor()
+    /// <summary>Write the open profile editor to disk. <paramref name="close"/> false leaves the
+    /// form up so you can keep editing — see <see cref="SaveEditorCommand"/>.</summary>
+    private void SaveEditor(bool close)
     {
         if (Editor is null) return;
         string fallback = Editor.TargetKind switch
@@ -276,19 +316,29 @@ public sealed class MainWindowViewModel : ViewModelBase
                 break;
         }
 
-        Editor = null;
+        // Before anything can close: the form is still open on Save, and it must now describe
+        // the layer that exists rather than the one that was being created. Without this a
+        // second Save would re-run the rename from a stale OriginalName.
+        Editor.MarkSaved(name);
+
+        if (close) Editor = null;
+        else RaiseToast("Saved", $"{name} saved. The form is still open — Done closes it.");
         RefreshTree();
         ReapplyToConnected();   // any layer in a connected tab's chain may have changed
     }
 
-    private void SaveSettings()
+    /// <summary>Write the global settings. <paramref name="close"/> false leaves the form up —
+    /// see <see cref="SaveSettingsCommand"/>. Nothing here carries identity the way the profile
+    /// editor's name does, so a repeat save is simply a repeat write.</summary>
+    private void SaveSettings(bool close)
     {
         if (Settings is null) return;
         ProfileLayer layer = Settings.ToLayer();
         _store.SaveGlobal(layer);
         Services.ThemeService.Apply(layer.Theme);   // scheme change takes effect immediately
         Services.ThemeService.ApplyAnsiPalette(layer.AnsiPalette);
-        Settings = null;
+        if (close) Settings = null;
+        else RaiseToast("Saved", "Settings saved. The form is still open — Done closes it.");
         ReapplyToConnected();   // global merges into every chain
     }
 

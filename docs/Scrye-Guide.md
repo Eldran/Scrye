@@ -141,6 +141,14 @@ Deeper layers win for single values (theme, font), and collections (triggers, al
 
 These are all editable in Settings (Global) or per world/character.
 
+### Finding things in a long list
+
+Every rule list in Settings and in a world's editor is **sorted A–Z** and has a **filter box** above it that matches on name, pattern and group as you type.
+
+Triggers, aliases and timers also have a **Group** field, and the list draws one collapsible heading per group with the rules sorted inside it — click a heading to fold it away. Anything with no group set collects under *(no group)* at the bottom. Groups are just a label you choose, so use whatever divisions you actually think in: `combat`, `travel`, `guild`. They earn their keep twice over, because a plugin or script can switch a whole group on and off at once rather than hunting down each rule.
+
+Two things worth knowing about the ordering. It is **display only** — the file keeps the order you added things in, and match order has never come from this list anyway: the engine sorts rules by their **Sequence** number (lower runs first), which is the field to reach for when one trigger genuinely has to beat another. And the list re-sorts when you *leave* a rule rather than as you type, so renaming something doesn't make it jump around under the cursor mid-edit.
+
 ## Appearance
 
 In **Settings → Appearance**:
