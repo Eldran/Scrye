@@ -1,7 +1,7 @@
 name: CI
 
-# Scrye claims to be cross-platform but has only ever been built and run on Windows. The
-# point of this workflow is to stop that claim drifting further from the truth: a compile
+# Scrye is developed on Windows and has since been built and run on Linux and macOS too.
+# The point of this workflow is to keep that true rather than aspirational: a compile
 # error on Linux or macOS should surface within minutes of the push that caused it, not
 # when someone finally tries a build there.
 #

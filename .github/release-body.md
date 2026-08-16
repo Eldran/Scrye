@@ -43,9 +43,23 @@ font picker enumerates the monospaced fonts it can find and looks broken without
 
 ### macOS
 
-Not released. It compiles in CI but has never actually been run, and text-to-speech and
-saved passwords are unimplemented there. Build from source if you want to try it — and
-please open an issue with what happened.
+Works, but you have to build it yourself — there is no macOS download here. Shipping one
+needs a signed, notarized `.app` or Gatekeeper refuses to open it, and that isn't set up.
+
+Needs the .NET 10 SDK (`brew install --cask dotnet-sdk`):
+
+```
+git clone {{REPO}}.git
+cd Scrye
+dotnet publish src/Scrye.App -c Release -r osx-arm64 --self-contained \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Use `-r osx-x64` on an Intel Mac. The binary lands in `src/Scrye.App/bin/Release/net10.0/osx-arm64/publish/`.
+
+Text-to-speech and saved auto-login passwords are not implemented on macOS; both decline
+politely rather than crashing. Everything else behaves as it does elsewhere — and please
+open an issue if it doesn't.
 
 ## What's bundled
 

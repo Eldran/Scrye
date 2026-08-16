@@ -33,9 +33,9 @@ it, so you can close it and pick up an hour later where you left off.
 | Windows 10/11 (x64) | `Scrye-<version>-win-x64.zip` | Unzip, run `Scrye.App.exe` |
 | Linux (x64) | `Scrye-<version>-linux-x64.tar.gz` | `tar -xzf` it, run `./Scrye.App` |
 
-The Windows build is unsigned, so first launch shows SmartScreen's "Windows protected your PC" — **More info → Run anyway**. `SHA256SUMS.txt` is attached to every release if you'd rather verify than trust. macOS isn't released; see [platforms](#build--run) below.
+The Windows build is unsigned, so first launch shows SmartScreen's "Windows protected your PC" — **More info → Run anyway**. `SHA256SUMS.txt` is attached to every release if you'd rather verify than trust. **macOS runs, but there is no download** — build it from source; see [platforms](#build--run) below.
 
-Building from source is only necessary if you want to change something — see **Build & run**.
+Building from source is otherwise only necessary if you want to change something — see **Build & run**.
 
 ## Documentation
 
@@ -116,15 +116,24 @@ To produce a self-contained build packed for sharing:
 ./publish-win.ps1 -Rid win-arm64     # any RID with a matching .pubxml
 ```
 
+There is no `.pubxml` for macOS and the script is PowerShell, so build there with `dotnet publish` directly:
+
+```
+dotnet publish src/Scrye.App -c Release -r osx-arm64 --self-contained \
+  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+(`-r osx-x64` on an Intel Mac.)
+
 The recipient needs nothing installed. On Windows they unzip and run `Scrye.App.exe`; unsigned builds show a SmartScreen warning on first launch. On Linux they extract and `chmod +x Scrye.App` first — NTFS has no executable bit, so nothing packed on Windows carries one.
 
 That script is for handing a build to someone directly. **Releases are automated**: pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes each platform *on* that platform (so the Linux tarball keeps its executable bit and needs no `chmod`), attaches the archives and their SHA-256 sums to a draft GitHub Release, and takes its install instructions from `.github/release-body.md`.
 
-**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction. Sound works everywhere (winmm on Windows, `afplay` on macOS, `paplay`/`aplay` on Linux), and auto-login passwords are stored in the OS credential store on Windows (Credential Manager) and Linux (the Secret Service — GNOME Keyring or KWallet — via `secret-tool` from `libsecret-tools`). **Text-to-speech is still Windows-only**, guarded so it declines rather than crashes; so is password storage on **macOS**, where it is not implemented. Saving a password that cannot be stored says so rather than failing quietly at the next login.
+**A note on platforms.** The engine and the Avalonia UI are cross-platform by construction, and all three desktop platforms have been built and run. Sound works everywhere (winmm on Windows, `afplay` on macOS, `paplay`/`aplay` on Linux), and auto-login passwords are stored in the OS credential store on Windows (Credential Manager) and Linux (the Secret Service — GNOME Keyring or KWallet — via `secret-tool` from `libsecret-tools`). Two gaps remain. **Text-to-speech is Windows-only.** And **saved passwords are not implemented on macOS**: that wants Security.framework, because the `security` CLI takes the password in `argv`, where any other process can read it off `ps`. Both gaps are guarded, so they decline rather than crash — saving a password that cannot be stored says so rather than failing quietly at the next login.
 
 - **Windows** is the primary platform: developed, built and played on daily.
 - **Linux** works. The `linux-x64` self-contained build has been run on Ubuntu and renders identically to Windows, fonts included. It is smoke-tested when something platform-sensitive changes, not on every commit, so treat it as working-but-lightly-exercised.
-- **macOS** compiles (CI builds it weekly) but has never been run. Untested.
+- **macOS** works — built from source and run there, no problems reported. There is no macOS download, though: shipping one needs a `.app` bundle, a Developer ID certificate and notarization, or Gatekeeper refuses to open it, and that pipeline is the real cost rather than the code. So build it yourself with the `dotnet publish` command above. It sees less use than Windows or Linux, and text-to-speech and saved passwords are unimplemented there.
 
 CI compiles the whole solution on Linux and Windows per push, so a build break surfaces within minutes on any of them. `WinExe` in `Scrye.App.csproj` is not an obstacle to a non-Windows build: it only sets the Windows PE subsystem and is ignored for other RIDs.
 

@@ -19,10 +19,12 @@ name: Release
 # The release is created as a DRAFT: nothing is public until you look at the assets and
 # press Publish. To make tags publish immediately, drop `--draft` from the gh call below.
 #
-# macOS is deliberately absent. It compiles (ci.yml builds it weekly) but has never been
-# run, and an unsigned, un-notarized .app gets a harder refusal from Gatekeeper than
-# SmartScreen gives on Windows — shipping one would generate bug reports about a build
-# nobody has verified. Add an entry to the matrix once someone has actually run it.
+# macOS is deliberately absent, and not because the app doesn't work there — it compiles
+# (ci.yml builds it weekly) and has been run without problems. The blocker is distribution:
+# an unsigned, un-notarized .app gets a harder refusal from Gatekeeper than SmartScreen
+# gives on Windows, so shipping one would mostly generate "it won't open" reports. Adding
+# a matrix entry is the easy half; a Developer ID certificate and a notarization step are
+# the real work. Until then macOS users build from source.
 
 on:
   push:

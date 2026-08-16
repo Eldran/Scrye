@@ -13,11 +13,12 @@ loose ends are.
 
 **Platform**
 
-- **macOS has never been run.** It compiles in CI, and nothing structural blocks it —
-  every native dependency ships macOS binaries — but nobody here owns a Mac. Handing a
-  build to someone else additionally needs a `.app` bundle, a Developer ID certificate
-  and notarization, or Gatekeeper refuses to open it. That pipeline is the real cost,
-  not the code. Releases are Windows and Linux only for this reason.
+- **macOS has no release build.** The app itself is fine — it has been compiled and run on
+  macOS without problems, and every native dependency ships macOS binaries. What is missing
+  is the *shipping* pipeline: handing a build to someone else needs a `.app` bundle, a
+  Developer ID certificate and notarization, or Gatekeeper refuses to open it. That is the
+  real cost, not the code, so releases stay Windows and Linux and macOS users build from
+  source. It also sees far less use than the other two, so treat it as lightly exercised.
 - **Text-to-speech is Windows-only.** It uses `System.Speech`, guarded so it declines
   rather than crashes elsewhere. macOS has `say` and Linux has `spd-say`/`espeak`, both a
   shell-out away if anyone wants it — the same shape the sound player already uses.
@@ -30,12 +31,10 @@ loose ends are.
 
 **Mobile companion vs. desktop**
 
-- **Barlist order differs.** The desktop draws refinery bars raw-amber left, refined-green
-  right; the phone's `buildBarList` still draws refined first. Small, cosmetic, but the two
-  disagree.
-- **Refinery quality breakdown is pointer-only.** It lives in a hover tooltip, which a touch
-  screen cannot fire, so the phone never shows it. The text already crosses the wire in the
-  barlist row — a tap-to-expand toggle would close this.
+- **Refinery quality *numbers* are pointer-only.** Both hosts now draw one segment per
+  quality stage, so the shape of the breakdown is visible on the phone. The figures behind
+  it still live in a hover tooltip, which a touch screen cannot fire. The text already
+  crosses the wire in the barlist row — a tap-to-expand toggle would close this.
 - **Colorgrid icons and weave are desktop-only.** The phone deliberately falls back to
   letter/colour tiles. Fine unless you use the maps on the phone a lot.
 - **The `inverse` markup flag is ignored on the phone.** It needs resolved base colours and
