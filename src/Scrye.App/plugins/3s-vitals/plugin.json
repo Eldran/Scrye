@@ -1,9 +1,9 @@
 {
   "id": "3s-vitals",
   "name": "3S Vitals",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Joakim",
-  "description": "Compact vitals HUD: HP / Seid / Vig / Rad gauges plus the current enemy and its health. Extracted from 3S Viking Status so the bars you glance at mid-fight live in their own small panel.",
+  "description": "Compact vitals HUD: four stat gauges plus the current enemy and its health. Draws HP / Seid / Vig / Rad for a Viking character and HP / SP / GP1 / GP2 for every other guild, picking the set from whether the viking feed is live. Extracted from 3S Viking Status so the bars you glance at mid-fight live in their own small panel.",
   "mudIds": [
     "*"
   ],

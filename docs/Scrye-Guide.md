@@ -287,6 +287,8 @@ The feeds are positional — `BATTLE` is eleven pipe-separated fields, and each 
 
 Two honest limits. It can only speak for keys the server actually sent, so run it after visiting whatever exercises the feeds (and with the right `vtoggle` flags on). And only a handful of keys have a recorded expectation — the ones whose layout was read directly off a parser. Everything else is listed as "no recorded expectation" with its observed shape, which still catches a later change but has never been checked against anything.
 
+**Switching characters without reconnecting works.** MIP is registered per *login*, not per connection, so the handshake sent when you connect doesn't cover a second character who logs in on the same session. Scrye notices the password prompt, clears the previous character's `character.*`, `enemy.*` and `vik.*` state so none of their numbers linger in a HUD, and re-sends the handshake at the next prompt — you'll see `[MIP] new login - handshake will re-send` in the output. If a MUD lets you swap characters *without* re-authenticating, that isn't detectable and you'll need to reconnect.
+
 The server binds to **loopback only**. On the same machine that's `http://127.0.0.1:4747`; to reach it from a phone you need [Tailscale](https://tailscale.com) in front of it, which also gives you HTTPS (iOS won't allow notifications or home‑screen install without it). `.companion tailscale` prints the one command you need; the full walkthrough — including the login and consent steps that aren't obvious — is in **`docs/Scrye-Companion-Setup.md`**.
 
 Once Tailscale is serving, the phone URL looks like `https://desktop-xxxx.your-tailnet.ts.net/` — scan the panel's QR code rather than typing it. If the phone is signed into the same tailnet, Scrye recognises it by its Tailscale login and **you never type the token either**. The token is the fallback for anything off the tailnet, and it changes every time the server starts.
@@ -570,7 +572,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.11.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.12.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -596,7 +598,9 @@ The companion renders rows side by side too, wrapping children onto the next lin
 screen is too narrow for them. **1.9 adds `onRightClick`** as a second, distinct action on
 `colorgrid`, `button` and `buttonrow` (the companion maps a long-press onto it); **1.10 adds
 `scrye.onRelay`**, chat arriving from another open world; **1.11 adds the manifest `panes`
-field**, so a plugin's capture panes exist as soon as it loads instead of on first traffic.
+field**, so a plugin's capture panes exist as soon as it loads instead of on first traffic;
+**1.12 adds the `barlist` stages field**, a seventh column of `qty,pct;…` rawest first, so a
+bar draws one segment per quality stage instead of a single amber/green split.
 
 ## Permissions
 
@@ -844,12 +848,13 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
-| `barlist` | A list of labelled bars from one bound value — a compact way to show several quantities against a common maximum. | `bind`; `color` |
+| `barlist` | A list of labelled bars from one bound value — a compact way to show several quantities against a common maximum. Rows are `label \t caption \t value \t max \t refined [\t tooltip [\t stages]]`; anything else in the bound value draws as plain text, so headers still work. | `bind`; `color` |
 | `row` | A horizontal container *(1.8)*: its children lay out side by side at their measured widths, the escape hatch from the panel's vertical stack. | `widgets = { ... }` (ordinary widget tables) |
 
 Notes:
 
-- **Dynamic content** flows through `bind` + `setState`: the *set* of widgets is fixed when the panel is built, but their bound content updates live. You still can't add or remove *widgets* at runtime — but `list` and `table` are single widgets whose **row count follows the bound value**, so a variable‑length collection no longer needs a `text` blob or a `colorgrid`.
+- **Dynamic content** flows through `bind` + `setState`: the *set* of widgets is fixed when the panel is built, but their bound content updates live. `list` and `table` are single widgets whose **row count follows the bound value**, so a variable‑length collection needs neither a `text` blob nor a `colorgrid`.
+- **To change the widgets themselves, call `scrye.addPanel` again with the same `title`.** The host replaces that panel in place rather than adding a second one: the canvas position and any drag survive, the companion replaces it by the same id, and the old panel's state watches and button callbacks are retired for you. This is the escape hatch for things a plugin cannot know at load — a gauge's *label* is fixed at build time, so a HUD whose stats are named differently per character (per guild, per class) rebuilds once when it finds out rather than trying to relabel in place. Rebuilds are cheap but not free: do it when the *shape* changes, not on every update.
 - **If you're reaching for `string.format` and padding, use `table`.** Composing aligned columns in Lua is what `text` widgets forced; the host measures columns for you, and the mobile companion renders a real table rather than pre‑padded text that wraps badly on a phone.
 - **Inline markup in `text` widgets renders on both hosts** — colours, `bold`/`underline`/`italic`, and `click=`/`prompt=` runs are tappable links on the companion, dispatched through the same input pipeline as the desktop (plugin aliases get first refusal). The one exception: the `inverse` flag is desktop‑only — the companion ignores it rather than guessing at base colours it only inherits.
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
@@ -857,6 +862,7 @@ Notes:
 - `colorgrid` `onHover` *(1.6)* fires when the pointer moves onto a **different** cell (never per pixel), and once with `(-1, -1, "")` when it leaves the grid so you can clear whatever you were previewing. Hover is desktop-only — the companion's touch screen never fires it — so use it to *enrich* (a room-name readout beside the map), never for anything `onClick` can't also reach.
 - **`onRightClick` *(1.9)* is a second action, not a variant of the first.** A right-click runs it and `onClick` does *not* also fire; a left click runs `onClick` and never this. It works on `colorgrid` (same `col, row, ch` as `onClick`), `button` and `buttonrow` (no arguments). Unlike `onHover` it may gate real behaviour, because the companion maps a **long-press (~500 ms)** onto it — so anything reachable by right-click on the desktop is reachable by touch on the phone. Use it for the secondary thing a cell or button obviously affords: left-click a map square to travel there, right-click to inspect it.
 - **Behaviour change in 1.9:** colorgrid cell clicks used to fire `onClick` on *any* pointer button, so a right-click silently ran it. Left click now runs `onClick` and nothing else. If a plugin relied on that, it was relying on an accident.
+- **`barlist` bars can show a quality breakdown, not just a fill.** Past `max`, the `refined` field splits the fill into raw (amber, left) and refined (green, right). The optional seventh field takes that further: `qty,pct;qty,pct;…` **rawest first** draws one segment per stage — width is how many units sit at that quality, colour is where that quality falls on the amber→green ramp — so the intermediate stages are visible instead of averaged into one split. A row without it renders exactly as before. The sixth field is a hover tooltip (`\n` becomes a line break); the phone can't fire hover, so don't put anything essential only there.
 - `input` seeds its field from `bind`; refresh it by `setState`‑ing that key.
 - `table` sizes each column to its widest cell. `align` takes one character per column — `l`, `r`, `c` — and right‑aligning numeric columns is worth doing; without it a table of quantities reads worse than the blob it replaced.
 - Rows with too few cells render blank in the missing columns, so a "nothing here" row can just be one cell.
@@ -919,7 +925,7 @@ arbitrary — so a typo shows as "unstyled", not as an invisible widget.
 ## State namespaces you'll see
 
 - `plugin.<id>.*` — your own published state (bind widgets here).
-- `character.*` — vitals etc. (e.g. `character.health.current`, `character.health.max`).
+- `character.*` — vitals, mirrored from MIP (or GMCP) so a HUD binds to one spelling whatever the source: `character.health.current`/`.max`, `character.spell.current`/`.max`, `character.gold.a`/`.amax` and `character.gold.b`/`.bmax` (the two guild‑point slots), plus `character.gline1`/`.gline2`, the guild's own status lines as free text.
 - `enemy.name`, `enemy.health` — current target.
 - Game‑specific feeds — e.g. on 3Scapes the viking MIP feed lands under `vik.*` (`vik.daler`, `vik.wstock`, `vik.carts`, `vik.buildings`, …), readable by any plugin via `scrye.getState("vik.<key>")` and watchable with `scrye.watch("vik", fn)`.
 

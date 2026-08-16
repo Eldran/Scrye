@@ -23,6 +23,16 @@ public sealed class AutoLogin
         @"\bpassword\b.*[:?]\s*$",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>Does this line look like a MUD asking for a password?</summary>
+    /// <remarks>Public because the session runs the same test for a different reason: a
+    /// password prompt is how it notices that a <i>different character</i> is taking over an
+    /// already-open connection (see <c>MudSession.ReArmMipForNewLogin</c>). Sharing the one
+    /// pattern means the two can never disagree about what a login looks like.</remarks>
+    public static bool IsPasswordPrompt(string text) => PasswordPrompt.IsMatch(text.Trim());
+
+    /// <summary>Does this line look like a MUD asking which character you are?</summary>
+    public static bool IsNamePrompt(string text) => NamePrompt.IsMatch(text.Trim());
+
     private readonly string _username;
     private readonly string? _password;
     private int _fed;
@@ -53,7 +63,7 @@ public sealed class AutoLogin
 
         if (!SentUsername)
         {
-            if (NamePrompt.IsMatch(t))
+            if (IsNamePrompt(t))
             {
                 SentUsername = true;
                 return _username;
@@ -61,7 +71,7 @@ public sealed class AutoLogin
             return null;
         }
 
-        if (_password is not null && !SentPassword && PasswordPrompt.IsMatch(t))
+        if (_password is not null && !SentPassword && IsPasswordPrompt(t))
         {
             SentPassword = true;
             isPassword = true;

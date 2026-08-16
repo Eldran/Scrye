@@ -332,6 +332,48 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mipPending = true; _mipGotData = false; _mipSent = false; _mipRetries = 0; _mipSecondsSinceHandshake = 0;
     }
 
+    /// <summary>The variables MIP owns. Cleared when a different character takes over the
+    /// connection, so none of the previous one's numbers linger in a HUD. Deliberately a
+    /// list rather than a wipe: variables are also user territory (aliases set them), and
+    /// "mipid" is the client id, which is per-connection and must survive.</summary>
+    private static readonly string[] MipOwnedVariables =
+    {
+        "hp", "hpmax", "sp", "spmax", "gp1", "gp1max", "gp2", "gp2max",
+        "gline1", "gline2", "enemy_name", "enemy_hp", "round",
+    };
+
+    /// <summary>
+    /// A password prompt on an already-connected session means a <i>different character</i>
+    /// is taking over it. 3Scapes registers a MIP client per <b>login</b>, not per socket, so
+    /// the handshake sent at connect does not carry over: without this the new character
+    /// silently gets no feed at all — every vital reads empty — and the only cure is
+    /// reconnecting. Re-arming hands the existing "first <c>&gt;</c> prompt" trigger its job
+    /// back, so the handshake goes out again for whoever just logged in.
+    ///
+    /// <para>The <b>password</b> prompt is the signal, not the name prompt: a MUD asks for one
+    /// exactly once per login and essentially never during play, whereas a line ending
+    /// "...name:" turns up in ordinary game text and would re-handshake at random. A MUD that
+    /// swaps characters without re-authenticating is not covered — nothing in the stream
+    /// distinguishes that from normal play.</para>
+    ///
+    /// <para>The previous character's state goes too. Leaving it would be worse than leaving it
+    /// blank: a HUD would show another character's health, and a plugin that keys off a
+    /// guild-specific feed (3s-vitals picks its bars from <c>vik.*</c>) would keep drawing the
+    /// wrong ones. Everything here is re-sent by the MUD within a prompt or two.</para>
+    /// </summary>
+    private void ReArmMipForNewLogin()
+    {
+        if (!Profile.EnableMip || _mipPending) return;   // already waiting to hand shake
+        foreach (string v in MipOwnedVariables) _variables.Delete(v);
+        _state.ClearPrefix("character");
+        _state.ClearPrefix("enemy");
+        _state.ClearPrefix("combat");
+        _state.ClearPrefix("vik");        // the guild feed is per-character too
+        ResetMipForConnect();
+        MipVitalsUpdated?.Invoke();       // tell the HUD its numbers just went away
+        RaiseLine(Line.FromText("[MIP] new login - handshake will re-send", SysColour));
+    }
+
     // ---- transcript logging --------------------------------------------------
 
     /// <summary>Default per-user log directory: <c>%APPDATA%/Scrye/logs</c> (or the
@@ -722,6 +764,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         {
             _mipPending = false;
             SendMipHandshake();
+        }
+        else if (AutoLogin.IsPasswordPrompt(line.PlainText))
+        {
+            // Not at connect — _mipPending is already true then, so this no-ops and the
+            // login we are in the middle of is left alone. This is the second login onward.
+            ReArmMipForNewLogin();
         }
         // Fallback net: a MIP frame that survived packet-level stripping (unlucky packet
         // splits, terminators the stream scanner missed) is consumed here rather than
