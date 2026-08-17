@@ -283,6 +283,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                         W = double.IsNaN(hp.UserWidth) ? 0 : hp.UserWidth,
                         H = double.IsNaN(hp.UserHeight) ? 0 : hp.UserHeight,
                     });
+        // Collapsed panels go in their own list: a panel can be rolled up before it has ever
+        // been dragged, and the entries above are only written once it has a real position.
+        if (Hud is not null)
+            foreach (HudPanelViewModel hp in Hud.Panels)
+                if (hp.IsCollapsed) layout.CollapsedHudPanels.Add(hp.Key);
         Services.PaneLayoutStore.Save(Title, layout);
     }
 
@@ -581,10 +586,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.
         var savedHud = new System.Collections.Generic.Dictionary<string, (double, double, double, double)>(StringComparer.Ordinal);
+        var savedCollapsed = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
         if (Services.PaneLayoutStore.Load(profile.Name) is { } savedLayout)
+        {
             foreach (Services.HudPanelLayout h in savedLayout.HudPanels)
                 if (!string.IsNullOrEmpty(h.Name)) savedHud[h.Name] = (h.X, h.Y, h.W, h.H);
+            foreach (string c in savedLayout.CollapsedHudPanels) savedCollapsed.Add(c);
+        }
         Hud.LoadPosition = key => savedHud.TryGetValue(key, out (double, double, double, double) p) ? p : null;
+        Hud.LoadCollapsed = key => savedCollapsed.Contains(key);
         Hud.PanelMoved = SaveLayout;
 
         // find-in-scrollback: searches the rendered output buffer.

@@ -284,7 +284,7 @@
                                             <Border behaviors:HudDrag.Enabled="True"
                                                     Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
                                                     BorderThickness="1" CornerRadius="6" Padding="10"
-                                                    Width="{Binding EffectiveWidth}" Height="{Binding UserHeight}"
+                                                    Width="{Binding EffectiveWidth}" Height="{Binding EffectiveHeight}"
                                                     Classes.hasbg="{Binding HasBackground}" Classes.hasac="{Binding HasAccent}">
                                                 <!-- Plugin colour overrides. Each style only applies when the plugin set that
                                                      colour (via a toggled class), so panels without custom colours keep
@@ -425,15 +425,26 @@
                                                      measured with infinity and never scroll. With auto height the star
                                                      row simply takes the content's size, exactly like the old stack. -->
                                                 <Grid RowDefinitions="Auto,*">
-                                                    <TextBlock Grid.Row="0" Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"
-                                                               Margin="0,0,0,4"
-                                                               Foreground="{DynamicResource ScryeAccent}"
-                                                               Classes.hasac="{Binding HasAccent}" />
-                                                    <ScrollViewer Grid.Row="1" IsVisible="{Binding !HasTabs}"
+                                                    <!-- The title strip doubles as the collapse control. The chevron is a
+                                                         Button, which HudDrag treats as interactive, so clicking it toggles
+                                                         instead of starting a drag on the panel. -->
+                                                    <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                                                        <Button DockPanel.Dock="Right" Content="{Binding CollapseGlyph}"
+                                                                Command="{Binding ToggleCollapseCommand}"
+                                                                ToolTip.Tip="{Binding CollapseTip}"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                Padding="4,0" FontSize="10" VerticalAlignment="Center"
+                                                                Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="11"
+                                                                   VerticalAlignment="Center"
+                                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                                   Classes.hasac="{Binding HasAccent}" />
+                                                    </DockPanel>
+                                                    <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowFlat}"
                                                                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                                         <ItemsControl ItemsSource="{Binding Widgets}" />
                                                     </ScrollViewer>
-                                                    <TabControl Grid.Row="1" ItemsSource="{Binding Tabs}" IsVisible="{Binding HasTabs}" Padding="0,4,0,0">
+                                                    <TabControl Grid.Row="1" ItemsSource="{Binding Tabs}" IsVisible="{Binding ShowTabs}" Padding="0,4,0,0">
                                                         <TabControl.ItemTemplate>
                                                             <DataTemplate x:DataType="vm:HudTabViewModel">
                                                                 <TextBlock Text="{Binding Title}" FontSize="11" />
@@ -451,7 +462,10 @@
                                                         </TabControl.ContentTemplate>
                                                     </TabControl>
                                                     <!-- resize grip glyph (hit-testing lives in HudDrag, by position) -->
+                                                    <!-- hidden while collapsed: there is no height to drag, so the hint
+                                                         would promise something the panel cannot do -->
                                                     <Path Grid.Row="1" Classes="grip" IsHitTestVisible="False"
+                                                          IsVisible="{Binding !IsCollapsed}"
                                                           HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                                           Margin="0,0,-6,-6"
                                                           Data="M 0,9 L 9,0 M 3.5,9 L 9,3.5 M 7,9 L 9,7"

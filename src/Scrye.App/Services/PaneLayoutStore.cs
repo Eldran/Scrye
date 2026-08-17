@@ -35,6 +35,14 @@ public sealed class WorldLayout
     /// would be undone every restart. Real traffic still wins: a line routed to a closed pane
     /// recreates it, because at that point the pane has something in it to read.</summary>
     public List<string> ClosedPanes { get; set; } = new();
+
+    /// <summary>HUD panels the user rolled up to their title strip, by <c>pluginId|title</c>.
+    ///
+    /// <para>A list of names rather than a flag on <see cref="HudPanelLayout"/>, because a panel
+    /// can be collapsed without ever having been dragged — and those entries are only written
+    /// when a panel HAS a position, since X/Y are NaN until it is placed and System.Text.Json
+    /// refuses to serialise NaN. Keeping the two apart means neither has to know that.</para></summary>
+    public List<string> CollapsedHudPanels { get; set; } = new();
 }
 
 /// <summary>

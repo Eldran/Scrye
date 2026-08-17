@@ -73,6 +73,11 @@ public sealed class HudViewModel : IDisposable
     /// W/H are the user-resized size; 0 = never resized (the panel auto-sizes).</summary>
     public Func<string, (double X, double Y, double W, double H)?>? LoadPosition { get; set; }
 
+    /// <summary>Saved collapsed state for a panel key, or null when the world has never seen it.
+    /// Separate from <see cref="LoadPosition"/> because a panel can be collapsed without ever
+    /// having been dragged, and the position tuple has no room for a flag that is not a size.</summary>
+    public Func<string, bool>? LoadCollapsed { get; set; }
+
     /// <summary>Raised after the user drags or resizes a panel (persist the layout).</summary>
     public Action? PanelMoved { get; set; }
 
@@ -144,6 +149,9 @@ public sealed class HudViewModel : IDisposable
                 if (pw > 0) panel.UserWidth = pw;
                 if (ph > 0) panel.UserHeight = ph;
             }
+            // Restore the collapse BEFORE wiring Moved, or applying the saved state would
+            // immediately write the layout back out as if the user had just done it.
+            if (LoadCollapsed?.Invoke(key) == true) panel.IsCollapsed = true;
             panel.Moved = _ => PanelMoved?.Invoke();
         }
 
@@ -467,7 +475,50 @@ public sealed class HudPanelViewModel : ViewModelBase
 
     /// <summary>Tabs is observable, but HasTabs is derived from its Count and so has to be
     /// raised by hand after a rebuild swaps a tabbed panel for a flat one or back.</summary>
-    internal void RaiseHasTabsChanged() => OnPropertyChanged(nameof(HasTabs));
+    internal void RaiseHasTabsChanged()
+    {
+        OnPropertyChanged(nameof(HasTabs));
+        OnPropertyChanged(nameof(ShowFlat));
+        OnPropertyChanged(nameof(ShowTabs));
+    }
+
+    // ---- collapsing --------------------------------------------------------------------
+    //
+    // Rolled up to its title strip, a panel costs ~22px instead of its full height but stays
+    // exactly where you put it — and the strip is its own way back, so unlike hiding a panel
+    // outright there is nothing to go looking for and nothing that can be lost. On a small
+    // screen four collapsed strips in a corner is the difference between a usable output pane
+    // and a cramped one.
+    //
+    // Collapsing changes nothing about the plugin: the widgets stay bound, state watches keep
+    // firing, timers keep running. It is a drawing decision, not a lifecycle one.
+
+    private bool _collapsed;
+    public bool IsCollapsed
+    {
+        get => _collapsed;
+        set
+        {
+            if (!SetField(ref _collapsed, value)) return;
+            OnPropertyChanged(nameof(CollapseGlyph));
+            OnPropertyChanged(nameof(CollapseTip));
+            OnPropertyChanged(nameof(ShowFlat));
+            OnPropertyChanged(nameof(ShowTabs));
+            OnPropertyChanged(nameof(EffectiveHeight));
+            Moved?.Invoke(this);          // the layout changed: persist it
+        }
+    }
+
+    /// <summary>Points the way the click will move the panel: ▾ rolls it up, ▸ opens it.</summary>
+    public string CollapseGlyph => _collapsed ? "▸" : "▾";
+    public string CollapseTip => _collapsed ? "Expand this panel" : "Collapse to its title";
+
+    // Two properties rather than a converter, because the row's visibility is really
+    // "flat AND open" / "tabbed AND open" and XAML has no AND.
+    public bool ShowFlat => !HasTabs && !_collapsed;
+    public bool ShowTabs => HasTabs && !_collapsed;
+
+    public RelayCommand ToggleCollapseCommand { get; }
 
     private double _width = 220;
     public double Width
@@ -496,8 +547,18 @@ public sealed class HudPanelViewModel : ViewModelBase
     public double UserHeight
     {
         get => _userHeight;
-        set { if (SetField(ref _userHeight, value)) OnPropertyChanged(nameof(TabMaxHeight)); }
+        set
+        {
+            if (!SetField(ref _userHeight, value)) return;
+            OnPropertyChanged(nameof(TabMaxHeight));
+            OnPropertyChanged(nameof(EffectiveHeight));
+        }
     }
+
+    /// <summary>What the panel Border binds. NaN means "auto" to Avalonia, which is exactly
+    /// what a collapsed panel wants: shrink to the title strip whatever height the user had
+    /// fixed — and get that height back untouched when it opens again.</summary>
+    public double EffectiveHeight => _collapsed ? double.NaN : _userHeight;
 
     /// <summary>Cap for a tabbed panel's per-tab ScrollViewer: 460 while auto-sizing (the
     /// long tabs would otherwise grow the panel unbounded), uncapped once the user fixed
@@ -550,7 +611,12 @@ public sealed class HudPanelViewModel : ViewModelBase
     internal Action<HudPanelViewModel>? Moved;
     public void ReportMoved() => Moved?.Invoke(this);
 
-    public HudPanelViewModel(string title, string pluginId) { Title = title; PluginId = pluginId; }
+    public HudPanelViewModel(string title, string pluginId)
+    {
+        Title = title;
+        PluginId = pluginId;
+        ToggleCollapseCommand = new RelayCommand(() => IsCollapsed = !IsCollapsed);
+    }
 }
 
 /// <summary>One tab in a tabbed HUD panel.</summary>
