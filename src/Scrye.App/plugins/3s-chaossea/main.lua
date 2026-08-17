@@ -39,9 +39,23 @@ local idle_fight_prompts = 0   -- self-heal counter when combat fizzles out
 local armed = false            -- a room was parsed; ok to auto-step on next prompt
 local plan = nil               -- walking plan: one confirmed move at a time
 local last_dir = nil           -- last direction actually sent (avoid instant backtrack)
-local last_cmd = nil           -- command sent since the last prompt, lowercased (nil = none).
-                               -- Tells a REPRINTED room header ('look', 'finger') apart from
-                               -- an actual move, and an actual move apart from a wimpy retreat.
+-- Commands on the wire whose output we have not finished reading, oldest first
+-- (first word, lowercased). Tells a REPRINTED room header ('look', 'finger') apart
+-- from an actual move, and an actual move apart from a wimpy retreat.
+--
+-- A QUEUE, not a single "last command", because commands pipeline: scrye.onCommand
+-- reports every send on the wire -- yours, ours, and other plugins' -- and the
+-- auto-trader in 3s-viking-status fires one `vtrade goods <x>` per second for 16
+-- goods. A scalar is overwritten by that timer in the gap between our step going out
+-- and its room header coming back, so our own move gets read as somebody's redisplay
+-- and never confirmed. The MUD answers commands in the order it received them, so
+-- the block being printed belongs to sent_q[1] and nothing else.
+-- Strictly one push per command, one pop per prompt: any cleverer bookkeeping
+-- (popping on the room header as well) drifts the queue by one and puts it
+-- permanently out of step with the output it is supposed to be labelling.
+local sent_q = {}
+local SENT_MAX = 16            -- self-limit: a lost prompt must not grow this forever
+local glance_unstick = false   -- the watchdog's !glance is asking for a move to be re-confirmed
 local blind_steps = 0          -- consecutive re-orient steps after a maze shift
 local killname = "mutant"
 local goal = "cask portal"
@@ -452,6 +466,7 @@ cs_advance = function()
     return
   end
   plan.awaiting = true
+  glance_unstick = false        -- a fresh step: any earlier unstick request is spent
   last_dir = plan.dirs[plan.idx]
   scrye.send(plan.dirs[plan.idx])
 end
@@ -460,15 +475,20 @@ local function cs_on_room(short)
   if not enabled then return end
   -- What produced this room header? Consume the answer: it is only valid for the
   -- block of output the command generated, and the prompt clears it again.
-  local cmd = last_cmd
-  last_cmd = nil
+  local cmd = sent_q[1]     -- the command this block of output is answering (nil = the server)
+  -- ...except the watchdog's own re-glance, which exists precisely to shake a room
+  -- header out of the MUD when a step went unconfirmed. Its reply IS the confirmation.
+  if glance_unstick and cmd == "!glance" and plan and plan.awaiting then
+    glance_unstick = false
+    cmd = plan.dirs[plan.idx]
+  end
   if cmd and not DELTA[cmd] then
-    -- You typed something that REPRINTS the room header without moving you: 'look',
-    -- 'finger bob', 'exits'. Only a direction (or the server itself) can move you, so
-    -- this is a redisplay, whatever it is. Refresh the exits from it and touch nothing
-    -- else -- do not advance the walking plan, and do not call it a wimpy retreat,
-    -- which is what used to happen here.
-    if not paused then parse_exits(short); cs_draw() end
+    -- Something that REPRINTS the room header without moving you: 'look', 'finger bob',
+    -- 'exits', or the bot's own '!glance'. Only a direction (or the server itself) can
+    -- move you, so this is a redisplay, whatever it is. Re-read the exits and arm the
+    -- stepper from it -- but do not advance the walking plan, and do not call it a wimpy
+    -- retreat, which is what used to happen here.
+    if not paused then parse_exits(short); armed = true; cs_draw() end
     return
   end
   if plan and plan.awaiting then
@@ -602,10 +622,11 @@ end
 
 -- ---------- prompt: goals + keep the plan moving ----------
 local function cs_on_prompt()
-  -- Before the guards: the prompt ends the block of output a command produced, so
-  -- anything after it that is not preceded by a command came from the server itself.
-  -- This is what makes a real wimpy retreat distinguishable at all.
-  last_cmd = nil
+  -- Before the guards: the prompt ends the block of output the oldest unanswered
+  -- command produced, so drop it -- what comes next belongs to the command behind it,
+  -- or, with the queue empty, to the server itself. That empty queue is what makes a
+  -- real wimpy retreat distinguishable at all.
+  if sent_q[1] then table.remove(sent_q, 1) end
   if not enabled or paused or resting then return end
   -- whole room is printed now: if a goal item was here, act on the
   -- highest-priority one (cask before portal), ignoring print order.
@@ -886,6 +907,7 @@ local function cs_watchdog()
     if awaiting_ticks >= 3 then
       awaiting_ticks = 0
       note("watchdog: move unconfirmed - glancing")
+      glance_unstick = true
       scrye.send("!glance")
     end
     return
@@ -1227,11 +1249,14 @@ scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true,
 scrye.onPrompt(cs_on_prompt)
 
 -- Every command that goes to the MUD, whoever sent it -- you, an alias, the bot's own
--- scrye.send. Observe-only. Records just the first word, lowercased, so 'finger bob' and
--- 'look at chest' collapse to 'finger' / 'look' and a bare direction stays a direction.
+-- scrye.send, ANOTHER PLUGIN's timer. Observe-only. Records just the first word,
+-- lowercased, so 'finger bob' and 'look at chest' collapse to 'finger' / 'look' and a
+-- bare direction stays a direction. Queued, because several can be in flight at once.
 scrye.onCommand(function(text)
   local first = tostring(text or ""):match("^%s*(%S+)")
-  last_cmd = first and first:lower() or nil
+  if not first then return end
+  sent_q[#sent_q + 1] = first:lower()
+  if #sent_q > SENT_MAX then table.remove(sent_q, 1) end
 end)
 
 -- ---------- alias ----------
