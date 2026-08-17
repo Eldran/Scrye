@@ -2601,7 +2601,11 @@ local function sget(k) local x = scrye.store.get(k); if x == nil or x == "" then
 local function sset(k, v) scrye.store.set(k, tostring(v)) end
 
 local at = {
-  on      = (sget("at_on") == "1"),                 -- default OFF (safety)
+  on      = false,                                  -- ALWAYS off on load, like 3s-raid's `ar.on`:
+                                                    -- a bot that spends daler must not come back
+                                                    -- armed from a restart you have forgotten about.
+                                                    -- Deliberately not read from the store, so the
+                                                    -- toggles below do not write it either.
   reserve = tonumber(sget("at_reserve")) or 5000,   -- keep-back daler (scalper won't spend below this)
   margin  = tonumber(sget("at_margin"))  or 1,      -- min profit/unit for arbitrage buys
   stock   = tonumber(sget("at_stock"))   or 300,    -- Raw> buffer to keep for raw building materials
@@ -3408,7 +3412,7 @@ local function at_show_log()
 end
 
 -- panel toggles
-local function at_toggle_on()      at.on = not at.on; sset("at_on", at.on and "1" or "0"); if at.on then at_schedule() end; at_draw(); at_status() end
+local function at_toggle_on()      at.on = not at.on; if at.on then at_schedule() end; at_draw(); at_status() end
 local function at_toggle_scalp()   at.scalp = not at.scalp; sset("at_scalp", at.scalp and "1" or "0"); if at.on and at.scalp then at_schedule() end; at_draw() end
 local function at_toggle_restock() at.restock = not at.restock; sset("at_restock", at.restock and "1" or "0"); if at.on and at.restock then at_schedule() end; at_draw() end
 local function at_toggle_refined() at.refined = not at.refined; sset("at_refined", at.refined and "1" or "0"); at_draw() end
@@ -3418,8 +3422,10 @@ local function at_config(rest)
   rest = trim(rest or ""):lower()
   local key, val = rest:match("^(%a+)%s+(%-?%d+)$")
   if rest == "" or rest == "status" then at_status(); return
-  elseif rest == "on"  then at.on = true;  sset("at_on", "1"); at_schedule(); at_draw()
-  elseif rest == "off" then at.on = false; sset("at_on", "0"); at_draw()
+  -- NB: the armed flag is deliberately NOT persisted -- the plugin always loads
+  -- disarmed (see `at.on` above), so writing it to the store would be a dead write.
+  elseif rest == "on"  then at.on = true;  at_schedule(); at_draw()
+  elseif rest == "off" then at.on = false; at_draw()
   elseif rest == "refined on"  then at.refined = true;  sset("at_refined", "1"); at_draw()
   elseif rest == "refined off" then at.refined = false; sset("at_refined", "0"); at_draw()
   elseif rest == "scalp on"    then at.scalp = true;  sset("at_scalp", "1"); if at.on then at_schedule() end; at_draw()
@@ -3671,8 +3677,11 @@ scrye.watch("vik", function() at_on_feed(); publish_dispatch() end)
 at_draw()   -- seed the Auto / Log tab state
 publish_notify_state()
 
--- a (re)load mid-session gets no onConnect, so start the driver here as well
-if at.on then at_driver() end
+-- A (re)load mid-session gets no onConnect, and this is where the driver used to be
+-- started for an installation that came back armed. It cannot any more: `at.on` is false
+-- for every load now. Drop the leftover key so an upgrade does not leave a dead "1"
+-- sitting in the store looking like it still means something.
+scrye.store.delete("at_on")
 
 -- The panel lives in the outer chunk, so hand it the handful of entry points its widgets
 -- need. Everything else stays private to this block.
