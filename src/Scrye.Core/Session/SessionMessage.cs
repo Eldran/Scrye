@@ -13,8 +13,10 @@ public abstract record SessionMessage
     /// continuation of the telnet stream, processed exactly like plain arrivals.</summary>
     public sealed record DataInflated(byte[] Bytes) : SessionMessage;
 
-    /// <summary>The user submitted a line of input (runs through aliases).</summary>
-    public sealed record UserInput(string Text) : SessionMessage;
+    /// <summary>The user submitted a line of input (runs through aliases).
+    /// <paramref name="Split"/> is false for text the MUD authored rather than the user --
+    /// an MXP command link -- which must stay one command whatever separators it contains.</summary>
+    public sealed record UserInput(string Text, bool Split = true) : SessionMessage;
 
     /// <summary>Text to send to the MUD as a line (appends newline). From triggers/aliases/timers.</summary>
     public sealed record SendText(string Text) : SessionMessage;

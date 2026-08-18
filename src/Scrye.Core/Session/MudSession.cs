@@ -478,6 +478,19 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public void Post(Action action) => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(action));
 
     public void Submit(string text) => _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text));
+
+    /// <summary>
+    /// Submit input that must be taken as ONE command however many separators it contains.
+    /// For text the MUD authored rather than the user: an MXP <c>&lt;SEND&gt;</c> link.
+    ///
+    /// <para><c>look;quit</c> in a link is the MUD's text, not a person asking for two
+    /// commands, and honouring ';' there would let a hostile link fan one click out into
+    /// several client-side commands -- each of which can match an alias, and an alias can
+    /// run script. Same reasoning as <c>WorldViewModel.HandleCommandLink</c> keeping links
+    /// away from the '/' console.</para>
+    /// </summary>
+    public void SubmitLiteral(string text) =>
+        _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text, Split: false));
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
 
@@ -646,7 +659,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         ProcessTelnetChunk(di.Bytes);
                         break;
                     case SessionMessage.UserInput u:
-                        HandleInput(u.Text);
+                        HandleInput(u.Text, u.Split);
                         break;
                     case SessionMessage.SendText s:
                         _events.Emit(SessionEventKind.Sent, s.Text);
@@ -873,7 +886,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         }
     }
 
-    private void HandleInput(string text)
+    private void HandleInput(string text, bool split = true)
     {
         // Presence, and the only evidence of it. This is reached by typing, by a macro key and by
         // a click on a plugin's panel link, because all three arrive through Submit. What does NOT
@@ -884,7 +897,23 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         IdleGuard.Poke();
 
         _events.Emit(SessionEventKind.InputSubmitted, text);
-        _logger?.Log("> " + text, InputColour);   // transcript records what the user typed
+        _logger?.Log("> " + text, InputColour);   // transcript records what the user typed, as typed
+
+        // One typed line can stand for several commands (";" separates, ";;" is a literal
+        // ";"). Split AFTER the idle poke and the transcript line -- those are about the
+        // person and the keystroke, not about how many commands came out of it -- and run
+        // each part through the whole alias pipeline separately, so an alias can match a
+        // part exactly as it would have matched a line typed on its own.
+        IReadOnlyList<string>? parts = split ? CommandSeparator.Split(text) : null;
+        if (parts is null) { RunInput(text); return; }
+        foreach (string part in parts) RunInput(part);
+    }
+
+    /// <summary>One command's trip through plugin aliases, then profile aliases, then the
+    /// wire. Separated from <see cref="HandleInput"/> only so a multi-command line can run
+    /// it once per command.</summary>
+    private void RunInput(string text)
+    {
         if (InputFilter is not null)
         {
             string? filtered = InputFilter(text);

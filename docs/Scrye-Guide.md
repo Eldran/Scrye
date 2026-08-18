@@ -31,6 +31,28 @@ Each connected world gets its own tab with an output pane and a command line.
   - **Esc** — clear the input.
 - **F11** — fullscreen on and off.
 
+## Several commands at once
+
+A semicolon separates commands, so one line can be several:
+
+```
+vtrade refine smithy transfer all;vtrade refine smelter transfer all;vtrade refine all fill
+```
+
+Each part takes its own trip through the alias pipeline, so `n;gg;s` fires the `gg` alias in
+the middle exactly as if you had typed it on its own. Spaces around a separator are trimmed
+and a trailing `;` is ignored, so `n; s;` is just two commands.
+
+To send a real semicolon, double it: `say I went there;; it was fun` goes out as one command
+with one `;` in it.
+
+Two things never split, because a semicolon already means something there: `/` script-console
+lines, where `;` separates Lua statements, and `.walk`/`.seq` lines, where the sequence parser
+owns it. Neither does anything a trigger, timer or plugin sends — the separator is for what a
+person types, and a plugin sending `say a;b` means one command. Clickable links the *MUD*
+sends (MXP `<SEND>`) are also taken literally, for the same reason they never reach the script
+console: one click should be one command.
+
 ## Client commands
 
 A handful of commands are handled by Scrye itself rather than sent to the MUD. They all start

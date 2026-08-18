@@ -1071,13 +1071,17 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// routing it through the normal pipeline would let a hostile MXP <c>&lt;SEND&gt;</c>
     /// smuggle a <c>/</c> Lua command into the console. It goes straight to the session as
     /// literal text, and a leading <c>/</c> is sent to the MUD rather than executed.
-    /// A companion server handling a link tap must send it raw for the same reason.</para></summary>
+    /// A companion server handling a link tap must send it raw for the same reason.</para>
+    ///
+    /// <para>For the same reason it submits <em>literally</em>: the ';' command separator is
+    /// something a person asks for by typing it, not something a link gets to claim on their
+    /// behalf.</para></summary>
     public void HandleCommandLink(string command, bool prompt)
     {
         if (string.IsNullOrWhiteSpace(command)) return;
         if (prompt) { Input = command; return; }
         _pending.Enqueue(Line.FromText("> " + command, EchoColour));
-        _session.Submit(command);
+        _session.SubmitLiteral(command);   // one command, whatever separators the MUD put in it
     }
 
     /// <summary>The command line's Enter handler: take what is in the input box, record it
