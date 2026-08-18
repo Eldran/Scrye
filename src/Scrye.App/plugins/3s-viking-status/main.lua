@@ -2703,6 +2703,20 @@ local RES = {
   { name = "Tools",       cmd = "tools"      },
   { name = "Gemstones",   cmd = "gems"       },
   { name = "Finery",      cmd = "finery"     },
+  -- Added later by the game. Every one is a single word, so the command word is just the
+  -- lowercase name -- unlike the older multi-word goods, which the game abbreviates
+  -- ("Salted Fish" -> salted, "Fine Furs" -> fine, "Gemstones" -> gems).
+  { name = "Wool",        cmd = "wool"       },
+  { name = "Eggs",        cmd = "eggs"       },
+  { name = "Milk",        cmd = "milk"       },
+  { name = "Pork",        cmd = "pork"       },
+  { name = "Mutton",      cmd = "mutton"     },
+  { name = "Poultry",     cmd = "poultry"    },
+  { name = "Beef",        cmd = "beef"       },
+  { name = "Horsemeat",   cmd = "horsemeat"  },
+  { name = "Weapons",     cmd = "weapons"    },
+  { name = "Armour",      cmd = "armour"     },
+  { name = "Cloth",       cmd = "cloth"      },
 }
 local DISPLAY = {}                       -- lower cmd -> nice name
 for _, r in ipairs(RES) do DISPLAY[r.cmd] = r.name end
@@ -2730,7 +2744,14 @@ end
 
 -- refined goods (towns only buy these) - matched by market-key name and by cmd
 local REFINED = { ["salted fish"] = true, salted = true, ["fine furs"] = true, fine = true,
-                  bread = true, finery = true, tools = true }
+                  bread = true, finery = true, tools = true,
+                  -- the butchery line: refined the same way bread is refined from grain, so the
+                  -- auto-trader sells them without holding back the raw reserve it keeps on
+                  -- timber and iron. Wool, eggs and milk are the raw side and are deliberately
+                  -- absent from all three tables: they keep the reserve, and the auto-BUYER
+                  -- leaves them alone (RAWBUILD is the list it spends daler on).
+                  pork = true, mutton = true, poultry = true, beef = true, horsemeat = true,
+                  weapons = true, armour = true, cloth = true }
 -- special commodities (not raw materials): sellable, but keep a small reserve
 local SPECIAL = { runestones = true, gemstones = true, gems = true }
 -- raw materials the auto-buyer will restock up to the Raw> buffer when they run low
@@ -2797,8 +2818,12 @@ local at = {
 }
 for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
 
--- manual dispatch cart size (the MUSHclient window had a Units hotspot, 20-350)
-local MK_UNITS_MIN, MK_UNITS_MAX = 20, 350
+-- Manual dispatch cart size (the MUSHclient window had a Units hotspot, 20-350). The ceiling
+-- is only a sanity clamp on what you type -- the game rejects an over-large cart itself, and
+-- the AUTO-trader never uses this number at all: at_capacity() reads the real cart size out of
+-- the CIDLE/CARTS feed. So it is set well above the largest cart anyone has, and left there,
+-- rather than tracking each capacity rise. It was 350 and carts outgrew it.
+local MK_UNITS_MIN, MK_UNITS_MAX = 20, 1000
 local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk_units")) or 100))
 
 -- forward declarations (mk_finish / the feed watch call these before they're defined)
@@ -3857,6 +3882,9 @@ scrye.store.delete("at_on")
 return {
   refresh        = function(quiet) mk_refresh(quiet) end,
   setunits       = function(t) mk_setunits(t) end,
+  -- the panel's label, built from the clamp rather than repeating it: the two drifted apart
+  -- once already, and a field labelled with the wrong range is worse than an unlabelled one
+  units_hint     = string.format("Units (%d-%d) ", MK_UNITS_MIN, MK_UNITS_MAX),
   setnum         = function(field, t) at_setnum(field, t) end,
   toggle_on      = function() at_toggle_on() end,
   toggle_scalp   = function() at_toggle_scalp() end,
@@ -3965,7 +3993,7 @@ scrye.addPanel{
         { type = "text",   bind = P .. "report" },
         { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "dim" },
         { type = "text",   bind = P .. "carts" },
-        { type = "input",  text = "Units (20-350) ", bind = P .. "v_units",
+        { type = "input",  text = MK.units_hint, bind = P .. "v_units",
           onSubmit = function(t) MK.setunits(t) end },
         { type = "input",  text = "Escort (1-20) ",  bind = P .. "v_escort",
           onSubmit = function(t) MK.setnum("escort", t) end },
