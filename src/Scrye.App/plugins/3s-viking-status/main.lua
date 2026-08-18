@@ -432,25 +432,35 @@ local function send_route(origin, dest)
     for _, c in ipairs(leg) do cmds[#cmds + 1] = c end
   end
   for _, c in ipairs(cmds) do scrye.send(c) end
-  return true
+  return #cmds          -- how long the walk is, so a caller can pace itself around it
 end
 
 -- Walk to a town. Origin = the remembered curtown (authoritative once set by travel or
 -- 'vhere'), else the live map position. After travel we KNOW where we are, so remember it.
-local function travel_to(dest)
+-- Returns the number of commands sent (0 = already there), or nil if it could not go --
+-- having already said why. The mission runner paces itself off that count.
+-- Where we think we are: the remembered town wins (travel and `vhere` both set it and are
+-- both definite), the laggy live map feed is the fallback, and nil means neither could say.
+local function current_town()
   local rem = scrye.store.get("curtown"); if rem == "" then rem = nil end
-  local origin = rem or live_town()
+  return rem or live_town()
+end
+
+local function travel_to(dest)
+  local origin = current_town()
   if not origin then
     scrye.print("[viking] can't tell where you are - set it with  vhere <town>  first")
     return
   end
-  if origin == dest then scrye.print("[viking] you're already at " .. town_label(dest)); return end
-  if not send_route(origin, dest) then
+  if origin == dest then scrye.print("[viking] you're already at " .. town_label(dest)); return 0 end
+  local n = send_route(origin, dest)
+  if not n then
     scrye.print("[viking] no route known for " .. town_label(origin) .. " -> " .. town_label(dest))
-    return
+    return nil
   end
   scrye.print("[viking] travelling " .. town_label(origin) .. " -> " .. town_label(dest))
   scrye.store.set("curtown", dest)
+  return n
 end
 
 -- travelable towns, sorted by display name (for the Travel tab buttons + vhere matching)
@@ -1624,6 +1634,27 @@ local function build_voyage()
   return table.concat(L, "\n")
 end
 
+-- The MISSIONS feed as a list we can act on, not just print:
+--   id | desc | rep | ? | expiry | (empty) | town | goods(good:qty,...)
+-- `code` is the town resolved to a travel code (Mid/Hol/Lod/...), or nil when the town
+-- is not one we have a route for -- which is what makes a mission runnable or not.
+local function parse_missions()
+  local out = {}
+  if gv("MISSIONS") == "" then return out end
+  for _, ms in ipairs(split(gv("MISSIONS"), ";")) do
+    local f = split(ms, "|")
+    local town = f[7] or ""
+    out[#out + 1] = {
+      id    = f[1] or "?",
+      town  = town,
+      goods = (f[8] or ""):gsub(":", ""):gsub(",", " "),
+      rep   = f[3] or "?",
+      code  = resolve_town(town),
+    }
+  end
+  return out
+end
+
 local function build_mission()
   local L = {}
   -- section headers ("-- Foo --") take the accent colour in every tab, for free
@@ -1632,15 +1663,21 @@ local function build_mission()
     if s:find("^%-%- ") and s:find(" %-%-$") then s = "@{accent,bold}" .. s .. "@{}" end
     L[#L + 1] = s
   end
-  add("-- Missions  (type: vmission fulfill <no>) --")
-  if gv("MISSIONS") == "" then add("no missions")
+  add("-- Missions  (click one to walk there and hand it in) --")
+  local ms = parse_missions()
+  if #ms == 0 then add("no missions")
   else
     add(string.format("%-4s %-16s %-24s %s", "no", "town", "needs", "rep"))
-    for _, ms in ipairs(split(gv("MISSIONS"), ";")) do
-      local f = split(ms, "|")
-      -- id | desc | rep | ? | expiry | (empty) | town | goods(good:qty,...)
-      local goods = (f[8] or ""):gsub(":", ""):gsub(",", " "):sub(1, 24)
-      add(string.format("%-4s %-16s %-24s %s", f[1] or "?", (f[7] or "?"):sub(1, 16), goods, f[3] or "?"))
+    for _, m in ipairs(ms) do
+      local row = string.format("%-4s %-16s %-24s %s",
+        m.id, m.town:sub(1, 16), m.goods:sub(1, 24), m.rep)
+      -- A mission we have no route to stays plain text: better a row you cannot click
+      -- than one that clicks into "no route known".
+      if m.code then
+        add(string.format("@{accent,click=vmgo %s}%s@{}", m.id, esc(row)))
+      else
+        add(esc(row) .. "  (no route)")
+      end
     end
   end
   add("")
@@ -1656,6 +1693,138 @@ local function build_mission()
   end
   return table.concat(L, "\n")
 end
+
+-- ---------------------------------------------------------- mission runner
+-- Clicking a mission row walks you to its town and hands it in; the Run button does
+-- the same for every mission you hold and finishes at Midgard.
+--
+-- Paced, one mission at a time. The Travel tab fires a whole ~40-command route in one
+-- burst and that is fine; a five-mission chain would be four hundred queued commands,
+-- and one blocked move part-way would put every leg after it in the wrong place. So
+-- each mission goes out as its own burst.
+--
+-- The pause between them does NOT wait for the walking. 3Scapes reads commands as fast
+-- as they arrive, so a route is spent almost the moment it is sent; the only thing worth
+-- waiting on is the `vmission fulfill` at the end of it landing before the next leg
+-- starts walking away from the town. Two seconds covers that. (An earlier version scaled
+-- the wait by route length and spent half a minute between missions doing nothing.)
+local mrun_pause = tonumber(scrye.store.get("mrun_pause")) or 2
+local mrun = { on = false, queue = nil, idx = 0, token = 0 }
+
+local function publish_mission()
+  scrye.setState(P .. "mission", build_mission())
+  scrye.setState(P .. "mrun", mrun.on
+    and string.format("RUNNING - mission %d of %d (Stop to break off)", mrun.idx, #mrun.queue)
+    or "idle - Run walks every mission, then home to Midgard")
+end
+
+local function mrun_stop(why)
+  if not mrun.on then return end
+  mrun.on = false
+  -- Invalidate anything already scheduled. `mrun.on = false` is not enough on its own:
+  -- Stop followed by Run starts a NEW run with `on` true again, and the first run's
+  -- pending tick would then drive it -- advancing the queue twice per tick.
+  mrun.token = mrun.token + 1
+  mrun.queue = nil
+  scrye.print("[viking] mission run stopped" .. (why and (" - " .. why) or ""))
+  publish_mission()
+end
+
+-- Walk to the mission's town (if we are not already standing in it) and fulfil it.
+-- Returns the walk length for pacing, or nil if we could not get there -- travel_to
+-- has already printed the reason in that case.
+local function mission_go(m)
+  if not m.code then
+    scrye.print("[viking] mission " .. m.id .. ": no route known to " .. (m.town ~= "" and m.town or "?"))
+    return nil
+  end
+  local n = travel_to(m.code)     -- 0 when we are already there
+  if not n then return nil end
+  -- The route ends with `enter`, so by the time this lands we are inside the town.
+  -- The MUD runs commands in the order it received them, so no delay is needed here;
+  -- if a move was blocked the fulfil simply fails, which is the loud failure we want.
+  scrye.send("vmission fulfill " .. m.id)
+  return n
+end
+
+local mrun_next
+mrun_next = function()
+  if not mrun.on then return end
+  local tok = mrun.token
+  mrun.idx = mrun.idx + 1
+  local m = mrun.queue[mrun.idx]
+  if not m then
+    mrun.on = false
+    scrye.print("[viking] missions done - heading back to Midgard")
+    travel_to("Mid")
+    publish_mission()
+    return
+  end
+  scrye.print(string.format("[viking] mission %d/%d: %s -> %s",
+    mrun.idx, #mrun.queue, m.id, town_label(m.code)))
+  publish_mission()
+  mission_go(m)   -- nil means it could not go, and has already said why; carry on regardless
+  -- Just long enough for the fulfil to land. Not for the walk -- that is already over.
+  scrye.after(mrun_pause, function()
+    if mrun.on and mrun.token == tok then mrun_next() end
+  end)
+end
+
+local function mrun_start()
+  if mrun.on then mrun_stop("by request") return end
+  local q, skipped = {}, {}
+  for _, m in ipairs(parse_missions()) do
+    if m.code then q[#q + 1] = m else skipped[#skipped + 1] = (m.town ~= "" and m.town or "?") end
+  end
+  if #skipped > 0 then
+    scrye.print("[viking] skipping, no route known: " .. table.concat(skipped, ", "))
+  end
+  if #q == 0 then scrye.print("[viking] nothing to run") return end
+  -- The run ends at Midgard and starting there is the natural loop, so when neither the
+  -- remembered town nor the map feed can say where we are, that is the assumption rather
+  -- than a stalled run that fails once per mission. Said out loud, because if it is wrong
+  -- the first leg walks a Midgard route from somewhere else and you want to know to Stop.
+  if not current_town() then
+    scrye.store.set("curtown", "Mid")
+    scrye.print("[viking] don't know where you are - assuming Midgard (vhere <town> if not)")
+  end
+  mrun.on = true; mrun.queue = q; mrun.idx = 0
+  scrye.print(string.format("[viking] running %d mission%s, then back to Midgard",
+    #q, #q == 1 and "" or "s"))
+  mrun_next()
+end
+
+-- one mission, by number: what a click on its row runs
+local function mrun_one(id)
+  id = tostring(id or ""):gsub("%s", "")
+  for _, m in ipairs(parse_missions()) do
+    if m.id == id then
+      if mrun.on then mrun_stop("single mission clicked") end
+      mission_go(m)
+      return
+    end
+  end
+  scrye.print("[viking] no mission numbered " .. id)
+end
+
+scrye.addAlias{ pattern = [[^vmgo (\d+)$]], regex = true, run = function(id) mrun_one(id) end }
+scrye.addAlias{ pattern = [[^vmrun$]],       regex = true, run = function() mrun_start() end }
+scrye.addAlias{ pattern = [[^vmrun stop$]],  regex = true, run = function() mrun_stop("by request") end }
+scrye.addAlias{
+  pattern = [[^vmrun pace ([\d.]+)$]], regex = true,
+  run = function(n)
+    mrun_pause = math.max(0.5, math.min(30, tonumber(n) or mrun_pause))
+    scrye.store.set("mrun_pause", tostring(mrun_pause))
+    scrye.print(string.format("[viking] mission run pause: %.1fs between missions", mrun_pause))
+  end,
+}
+
+-- A dropped connection is not a reason to keep walking when it comes back.
+scrye.onDisconnect(function() mrun_stop("disconnected") end)
+
+scrye.store.delete("mrun_step")   -- the old route-length pacing; `mrun_pause` replaced it
+
+publish_mission()   -- so the tab has its status line before the first feed arrives
 
 local function build_feeds()
   local keys = {}
@@ -2118,7 +2287,7 @@ local BUILDERS = {
   voyage     = function() scrye.setState(P .. "voyage", build_voyage()) end,
   map        = build_map,
   plan       = build_plan,
-  mission    = function() scrye.setState(P .. "mission", build_mission()) end,
+  mission    = function() publish_mission() end,
   feeds      = function() scrye.setState(P .. "feeds", build_feeds()) end,
 }
 
@@ -3780,8 +3949,15 @@ scrye.addPanel{
     } },
     { title = "Mission", widgets = {
         { type = "text", bind = P .. "mission" },
-        { type = "button", text = "Fetch",  action = function() scrye.send("vmission newbie fetch") end },
-        { type = "button", text = "Submit", action = function() scrye.send("vmission newbie submit") end },
+        { type = "label", bind = P .. "mrun", color = "dim" },
+        { type = "buttonrow", buttons = {
+            { text = "Run all", action = function() mrun_start() end },
+            { text = "Stop",    action = function() mrun_stop("by request") end },
+        } },
+        { type = "buttonrow", buttons = {
+            { text = "Fetch",  action = function() scrye.send("vmission newbie fetch") end },
+            { text = "Submit", action = function() scrye.send("vmission newbie submit") end },
+        } },
     } },
     { title = "Trade", widgets = {
         { type = "button", text = "Refresh", action = function() MK.refresh(false) end },
