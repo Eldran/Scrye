@@ -75,6 +75,9 @@ local steps_done = 0
 local seanum = 1
 local sea_time = nil           -- `now` value when the current sea was entered
 local sea_started_here = false -- true only if THIS session started the sea (see cs_new_sea)
+local sea_entering = false     -- New Sea sequence in flight: the swap is sent over several
+                               -- seconds and the map reset + opening glance come at the end
+                               -- of it, so nothing may walk, unpause or re-glance until then.
 local now = 0                  -- seconds since plugin load (1 s ticker)
 local map_serial = 1           -- bumped on every GRAPH change (rooms/exits), not moves —
                                -- the wasm pathfinder caches the graph keyed on this
@@ -726,6 +729,7 @@ end
 
 -- ---------- pause / stepping ----------
 local function cs_pause_toggle()
+  if sea_entering then note("swapping seas - the new one comes up unpaused") return end
   paused = not paused
   if paused then
     note("PAUSED - 'cs pause' (or the Pause button) to continue")
@@ -927,7 +931,11 @@ local function cs_watchdog()
 end
 
 -- ---------- new sea (only while paused at the cask) ----------
+-- The one button you press at the cask: loot it, swap to a fresh sea, throw the old
+-- maze away and glance at the room you land in. Everything up to and including the
+-- reset used to be four separate clicks (open cask / get all / New Sea / Reset).
 local function cs_new_sea()
+  if sea_entering then note("already swapping seas - hold on") return end
   if not paused then note("New Sea only works while paused (at the cask)") return end
   -- the game's `unsetsea` only works once the sea is 60 min old; refuse until then so
   -- we never fire the sequence early (which would leave you in the same sea). When there
@@ -943,12 +951,29 @@ local function cs_new_sea()
       return
     end
   end
-  note("opening cask & starting new sea #" .. seanum)
+  note("looting the cask & starting new sea #" .. seanum)
+  sea_entering = true
   scrye.send("open cask")
-  scrye.after(1, function() scrye.send("retreat from the sea") end)
-  scrye.after(2, function() scrye.send("unsetsea") end)
-  scrye.after(3, function() scrye.send("setsea " .. seanum) end)
-  scrye.after(4, function() scrye.send("enter sea") end)
+  scrye.after(1, function() scrye.send("get all") end)     -- the cask is why you came
+  scrye.after(2, function() scrye.send("retreat from the sea") end)
+  scrye.after(3, function() scrye.send("unsetsea") end)
+  scrye.after(4, function() scrye.send("setsea " .. seanum) end)
+  scrye.after(5, function() scrye.send("enter sea") end)
+  -- ...and once we are actually in it, finish the job the user used to finish by hand:
+  -- a new sea is a NEW MAZE, so the old map is not stale, it is wrong. reset() drops it,
+  -- recentres on 0,0,0 and clears paused/goal_found; the glance then maps the room we
+  -- landed in and arms the stepper. Two seconds after `enter sea` so the room has printed.
+  scrye.after(7, function()
+    sea_entering = false
+    reset()                  -- clears the old maze, the goal flag and the pause
+    scrye.send("!glance")    -- map the arrival room; its reply arms the stepper
+    if auto then
+      note("new sea #" .. seanum .. " ready - auto-exploring")
+    else
+      note("new sea #" .. seanum .. " ready - press Auto (or Step) to go")
+    end
+    cs_draw()
+  end)
   sea_time = now   -- start the sea-age clock
   sea_started_here = true
   cs_last_sea_min = nil
@@ -1097,6 +1122,7 @@ function cs_interface(args)
     note("  cs delay <secs>       pause after killing blows (default 2.5s)")
     note("  cs rest <seid> [secs] rest when Seid drops below <seid> (0 = off)")
     note("  cs seanum <n>         set the sea number (1-120) for New Sea")
+    note("  (New Sea, at the cask, also loots it and resets the map for you)")
     note("  cs party <names>      group members to ignore (comma separated; 'clear' to reset)")
     note("  cs pause              hold everything / continue (also the Pause button)")
     note("  cs notify on|off      buzz the phone when the bot pauses or runs out (now: "
@@ -1132,7 +1158,12 @@ function cs_interface(args)
     -- map the CURRENT room first (a reload wipes the map, so the frontier may be empty). The
     -- glance re-parses the room, seeds the frontier, arms us, and the next prompt starts stepping.
     -- Only fall straight into cs_step() if we already have somewhere to go.
-    if #frontier > 0 then cs_step() else scrye.send("!glance") end
+    --
+    -- Mid-swap, do neither: the room we are standing in is the old sea (or nowhere at all)
+    -- and the map is about to be thrown away. Arming `auto` here is the whole point -- New
+    -- Sea's own glance, seconds from now, is what will start the walking.
+    if sea_entering then note("...as soon as the new sea is ready")
+    elseif #frontier > 0 then cs_step() else scrye.send("!glance") end
   elseif args == "auto off" then
     auto = false; note("auto off")
   elseif args == "pause" then
