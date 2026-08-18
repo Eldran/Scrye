@@ -225,6 +225,11 @@ public partial class MainWindow : Window
         {
             case Key.Enter:
                 vm.SubmitCommand.Execute(null);
+                // With "keep the last command" on, the text is still in the box: select it, so
+                // the next keystroke replaces it and Enter on its own repeats it. Asks the
+                // view-model rather than box.Text, so it does not depend on when the binding
+                // got round to updating.
+                if (!string.IsNullOrEmpty(vm.Input)) box.SelectAll();
                 e.Handled = true;
                 break;
             case Key.Up:                                  // recall previous command

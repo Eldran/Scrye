@@ -29,6 +29,9 @@ Each connected world gets its own tab with an output pane and a command line.
   - **Tab** — complete the word under the caret from words seen in the output.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
+  - Global Settings → Appearance has **Keep the last command in the input box**: after Enter
+    the command stays put with its text selected, so Enter on its own repeats it and typing
+    replaces it. Off by default — the box clears, as it always has.
 - **Click almost anywhere and start typing.** The command line takes focus back after a click
   that had nothing better to do with it — the output, a HUD panel, a world tab. Controls that
   use the keyboard keep it: text boxes, buttons, the world list, scrollbars, and the output

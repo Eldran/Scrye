@@ -1422,6 +1422,10 @@
                                           HorizontalAlignment="Left" MinWidth="220" />
                                 <TextBlock Text="How the MUD's color codes are painted. 'MUSHclient (classic)' matches MUSHclient's palette (pure-primary bold colors, olive yellow); 'Modern' uses the softer xterm palette. Applies to new output."
                                            Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                <CheckBox IsChecked="{Binding Settings.KeepInputAfterSend}" Margin="0,10,0,0"
+                                          Content="Keep the last command in the input box" />
+                                <TextBlock Text="After Enter, leave the command in the box with the text selected, so Enter on its own repeats it and typing replaces it. Off clears the box, which is Scrye's normal behaviour."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
                                 <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
                                 <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
                                           HorizontalAlignment="Left" MinWidth="260" />

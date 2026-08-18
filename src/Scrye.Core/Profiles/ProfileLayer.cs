@@ -43,6 +43,12 @@ public sealed class ProfileLayer
     /// <summary>ANSI 16-colour palette: "modern" (xterm/VGA, default) or "classic" (MUSHclient).</summary>
     public string? AnsiPalette { get; set; }
 
+    /// <summary>Leave the command in the input box after Enter instead of clearing it, with the
+    /// text selected — so Enter alone repeats it and the next keystroke replaces it. What
+    /// MUSHclient and Mudlet both offer. Null/false clears, which is what someone who has not
+    /// asked for this expects.</summary>
+    public bool? KeepInputAfterSend { get; set; }
+
     /// <summary>Dead-man's switch for unattended automation: stop when nobody has done anything
     /// for <see cref="IdleGuardSeconds"/>. Null inherits; see
     /// <see cref="Scrye.Core.Session.IdleGuard"/>. Off unless asked for.</summary>

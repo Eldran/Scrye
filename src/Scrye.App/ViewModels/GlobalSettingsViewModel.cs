@@ -86,6 +86,16 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     private string _ansiPalette;
     public string AnsiPalette { get => _ansiPalette; set => SetField(ref _ansiPalette, value); }
 
+    // ---- input box ----
+    private bool _keepInputAfterSend;
+    /// <summary>Leave the command in the box after Enter, selected — Enter alone repeats it,
+    /// typing replaces it. MUSHclient's and Mudlet's behaviour, off unless asked for.</summary>
+    public bool KeepInputAfterSend
+    {
+        get => _keepInputAfterSend;
+        set => SetField(ref _keepInputAfterSend, value);
+    }
+
     // ---- global rule sets + variables ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
@@ -141,6 +151,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _theme = ThemeService.Find(layer.Theme);
         _ansiPalette = string.Equals(layer.AnsiPalette, "classic", StringComparison.OrdinalIgnoreCase)
             ? PaletteClassic : PaletteModern;
+        _keepInputAfterSend = layer.KeepInputAfterSend ?? false;
 
         // monospaced fonts on this machine, "Default" first; include any current custom
         // value so it stays visible/selectable in the dropdown even if it isn't monospaced
@@ -237,6 +248,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
             ? sz : null;
         _layer.Theme = Theme.Key;
         _layer.AnsiPalette = (AnsiPalette == PaletteClassic) ? "classic" : "modern";
+        _layer.KeepInputAfterSend = KeepInputAfterSend ? true : null;   // null = the default, not written
 
         var triggers = new List<TriggerDef>();
         foreach (TriggerRowViewModel r in Triggers) if (!string.IsNullOrWhiteSpace(r.Name)) triggers.Add(r.ToDef());

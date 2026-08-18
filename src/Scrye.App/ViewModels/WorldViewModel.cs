@@ -1094,8 +1094,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     private void Submit()
     {
         string text = Input ?? "";
-        Input = "";
-        _history.Add(text);        // record for up/down recall
+        // "Keep the last command" leaves it in the box instead of clearing; the view then
+        // selects it, so Enter alone repeats it and the next keystroke replaces it. An empty
+        // submit has nothing to keep. Set BEFORE the command goes out, as the clear always was,
+        // so nothing downstream can observe a box that still holds what is already on the wire.
+        Input = Services.InputPreferences.KeepAfterSend && text.Length > 0 ? text : "";
+        _history.Add(text);        // record for up/down recall (consecutive repeats collapse)
         _completion.Observe(text); // typed words feed completion too
 
         SubmitText(text, CommandOrigin.Local);
