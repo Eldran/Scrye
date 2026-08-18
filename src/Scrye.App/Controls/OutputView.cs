@@ -358,6 +358,15 @@ public class OutputView : Control
         return null;
     }
 
+    /// <summary>Something is selected here right now.
+    ///
+    /// <para>The window uses this to decide whether a click should hand focus to the command
+    /// line: a click that ended a drag-selection must NOT, or the Ctrl+C that follows it goes
+    /// to the input box instead of reaching <see cref="OnKeyDown"/> here. The selection itself
+    /// lives in fields rather than in the focus, so it survives either answer.</para></summary>
+    public bool HasSelection =>
+        _selAnchor is not null && _selCaret is not null && _selAnchor.Value != _selCaret.Value;
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);

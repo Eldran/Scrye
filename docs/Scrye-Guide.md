@@ -29,6 +29,10 @@ Each connected world gets its own tab with an output pane and a command line.
   - **Tab** — complete the word under the caret from words seen in the output.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
+- **Click almost anywhere and start typing.** The command line takes focus back after a click
+  that had nothing better to do with it — the output, a HUD panel, a world tab. Controls that
+  use the keyboard keep it: text boxes, buttons, the world list, scrollbars, and the output
+  pane while a selection is up, so Ctrl+C still copies what you just dragged over.
 - **F11** — fullscreen on and off.
 
 ## Several commands at once

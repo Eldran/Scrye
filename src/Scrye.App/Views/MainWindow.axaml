@@ -128,7 +128,8 @@
                                                       IsChecked="{Binding TtsEnabled}" Margin="4,0,0,0"
                                                       AutomationProperties.Name="Text to speech"
                                                       ToolTip.Tip="Speak incoming lines aloud (Windows). Commands: .tts on/off/stop/rate N" />
-                                        <TextBox Text="{Binding Input}" PlaceholderText="type a command and press Enter…"
+                                        <TextBox Name="CommandInput" Text="{Binding Input}"
+                                                 PlaceholderText="type a command and press Enter…"
                                                  Classes="terminalinput"
                                                  AutomationProperties.Name="Command input"
                                                  KeyDown="OnInputKeyDown" />

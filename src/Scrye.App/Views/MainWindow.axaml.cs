@@ -26,6 +26,84 @@ public partial class MainWindow : Window
         // control didn't already consume (so Enter/Ctrl+F/typing are untouched).
         AddHandler(InputElement.KeyDownEvent, OnWindowKeyDown,
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
+        // "click anywhere and just start typing" (MUSHclient / Mudlet). Bubble, and on
+        // RELEASE rather than press: a press handler would move focus out from under a
+        // drag-selection in the output while it was still being made.
+        AddHandler(InputElement.PointerReleasedEvent, OnWindowPointerReleased,
+                   Avalonia.Interactivity.RoutingStrategies.Bubble);
+    }
+
+    /// <summary>
+    /// Give the command line focus after a click that had no better claim on it, so you can
+    /// click the output (or the map, or a HUD panel) and start typing — what MUSHclient and
+    /// Mudlet both do.
+    ///
+    /// <para>"No better claim" is the whole design. A control that <em>uses</em> the keyboard
+    /// keeps what it was given: text boxes, buttons and toggles, lists and tabs you may want to
+    /// arrow through, scrollbars and sliders you may still be dragging, menus. So does an open
+    /// Settings or Edit-world overlay, which is nothing but such controls. And so does the
+    /// output pane when the click finished a selection — <see cref="Controls.OutputView"/>
+    /// handles Ctrl+C itself, so stealing focus there would send the copy to the input box.</para>
+    /// </summary>
+    private void OnWindowPointerReleased(object? sender, Avalonia.Input.PointerReleasedEventArgs e)
+    {
+        if (e.InitialPressMouseButton != MouseButton.Left) return;
+        if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
+        if (vm.Settings is not null || vm.Editor is not null) return;   // an overlay owns the keyboard
+        if (e.Source is not Avalonia.Visual source) return;
+        if (!MayTakeFocus(source)) return;
+
+        // Once the click has finished settling. Background rather than Input because clicking
+        // a world TAB is one of the cases: the new world's content has to be realised before
+        // its command line can be found at all. Same reason FocusFindBox posts at Background.
+        Dispatcher.UIThread.Post(() =>
+        {
+            TextBox? input = this.GetVisualDescendants().OfType<TextBox>()
+                .FirstOrDefault(t => t.Name == "CommandInput"
+                                     && ReferenceEquals(t.DataContext, world)
+                                     && t.IsEffectivelyVisible);
+            if (input is null || input.IsFocused) return;
+            input.Focus();
+            input.CaretIndex = (input.Text ?? "").Length;
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>Whether a click that landed on <paramref name="source"/> may be treated as
+    /// "nothing in particular" and hand the keyboard to the command line. Walks up from what
+    /// was hit, so a click on a button's label or a scrollbar's thumb answers for the whole
+    /// control rather than for the scrap of visual it landed on.</summary>
+    private static bool MayTakeFocus(Avalonia.Visual? source)
+    {
+        for (Avalonia.Visual? v = source; v is not null; v = v.GetVisualParent())
+        {
+            switch (v)
+            {
+                // Controls that keep using the keyboard after you have clicked them.
+                case TextBox:
+                // Button, not a ButtonBase: Avalonia 12 has no ButtonBase, because Button IS
+                // the root here -- ToggleButton derives from it (and CheckBox and RadioButton
+                // from ToggleButton), unlike WPF where they are siblings under ButtonBase.
+                // So this one case catches every button-ish control in the window.
+                case Button:
+                case ComboBox:
+                case ListBox:
+                case TreeView:                                  // the world list: arrow keys belong to it
+                case MenuItem:
+                case Avalonia.Controls.Primitives.ScrollBar:
+                case Avalonia.Controls.Primitives.Thumb:
+                case Slider:
+                    return false;
+
+                // The output pane: a plain click hands over, a click that ended a
+                // drag-selection does not (Ctrl+C has to reach it).
+                case Controls.OutputView output:
+                    return !output.HasSelection;
+            }
+        }
+        // Everything else, deliberately including tab headers: clicking a world tab is how you
+        // switch worlds, and having to click a second time before you can type is the exact
+        // annoyance this whole thing is about.
+        return true;
     }
 
     /// <summary>Window-level keys: F11 toggles fullscreen; otherwise fire a keyboard macro
