@@ -383,6 +383,56 @@ public sealed class MainWindowViewModel : ViewModelBase
         else _store.SaveMud(r.Mud, layer);
     }
 
+    /// <summary>Merge a parsed MUSHclient import into the connected node's own layer and
+    /// live-apply it, so imported rules work without a reconnect.</summary>
+    private bool ImportRules(ProfileRef r, Scrye.Core.Automation.MushclientImport import)
+    {
+        bool ok = Services.CrashLog.Guard("ImportRules", () => SaveImport(r, import));
+        if (!ok) RaiseToast("Import", "Couldn't save the imported rules (see logs).");
+        return ok;
+    }
+
+    private void SaveImport(ProfileRef r, Scrye.Core.Automation.MushclientImport import)
+    {
+        ProfileLayer layer = OwnLayer(r);
+        // By name, the same way the profile cascade merges layers -- so importing the same
+        // file twice updates its rules instead of ending up with two of each.
+        MergeByName(layer.Triggers, import.Triggers, t => t.Name);
+        MergeByName(layer.Aliases, import.Aliases, a => a.Name);
+        MergeByName(layer.Timers, import.Timers, t => t.Name);
+        MergeByName(layer.Macros, import.Macros, m => m.Key);
+        foreach (KeyValuePair<string, string> v in import.Variables) layer.Variables[v.Key] = v.Value;
+        SaveOwnLayer(r, layer);
+        ReapplyToConnected();
+    }
+
+    private static void MergeByName<T>(List<T> into, IEnumerable<T> incoming, Func<T, string> key)
+    {
+        foreach (T item in incoming)
+        {
+            int i = into.FindIndex(x => string.Equals(key(x), key(item), StringComparison.OrdinalIgnoreCase));
+            if (i >= 0) into[i] = item; else into.Add(item);
+        }
+    }
+
+    /// <summary>The connected node's OWN layer (not the resolved cascade), created empty if it
+    /// does not exist yet. The same choice SavePluginChoice and SaveTriggerNotify make.</summary>
+    private ProfileLayer OwnLayer(ProfileRef r) =>
+        r.Character is not null
+            ? _store.LoadCharacter(r.Mud, r.Account, r.Character)
+              ?? new ProfileLayer { Kind = LayerKind.Character, Name = r.Character }
+        : r.Account is not null
+            ? _store.LoadAccount(r.Mud, r.Account)
+              ?? new ProfileLayer { Kind = LayerKind.Account, Name = r.Account }
+        : _store.LoadMud(r.Mud) ?? new ProfileLayer { Kind = LayerKind.Mud, Name = r.Mud };
+
+    private void SaveOwnLayer(ProfileRef r, ProfileLayer layer)
+    {
+        if (r.Character is not null) _store.SaveCharacter(r.Mud, r.Account, r.Character, layer);
+        else if (r.Account is not null) _store.SaveAccount(r.Mud, r.Account, layer);
+        else _store.SaveMud(r.Mud, layer);
+    }
+
     private void PersistTriggerNotify(ProfileRef r, TriggerDef def, bool notify)
     {
         if (!Services.CrashLog.Guard("PersistTriggerNotify", () => SaveTriggerNotify(r, def, notify)))
@@ -453,6 +503,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
         vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
         vm.PersistTriggerNotify = (def, notify) => PersistTriggerNotify(r, def, notify);
+        vm.ImportRules = import => ImportRules(r, import);
         vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
         Worlds.Add(vm);
         Companion.Attach(vm);

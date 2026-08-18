@@ -77,6 +77,41 @@ with a dot, and they're intercepted before plugins see them, so a plugin can't s
 | `.companion` | The mobile companion — see its own section below. |
 | `.mip` | Audit the MIP feed for structural drift — see below. |
 | `.mip fields` | List what this character actually receives — every field, key and frame type. |
+| `.import <file>` | Read a MUSHclient world file (`.mcl`) or exported plugin and say what would come across. Add `apply` to keep it. |
+
+### Bringing rules over from MUSHclient
+
+`.import <path to a .mcl>` reads a MUSHclient world file and reports what it found, without
+changing anything. Add `apply` to keep it:
+
+```
+.import C:\mush\worlds\3scapes.mcl
+.import C:\mush\worlds\3scapes.mcl apply
+```
+
+Most of a hand-written rule set crosses unchanged — `match`, `regexp`, `sequence`, `group`,
+`keep_evaluating`, `one_shot` and `omit_from_output` all mean the same thing in both clients,
+MUSHclient's non-regex `*` and `?` wildcards are the ones Scrye already compiles, and `%1`–`%9`
+in send text needs no rewriting. Triggers, aliases, interval timers, macros and variables all
+come across, and everything the file did not already put in a group is put in one named after
+the file — so it is a single collapsed header in Settings, and a single thing to delete if you
+change your mind. Importing the same file twice updates its rules rather than doubling them.
+
+What does **not** cross is listed, with the reason, rather than imported half-working:
+
+- **Script rules.** The XML only names the function; the Lua lives in the plugin's `<script>`
+  block and has to be ported by hand. A trigger that fires and does nothing is worse than a
+  trigger you know is missing.
+- **Multi-line triggers** — Scrye matches one line at a time.
+- **Time-of-day timers** — Scrye timers repeat on an interval.
+- **Notepad, status-line and log-file destinations**, which Scrye has no equivalent for. A
+  speedwalk send is skipped too, pointing you at `.walk` and sequences instead.
+
+Two things are imported but flagged in the report: rules using `@variable` expansion (rewrite
+them as `${name}`), and regex rules with no `ignore_case` setting, which come across
+case-sensitive because in this format an absent flag is a real answer. Colour triggers print
+the colour they produced beside the number it came from, so you can check one against
+MUSHclient's own swatch before keeping the rest.
 
 Separately, anything starting with **`/`** is Lua rather than a MUD command — see
 [The script console](#the-script-console).

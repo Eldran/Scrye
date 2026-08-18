@@ -498,6 +498,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// companion panel greys the tick boxes out when it is.</summary>
     public Action<TriggerDef, bool>? PersistTriggerNotify { get; set; }
 
+    /// <summary>Write a parsed MUSHclient import into this world's own profile layer.
+    /// Set by the shell, which owns the profile store; null on a quick-connect tab, which has
+    /// no layer to write to. Returns false if the save failed (it has already toasted).</summary>
+    public Func<Scrye.Core.Automation.MushclientImport, bool>? ImportRules { get; set; }
+
     public WorldViewModel(WorldProfile profile, IReadOnlyList<string>? enabledPlugins = null)
     {
         Title = profile.Name;
@@ -1185,12 +1190,66 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".tts": HandleTtsCommand(arg); return true;
             case ".companion": HandleCompanionCommand(arg); return true;
             case ".mip": HandleMipCommand(arg); return true;
+            case ".import": HandleImportCommand(arg); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
                 AppendSystem(ShowTimestamps ? "timestamps on" : "timestamps off");
                 return true;
             default: return false;
         }
+    }
+
+    /// <summary>
+    /// <c>.import &lt;file&gt;</c> — read a MUSHclient world file (or an exported plugin) and
+    /// say what would come across; <c>.import &lt;file&gt; apply</c> keeps it.
+    ///
+    /// <para>Two steps on purpose. A world file can hold hundreds of rules and several of them
+    /// will not survive the crossing — script actions especially — so reading the list is
+    /// cheaper than undoing the import afterwards. What is kept lands in a group named after
+    /// the file, which makes it one collapsed header in Settings, and one thing to delete if
+    /// you change your mind.</para>
+    /// </summary>
+    private void HandleImportCommand(string arg)
+    {
+        bool apply = arg.EndsWith(" apply", StringComparison.OrdinalIgnoreCase);
+        string path = (apply ? arg[..^" apply".Length] : arg).Trim().Trim('"');
+        if (path.Length == 0)
+        {
+            AppendSystem("usage: .import <path to a MUSHclient .mcl or plugin .xml> [apply]");
+            return;
+        }
+        if (!System.IO.File.Exists(path)) { AppendSystem("no such file: " + path); return; }
+
+        string group = System.IO.Path.GetFileNameWithoutExtension(path);
+        Scrye.Core.Automation.MushclientImport import;
+        try
+        {
+            import = Scrye.Core.Automation.MushclientImport.Parse(System.IO.File.ReadAllText(path), group);
+        }
+        catch (Exception ex)
+        {
+            AppendSystem($"could not read {path}: {ex.Message}");
+            return;
+        }
+
+        foreach (string line in import.Report().Split('\n')) AppendSystem(line.TrimEnd());
+
+        if (!apply)
+        {
+            AppendSystem(import.Count > 0
+                ? $"nothing has changed yet — run  .import {path} apply  to keep this"
+                : "nothing to import");
+            return;
+        }
+        if (import.Count == 0) { AppendSystem("nothing to import"); return; }
+        if (ImportRules is null)
+        {
+            AppendSystem("this tab has no saved profile to import into (quick-connect)");
+            return;
+        }
+        AppendSystem(ImportRules(import)
+            ? $"imported — look for the '{group}' group in Settings"
+            : "the import could not be saved (see logs)");
     }
 
     /// <summary>
