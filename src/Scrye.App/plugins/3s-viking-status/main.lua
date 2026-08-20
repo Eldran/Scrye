@@ -2717,6 +2717,10 @@ local RES = {
   { name = "Weapons",     cmd = "weapons"    },
   { name = "Armour",      cmd = "armour"     },
   { name = "Cloth",       cmd = "cloth"      },
+  -- "Smoked Meat" abbreviates the way the older multi-word goods do (Salted Fish ->
+  -- salted, Fine Furs -> fine), which is the rule the single-word guesses above assume.
+  { name = "Smoked Meat", cmd = "smoked"     },
+  { name = "Cheese",      cmd = "cheese"     },
 }
 local DISPLAY = {}                       -- lower cmd -> nice name
 for _, r in ipairs(RES) do DISPLAY[r.cmd] = r.name end
@@ -2751,7 +2755,8 @@ local REFINED = { ["salted fish"] = true, salted = true, ["fine furs"] = true, f
                   -- absent from all three tables: they keep the reserve, and the auto-BUYER
                   -- leaves them alone (RAWBUILD is the list it spends daler on).
                   pork = true, mutton = true, poultry = true, beef = true, horsemeat = true,
-                  weapons = true, armour = true, cloth = true }
+                  weapons = true, armour = true, cloth = true,
+                  ["smoked meat"] = true, smoked = true, cheese = true }
 -- special commodities (not raw materials): sellable, but keep a small reserve
 local SPECIAL = { runestones = true, gemstones = true, gems = true }
 -- raw materials the auto-buyer will restock up to the Raw> buffer when they run low
@@ -3260,6 +3265,52 @@ local function at_record(side, qty, cmd, town, amount)
   if at_draw then at_draw() end
 end
 
+-- ---------- a dispatch is not a trade until a cart goes out ----------
+-- at_record used to run on the SEND, which meant the log and the running totals recorded
+-- the ATTEMPT. A cart that is refitting, a cooldown that has not expired, daler that ran
+-- short -- the MUD refuses, nothing leaves, and the trade log says it happened anyway.
+--
+-- So the record is held until the CART FEED proves a cart went out: the active-cart count
+-- rising above what it was when we sent. Structured data rather than English, which means
+-- it cannot be broken by a reworded refusal and it catches every reason at once, including
+-- the ones neither of us has thought of. Unconfirmed after CONFIRM_SECS, it is dropped and
+-- said out loud -- an under-counted log is a smaller lie than an inflated one.
+--
+-- Only ever one at a time: at_dispatch forces `free = math.min(free, 1)`, one dispatch per
+-- pass, because each one starts a fresh cooldown.
+local CONFIRM_SECS = 12
+local at_pend = nil       -- { side, qty, cmd, town, amount, carts, at }
+
+local function at_active_carts(v)
+  local n = 0
+  for _ in ((v or at_getvars()).CARTS or ""):gmatch("[^;]+") do n = n + 1 end
+  return n
+end
+
+local function at_settle(active)
+  if not at_pend then return end
+  local p = at_pend
+  if active and active > p.carts then
+    at_pend = nil
+    at_record(p.side, p.qty, p.cmd, p.town, p.amount)
+    return
+  end
+  if os.time() - p.at >= CONFIRM_SECS then
+    at_pend = nil
+    note(string.format("%s %d %s never left (no cart went out) - not logged",
+      p.side, p.qty, p.cmd))
+    if at_draw then at_draw() end
+  end
+end
+
+-- Queue a dispatch we have just sent. Replaces the at_record call at each send site.
+local function at_queue(side, qty, cmd, town, amount)
+  if at_pend then at_settle(nil) end          -- a stale one cannot outlive a new dispatch
+  at_pend = { side = side, qty = qty, cmd = cmd, town = town, amount = amount or 0,
+              carts = at_active_carts(), at = os.time() }
+  scrye.after(CONFIRM_SECS + 1, function() at_settle(at_active_carts()) end)
+end
+
 local at_cd_retry
 
 -- one dispatch pass: pick the single most worthwhile cart to send (restock > sells/scalps)
@@ -3423,7 +3474,7 @@ auto_trade_tick = function()
         scrye.send(string.format("vtrade dispatch buy %d %s %s escort %d",
           q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
         note(string.format("restock buy %d %s from %s (-%dd, had %d)", q, c.cmd, c.town, cost, c.have))
-        at_record("buy", q, disp_cmd(c.cmd), c.town, cost)
+        at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
         budget = budget - cost; space = space - q; seen[c.cmd] = true
         at.pending = (at.pending or 0) + 1; sent = sent + 1
       end
@@ -3442,7 +3493,7 @@ auto_trade_tick = function()
             q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
           note(string.format("scalp buy %d %s from %s (-%dd, ~+%dd margin)",
             q, c.cmd, c.town, cost, math.floor(q * (c.per or 0))))
-          at_record("buy", q, disp_cmd(c.cmd), c.town, cost)
+          at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
           budget = budget - cost; space = space - q; seen[c.cmd] = true
           at.pending = (at.pending or 0) + 1; sent = sent + 1
         end
@@ -3450,7 +3501,7 @@ auto_trade_tick = function()
         scrye.send(string.format("vtrade dispatch sell %d %s %s escort %d",
           c.qty, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
         note(string.format("sell %d %s to %s (~%dd cart)", c.qty, c.cmd, c.town, c.value))
-        at_record("sell", c.qty, disp_cmd(c.cmd), c.town, c.value)
+        at_queue("sell", c.qty, disp_cmd(c.cmd), c.town, c.value)
         seen[c.cmd] = true; at.pending = (at.pending or 0) + 1; sent = sent + 1
       end
     end
@@ -3478,8 +3529,10 @@ local function at_driver() if at.on then at_schedule() end end
 -- react to the live feed: dispatch when the warehouse gains goods or a cart frees up
 local at_last_free, at_last_stock = -1, -1
 local function at_on_feed()
+  local v0 = at_getvars()
+  at_settle(at_active_carts(v0))   -- a cart appearing is what confirms the last dispatch
   if not at.on then return end
-  local v = at_getvars()
+  local v = v0
   local maxc = at_capacity(v)
   if at.carts and at.carts > 0 then maxc = math.min(maxc, at.carts) end
   local active = 0
