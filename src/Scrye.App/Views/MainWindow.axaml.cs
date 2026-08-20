@@ -215,6 +215,17 @@ public partial class MainWindow : Window
         catch { /* cosmetic only */ }
     }
 
+    // true while Recall is writing to the box, so its TextChanged is not mistaken for typing
+    private bool _recalling;
+
+    /// <summary>The user changed the input themselves, so the next Up should filter on what is
+    /// there NOW rather than on whatever the last walk anchored to.</summary>
+    private void OnInputTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        if (_recalling) return;
+        if (sender is TextBox { DataContext: WorldViewModel vm }) vm.HistoryResync();
+    }
+
     // tab-completion cycling state (single active input at a time)
     private TextBox? _tabBox;
     private int _tabAnchor = -1;
@@ -237,8 +248,8 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrEmpty(vm.Input)) box.SelectAll();
                 e.Handled = true;
                 break;
-            case Key.Up:                                  // recall previous command
-                Recall(box, vm.HistoryPrevious(box.Text ?? ""));
+            case Key.Up:                                  // recall previous, filtered by what you typed
+                Recall(box, vm.HistoryPrevious(box.Text ?? "", RecallPrefix(box, e.KeyModifiers)));
                 e.Handled = true;
                 break;
             case Key.Down:                                // recall next / restore draft
@@ -377,10 +388,35 @@ public partial class MainWindow : Window
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c is '_' or '\'' or '-';
 
-    private static void Recall(TextBox box, string? text)
+    /// <summary>What an Up should filter the history by: the text BEFORE the caret, so you can
+    /// park mid-line and filter on a stem.
+    ///
+    /// <para>Empty in two cases. Ctrl is the deliberate escape hatch — "show me everything even
+    /// though I have typed something". And a fully-selected box counts as empty because the next
+    /// keystroke would replace it anyway: with "keep the last command" on, the box holds the
+    /// command selected after Enter, and anchoring on the whole thing would match only exact
+    /// repeats of it.</para></summary>
+    private static string RecallPrefix(TextBox box, KeyModifiers mods)
+    {
+        if (mods.HasFlag(KeyModifiers.Control)) return "";
+        string text = box.Text ?? "";
+        if (text.Length == 0) return "";
+        if (Math.Abs(box.SelectionEnd - box.SelectionStart) >= text.Length) return "";
+        return text.Substring(0, Math.Clamp(box.CaretIndex, 0, text.Length));
+    }
+
+    /// <summary>Put a recalled command in the box. Sets <see cref="_recalling"/> so the
+    /// TextChanged handler does not read our own write as the user editing — which would
+    /// drop the walk's filter on the very first Up.</summary>
+    private void Recall(TextBox box, string? text)
     {
         if (text is null) return;
-        box.Text = text;
-        box.CaretIndex = text.Length;   // caret to end
+        _recalling = true;
+        try
+        {
+            box.Text = text;
+            box.CaretIndex = text.Length;   // caret to end
+        }
+        finally { _recalling = false; }
     }
 }

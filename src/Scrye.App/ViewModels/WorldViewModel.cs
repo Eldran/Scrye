@@ -1058,7 +1058,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     /// <summary>Up-arrow recall. <paramref name="current"/> is the box text (saved as draft).</summary>
-    public string? HistoryPrevious(string current) => _history.Previous(current);
+    /// <summary>Up arrow. <paramref name="prefix"/> filters the walk — the text before the
+    /// caret, or empty for the whole history.</summary>
+    public string? HistoryPrevious(string current, string? prefix = null) => _history.Previous(current, prefix);
+
+    /// <summary>The newest command starting with <paramref name="prefix"/> (inline suggestion).</summary>
+    public string? HistorySuggest(string? prefix) => _history.Suggest(prefix);
+
+    /// <summary>The user edited the input: the next Up should filter on what is there now.</summary>
+    public void HistoryResync() => _history.Resync();
     /// <summary>Down-arrow recall / draft restore.</summary>
     public string? HistoryNext() => _history.Next();
 
