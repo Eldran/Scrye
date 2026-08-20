@@ -1,7 +1,7 @@
 {
   "id": "3s-chaossea",
   "name": "3S Chaos Sea",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Joakim",
   "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way.",
   "mudIds": [

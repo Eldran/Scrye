@@ -257,7 +257,8 @@ public sealed class HudViewModel : IDisposable
                 return new ButtonWidgetViewModel(w.Text ?? "Button",
                     () => { if (actionId is not null) _invokeAction?.Invoke(pluginId, actionId); },
                     contextId is null ? null
-                        : () => _invokeAction?.Invoke(pluginId, contextId));
+                        : () => _invokeAction?.Invoke(pluginId, contextId),
+                    w.Color);
             }
             case "row":
             {
@@ -291,7 +292,8 @@ public sealed class HudViewModel : IDisposable
                         row.Buttons.Add(new ButtonWidgetViewModel(child.Text ?? "Button",
                             () => { if (childAction is not null) _invokeAction?.Invoke(pluginId, childAction); },
                             childContext is null ? null
-                                : () => _invokeAction?.Invoke(pluginId, childContext)));
+                                : () => _invokeAction?.Invoke(pluginId, childContext),
+                            child.Color));
                     }
                 return row;
             }
@@ -630,7 +632,7 @@ public sealed class HudTabViewModel
 /// <summary>A clickable button widget: its <see cref="Command"/> invokes the plugin's callback.
 /// <see cref="ContextCommand"/> is the API 1.9 secondary activation (right-click on the desktop,
 /// long-press on the phone) and is null unless the widget declared <c>onRightClick</c>.</summary>
-public sealed class ButtonWidgetViewModel : ViewModelBase
+public sealed class ButtonWidgetViewModel : ViewModelBase, IReThemable
 {
     public string Text { get; }
     public RelayCommand Command { get; }
@@ -639,12 +641,32 @@ public sealed class ButtonWidgetViewModel : ViewModelBase
     /// the widget declared no onRightClick, which is what keeps the behaviour inert.</summary>
     public RelayCommand? ContextCommand { get; }
 
-    public ButtonWidgetViewModel(string text, Action onClick, Action? onRightClick = null)
+    // Same shape as LabelWidgetViewModel: keep the SPEC string so a theme change can
+    // re-resolve a token like "accent", and drive a `.wc` class rather than binding
+    // Foreground directly — a null brush on a Button would paint its label with nothing.
+    private readonly string? _colour;
+    private Avalonia.Media.IBrush? _colorBrush;
+
+    /// <summary>Custom foreground brush, or null to follow the theme. Lets a plugin show a
+    /// button's STATE — armed, running, paused — without a second widget to read.</summary>
+    public Avalonia.Media.IBrush? ColorBrush
+    {
+        get => _colorBrush;
+        private set { if (SetField(ref _colorBrush, value)) OnPropertyChanged(nameof(HasColor)); }
+    }
+    public bool HasColor => ColorBrush is not null;
+
+    public ButtonWidgetViewModel(string text, Action onClick, Action? onRightClick = null,
+                                 string? colorHex = null)
     {
         Text = text;
         Command = new RelayCommand(onClick);
         ContextCommand = onRightClick is null ? null : new RelayCommand(onRightClick);
+        _colour = colorHex;
+        _colorBrush = HudColor.Brush(colorHex);
     }
+
+    public void ReTheme() => ColorBrush = HudColor.Brush(_colour);
 }
 
 /// <summary>Widgets laid out side by side (the "row" container, API 1.8). Children are
@@ -661,9 +683,12 @@ public sealed class RowWidgetViewModel : ViewModelBase, IReThemable
 }
 
 /// <summary>A row of buttons rendered side by side as equal-width columns (a "buttonrow" widget).</summary>
-public sealed class ButtonRowWidgetViewModel : ViewModelBase
+public sealed class ButtonRowWidgetViewModel : ViewModelBase, IReThemable
 {
     public System.Collections.ObjectModel.ObservableCollection<ButtonWidgetViewModel> Buttons { get; } = new();
+
+    // so a button coloured with a theme TOKEN re-resolves with everything else
+    public void ReTheme() { foreach (ButtonWidgetViewModel b in Buttons) b.ReTheme(); }
 }
 
 /// <summary>An inline text field with a label; pressing Enter (or the Set button) submits the

@@ -948,8 +948,8 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `text` | A multi‑line monospaced block (reports/tables). | `bind`; `color` |
 | `gauge` | A labeled bar; auto‑colors cyan→amber→red by ratio unless `color` set. | `text`, `value`, `max` (state paths or numbers); `color`; `dim = true` (darken toward black as the value falls, using `color` as the base hue — green when unset — instead of the ratio ramp) |
 | `progress` | A labeled bar with an explicit color. | `text`, `value`, `max`; `color` |
-| `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)* |
-| `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=}, ... }` |
+| `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)*, `color` *(1.13 — colours the label, so a button can show the STATE of what it controls)* |
+| `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=, color=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
 | `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |

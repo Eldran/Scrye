@@ -310,6 +310,11 @@
                                                     <Style Selector="ProgressBar.wc">
                                                         <Setter Property="Foreground" Value="{ReflectionBinding ColorBrush}" />
                                                     </Style>
+                                                    <!-- a plugin button that carries a colour: it is showing you its STATE
+                                                         (armed, running, paused) rather than decorating itself -->
+                                                    <Style Selector="Button.wc">
+                                                        <Setter Property="Foreground" Value="{ReflectionBinding ColorBrush}" />
+                                                    </Style>
                                                     <!-- resize grip: invisible until the pointer is over the panel (these
                                                          styles are scoped to this Border, so plain selectors are enough) -->
                                                     <Style Selector="Path.grip">
@@ -380,6 +385,7 @@
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"
                                                                 behaviors:RightClick.Command="{Binding ContextCommand}"
+                                                                Classes.wc="{Binding HasColor}"
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:InputWidgetViewModel">
@@ -415,6 +421,7 @@
                                                                 <DataTemplate x:DataType="vm:ButtonWidgetViewModel">
                                                                     <Button Content="{Binding Text}" Command="{Binding Command}"
                                                                             behaviors:RightClick.Command="{Binding ContextCommand}"
+                                                                            Classes.wc="{Binding HasColor}"
                                                                             HorizontalAlignment="Stretch" Margin="1" Padding="8,3" FontSize="11" />
                                                                 </DataTemplate>
                                                             </ItemsControl.ItemTemplate>

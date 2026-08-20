@@ -85,7 +85,9 @@ local map_serial = 1           -- bumped on every GRAPH change (rooms/exits), no
 local cs_flags = { item = false, gold = false, player = false }
 
 -- forward declarations (mutually recursive)
-local cs_draw, cs_step, cs_advance, mark_dirty
+local cs_draw, cs_step, cs_advance, mark_dirty, build_panel
+-- what the buttons last showed, so the panel is only rebuilt when it would look different
+local panel_on, panel_auto, panel_paused = nil, nil, nil
 
 -- the original drew ":: CSS ::" in red/grey/red before every message
 local function note(s) scrye.print("@{#FD2083,bold}::@{} @{#4BE4FF}CSS@{} @{#FD2083,bold}::@{} " .. s) end
@@ -995,6 +997,15 @@ cs_draw = function()
   scrye.setVariable("cs_auto", auto and "1" or "0")
   scrye.setVariable("cs_enabled", enabled and "1" or "0")
 
+  -- The buttons carry the bot's state in their colour, so the panel has to be rebuilt
+  -- when that state changes -- but ONLY then. cs_draw runs on every room and every
+  -- watchdog tick, and replacing the panel at that rate would be wasteful and visibly
+  -- twitchy for a picture that has not changed.
+  if build_panel and (enabled ~= panel_on or auto ~= panel_auto or paused ~= panel_paused) then
+    panel_on, panel_auto, panel_paused = enabled, auto, paused
+    build_panel()
+  end
+
   -- status banner: what is the bot doing RIGHT NOW
   local modetxt
   if not enabled then       modetxt = "OFF - press On in your start room"
@@ -1059,6 +1070,14 @@ cs_draw = function()
   mark_dirty()
 end
 
+-- The panel is rebuilt whenever the bot's state changes, so its buttons can show that
+-- state. addPanel with the same title REPLACES in place -- position, size and the
+-- selected tab survive -- and this panel has no input fields, so a rebuild can never
+-- eat something you were half-way through typing.
+local LIT  = "#6BEF75"   -- armed: the same green the map draws you in
+local HELD = "#DA950B"   -- deliberately held: the frontier amber
+
+build_panel = function()
 scrye.addPanel{
   title = "3S Chaos Sea",
   width = 300,
@@ -1085,13 +1104,19 @@ scrye.addPanel{
     { type = "value", text = "kills: ", bind = P .. "hunt", color = "error" },     -- semantic: kills
     { type = "value", text = "sea ",    bind = P .. "sea",  color = "#0B9DB3" },   -- sea id echoes the panel accent
     -- controls laid out two per row (Delay +/- dropped; use "cs delay <n>" if needed)
+    -- The three state buttons carry their own colour: green when the thing they control
+    -- is ON, amber for a deliberate hold. A bot you cannot tell the state of at a glance
+    -- is a bot you end up prodding to find out.
     { type = "buttonrow", buttons = {
-        { text = "On/Off", action = function() cs_interface(enabled and "disable" or "enable") end },
-        { text = "Step",   action = function() cs_step() end },
+        { text = enabled and "On" or "Off", color = enabled and LIT or nil,
+          action = function() cs_interface(enabled and "disable" or "enable") end },
+        { text = "Step", action = function() cs_step() end },
     } },
     { type = "buttonrow", buttons = {
-        { text = "Auto",  action = function() cs_interface(auto and "auto off" or "auto on") end },
-        { text = "Pause", action = function() cs_pause_toggle() end },
+        { text = auto and "Auto ON" or "Auto", color = auto and LIT or nil,
+          action = function() cs_interface(auto and "auto off" or "auto on") end },
+        { text = paused and "PAUSED" or "Pause", color = paused and HELD or nil,
+          action = function() cs_pause_toggle() end },
     } },
     { type = "buttonrow", buttons = {
         { text = "Leave", action = function() cs_leave() end },
@@ -1105,6 +1130,9 @@ scrye.addPanel{
     { type = "button", text = "New Sea", action = function() cs_new_sea() end },
   },
 }
+end
+
+build_panel()
 
 -- ---------- command interface ----------
 function cs_interface(args)

@@ -125,7 +125,17 @@ public static class ScryeApi
     //        Additive: a row without the field renders exactly as it did before, and a host
     //        that predates it ignores the extra column. Ordering carries the meaning as much
     //        as hue does — rawest is always leftmost — so the ramp is never the only encoding.
-    public static readonly Version Current = new(1, 12);
+    //
+    // 1.13 A `button` (and a `buttonrow` child) may carry a `color`, which paints its label.
+    //
+    //      A bot you cannot read the state of at a glance is a bot you prod to find out.
+    //      The chaos-sea panel had four buttons that looked identical whether it was armed,
+    //      auto-exploring or paused, and the answer was in a status line above them.
+    //
+    //      Additive, and the same shape a label already uses: the colour drives a `.wc`
+    //      class rather than binding Foreground directly, because a NULL brush on a Button
+    //      paints its text with nothing. A host that predates it ignores the field.
+    public static readonly Version Current = new(1, 13);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";
