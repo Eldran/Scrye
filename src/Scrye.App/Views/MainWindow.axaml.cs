@@ -78,6 +78,11 @@ public partial class MainWindow : Window
         {
             switch (v)
             {
+                // A button that ASKS for the focus to go back to the command line: the
+                // "back to bottom" chip, whose whole purpose is "take me back to live".
+                case Button b when b.Classes.Contains("refocus"):
+                    return true;
+
                 // Controls that keep using the keyboard after you have clicked them.
                 case TextBox:
                 // Button, not a ButtonBase: Avalonia 12 has no ButtonBase, because Button IS
@@ -249,11 +254,32 @@ public partial class MainWindow : Window
                 FocusFindBox(box);
                 e.Handled = true;
                 break;
+            case Key.PageUp:                              // page the scrollback without leaving the box
+            case Key.PageDown:
+                PageScrollback(vm, e.Key == Key.PageUp ? -1 : 1);
+                e.Handled = true;
+                break;
             case Key.Escape:                              // clear the input
                 box.Text = "";
                 box.CaretIndex = 0;
                 e.Handled = true;
                 break;
+        }
+    }
+
+    /// <summary>Page this world's scrollback from somewhere that is not the output pane —
+    /// the command line, where you spend most of your time.
+    ///
+    /// <para>Finds the pane by its SOURCE rather than by walking up from the box: capture
+    /// panes and float windows are terminal panes too, and the one that should move is the
+    /// one showing this world's scrollback.</para></summary>
+    private void PageScrollback(WorldViewModel vm, int direction)
+    {
+        foreach (Controls.TerminalPane pane in this.GetVisualDescendants().OfType<Controls.TerminalPane>())
+        {
+            if (!ReferenceEquals(pane.Source, vm.Scrollback) || !pane.IsEffectivelyVisible) continue;
+            pane.Page(direction);
+            return;
         }
     }
 

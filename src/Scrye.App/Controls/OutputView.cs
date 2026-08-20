@@ -77,6 +77,10 @@ public class OutputView : Control
     private bool _stickToBottom = true;
     private int _pendingLines;
     private int _lastCount;
+    // BaseSequence at the last change. Its RISE is exactly how many lines the buffer just
+    // dropped off the front — see OnSourceChanged, which is the only thing that can tell a
+    // trim from an ordinary add, because both leave Count looking much the same.
+    private long _lastBase;
 
     // text selection, in (line, column) content coordinates
     private (int line, int col)? _selAnchor;
@@ -176,6 +180,7 @@ public class OutputView : Control
             if (old is not null) old.Changed -= OnSourceChanged;
             if (_source is not null) _source.Changed += OnSourceChanged;
             _lastCount = _source?.Count ?? 0;
+            _lastBase = _source?.BaseSequence ?? 0;
             SetPendingLines(0);
             InvalidateMeasure();
             InvalidateVisual();
@@ -225,10 +230,28 @@ public class OutputView : Control
     private void OnSourceChanged()
     {
         int count = _source?.Count ?? 0;
-        int delta = count - _lastCount;
-        _lastCount = count;
+        long baseSeq = _source?.BaseSequence ?? 0;
 
-        InvalidateMeasure();   // extent grew
+        if (count == 0)                       // cleared: no position left to hold
+        {
+            _lastCount = 0;
+            _lastBase = baseSeq;
+            SetPendingLines(0);
+            InvalidateMeasure();
+            InvalidateVisual();
+            return;
+        }
+
+        // How many lines fell off the FRONT since last time. The buffer trims in chunks
+        // (2,000 by default) once it passes its cap, and BaseSequence rises by exactly that
+        // many — Count alone cannot tell a trim from a quiet moment, because a trim that
+        // coincides with new arrivals leaves it almost unchanged.
+        long trimmed = Math.Max(0, baseSeq - _lastBase);
+        int added = count - _lastCount + (int)trimmed;
+        _lastCount = count;
+        _lastBase = baseSeq;
+
+        InvalidateMeasure();   // extent changed
         if (_stickToBottom)
         {
             // scroll to the tail once the new extent has been laid out
@@ -236,9 +259,34 @@ public class OutputView : Control
         }
         else
         {
-            // scrolled up: count what streams past below (cleared buffer resets)
-            SetPendingLines(delta > 0 ? _pendingLines + delta : 0);
+            // A trim moved every remaining line UP by `trimmed`, under a scrollbar that did
+            // not move. Left alone, the text you were reading silently jumps forward by a
+            // whole chunk — which is what "I scrolled back, left it, and it reset" is.
+            // So the reading position travels with the content.
+            if (trimmed > 0 && _scrollViewer is not null && _lineHeight > 0)
+            {
+                double y = Math.Max(0, _scrollViewer.Offset.Y - trimmed * _lineHeight);
+                _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, y);
+            }
+            // ...and the new-lines count is what ARRIVED, not the change in Count: a trim
+            // used to make that difference negative and reset the chip to zero.
+            SetPendingLines(added > 0 ? _pendingLines + added : _pendingLines);
         }
+        InvalidateVisual();
+    }
+
+    /// <summary>Page the view by one viewport, keeping one line of overlap so you can see
+    /// where you were. Negative pages up. Paging up stops following the tail; paging back to
+    /// the bottom resumes it, which the offset watcher does on its own.</summary>
+    public void Page(int direction)
+    {
+        if (_scrollViewer is null || _lineHeight <= 0) return;
+        double vp = _scrollViewer.Viewport.Height;
+        double step = Math.Max(_lineHeight, vp - _lineHeight);   // one line of overlap
+        double target = Math.Clamp(_scrollViewer.Offset.Y + direction * step,
+                                   0, Math.Max(0, ExtentHeight - vp));
+        if (direction < 0) SetFollowing(false);
+        _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, target);
         InvalidateVisual();
     }
 
@@ -370,7 +418,12 @@ public class OutputView : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        if (e.Key is Key.PageUp or Key.PageDown)
+        {
+            Page(e.Key == Key.PageUp ? -1 : 1);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.C && e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             CopySelection(CopyFormat.Plain);
             e.Handled = true;

@@ -92,6 +92,11 @@ public class TerminalPane : Grid
             Background = ChipBackground,
             IsVisible = false,
         };
+        // "refocus": the window-level click-to-focus handler denies Buttons by default,
+        // because a button you clicked usually wants the keyboard. This one is the
+        // opposite — its whole purpose is "take me back to live", which is the exact
+        // moment you want to be typing again.
+        _chip.Classes.Add("refocus");
         _chip.Click += (_, _) => _history.ScrollToEnd();
         SetRow(_chip, 0);
         Children.Add(_chip);
@@ -140,6 +145,10 @@ public class TerminalPane : Grid
 
         UpdateTailHeight();
     }
+
+    /// <summary>Page the scrollback. The history pane is the one that scrolls — the tail
+    /// is a fixed window on the newest lines — so this forwards there.</summary>
+    public void Page(int direction) => _history.Page(direction);
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {

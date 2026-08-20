@@ -27,6 +27,13 @@ Each connected world gets its own tab with an output pane and a command line.
 - **Command line** — type a command and press **Enter** to send it. Handy keys:
   - **Up / Down** — walk back and forth through command history.
   - **Tab** — complete the word under the caret from words seen in the output.
+  - **Up / Down** — recall previous commands, **filtered by what you have already typed**.
+    Type `vtrade ` and press Up and you cycle only the vtrade commands; an empty box still
+    cycles everything. The filter is fixed when you start walking, and the same command never
+    comes up twice. **Ctrl+Up** ignores the filter when you want the whole history anyway.
+  - **PgUp / PgDown** — page through the scrollback. Works from the command line as well
+    as from the output pane, so you never have to click into the output first. One line of
+    overlap between pages; paging back to the bottom resumes following the newest lines.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
   - Global Settings → Appearance has **Keep the last command in the input box**: after Enter
@@ -35,7 +42,9 @@ Each connected world gets its own tab with an output pane and a command line.
 - **Click almost anywhere and start typing.** The command line takes focus back after a click
   that had nothing better to do with it — the output, a HUD panel, a world tab. Controls that
   use the keyboard keep it: text boxes, buttons, the world list, scrollbars, and the output
-  pane while a selection is up, so Ctrl+C still copies what you just dragged over.
+  pane while a selection is up, so Ctrl+C still copies what you just dragged over. The
+  **▼ back to bottom** chip is the exception among buttons — it hands the keyboard back,
+  because "take me back to live" is the moment you want to be typing.
 - **F11** — fullscreen on and off.
 
 ## Several commands at once
