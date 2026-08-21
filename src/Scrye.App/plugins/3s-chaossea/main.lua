@@ -53,8 +53,21 @@ local last_dir = nil           -- last direction actually sent (avoid instant ba
 -- Strictly one push per command, one pop per prompt: any cleverer bookkeeping
 -- (popping on the room header as well) drifts the queue by one and puts it
 -- permanently out of step with the output it is supposed to be labelling.
-local sent_q = {}
+--
+-- One push per command is not enough on its own, because SOME COMMANDS PRODUCE NO
+-- PROMPT and so are never popped. Scrye's own MIP handshake is four of them
+-- ('3klient ...' x3, 'forcehp'), CommandSent reports every one, and they go out on
+-- every connect. A single un-popped entry puts sent_q permanently one behind: from
+-- then on sent_q[1] names the command BEFORE the one whose output is printing, so
+-- every one of the bot's own moves reads as somebody else's redisplay, never
+-- confirms, and only the watchdog's 15s !glance shakes it loose -- one room per
+-- watchdog tick, indefinitely. The drift is stable, which is why it never recovers.
+-- Each entry therefore carries the tick it went out on, and anything that has been
+-- sitting here for seconds is dropped: a MUD answers in milliseconds, so an old
+-- entry is not a pending command, it is one that will never be popped.
+local sent_q = {}              -- { { cmd = "n", at = tick }, ... }
 local SENT_MAX = 16            -- self-limit: a lost prompt must not grow this forever
+local SENT_TTL = 3             -- ticks an unanswered command stays believable
 local glance_unstick = false   -- the watchdog's !glance is asking for a move to be re-confirmed
 local blind_steps = 0          -- consecutive re-orient steps after a maze shift
 local killname = "mutant"
@@ -79,6 +92,20 @@ local sea_entering = false     -- New Sea sequence in flight: the swap is sent o
                                -- seconds and the map reset + opening glance come at the end
                                -- of it, so nothing may walk, unpause or re-glance until then.
 local now = 0                  -- seconds since plugin load (1 s ticker)
+
+-- Drop the entries at the head that the MUD has certainly already answered. This is
+-- the queue correcting its own model rather than a heuristic: it holds commands whose
+-- output has not finished printing, and after SENT_TTL seconds that is no longer what
+-- an entry means.
+local function sent_prune()
+  while sent_q[1] and now - sent_q[1].at >= SENT_TTL do table.remove(sent_q, 1) end
+end
+
+-- The command whose block of output is printing now, or nil for the server itself.
+local function sent_head()
+  sent_prune()
+  return sent_q[1] and sent_q[1].cmd or nil
+end
 local map_serial = 1           -- bumped on every GRAPH change (rooms/exits), not moves —
                                -- the wasm pathfinder caches the graph keyed on this
 
@@ -471,6 +498,7 @@ cs_advance = function()
     return
   end
   plan.awaiting = true
+  plan.sent_at = now            -- anything older than this is not what is printing
   glance_unstick = false        -- a fresh step: any earlier unstick request is spent
   last_dir = plan.dirs[plan.idx]
   scrye.send(plan.dirs[plan.idx])
@@ -480,7 +508,17 @@ local function cs_on_room(short)
   if not enabled then return end
   -- What produced this room header? Consume the answer: it is only valid for the
   -- block of output the command generated, and the prompt clears it again.
-  local cmd = sent_q[1]     -- the command this block of output is answering (nil = the server)
+  local cmd = sent_head()   -- the command this block of output is answering (nil = the server)
+  -- A command that was already on the wire BEFORE we stepped and still has not printed
+  -- is one that never will: nothing pops an entry but a prompt, and it produced none.
+  -- The block arriving is ours. Drop the impostor instead of spending a watchdog cycle
+  -- on it -- otherwise the first silent command of the session costs 15s, and the next
+  -- one 15s more.
+  while cmd and not DELTA[cmd]
+        and plan and plan.awaiting and plan.sent_at and sent_q[1].at < plan.sent_at do
+    table.remove(sent_q, 1)
+    cmd = sent_head()
+  end
   -- ...except the watchdog's own re-glance, which exists precisely to shake a room
   -- header out of the MUD when a step went unconfirmed. Its reply IS the confirmation.
   if glance_unstick and cmd == "!glance" and plan and plan.awaiting then
@@ -631,6 +669,7 @@ local function cs_on_prompt()
   -- command produced, so drop it -- what comes next belongs to the command behind it,
   -- or, with the queue empty, to the server itself. That empty queue is what makes a
   -- real wimpy retreat distinguishable at all.
+  sent_prune()
   if sent_q[1] then table.remove(sent_q, 1) end
   if not enabled or paused or resting then return end
   -- whole room is printed now: if a goal item was here, act on the
@@ -871,6 +910,7 @@ end
 
 local function reset()
   rooms = {}; frontier = {}
+  sent_q = {}                  -- "start over" includes what we thought was on the wire
   map_serial = map_serial + 1
   pos = { x = 0, y = 0, z = 0 }
   plan = nil; fighting = false; steps_done = 0
@@ -913,6 +953,10 @@ local function cs_watchdog()
     if awaiting_ticks >= 3 then
       awaiting_ticks = 0
       note("watchdog: move unconfirmed - glancing")
+      -- The queue said our own room header belonged to someone else, and it was wrong.
+      -- Whatever is left in it has been overtaken by events, so stop believing it: the
+      -- glance's reply then reads as the server's, which confirms the move.
+      sent_q = {}
       glance_unstick = true
       scrye.send("!glance")
     end
@@ -1314,7 +1358,7 @@ scrye.onPrompt(cs_on_prompt)
 scrye.onCommand(function(text)
   local first = tostring(text or ""):match("^%s*(%S+)")
   if not first then return end
-  sent_q[#sent_q + 1] = first:lower()
+  sent_q[#sent_q + 1] = { cmd = first:lower(), at = now }
   if #sent_q > SENT_MAX then table.remove(sent_q, 1) end
 end)
 
