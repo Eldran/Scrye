@@ -3270,45 +3270,115 @@ end
 -- the ATTEMPT. A cart that is refitting, a cooldown that has not expired, daler that ran
 -- short -- the MUD refuses, nothing leaves, and the trade log says it happened anyway.
 --
--- So the record is held until the CART FEED proves a cart went out: the active-cart count
--- rising above what it was when we sent. Structured data rather than English, which means
--- it cannot be broken by a reworded refusal and it catches every reason at once, including
--- the ones neither of us has thought of. Unconfirmed after CONFIRM_SECS, it is dropped and
--- said out loud -- an under-counted log is a smaller lie than an inflated one.
+-- So the record is held until the CART FEED proves a cart went out. Structured data rather
+-- than English, which means it cannot be broken by a reworded refusal and it catches every
+-- reason at once, including the ones neither of us has thought of. Unconfirmed after
+-- CONFIRM_SECS it is dropped and said out loud -- an under-counted log is a smaller lie
+-- than an inflated one, but a SILENT under-count is worse than either.
 --
--- Only ever one at a time: at_dispatch forces `free = math.min(free, 1)`, one dispatch per
--- pass, because each one starts a fresh cooldown.
+-- Two things this got wrong when it was written, both of which lose a trade that really
+-- happened:
+--
+--  * One pending slot. A second dispatch inside CONFIRM_SECS overwrote the first with no
+--    log line and no complaint. The cooldown retry runs at 10s and CONFIRM_SECS is 12, so
+--    two dispatches overlapping is the ordinary cadence rather than a corner case. Pending
+--    dispatches are a LIST now, oldest first.
+--
+--  * Counting carts instead of identifying them. "More carts than before" cannot see a cart
+--    coming home in the same feed tick as one going out: the count is unchanged, so a cart
+--    plainly on the road read as "nothing left". Carts are matched by kind+good now, so what
+--    is compared is which carts are out, not how many.
 local CONFIRM_SECS = 12
-local at_pend = nil       -- { side, qty, cmd, town, amount, carts, at }
+local at_pend = {}        -- dispatches sent, not yet proved by the feed; oldest first
+local at_seen = nil       -- the carts that were out when the oldest of them went
 
-local function at_active_carts(v)
-  local n = 0
-  for _ in ((v or at_getvars()).CARTS or ""):gmatch("[^;]+") do n = n + 1 end
-  return n
+-- The carts on the road, counted per kind+good. Counted rather than a set because two carts
+-- of the same good really can be out at once.
+local function at_cart_sigs(v)
+  local t = {}
+  for e in ((v or at_getvars()).CARTS or ""):gmatch("[^;]+") do
+    local kind, good = e:match("^([^|]*)|([^|]*)")
+    local sig = trim(kind or ""):lower() .. "|" .. trim(good or ""):lower()
+    t[sig] = (t[sig] or 0) + 1
+  end
+  return t
 end
 
-local function at_settle(active)
-  if not at_pend then return end
-  local p = at_pend
-  if active and active > p.carts then
-    at_pend = nil
-    at_record(p.side, p.qty, p.cmd, p.town, p.amount)
-    return
+-- How many carts are out now that were not out before, split by kind.
+local function at_appeared(before, after)
+  local by = {}
+  for sig, n in pairs(after) do
+    local extra = n - (before[sig] or 0)
+    if extra > 0 then
+      local side = sig:match("^([^|]*)")
+      by[side] = (by[side] or 0) + extra
+    end
   end
-  if os.time() - p.at >= CONFIRM_SECS then
-    at_pend = nil
+  return by
+end
+
+-- Credit what the feed proves, then drop what has waited too long. Called on every feed
+-- tick and once per dispatch from its own timeout timer.
+local function at_settle(v)
+  if #at_pend == 0 then at_seen = nil; return end
+
+  local cur = at_cart_sigs(v)
+  if at_seen then
+    local appeared = at_appeared(at_seen, cur)
+
+    -- Walk the pending list in the order the dispatches went out -- so the log reads in
+    -- that order too -- and give each one a cart of its own kind if one appeared.
+    --
+    -- Kind, and not the good as well: the feed names goods the way it DISPLAYS them
+    -- ("smoked meat") and a dispatch names them the way you COMMAND them ("smoked"), so a
+    -- mapping between the two would go quietly wrong the first time a good was renamed.
+    -- Matching on kind alone can put a cart against the wrong one of two sells sent
+    -- seconds apart; it can never lose one, which is the property that matters.
+    local i = 1
+    while i <= #at_pend do
+      local p = at_pend[i]
+      local n = appeared[p.side] or 0
+      if n > 0 then
+        appeared[p.side] = n - 1
+        table.remove(at_pend, i)
+        at_record(p.side, p.qty, p.cmd, p.town, p.amount)
+      else
+        i = i + 1
+      end
+    end
+
+    -- Carts of a kind nothing pending claimed. If the feed ever spells its kinds
+    -- differently than we do, they land on the oldest dispatch -- a cart we can SEE on the
+    -- road must not strand a trade in the holding pen until it times out.
+    local spare = 0
+    for _, n in pairs(appeared) do if n > 0 then spare = spare + n end end
+    while spare > 0 and at_pend[1] do
+      spare = spare - 1
+      local p = table.remove(at_pend, 1)
+      at_record(p.side, p.qty, p.cmd, p.town, p.amount)
+    end
+  end
+  at_seen = cur
+
+  local t = os.time()
+  while at_pend[1] and t - at_pend[1].at >= CONFIRM_SECS do
+    local p = table.remove(at_pend, 1)
     note(string.format("%s %d %s never left (no cart went out) - not logged",
       p.side, p.qty, p.cmd))
     if at_draw then at_draw() end
   end
+  if #at_pend == 0 then at_seen = nil end
 end
 
 -- Queue a dispatch we have just sent. Replaces the at_record call at each send site.
 local function at_queue(side, qty, cmd, town, amount)
-  if at_pend then at_settle(nil) end          -- a stale one cannot outlive a new dispatch
-  at_pend = { side = side, qty = qty, cmd = cmd, town = town, amount = amount or 0,
-              carts = at_active_carts(), at = os.time() }
-  scrye.after(CONFIRM_SECS + 1, function() at_settle(at_active_carts()) end)
+  -- The baseline belongs to the OLDEST outstanding dispatch, so a later one joining the
+  -- queue must not move it: a cart that appeared since the last settle is still owed to
+  -- whoever was waiting for it.
+  if #at_pend == 0 then at_seen = at_cart_sigs() end
+  at_pend[#at_pend + 1] = { side = side, qty = qty, cmd = cmd, town = town,
+                            amount = amount or 0, at = os.time() }
+  scrye.after(CONFIRM_SECS + 1, function() at_settle() end)
 end
 
 local at_cd_retry
@@ -3530,7 +3600,7 @@ local function at_driver() if at.on then at_schedule() end end
 local at_last_free, at_last_stock = -1, -1
 local function at_on_feed()
   local v0 = at_getvars()
-  at_settle(at_active_carts(v0))   -- a cart appearing is what confirms the last dispatch
+  at_settle(v0)   -- a cart appearing is what confirms a dispatch
   if not at.on then return end
   local v = v0
   local maxc = at_capacity(v)
