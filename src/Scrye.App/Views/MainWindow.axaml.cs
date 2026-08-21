@@ -26,6 +26,13 @@ public partial class MainWindow : Window
         // control didn't already consume (so Enter/Ctrl+F/typing are untouched).
         AddHandler(InputElement.KeyDownEvent, OnWindowKeyDown,
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
+        // PgUp/PgDn page the scrollback. TUNNEL, and at the window: the command line is a
+        // TextBox, a TextBox is entitled to those keys, and it takes them before a KeyDown
+        // handler on the box itself is ever reached — which is why paging from the command
+        // line did nothing at all. Coming down the tree instead of up puts the scrollback
+        // first, which is what a MUD client's page keys are for.
+        AddHandler(InputElement.KeyDownEvent, OnPagingKeyDown,
+                   Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // "click anywhere and just start typing" (MUSHclient / Mudlet). Bubble, and on
         // RELEASE rather than press: a press handler would move focus out from under a
         // drag-selection in the output while it was still being made.
@@ -215,17 +222,6 @@ public partial class MainWindow : Window
         catch { /* cosmetic only */ }
     }
 
-    // true while Recall is writing to the box, so its TextChanged is not mistaken for typing
-    private bool _recalling;
-
-    /// <summary>The user changed the input themselves, so the next Up should filter on what is
-    /// there NOW rather than on whatever the last walk anchored to.</summary>
-    private void OnInputTextChanged(object? sender, TextChangedEventArgs e)
-    {
-        if (_recalling) return;
-        if (sender is TextBox { DataContext: WorldViewModel vm }) vm.HistoryResync();
-    }
-
     // tab-completion cycling state (single active input at a time)
     private TextBox? _tabBox;
     private int _tabAnchor = -1;
@@ -248,12 +244,12 @@ public partial class MainWindow : Window
                 if (!string.IsNullOrEmpty(vm.Input)) box.SelectAll();
                 e.Handled = true;
                 break;
-            case Key.Up:                                  // recall previous, filtered by what you typed
+            case Key.Up:                                  // recall previous (Ctrl/Alt: filtered)
                 Recall(box, vm.HistoryPrevious(box.Text ?? "", RecallPrefix(box, e.KeyModifiers)));
                 e.Handled = true;
                 break;
             case Key.Down:                                // recall next / restore draft
-                Recall(box, vm.HistoryNext());
+                Recall(box, vm.HistoryNext(box.Text ?? ""));
                 e.Handled = true;
                 break;
             case Key.Tab:                                 // complete the word under the caret
@@ -265,17 +261,57 @@ public partial class MainWindow : Window
                 FocusFindBox(box);
                 e.Handled = true;
                 break;
-            case Key.PageUp:                              // page the scrollback without leaving the box
-            case Key.PageDown:
-                PageScrollback(vm, e.Key == Key.PageUp ? -1 : 1);
-                e.Handled = true;
-                break;
             case Key.Escape:                              // clear the input
                 box.Text = "";
                 box.CaretIndex = 0;
                 e.Handled = true;
                 break;
         }
+    }
+
+    /// <summary>
+    /// PgUp/PgDn belong to the scrollback unless something on the way down genuinely needs
+    /// them. Runs on the tunnel so it sees the key before any focused control does, and walks
+    /// DOWN from the window to whatever has focus — a deny-list, like <see cref="MayTakeFocus"/>
+    /// and for the same reason: the scrollback is this window's default subject, and the
+    /// exceptions are the few controls with pages of their own.
+    ///
+    /// <para>An overlay (Settings, Edit world) owns the keyboard outright while it is open, so
+    /// nothing here fires for it.</para>
+    /// </summary>
+    private void OnPagingKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key is not (Key.PageUp or Key.PageDown)) return;
+        if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
+        if (vm.Settings is not null || vm.Editor is not null) return;
+
+        int direction = e.Key == Key.PageUp ? -1 : 1;
+        for (Avalonia.Visual? v = e.Source as Avalonia.Visual; v is not null; v = v.GetVisualParent())
+        {
+            switch (v)
+            {
+                // Inside a pane: page THAT pane. A capture pane shows different text and keeps
+                // its own place in it, so paging this world's scrollback would scroll the wrong
+                // window out from under you.
+                case Controls.TerminalPane pane:
+                    pane.Page(direction);
+                    e.Handled = true;
+                    return;
+
+                // Controls with pages of their own. A single-line TextBox is NOT one of them:
+                // the command line is one line tall, so there is no page in it to move through,
+                // and it is where you are standing when you want to look at what just went past.
+                case TextBox box when box.AcceptsReturn:
+                case ListBox:
+                case TreeView:
+                case ComboBox:
+                case MenuItem:
+                    return;
+            }
+        }
+
+        PageScrollback(world, direction);
+        e.Handled = true;
     }
 
     /// <summary>Page this world's scrollback from somewhere that is not the output pane —
@@ -388,35 +424,41 @@ public partial class MainWindow : Window
 
     private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c is '_' or '\'' or '-';
 
-    /// <summary>What an Up should filter the history by: the text BEFORE the caret, so you can
-    /// park mid-line and filter on a stem.
+    /// <summary>What an Up should filter the history by — empty for the whole history.
     ///
-    /// <para>Empty in two cases. Ctrl is the deliberate escape hatch — "show me everything even
-    /// though I have typed something". And a fully-selected box counts as empty because the next
+    /// <para><b>Plain Up/Down is the whole history</b>, always. It is the oldest habit in every
+    /// shell and every MUD client, and answering a narrower question with it is worse than
+    /// asking for a second key: you reach for Up to get back to something, and a filter you did
+    /// not ask for looks like the history has holes in it.</para>
+    ///
+    /// <para>Hold <b>Ctrl or Alt</b> and the walk is filtered by the text BEFORE the caret
+    /// instead, so you can park mid-line and filter on a stem: type <c>vtrade </c>, hold Alt,
+    /// press Up, and you cycle only the vtrade commands. Alt+Up is MUSHclient's own key for
+    /// this; Ctrl+Up does the same thing because it is a gesture this already shipped with.</para>
+    ///
+    /// <para>A fully-selected box counts as empty even with the modifier down, because the next
     /// keystroke would replace it anyway: with "keep the last command" on, the box holds the
     /// command selected after Enter, and anchoring on the whole thing would match only exact
     /// repeats of it.</para></summary>
     private static string RecallPrefix(TextBox box, KeyModifiers mods)
     {
-        if (mods.HasFlag(KeyModifiers.Control)) return "";
+        if (!mods.HasFlag(KeyModifiers.Control) && !mods.HasFlag(KeyModifiers.Alt)) return "";
         string text = box.Text ?? "";
         if (text.Length == 0) return "";
         if (Math.Abs(box.SelectionEnd - box.SelectionStart) >= text.Length) return "";
         return text.Substring(0, Math.Clamp(box.CaretIndex, 0, text.Length));
     }
 
-    /// <summary>Put a recalled command in the box. Sets <see cref="_recalling"/> so the
-    /// TextChanged handler does not read our own write as the user editing — which would
-    /// drop the walk's filter on the very first Up.</summary>
-    private void Recall(TextBox box, string? text)
+    /// <summary>Put a recalled command in the box.
+    ///
+    /// <para>Nothing has to be flagged around this write. The walk ends when the box no longer
+    /// holds what the last step put there, and <c>CommandHistory</c> works that out from
+    /// the text it is handed — so our own write cannot be mistaken for the user editing, which
+    /// is exactly what a flag held across this assignment failed to guarantee.</para></summary>
+    private static void Recall(TextBox box, string? text)
     {
         if (text is null) return;
-        _recalling = true;
-        try
-        {
-            box.Text = text;
-            box.CaretIndex = text.Length;   // caret to end
-        }
-        finally { _recalling = false; }
+        box.Text = text;
+        box.CaretIndex = text.Length;   // caret to end
     }
 }

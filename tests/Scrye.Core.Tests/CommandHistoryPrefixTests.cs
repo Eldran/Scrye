@@ -4,13 +4,41 @@ using Xunit;
 namespace Scrye.Core.Tests;
 
 /// <summary>
-/// Recall filtered by what you have already typed: `vtrade ` then Up cycles only the vtrade
-/// commands. MUSHclient puts this on Alt+Up because plain Up is spoken for; with a prefix in
-/// the box there is no other sensible reading of Up, so it goes on plain Up here and Ctrl+Up
-/// keeps the unfiltered walk.
+/// Recall filtered by what you have already typed: `vtrade `, then Ctrl+Up or Alt+Up, cycles
+/// only the vtrade commands. Plain Up/Down is the whole history and stays that way — it was
+/// briefly the filtered walk, and in use that turned out to answer a narrower question than
+/// the key is asking.
+///
+/// <para>Everything here drives the history through <see cref="Box"/>, which does what the
+/// command line does: whatever a step hands back is what is in the box on the next one. That
+/// is the contract, not a convenience — an edit ends a walk, and the history works that out by
+/// comparing the text it is handed against what it last gave you. Two bare
+/// <c>Previous("")</c> calls are not "press Up twice"; they are "press Up, clear the box,
+/// press Up".</para>
 /// </summary>
 public class CommandHistoryPrefixTests
 {
+    /// <summary>The command line, as far as <see cref="CommandHistory"/> can tell.</summary>
+    private sealed class Box
+    {
+        public readonly CommandHistory History;
+        public string Text;
+        public Box(CommandHistory history, string text = "") { History = history; Text = text; }
+        public string? Up(string? prefix = null)
+        {
+            string? r = History.Previous(Text, prefix);
+            if (r is not null) Text = r;
+            return r;
+        }
+        public string? Down()
+        {
+            string? r = History.Next(Text);
+            if (r is not null) Text = r;
+            return r;
+        }
+        public void Type(string t) => Text = t;
+    }
+
     private static CommandHistory Seeded()
     {
         var h = new CommandHistory();
@@ -24,19 +52,35 @@ public class CommandHistoryPrefixTests
     }
 
     [Fact]
-    public void No_prefix_is_the_whole_history_newest_first()
+    public void Plain_up_walks_the_whole_history_and_keeps_walking()
     {
-        CommandHistory h = Seeded();
-        Assert.Equal("north", h.Previous(""));
-        Assert.Equal("vbuild list", h.Previous(""));
+        // The reported break: Up from an empty box gave the newest command and then stopped
+        // dead. The box's TextChanged for the recalled text was being read as the user
+        // typing, which re-anchored the walk on the command it had just recalled — a view of
+        // one entry, stepped forever.
+        var b = new Box(Seeded());
+        Assert.Equal("north", b.Up());
+        Assert.Equal("vbuild list", b.Up());
+        Assert.Equal("vtrade goods iron", b.Up());
+        Assert.Equal("score", b.Up());
+    }
+
+    [Fact]
+    public void Plain_up_ignores_what_you_have_typed()
+    {
+        // The filtered walk is a separate gesture. Up on its own is the whole history, which
+        // is what the key means in every shell and every other client.
+        var b = new Box(Seeded(), "vtrade ");
+        Assert.Equal("north", b.Up());
+        Assert.Equal("vbuild list", b.Up());
     }
 
     [Fact]
     public void A_prefix_limits_the_walk_to_what_starts_with_it()
     {
-        CommandHistory h = Seeded();
-        Assert.Equal("vtrade goods iron", h.Previous("vtrade ", "vtrade "));
-        Assert.Equal("vtrade goods mead", h.Previous("", "vtrade "));
+        var b = new Box(Seeded(), "vtrade ");
+        Assert.Equal("vtrade goods iron", b.Up("vtrade "));
+        Assert.Equal("vtrade goods mead", b.Up("vtrade "));
     }
 
     [Fact]
@@ -44,9 +88,9 @@ public class CommandHistoryPrefixTests
     {
         // After the first Up the box holds the matched command. Re-deriving the prefix from
         // THAT would collapse the cycle to one entry, so the anchor has to outlive the box.
-        CommandHistory h = Seeded();
-        Assert.Equal("vtrade goods iron", h.Previous("vtrade ", "vtrade "));
-        Assert.Equal("vtrade goods mead", h.Previous("", "vtrade goods iron"));
+        var b = new Box(Seeded(), "vtrade ");
+        Assert.Equal("vtrade goods iron", b.Up("vtrade "));
+        Assert.Equal("vtrade goods mead", b.Up("a different prefix entirely"));
     }
 
     [Fact]
@@ -54,51 +98,72 @@ public class CommandHistoryPrefixTests
     {
         // "vtrade goods iron" was run twice with other commands in between, which Add's
         // consecutive-only dedupe does not touch. Filtered, that is the tedious case.
-        CommandHistory h = Seeded();
-        h.Previous("vtrade ", "vtrade ");
-        Assert.Equal(2, h.MatchCount);
+        var b = new Box(Seeded(), "vtrade ");
+        b.Up("vtrade ");
+        Assert.Equal(2, b.History.MatchCount);
     }
 
     [Fact]
     public void Down_walks_back_and_ends_at_what_you_had_typed()
     {
-        CommandHistory h = Seeded();
-        h.Previous("vtrade ", "vtrade ");
-        h.Previous("", "vtrade ");
-        Assert.Equal("vtrade goods iron", h.Next());
-        Assert.Equal("vtrade ", h.Next());
-        Assert.Null(h.Next());
+        var b = new Box(Seeded(), "vtrade ");
+        b.Up("vtrade ");
+        b.Up("vtrade ");
+        Assert.Equal("vtrade goods iron", b.Down());
+        Assert.Equal("vtrade ", b.Down());
+        Assert.Null(b.Down());
     }
 
     [Fact]
     public void A_prefix_nothing_matches_recalls_nothing_and_leaves_no_dead_walk()
     {
-        CommandHistory h = Seeded();
-        Assert.Null(h.Previous("zzz", "zzz"));   // the box is left alone
-        Assert.Equal("north", h.Previous("", ""));
+        var b = new Box(Seeded(), "zzz");
+        Assert.Null(b.Up("zzz"));    // the box is left alone
+        Assert.Equal("north", b.Up());
     }
 
     [Fact]
     public void Editing_re_anchors_the_next_walk()
     {
-        CommandHistory h = Seeded();
-        Assert.Equal("vtrade goods iron", h.Previous("vtrade ", "vtrade "));
-        h.Resync();                              // the input box changed under the user's hands
-        Assert.Equal("vbuild list", h.Previous("vbuild", "vbuild"));
+        // No Resync() call and no event: the history sees that the box no longer holds what
+        // it handed back, which is the only signal that cannot arrive at the wrong moment.
+        var b = new Box(Seeded(), "vtrade ");
+        Assert.Equal("vtrade goods iron", b.Up("vtrade "));
+        b.Type("vbuild");
+        Assert.Equal("vbuild list", b.Up("vbuild"));
+    }
+
+    [Fact]
+    public void Editing_ends_an_unfiltered_walk_too()
+    {
+        var b = new Box(Seeded());
+        b.Up(); b.Up();
+        b.Type("half typed");
+        Assert.Equal("north", b.Up());      // back at the newest, on a fresh walk
+    }
+
+    [Fact]
+    public void Down_after_an_edit_does_nothing_rather_than_resuming()
+    {
+        var b = new Box(Seeded());
+        b.Up(); b.Up();
+        b.Type("half typed");
+        Assert.Null(b.Down());
     }
 
     [Fact]
     public void Submitting_ends_the_walk()
     {
-        CommandHistory h = Seeded();
-        h.Previous("vtrade ", "vtrade ");
-        h.Add("vtrade goods furs");
-        Assert.Equal("vtrade goods furs", h.Previous("", ""));
+        var b = new Box(Seeded(), "vtrade ");
+        b.Up("vtrade ");
+        b.History.Add("vtrade goods furs");
+        b.Type("");
+        Assert.Equal("vtrade goods furs", b.Up());
     }
 
     [Fact]
     public void The_prefix_match_ignores_case() =>
-        Assert.Equal("vtrade goods iron", Seeded().Previous("VTR", "VTR"));
+        Assert.Equal("vtrade goods iron", new Box(Seeded(), "VTR").Up("VTR"));
 
     // ---- the inline suggestion (ghost text reads this) ----
 
@@ -115,9 +180,9 @@ public class CommandHistoryPrefixTests
     [Fact]
     public void Suggest_does_not_disturb_a_walk_in_progress()
     {
-        CommandHistory h = Seeded();
-        h.Previous("vtrade ", "vtrade ");
-        h.Suggest("vb");
-        Assert.Equal("vtrade goods mead", h.Previous("", "vtrade "));
+        var b = new Box(Seeded(), "vtrade ");
+        b.Up("vtrade ");
+        b.History.Suggest("vb");
+        Assert.Equal("vtrade goods mead", b.Up("vtrade "));
     }
 }

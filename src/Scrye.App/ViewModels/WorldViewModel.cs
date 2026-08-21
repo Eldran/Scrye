@@ -1066,9 +1066,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public string? HistorySuggest(string? prefix) => _history.Suggest(prefix);
 
     /// <summary>The user edited the input: the next Up should filter on what is there now.</summary>
-    public void HistoryResync() => _history.Resync();
     /// <summary>Down-arrow recall / draft restore.</summary>
-    public string? HistoryNext() => _history.Next();
+    public string? HistoryNext(string current) => _history.Next(current);
 
     /// <summary>Tab-completion candidates for <paramref name="prefix"/> (most-recent first).</summary>
     public IReadOnlyList<string> Complete(string prefix) => _completion.Complete(prefix);

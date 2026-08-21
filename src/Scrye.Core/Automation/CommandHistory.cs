@@ -6,13 +6,19 @@ namespace Scrye.Core.Automation;
 /// restored when you come back down past the newest entry — so arrowing up then down never
 /// loses what you were typing. Pure logic; the input box just calls it.
 ///
-/// <para><b>The walk is filtered by what you had typed.</b> Type <c>vtrade </c> and press Up
-/// and you cycle only the vtrade commands; an empty box still means "everything". MUSHclient
-/// puts this on Alt+Up because plain Up is already spoken for, but if there is a prefix in the
-/// box there is no other sensible reading of Up — which is why zsh and fish both do it without
-/// a second key. The unfiltered walk is still reachable (the input box binds it to Ctrl+Up).</para>
+/// <para><b>Two walks, on two gestures.</b> Plain Up/Down steps the whole history, which is
+/// the oldest habit in every shell and every MUD client and has to keep working without
+/// thinking about it. A <em>filtered</em> walk — only the commands starting with what you have
+/// typed — is a separate gesture, which the input box binds to Ctrl+Up and Alt+Up (MUSHclient's
+/// own key for it). This class does not know about keys; it takes the prefix to filter by, and
+/// an empty one means the whole history.</para>
 ///
-/// <para>Two details that matter more than they look:</para>
+/// <para>An earlier version put the filter on plain Up, on the reasoning that a prefix in the
+/// box leaves no other sensible reading. In use it does: you reach for Up to get back to
+/// something you typed, and having it silently answer a different question is worse than
+/// needing a second key for the narrower one.</para>
+///
+/// <para>Three details that matter more than they look:</para>
 /// <list type="bullet">
 /// <item>The filter is ANCHORED when the walk begins. After the first Up the box holds the
 /// matched command, and re-deriving the prefix from that would collapse the cycle to a single
@@ -21,6 +27,8 @@ namespace Scrye.Core.Automation;
 /// CONSECUTIVE repeats, which is fine for the full list and useless once filtered — running
 /// <c>vtrade goods iron</c> five times between other commands is exactly the case where
 /// cycling gets tedious.</item>
+/// <item>An edit ends the walk, and that is detected from the TEXT the caller passes in, not
+/// from an event. See <see cref="Previous"/>.</item>
 /// </list>
 /// </summary>
 public sealed class CommandHistory
@@ -31,6 +39,7 @@ public sealed class CommandHistory
     private int _index;          // cursor into _view; == _view.Count means "at the live draft"
     private bool _walking;       // a walk is in progress, so the anchor and view stand
     private string _draft = "";
+    private string? _handed;     // what the last step gave the caller; see Previous
 
     public CommandHistory(int capacity = 200)
     {
@@ -76,9 +85,22 @@ public sealed class CommandHistory
     /// <summary>Up arrow: step to the previous command. <paramref name="currentText"/> is the
     /// box contents, saved as the draft when navigation begins; <paramref name="prefix"/> is
     /// what to filter by (the text before the caret — empty for the whole history). Null when
-    /// nothing matches, which leaves the box alone.</summary>
+    /// nothing matches, which leaves the box alone.
+    ///
+    /// <para><b>The caller must pass what is actually in the box.</b> That is how an edit ends
+    /// a walk: if the text is no longer what the last step handed back, the user has changed
+    /// it, and the next step re-anchors on what is there now.</para>
+    ///
+    /// <para>It is asked here, of the text, rather than inferred from the box's TextChanged
+    /// event — and that is a fix, not a preference. Putting a recalled command in the box
+    /// raises TextChanged too, so telling the two apart needed a flag held across the write,
+    /// and a two-way bound box does not necessarily raise it inside that window. When it
+    /// landed late, every Up after the first re-anchored on the command it had just recalled:
+    /// the view collapsed to that one entry and the walk appeared to stop dead after a single
+    /// step. Comparing the text cannot go out of step with itself.</para></summary>
     public string? Previous(string currentText, string? prefix = null)
     {
+        if (_walking && !string.Equals(currentText, _handed, StringComparison.Ordinal)) Resync();
         if (!_walking)
         {
             _draft = currentText;
@@ -88,16 +110,22 @@ public sealed class CommandHistory
             _walking = true;
         }
         if (_index > 0) _index--;
-        return _view[_index];
+        _handed = _view[_index];
+        return _handed;
     }
 
     /// <summary>Down arrow: step to the next command, or back to the saved draft at the end.
-    /// Null when not currently navigating.</summary>
-    public string? Next()
+    /// Null when not currently navigating. <paramref name="currentText"/> is the box contents
+    /// and ends the walk when it is no longer what the last step handed back, exactly as in
+    /// <see cref="Previous"/>; pass null to skip that check.</summary>
+    public string? Next(string? currentText = null)
     {
+        if (_walking && currentText is not null
+            && !string.Equals(currentText, _handed, StringComparison.Ordinal)) Resync();
         if (!_walking || _index >= _view.Count) return null;
         _index++;
-        return _index == _view.Count ? _draft : _view[_index];
+        _handed = _index == _view.Count ? _draft : _view[_index];
+        return _handed;
     }
 
     /// <summary>The newest command that starts with <paramref name="prefix"/> and is longer
@@ -115,13 +143,16 @@ public sealed class CommandHistory
         return null;
     }
 
-    /// <summary>Drop back to the live end and forget the walk's filter. Call when the user
-    /// edits the input directly — the next Up should anchor on what is there NOW.</summary>
+    /// <summary>Drop back to the live end and forget the walk's filter, so the next Up anchors
+    /// on whatever is in the box then. <see cref="Previous"/> does this for itself when the
+    /// text has been edited; this is for the caller that knows the walk is over for another
+    /// reason — a command was submitted, or the history was cleared.</summary>
     public void Resync()
     {
         _walking = false;
         _view.Clear();
         _index = 0;
+        _handed = null;
     }
 
     public void Clear()

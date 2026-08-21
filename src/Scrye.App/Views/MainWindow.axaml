@@ -132,7 +132,7 @@
                                                  PlaceholderText="type a command and press Enter…"
                                                  Classes="terminalinput"
                                                  AutomationProperties.Name="Command input"
-                                                 KeyDown="OnInputKeyDown" TextChanged="OnInputTextChanged" />
+                                                 KeyDown="OnInputKeyDown" />
                                     </DockPanel>
 
                                     <!-- running-sequence status strip (visible while a sequence runs) -->

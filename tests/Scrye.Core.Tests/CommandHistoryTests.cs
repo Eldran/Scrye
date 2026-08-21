@@ -5,6 +5,11 @@ namespace Scrye.Core.Tests;
 
 public class CommandHistoryTests
 {
+    // The history decides a walk is over by comparing the text it is handed against what it
+    // last gave back, so a caller that does not feed the recall in is saying "the box was
+    // cleared". These walks therefore pass the last result back, exactly as the input box does.
+
+
     [Fact]
     public void AddSkipsEmptyAndConsecutiveDuplicates()
     {
@@ -23,8 +28,8 @@ public class CommandHistoryTests
         var h = new CommandHistory();
         h.Add("a"); h.Add("b");
         Assert.Equal("b", h.Previous(""));
-        Assert.Equal("a", h.Previous(""));
-        Assert.Equal("a", h.Previous(""));   // clamped
+        Assert.Equal("a", h.Previous("b"));
+        Assert.Equal("a", h.Previous("a"));   // clamped
     }
 
     [Fact]
@@ -33,10 +38,10 @@ public class CommandHistoryTests
         var h = new CommandHistory();
         h.Add("a"); h.Add("b");
         Assert.Equal("b", h.Previous("draft"));   // begin nav, save draft
-        Assert.Equal("a", h.Previous("draft"));
-        Assert.Equal("b", h.Next());
-        Assert.Equal("draft", h.Next());          // back to the live draft
-        Assert.Null(h.Next());                    // nothing past the end
+        Assert.Equal("a", h.Previous("b"));
+        Assert.Equal("b", h.Next("a"));
+        Assert.Equal("draft", h.Next("b"));       // back to the live draft
+        Assert.Null(h.Next("draft"));             // nothing past the end
     }
 
     [Fact]

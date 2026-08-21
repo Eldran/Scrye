@@ -25,15 +25,21 @@ Each connected world gets its own tab with an output pane and a command line.
 - **Output pane** — the MUD's text, with ANSI colors, MXP links, and clickable command links. It has its own scrollback; scroll up to read history, and it snaps back to the bottom on new output.
   Drag to select, then **Ctrl+C** or right-click to copy. The menu also offers **Copy as ANSI** and **Copy as HTML**, which keep the colours — useful for pasting a fight into a forum or a bug report. **Ctrl+A** selects the whole scrollback.
 - **Command line** — type a command and press **Enter** to send it. Handy keys:
-  - **Up / Down** — walk back and forth through command history.
+  - **Up / Down** — walk back and forth through the whole command history. The same command
+    never comes up twice, however many times you ran it.
+  - **Ctrl+Up / Alt+Up** (and Down) — the same walk, **filtered by what you have already
+    typed**: type `vtrade `, hold Ctrl or Alt, and press Up, and you cycle only the vtrade
+    commands. The filter is the text *before the caret*, so you can park mid-line and filter
+    on a stem, and it is fixed when the walk starts — editing the box starts a fresh one.
+    Alt+Up is MUSHclient's key for this; Ctrl+Up does the same thing.
   - **Tab** — complete the word under the caret from words seen in the output.
-  - **Up / Down** — recall previous commands, **filtered by what you have already typed**.
-    Type `vtrade ` and press Up and you cycle only the vtrade commands; an empty box still
-    cycles everything. The filter is fixed when you start walking, and the same command never
-    comes up twice. **Ctrl+Up** ignores the filter when you want the whole history anyway.
-  - **PgUp / PgDown** — page through the scrollback. Works from the command line as well
-    as from the output pane, so you never have to click into the output first. One line of
-    overlap between pages; paging back to the bottom resumes following the newest lines.
+  - **PgUp / PgDown** — page through the scrollback. They work from anywhere in the window
+    — the command line, the output pane, a HUD panel — so you never have to click into the
+    output first. Inside a capture pane they page *that* pane, which keeps its own place.
+    The exceptions are controls with pages of their own (a multi-line box, a list, the world
+    tree) and the Settings/Edit-world overlays, which keep the keys while they are open.
+    One line of overlap between pages; paging back to the bottom resumes following the
+    newest lines.
   - **Ctrl+F** — open the find bar to search the scrollback.
   - **Esc** — clear the input.
   - Global Settings → Appearance has **Keep the last command in the input box**: after Enter
