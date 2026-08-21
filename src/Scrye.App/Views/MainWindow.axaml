@@ -1,4 +1,4 @@
-<Window xmlns="https://github.com/avaloniaui"
+﻿<Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Scrye.App.ViewModels"
         xmlns:controls="using:Scrye.App.Controls"
@@ -978,6 +978,8 @@
                                 <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
                                     <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
                                     <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
+                                    <CheckBox Content="GMCP" IsChecked="{Binding Editor.EnableGmcp}"
+                                              ToolTip.Tip="Out-of-band JSON: vitals, room, combat, chat. Negotiated automatically; turn it off to see what a HUD or plugin is getting from MIP alone." />
                                     <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
                                               ToolTip.Tip="Clickable links + inline markup when the server supports it" />
                                     <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"

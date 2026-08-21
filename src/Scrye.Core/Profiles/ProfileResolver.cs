@@ -43,6 +43,7 @@ public static class ProfileResolver
             if (layer.EncodingName is not null) world.EncodingName = layer.EncodingName;
             if (layer.TerminalColumns is not null) world.TerminalColumns = layer.TerminalColumns.Value;
             if (layer.TerminalRows is not null) world.TerminalRows = layer.TerminalRows.Value;
+            if (layer.EnableGmcp is not null) world.EnableGmcp = layer.EnableGmcp.Value;
             if (layer.EnableMip is not null) world.EnableMip = layer.EnableMip.Value;
             if (layer.MipClientId is not null) world.MipClientId = layer.MipClientId;
             if (layer.EnableMxp is not null) world.EnableMxp = layer.EnableMxp.Value;

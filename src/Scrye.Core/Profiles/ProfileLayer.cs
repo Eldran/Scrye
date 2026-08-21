@@ -25,6 +25,7 @@ public sealed class ProfileLayer
     public string? EncodingName { get; set; }
     public int? TerminalColumns { get; set; }
     public int? TerminalRows { get; set; }
+    public bool? EnableGmcp { get; set; }
     public bool? EnableMip { get; set; }
     public string? MipClientId { get; set; }
     public bool? EnableMxp { get; set; }

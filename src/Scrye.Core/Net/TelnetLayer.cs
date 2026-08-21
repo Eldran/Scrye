@@ -41,6 +41,16 @@ public sealed class TelnetLayer
     public event Action<byte[]>? SendData;
     /// <summary>An out-of-band GMCP message: (package, json-or-empty).</summary>
     public event Action<string, string>? GmcpReceived;
+
+    /// <summary>Whether to accept GMCP when the server offers it. False answers DONT, which is
+    /// what makes "turn GMCP off for this world" mean anything — a client that negotiates and
+    /// then ignores the data is still costing the server the work of sending it.</summary>
+    public bool GmcpSupported { get; set; } = true;
+
+    /// <summary>GMCP has just been negotiated. The handshake (<c>Core.Hello</c> and the
+    /// subscription) hangs off this: until something subscribes, a server that only sends
+    /// packages you asked for sends nothing at all.</summary>
+    public event Action? GmcpEnabled;
     /// <summary>Parsed MSSP server-status variables.</summary>
     public event Action<IReadOnlyDictionary<string, string>>? MsspReceived;
     /// <summary>Server ECHO state changed. true = server echoes (client should mask local input).</summary>
@@ -165,7 +175,10 @@ public sealed class TelnetLayer
             case OPT_ECHO: SendCmd(DO, option); ServerEchoChanged?.Invoke(true); break;
             case OPT_SGA: SendCmd(DO, option); break;
             case OPT_MSSP: SendCmd(DO, option); break;
-            case OPT_GMCP: SendCmd(DO, option); break;
+            case OPT_GMCP:
+                if (GmcpSupported) { SendCmd(DO, option); GmcpEnabled?.Invoke(); }
+                else SendCmd(DONT, option);
+                break;
             case OPT_CHARSET: SendCmd(DO, option); break;
             case OPT_MCCP2:
                 if (MccpSupported) SendCmd(DO, option);                 // compression starts at SB 86 SE

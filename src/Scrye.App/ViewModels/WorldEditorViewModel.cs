@@ -81,6 +81,11 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public bool UseTls { get => _useTls; set => SetField(ref _useTls, value); }
     private bool _enableMip;
     public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
+
+    // Default ON, and stored as null when on, so a world that never thought about GMCP still
+    // gets it: the option is negotiation-gated, so it costs nothing where the server is silent.
+    private bool _enableGmcp = true;
+    public bool EnableGmcp { get => _enableGmcp; set => SetField(ref _enableGmcp, value); }
     private bool _enableMxp;
     public bool EnableMxp { get => _enableMxp; set => SetField(ref _enableMxp, value); }
     private bool _enableMsp;
@@ -150,6 +155,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _encoding = _layer.EncodingName ?? (kind == LayerKind.Mud ? "utf-8" : "");
         _useTls = _layer.UseTls ?? false;
         _enableMip = _layer.EnableMip ?? false;
+        _enableGmcp = _layer.EnableGmcp ?? true;
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
         _enableMsp = _layer.EnableMsp ?? true;   // on by default; !!SOUND lines are unambiguous
         _relayChannels = _layer.RelayChannels ?? "";   // blank = inherit (resolves to "Tell")
@@ -227,6 +233,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.UseTls = UseTls ? true : null;
         _layer.AcceptInvalidCertificates = UseTls ? true : null;   // accept self-signed when TLS on
         _layer.EnableMip = EnableMip ? true : null;
+        _layer.EnableGmcp = EnableGmcp ? null : false;   // on is the default; only "off" is a choice
         _layer.EnableMxp = EnableMxp ? null : false;   // default-on: only an explicit OFF is stored
         _layer.EnableMsp = EnableMsp ? null : false;   // same default-on rule
         // Blank means inherit, so it stores null. "none" is how you say an explicit OFF that a

@@ -41,6 +41,15 @@ public sealed class WorldProfile
     /// Harmless when the server never sends them.</summary>
     public bool EnableMsp { get; set; } = true;
 
+    /// <summary>Accept GMCP (telnet option 201: out-of-band JSON — vitals, room, combat, chat)
+    /// and subscribe to it when the server offers it. On by default and harmless when the server
+    /// does not speak it, since nothing happens until the option is negotiated.
+    ///
+    /// <para>Worth being able to turn OFF on 3Scapes specifically: GMCP and MIP carry much the
+    /// same data, and having a switch is what makes it possible to tell which one a HUD or a
+    /// plugin is actually being driven by.</para></summary>
+    public bool EnableGmcp { get; set; } = true;
+
     /// <summary>Enable the 3Kingdoms/3Scapes in-band MIP protocol (handshake + frame parsing).</summary>
     public bool EnableMip { get; set; } = false;
     /// <summary>5-digit MIP client id (generated on first connect if empty; persisted with the profile).</summary>

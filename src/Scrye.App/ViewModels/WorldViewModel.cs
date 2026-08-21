@@ -1201,6 +1201,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".tts": HandleTtsCommand(arg); return true;
             case ".companion": HandleCompanionCommand(arg); return true;
             case ".mip": HandleMipCommand(arg); return true;
+            case ".gmcp": HandleGmcpCommand(arg); return true;
             case ".import": HandleImportCommand(arg); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
@@ -1208,6 +1209,85 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 return true;
             default: return false;
         }
+    }
+
+    /// <summary>
+    /// <c>.gmcp</c> — what was subscribed to, what the server said it supports, and what has
+    /// actually arrived. <c>.gmcp &lt;package&gt;</c> prints the whole of that package's last
+    /// payload; <c>.gmcp raw on</c> echoes every message as it lands; <c>.gmcp fields</c>
+    /// writes a markdown report of every package and every field seen.
+    ///
+    /// <para>The first evening of a protocol going live is when this is worth the most, and it
+    /// is also when nothing else can help: a package that is advertised but never sent, a name
+    /// spelled a shade differently than a plugin expects, and a subscription that never landed
+    /// all look identical from the output pane. Each needs a different fix.</para>
+    /// </summary>
+    private void HandleGmcpCommand(string arg)
+    {
+        string a = arg.Trim();
+        string lower = a.ToLowerInvariant();
+
+        if (lower is "raw on" or "raw off")
+        {
+            bool on = lower.EndsWith("on");
+            _session.Post(() => _session.GmcpAudit.Raw = on);
+            AppendSystem(on
+                ? "GMCP raw echo ON - every package is printed as it arrives"
+                : "GMCP raw echo off");
+            return;
+        }
+
+        if (lower is "fields" or "fields save")
+        {
+            _session.Post(() =>
+            {
+                IReadOnlyList<string> lines = _session.GmcpAudit.FieldReport(Title);
+                string? written = null, error = null;
+                try
+                {
+                    string dir = MudSession.DefaultLogDirectory();
+                    Directory.CreateDirectory(dir);
+                    // Named after the world for the same reason the MIP report is: the point is
+                    // running it on more than one character and comparing.
+                    string safe = string.Join("_", Title.Split(Path.GetInvalidFileNameChars()));
+                    written = Path.Combine(dir, $"gmcp-fields-{safe}-{DateTime.Now:yyyyMMdd-HHmmss}.md");
+                    File.WriteAllLines(written, lines);
+                }
+                catch (Exception ex) { error = ex.Message; written = null; }
+                Dispatcher.UIThread.Post(() => AppendSystem(written is not null
+                    ? $"GMCP field report written to {written}"
+                    : $"could not write the GMCP field report: {error}"));
+            });
+            return;
+        }
+
+        if (a.Length == 0)
+        {
+            _session.Post(() =>
+            {
+                IReadOnlyList<string> lines = _session.GmcpAudit.Report();
+                Dispatcher.UIThread.Post(() => { foreach (string l in lines) AppendSystem(l); });
+            });
+            return;
+        }
+
+        // anything else is a package name
+        _session.Post(() =>
+        {
+            Scrye.Core.Gmcp.GmcpPackageSeen? p = _session.GmcpAudit.Find(a);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (p is null)
+                {
+                    AppendSystem($"no GMCP package '{a}' has arrived on this connection");
+                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields");
+                    return;
+                }
+                AppendSystem($"-- {p.Package} -- {p.Count} message(s), last {p.LastAt:HH:mm:ss}");
+                foreach (string l in Scrye.Core.Gmcp.GmcpAudit.Pretty(p.Last).Split('\n'))
+                    AppendSystem(l.TrimEnd('\r'));
+            });
+        });
     }
 
     /// <summary>

@@ -334,6 +334,69 @@ Three things it deliberately does not do:
   next session.
 - **Your own outgoing tells don't relay.** You know what you just sent.
 
+## GMCP — structured data from the MUD
+
+GMCP is out-of-band JSON: your vitals, who is attacking you, the room you are in, chat lines and
+guild status, sent alongside the ordinary game text. None of it changes gameplay. Scrye
+negotiates it automatically (telnet option 201) and there is nothing to turn on in the game.
+
+**Subscribing is the part that matters**, and it is the part that is easy to get wrong. A server
+that sends only the packages you asked for will send *nothing at all* to a client that agrees to
+the option and then stays quiet — which looks exactly like a server that has no GMCP. So on
+negotiation Scrye sends `Core.Hello` and then subscribes to the four roots 3Scapes publishes:
+
+```
+Core.Supports.Set ["Char 1","Room 1","Comm 1","Guild 1"]
+```
+
+Roots rather than exact package names, so a package added later starts arriving without a client
+release. If no data has appeared a few seconds after subscribing, Scrye tries the bare
+`Core.Supports` spelling once and says so in the output — 3Scapes' help text and the GMCP
+specification name the mechanism slightly differently, and the retry turns a puzzling silence
+into one line naming what happened.
+
+### Seeing what actually arrives — `.gmcp`
+
+| Command | What it does |
+|---|---|
+| `.gmcp` | Whether the option was negotiated, what was subscribed to, what the server answered with `Core.Supported`, and every package that has arrived with a count and a one-line sample. |
+| `.gmcp <package>` | The whole of that package's last payload, pretty-printed. Case-insensitive, so `.gmcp char.vitals` is fine. |
+| `.gmcp raw on` / `off` | Echo every message into the output as it lands. Noisy on purpose — this is the one to run for a few minutes the first time a feed goes live. |
+| `.gmcp fields` | Write a markdown report of every package, every field, and the raw payloads, into the log folder. The artefact worth keeping from a first session: it says what the server *actually* sends, which is the only thing worth writing a plugin against. |
+
+The three ways a feed can be silent — never negotiated, negotiated but never subscribed, and
+subscribed but nothing has changed yet — look identical from the output pane and need different
+fixes, so `.gmcp` names which one it is rather than making you guess.
+
+### What it feeds
+
+Every package lands in the **State** inspector under its own name (`char.vitals.hp`,
+`room.info.area`), and the ones with a MIP equivalent are *also* copied onto the paths MIP
+already feeds, so a HUD panel or a plugin written against `character.health.current` works from
+either protocol without knowing which one it is talking to:
+
+| GMCP | also lands at |
+|---|---|
+| `Char.Vitals` hp / maxhp / sp / maxsp | `character.health.current` / `.max`, `character.spell.current` / `.max` |
+| `Char.Vitals` enc / coffin / coffin_max | `character.encumbrance`, `character.coffin.current` / `.max` *(no MIP equivalent)* |
+| `Char.Combat` attacker / attacker_hp / rounds | `enemy.name`, `enemy.health`, `combat.round` |
+| `Char.Combat` target | `combat.target` *(no MIP equivalent)* |
+| `Room.Info` num / name / area / exits | `room.num` / `.name` / `.area` / `.exits` |
+
+`Room.Contents`, `Room.Map`, `Comm.Channel.Text` and the `Guild.*` packages have no MIP
+counterpart and stay on their own paths; plugins read them with `scrye.onGmcp("Room.Contents",
+fn)` or from the state tree.
+
+Two things worth knowing, both from 3Scapes' own help: packages flow **only while subscribed**
+and **only when their values change**, and the Room packages are sent when you *enter* a room —
+`look` does not resend them. A quiet feed is often just a quiet moment.
+
+### Turning it off
+
+Per world, in the world editor (**GMCP**, on by default). It is worth having the switch on
+3Scapes specifically: GMCP and MIP carry much the same data, and turning one off is how you find
+out which one a panel or a plugin is actually being driven by.
+
 ## MXP — what the server can do
 
 MXP is markup a MUD can send inline: clickable commands, links, colours, and a few things that

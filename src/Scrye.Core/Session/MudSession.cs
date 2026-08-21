@@ -180,10 +180,16 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _connection.StateChanged += s => _mailbox.Writer.TryWrite(new SessionMessage.ConnectionStateChanged(s));
 
         _telnet.SendData += bytes => _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
+        _telnet.GmcpSupported = profile.EnableGmcp;
+        _telnet.GmcpEnabled += () =>
+            _mailbox.Writer.TryWrite(new SessionMessage.Invoke(OnGmcpNegotiated));
         _telnet.GmcpReceived += (pkg, json) =>
         {
             _events.Emit(SessionEventKind.Gmcp, json, pkg);
+            GmcpAudit.Observe(pkg, json);
             if (!string.IsNullOrWhiteSpace(json)) _state.SetJson(pkg, json);   // GMCP → structured state
+            MapGmcpState(pkg);
+            if (GmcpAudit.Raw) RaiseLine(Line.FromText($"[GMCP] {pkg} {json}", SysColour));
             GmcpReceived?.Invoke(pkg, json);
         };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
@@ -687,6 +693,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                             TickIdleGuard();
                             _automation.Tick(1.0, this);
                             _sequences.Tick(1.0);
+                            GmcpTick();
                             MipTick();
                         }
                         Ticked?.Invoke(TickIntervalSeconds);
@@ -976,6 +983,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 CancelReconnect();               // a successful connect ends any retry loop
                 _mccp?.Dispose(); _mccp = null;  // compression renegotiates per connection
                 _telnet.ResetCompression();
+                ResetGmcpForConnect();                        // GMCP re-negotiates per connection
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 // arm auto-login for this (re)connect when the profile carries a username
                 _autoLogin = Profile.Username.Length > 0
@@ -997,6 +1005,151 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         }
         StateChanged?.Invoke(state);
     }
+
+    // ---- GMCP ----------------------------------------------------------------
+
+    /// <summary>What the audit and <c>.gmcp</c> read.</summary>
+    public Gmcp.GmcpAudit GmcpAudit { get; } = new();
+
+    /// <summary>
+    /// The roots we subscribe to. Roots rather than exact packages, so a server that adds
+    /// <c>Char.Something</c> later starts sending it without a client release — GMCP's own
+    /// reason for allowing "Char 1" to stand for the family.
+    ///
+    /// <para>These four are what 3Scapes documents: Char (vitals, combat), Room (info,
+    /// contents, map), Comm (chat) and Guild (identity, state, guild-specific extras).
+    /// Subscribing to everything is the right default for a client with an inspector: a
+    /// package you did not ask for is invisible, and invisible is the hardest kind of missing
+    /// data to diagnose.</para>
+    /// </summary>
+    public static readonly string[] GmcpPackages = { "Char 1", "Room 1", "Comm 1", "Guild 1" };
+
+    private bool _gmcpHandshakeSent;
+    private int _gmcpSecondsSinceSubscribe = -1;
+    private bool _gmcpRetriedVerb;
+
+    /// <summary>
+    /// GMCP has been negotiated: say hello and subscribe.
+    ///
+    /// <para>The subscription is the part that matters. A server that only sends the packages
+    /// you asked for will send NOTHING to a client that negotiates the option and then stays
+    /// quiet — which looks exactly like a server that does not support GMCP, and is why this
+    /// is done here rather than left to a plugin.</para>
+    /// </summary>
+    private void OnGmcpNegotiated()
+    {
+        GmcpAudit.Negotiated = true;
+        if (_gmcpHandshakeSent) return;
+        _gmcpHandshakeSent = true;
+
+        _telnet.SendGmcp("Core.Hello",
+            $"{{\"client\":\"Scrye\",\"version\":\"{ClientVersion}\"}}");
+        SendGmcpSubscription("Core.Supports.Set");
+        RaiseLine(Line.FromText("[GMCP] negotiated - subscribed to "
+                                + string.Join(", ", GmcpPackages), SysColour));
+    }
+
+    private void SendGmcpSubscription(string verb)
+    {
+        string payload = "[" + string.Join(",", GmcpPackages.Select(p => $"\"{p}\"")) + "]";
+        _telnet.SendGmcp(verb, payload);
+        GmcpAudit.SubscriptionSent = payload;
+        GmcpAudit.SubscriptionVerb = verb;
+        _gmcpSecondsSinceSubscribe = 0;
+    }
+
+    /// <summary>
+    /// One second of the GMCP watchdog, driven from the same tick as the MIP one.
+    ///
+    /// <para>It exists for a single doubt. <c>Core.Supports.Set</c> is the spelling the GMCP
+    /// specification gives and every client uses; 3Scapes' own help text calls the mechanism
+    /// "Core.Supports". If those are two names for the same thing, nothing here ever fires.
+    /// If they are not, the alternative goes out after a few seconds of silence and says so,
+    /// which turns "GMCP does not work" into one line naming exactly what happened.</para>
+    /// </summary>
+    private void GmcpTick()
+    {
+        if (!Profile.EnableGmcp || _gmcpSecondsSinceSubscribe < 0) return;
+        if (GmcpAudit.AnyData) { _gmcpSecondsSinceSubscribe = -1; return; }   // it worked
+        _gmcpSecondsSinceSubscribe++;
+        if (_gmcpSecondsSinceSubscribe < 5 || _gmcpRetriedVerb) return;
+
+        _gmcpRetriedVerb = true;
+        RaiseLine(Line.FromText(
+            "[GMCP] no reply to Core.Supports.Set - trying the bare 'Core.Supports' spelling",
+            SysColour));
+        SendGmcpSubscription("Core.Supports");
+    }
+
+    private void ResetGmcpForConnect()
+    {
+        GmcpAudit.Reset();
+        _gmcpHandshakeSent = false;
+        _gmcpRetriedVerb = false;
+        _gmcpSecondsSinceSubscribe = -1;
+    }
+
+    /// <summary>
+    /// Mirror the GMCP packages onto the state paths MIP already feeds, so a HUD panel or a
+    /// plugin written against <c>character.health.current</c> lights up from either protocol
+    /// without knowing which one it is talking to.
+    ///
+    /// <para><see cref="StateStore.SetJson"/> has already put the payload at its own dotted
+    /// path (<c>char.vitals.hp</c>); this is the second, compatibility copy. Both are kept:
+    /// the raw tree is the truth about what the server sent, and this one is the contract
+    /// everything already written depends on.</para>
+    ///
+    /// <para>Only fields whose MEANING matches are mirrored. GMCP's <c>attacker</c> is who is
+    /// attacking you and MIP's <c>enemy_name</c> is who you are fighting; in practice on
+    /// 3Scapes those are the same creature, and every consumer uses it as "am I in combat and
+    /// with what", which is true of both. <c>Char.Combat</c>'s <c>target</c> has no MIP
+    /// equivalent at all and keeps its own path rather than being forced into one.</para>
+    /// </summary>
+    private void MapGmcpState(string package)
+    {
+        void Copy(string from, string to)
+        {
+            StateValue v = _state.Get(from);
+            if (!v.IsNull) _state.Set(to, v);
+        }
+
+        switch (package.ToLowerInvariant())
+        {
+            case "char.vitals":
+                Copy("char.vitals.hp", "character.health.current");
+                Copy("char.vitals.maxhp", "character.health.max");
+                Copy("char.vitals.sp", "character.spell.current");
+                Copy("char.vitals.maxsp", "character.spell.max");
+                Copy("char.vitals.enc", "character.encumbrance");
+                Copy("char.vitals.coffin", "character.coffin.current");
+                Copy("char.vitals.coffin_max", "character.coffin.max");
+                break;
+
+            case "char.combat":
+                // Combat ending arrives as one EMPTY snapshot, so the mirror has to be able to
+                // clear as well as set: SetJson has already removed the leaves this reads, and
+                // Get returns null for them, which writes an empty name -- the "no enemy" that
+                // every consumer already tests for.
+                _state.Set("enemy.name", _state.Get("char.combat.attacker") is { IsNull: false } a
+                    ? a : StateValue.Str(""));
+                Copy("char.combat.attacker_hp", "enemy.health");
+                Copy("char.combat.rounds", "combat.round");
+                Copy("char.combat.target", "combat.target");
+                break;
+
+            case "room.info":
+                Copy("room.info.num", "room.num");
+                Copy("room.info.name", "room.name");
+                Copy("room.info.area", "room.area");
+                Copy("room.info.exits", "room.exits");
+                break;
+        }
+    }
+
+    /// <summary>The version reported in <c>Core.Hello</c>. Read off the assembly so it cannot
+    /// drift from what shipped.</summary>
+    public static string ClientVersion =>
+        typeof(MudSession).Assembly.GetName().Version?.ToString(3) ?? "0";
 
     // ---- MIP handshake -------------------------------------------------------
 
