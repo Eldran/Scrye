@@ -12,6 +12,12 @@ public interface IWorldActions
     /// <summary>Send a line to the MUD.</summary>
     void Send(string text);
 
+    /// <summary>Run a line through the client's own command pipeline -- plugin aliases, then
+    /// profile aliases, then the MUD if nothing claimed it -- so a rule can invoke a plugin
+    /// command. The default degrades to <see cref="Send"/>, which is what a host without a
+    /// pipeline (headless, tests) can honestly do with it.</summary>
+    void SendToClient(string text) => Send(text);
+
     /// <summary>Echo a line into the local output.</summary>
     void Echo(string text);
 

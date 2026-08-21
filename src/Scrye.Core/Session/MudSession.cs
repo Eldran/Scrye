@@ -231,6 +231,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
         // sequences: emitted commands go to the MUD via the mailbox; progress surfaces to the UI.
         _sequences.Send += text => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
+        _sequences.SendClient += RunClientCommand;   // ">cs pause" steps go through the pipeline
         _sequences.StatusChanged += s => SequenceStatusChanged?.Invoke(s);
 
         _mip.MessageReceived += m =>
@@ -618,6 +619,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public void RequestNotify(Line line) => NotifyRequested?.Invoke(line);
 
     void IWorldActions.Send(string text) => _mailbox.Writer.TryWrite(new SessionMessage.SendText(text));
+    void IWorldActions.SendToClient(string text) => RunClientCommand(text);
     void IWorldActions.Echo(string text) => Echo(text);
     string? IWorldActions.GetVariable(string name) => _variables.Get(name);
     void IWorldActions.SetVariable(string name, string value)
@@ -884,6 +886,44 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             case "pause": _sequences.Pause(); break;
             case "resume": _sequences.Resume(); break;
         }
+    }
+
+    /// <summary>How deep the client pipeline is currently nested. Only ever touched on the
+    /// session loop, which is single-threaded, so a plain field is the whole story.</summary>
+    private int _clientDepth;
+
+    /// <summary>How many hops a rule-driven command may take before we call it a loop. Five is
+    /// past anything a person composes on purpose (an alias reaching a plugin that answers with
+    /// another alias is two) and short enough that a runaway stops before it is noticed.</summary>
+    private const int MaxClientDepth = 5;
+
+    /// <summary>
+    /// Run <paramref name="text"/> through the client's own command pipeline -- plugin aliases,
+    /// then profile aliases, then the MUD if nothing claimed it -- on behalf of a rule or a
+    /// sequence step whose destination is <see cref="SendTo.Client"/>. This is what lets a
+    /// trigger say <c>cs pause</c> and have the chaos-sea plugin hear it.
+    ///
+    /// <para>Deliberately <see cref="RunInput"/> and not <see cref="HandleInput"/>: no idle
+    /// poke, no "&gt;" transcript line, no ';' split. A rule firing is not a person at the
+    /// keyboard, and the whole point of the idle guard is that a bot must never look like one.
+    /// The separator was already applied to the rule's own template, where the author typed it.</para>
+    ///
+    /// <para>Runs inline rather than queueing, so a rule's commands leave in the order the rules
+    /// fired: a queued hop would let a later plain send overtake an earlier client one. The
+    /// depth cap is what makes inlining safe -- an alias that produces its own pattern stops
+    /// with a message instead of recursing until the stack gives out.</para>
+    /// </summary>
+    private void RunClientCommand(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (_clientDepth >= MaxClientDepth)
+        {
+            Echo($"[scrye] command loop stopped after {MaxClientDepth} hops - '{text}' was not run");
+            return;
+        }
+        _clientDepth++;
+        try { RunInput(text); }
+        finally { _clientDepth--; }
     }
 
     private void HandleInput(string text, bool split = true)

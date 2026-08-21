@@ -175,20 +175,29 @@ public sealed class AutomationEngine
     /// handled it (the raw input should NOT be sent); false if it should pass through.</summary>
     public bool ProcessInput(string input, IWorldActions ctx)
     {
+        // Iterate a snapshot, and retire one-shots by identity rather than by index. An alias
+        // whose destination is SendTo.Client runs its command back through the pipeline, which
+        // re-enters this method; indexing the live list across that call would let a NESTED
+        // one-shot removal shift the outer loop, and RemoveAt(i) would then drop the wrong
+        // alias. The cost is that an alias added by a nested call does not get to match this
+        // same input -- which is the behaviour you want anyway, and matches how the plugin
+        // manager drains its quarantine after a dispatch rather than during one.
         bool consumed = false;
-        for (int i = 0; i < _aliases.Count; i++)
+        Als[] pass = _aliases.ToArray();
+        for (int i = 0; i < pass.Length; i++)
         {
-            Als a = _aliases[i];
-            if (!a.Enabled) continue;
+            Als a = pass[i];
+            if (!a.Enabled || !_aliases.Contains(a)) continue;   // disabled, or already retired
 
             MatchResult? m = a.Pattern.Match(input);
             if (m is null) continue;
 
+            if (a.Def.OneShot) _aliases.Remove(a);   // retire BEFORE firing: a Client send that
+                                                     // comes back round must not match it again
             string action = Fire(a.Def.SendTo, a.Def.Send, a.Def.Variable, a.Def.Script, m, ctx);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Alias, a.Def.Name, a.Def.Group, input, action));
             consumed = true;
 
-            if (a.Def.OneShot) { _aliases.RemoveAt(i); i--; }
             if (!a.Def.KeepEvaluating) break;
         }
         return consumed;
@@ -246,12 +255,34 @@ public sealed class AutomationEngine
             case SendTo.Command: ForEachLine(text, ctx.Echo); break;
             case SendTo.Variable when !string.IsNullOrEmpty(variable): ctx.SetVariable(variable!, text); break;
             case SendTo.Script: break; // handled below
+
+            // The client pipeline. Splits on ';' the way a typed line does -- but it splits the
+            // TEMPLATE, before expansion. A ';' the author typed in the Send box is theirs and
+            // means "two commands"; a ';' that arrives inside %1 came from the MUD, and the MUD
+            // does not get to fan one rule out into several client commands. Same reasoning as
+            // MudSession.SubmitLiteral keeping an MXP link away from the separator.
+            case SendTo.Client when !string.IsNullOrEmpty(send):
+                ForEachLine(send!, template =>
+                {
+                    IReadOnlyList<string>? parts = CommandSeparator.Split(template);
+                    if (parts is null) { RunClient(template, m, ctx); return; }
+                    for (int i = 0; i < parts.Count; i++) RunClient(parts[i], m, ctx);
+                });
+                break;
         }
 
         if (!string.IsNullOrEmpty(script))
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
         return Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
+    }
+
+    /// <summary>Expand one client-pipeline command template and run it. Empty after
+    /// expansion means the author asked for nothing, and gets nothing.</summary>
+    private void RunClient(string template, MatchResult? m, IWorldActions ctx)
+    {
+        string one = Template.Expand(template, m, _vars);
+        if (one.Length > 0) ctx.SendToClient(one);
     }
 
     /// <summary>Apply a trigger's highlight (if any) to the line being processed, via
@@ -305,6 +336,8 @@ public sealed class AutomationEngine
             SendTo.World => "send: (empty)",
             SendTo.Output => $"echo: {FirstLine(text)}",
             SendTo.Command => $"command: {FirstLine(text)}",
+            SendTo.Client when text.Length > 0 => $"run: {FirstLine(text)}",
+            SendTo.Client => "run: (empty)",
             SendTo.Variable when !string.IsNullOrEmpty(variable) => $"var {variable}={text}",
             SendTo.Variable => "var: (no target)",
             SendTo.Script => "",

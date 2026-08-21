@@ -132,11 +132,13 @@ public sealed class MushclientImport
         2 => (SendTo.Output, null),
         8 => (SendTo.World, null),               // command queue: Scrye has one queue
         9 => (SendTo.Variable, null),
+        // 10 lands beside 0/8 rather than under "skipped" because Scrye grew a destination for
+        // it: SendTo.Client runs the text back through plugin and profile aliases.
         12 or 13 or 14 => (SendTo.Script, null), // script engine (13 unqueued, 14 after omit)
         3 => (null, "sends to the status line, which Scrye does not have"),
         4 or 5 or 7 => (null, "sends to the notepad, which Scrye does not have"),
         6 => (null, "writes to the log file, which no Scrye rule can do"),
-        10 => (null, "re-parses its output as a command; Scrye does not re-feed rule output"),
+        10 => (SendTo.Client, null),             // "send to execute": re-parse as a command
         11 => (null, "sends a speedwalk -- use a Scrye sequence (.walk) instead"),
         _ => (null, $"has an unknown send_to value ({sendTo})"),
     };

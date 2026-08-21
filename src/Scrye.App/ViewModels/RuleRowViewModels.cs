@@ -81,6 +81,7 @@ public abstract class RuleRowViewModel : ViewModelBase
                 SendTo.Variable => $"✓ match → set {Variable}={expanded}{wilds}",
                 SendTo.Script => $"✓ match → script {Script}{wilds}",
                 SendTo.Output or SendTo.Command => $"✓ match → echo: {expanded}{wilds}",
+                SendTo.Client => $"✓ match → run as a command: {expanded}{wilds}",
                 _ => $"✓ match → send: {expanded}{wilds}",
             };
         }

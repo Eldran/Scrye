@@ -64,10 +64,60 @@ with one `;` in it.
 
 Two things never split, because a semicolon already means something there: `/` script-console
 lines, where `;` separates Lua statements, and `.walk`/`.seq` lines, where the sequence parser
-owns it. Neither does anything a trigger, timer or plugin sends — the separator is for what a
-person types, and a plugin sending `say a;b` means one command. Clickable links the *MUD*
-sends (MXP `<SEND>`) are also taken literally, for the same reason they never reach the script
-console: one click should be one command.
+owns it. Neither does anything a trigger, timer or plugin sends to the **World** — the
+separator is for what a person types, and a plugin sending `say a;b` means one command. A rule
+whose destination is **Client** is the one exception, and it splits only the template you
+typed into the Send box, never text a wildcard carried in from the MUD (see *Reaching a plugin
+from a rule*). Clickable links the *MUD* sends (MXP `<SEND>`) are taken literally, for the same
+reason they never reach the script console: one click should be one command.
+
+## Reaching a plugin from a rule
+
+A trigger, alias or timer's **Send to** box picks where its text goes, and the choice that
+matters here is **Client**.
+
+**World** is the old behaviour: straight to the MUD, alias pipeline skipped. That is right for
+`flee` and wrong for `cs pause`, because `cs pause` is a command the *chaos-sea plugin* answers
+and 3Scapes has never heard of — sent to the world it comes back "Huh?".
+
+**Client** runs the text the way a line you typed is run: plugin aliases first, then your own
+aliases, then the MUD if nothing claimed it. So the whole pause-do-things-resume shape becomes
+one rule:
+
+```
+Send to:  Client
+Send:     cs pause;open cask;get all;cs resume
+```
+
+The semicolon splits it the same way it splits a typed line, and one command per line works too
+— mix them freely. The split is applied to **what you wrote**, before `%1` and `${var}` are
+filled in, so a semicolon that arrives inside a wildcard is part of the text and not a new
+command. That matters on a trigger: the MUD authored the line your wildcards captured, and the
+MUD does not get to turn one rule of yours into three commands.
+
+Two things a Client send deliberately does *not* do. It does not touch the input box or the
+command history — the box is yours. And it does not poke the **idle guard**: a rule firing is
+not a person at the keyboard, which is the whole reason the guard can tell a bot from you.
+
+If a rule ends up feeding itself — an alias whose command matches its own pattern — it stops
+after five hops and says so in the output rather than looping. Five is well past anything you
+would compose on purpose.
+
+### From a sequence
+
+Sequence steps go straight to the wire, so every speedwalk you have written still behaves
+exactly as it did. Prefix a step with `>` to send it through the client pipeline instead:
+
+```
+.walk >cs pause;open cask;get all;wait 2;>cs resume
+```
+
+Unprefixed steps are untouched, `wait N` still pauses (only when unprefixed — `>wait 2` asks
+the client to run a command spelled `wait 2`), `>cs step x3` repeats, and `>>` is a literal `>`
+for a MUD that wants one.
+
+Macros already work this way and always have: a key binding goes through the same pipeline
+typing does, so `F1 = cs pause` has never needed anything special.
 
 ## Client commands
 
@@ -105,9 +155,10 @@ Most of a hand-written rule set crosses unchanged — `match`, `regexp`, `sequen
 `keep_evaluating`, `one_shot` and `omit_from_output` all mean the same thing in both clients,
 MUSHclient's non-regex `*` and `?` wildcards are the ones Scrye already compiles, and `%1`–`%9`
 in send text needs no rewriting. Triggers, aliases, interval timers, macros and variables all
-come across, and everything the file did not already put in a group is put in one named after
-the file — so it is a single collapsed header in Settings, and a single thing to delete if you
-change your mind. Importing the same file twice updates its rules rather than doubling them.
+come across, including MUSHclient's *Send to Execute* rules, which land on Scrye's **Client**
+destination. Everything the file did not already put in a group is put in one named after the
+file, so it is a single collapsed header in Settings and a single thing to delete if you change
+your mind. Importing the same file twice updates its rules rather than doubling them.
 
 What does **not** cross is listed, with the reason, rather than imported half-working:
 
