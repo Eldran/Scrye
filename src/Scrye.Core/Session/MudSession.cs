@@ -199,13 +199,23 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
         // MXP: negotiated via telnet option 91 → the ANSI parser starts interpreting tags.
         _telnet.MxpSupported = profile.EnableMxp;
+        MxpAudit.Enabled = profile.EnableMxp;
         _telnet.MxpEnabled += () =>
         {
+            MxpAudit.Negotiated = true;
             if (_ansi.MxpEnabled) return;
             _ansi.MxpEnabled = true;
             _events.Emit(SessionEventKind.Notice, "MXP enabled");
-            RaiseLine(Line.FromText("[MXP] enabled", SysColour));
+            RaiseLine(Line.FromText("[MXP] enabled - '.mxp' to see what it sends", SysColour));
         };
+        _ansi.MxpTagSeen += (name, secure, closing) =>
+        {
+            MxpAudit.Observe(name, secure, closing);
+            if (MxpAudit.Raw)
+                RaiseLine(Line.FromText(
+                    $"[MXP] <{(closing ? "/" : "")}{name}>{(secure ? " (secure)" : "")}", SysColour));
+        };
+        _ansi.MxpTagIgnored += name => MxpAudit.Ignored(name);
         _ansi.MxpResponse += reply =>
             _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(_encoding.GetBytes(reply)));
 
@@ -984,6 +994,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 _mccp?.Dispose(); _mccp = null;  // compression renegotiates per connection
                 _telnet.ResetCompression();
                 ResetGmcpForConnect();                        // GMCP re-negotiates per connection
+                MxpAudit.Reset();                             // ...and so does MXP
+                MxpAudit.Enabled = Profile.EnableMxp;
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 // arm auto-login for this (re)connect when the profile carries a username
                 _autoLogin = Profile.Username.Length > 0
@@ -1005,6 +1017,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         }
         StateChanged?.Invoke(state);
     }
+
+    /// <summary>What <c>.mxp</c> reads: which tags the server sends, and which are stripped.</summary>
+    public MxpAudit MxpAudit { get; } = new();
 
     // ---- GMCP ----------------------------------------------------------------
 
@@ -1141,9 +1156,46 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 Copy("room.info.num", "room.num");
                 Copy("room.info.name", "room.name");
                 Copy("room.info.area", "room.area");
-                Copy("room.info.exits", "room.exits");
+                _state.Set("room.exits", StateValue.Str(RoomExitList()));
                 break;
         }
+    }
+
+    /// <summary>
+    /// The compact exit list for <c>room.exits</c>: <c>"e,w"</c>.
+    ///
+    /// <para><c>Room.Info</c>'s exits are an OBJECT — direction to destination room number,
+    /// <c>{"w":3873,"e":0}</c> — which is far more than the help text's "exits" suggested and
+    /// better than anything the room header ever gave us. It is not a leaf, though, so it has
+    /// no single value to mirror; the destinations stay where <see cref="StateStore.SetJson"/>
+    /// put them, at <c>room.info.exits.&lt;dir&gt;</c>, where they are kept correct on the way
+    /// out as well as in. What is mirrored here is the one thing a room header used to give and
+    /// this does not: the plain list of which ways lead somewhere.</para>
+    ///
+    /// <para>A destination of 0 still counts as an exit — it means the way is there and the
+    /// server is not saying where it goes, which is exactly the frontier a mapper wants.
+    /// Compass order rather than the server's, because the store keeps no order and a stable
+    /// one can be compared between rooms.</para>
+    ///
+    /// <para>Compass points FIRST, and the rest after, is not only tidiness: a compass exit
+    /// reverses (north out is south back, almost always) and a special one need not — <c>in</c>
+    /// does not have to come back as <c>out</c>. The split in the list is the split between
+    /// what a mapper may reason about in both directions and what it must walk to learn.</para>
+    /// </summary>
+    private string RoomExitList()
+    {
+        const string Prefix = "room.info.exits.";
+        var found = new List<string>();
+        foreach (KeyValuePair<string, StateValue> kv in _state.Snapshot())
+            if (kv.Key.StartsWith(Prefix, StringComparison.Ordinal))
+                found.Add(kv.Key[Prefix.Length..]);
+
+        string[] order = { "n", "ne", "e", "se", "s", "sw", "w", "nw", "u", "d" };
+        var ordered = new List<string>();
+        foreach (string d in order) if (found.Remove(d)) ordered.Add(d);
+        found.Sort(StringComparer.Ordinal);          // anything the compass does not cover
+        ordered.AddRange(found);
+        return string.Join(",", ordered);
     }
 
     /// <summary>The version reported in <c>Core.Hello</c>. Read off the assembly so it cannot

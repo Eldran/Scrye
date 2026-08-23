@@ -362,7 +362,7 @@ into one line naming what happened.
 | `.gmcp` | Whether the option was negotiated, what was subscribed to, what the server answered with `Core.Supported`, and every package that has arrived with a count and a one-line sample. |
 | `.gmcp <package>` | The whole of that package's last payload, pretty-printed. Case-insensitive, so `.gmcp char.vitals` is fine. |
 | `.gmcp raw on` / `off` | Echo every message into the output as it lands. Noisy on purpose — this is the one to run for a few minutes the first time a feed goes live. |
-| `.gmcp fields` | Write a markdown report of every package, every field, and the raw payloads, into the log folder. The artefact worth keeping from a first session: it says what the server *actually* sends, which is the only thing worth writing a plugin against. |
+| `.gmcp fields` | Write a markdown report into the log folder: every room you walked through and which area it was in, then every package with its fields, its raw payloads, and how many *different* ones it sent. The artefact worth keeping from a session — it says what the server actually sends, which is the only thing worth writing a plugin against. |
 
 The three ways a feed can be silent — never negotiated, negotiated but never subscribed, and
 subscribed but nothing has changed yet — look identical from the output pane and need different
@@ -381,7 +381,8 @@ either protocol without knowing which one it is talking to:
 | `Char.Vitals` enc / coffin / coffin_max | `character.encumbrance`, `character.coffin.current` / `.max` *(no MIP equivalent)* |
 | `Char.Combat` attacker / attacker_hp / rounds | `enemy.name`, `enemy.health`, `combat.round` |
 | `Char.Combat` target | `combat.target` *(no MIP equivalent)* |
-| `Room.Info` num / name / area / exits | `room.num` / `.name` / `.area` / `.exits` |
+| `Room.Info` num / name / area | `room.num` / `.name` / `.area` |
+| `Room.Info` exits | `room.exits` — the plain list, `"e,w"` |
 
 `Room.Contents`, `Room.Map`, `Comm.Channel.Text` and the `Guild.*` packages have no MIP
 counterpart and stay on their own paths; plugins read them with `scrye.onGmcp("Room.Contents",
@@ -390,6 +391,158 @@ fn)` or from the state tree.
 Two things worth knowing, both from 3Scapes' own help: packages flow **only while subscribed**
 and **only when their values change**, and the Room packages are sent when you *enter* a room —
 `look` does not resend them. A quiet feed is often just a quiet moment.
+
+### The feed as it actually is
+
+Captured from a live session rather than read off the help text, because two of these are not
+what the help text implies.
+
+**`Room.Info.exits` is an object, not a string** — direction to *destination room number*:
+
+```json
+{ "num": 3872, "name": "On the outer wall", "area": "Angarboda",
+  "exits": { "w": 3873, "e": 0 } }
+```
+
+That is the map graph handed over, edge by edge, which is a great deal more than the room
+header ever gave. A destination of `0` still means the exit is there; the server is just not
+saying where it leads, which is precisely the frontier a mapper wants to walk to. Destinations
+live at `room.info.exits.<dir>` and are cleared when you leave; `room.exits` is the compact
+list, in compass order.
+
+**Not every key is a compass point, and two of them can lead to the same place.** `in`, `out`
+and `enter` all turn up as exits — the gatehouse of Midgard reports
+`{"nw": 50940, "sw": 50943, "in": 50943}`, where `in` goes exactly where southwest goes.
+`room.exits` lists the compass points first, in compass order, then everything else
+alphabetically: `sw,nw,in`.
+
+**An empty `exits` does not mean a dead end.** Hidden exits are not included, so a room whose
+exits are all hidden reports `{}` — Da Void does, and you can walk straight through it. There is
+no way to learn those but to try them. Treat `{}` as "nothing to tell you", never as "nowhere
+to go".
+
+**`"Unknown"` is an answer, not a gap.** It is what the connective parts of the world report:
+the realm between named areas, and the main town. In a walk across six areas, 25 of 40 rooms
+came back that way. So it is worth showing — "you are out in the realm" is real information —
+but it is shared by a great many rooms that have nothing to do with each other, so it can label
+a room and can never key one. `num` is the identity.
+
+One more, from the Sea of Chaos: an exit can point at **the room you are standing in**
+(`{"num": 60494, "exits": {"n": 0, "e": 60494}}`). The sea is generated fresh each time and is a
+fair worst case rather than a typical room — the bundled chaos-sea bot maps it by dead reckoning
+for that reason and needs none of this — but a general mapper has to survive it.
+
+### If you are building a mapper
+
+Four rules, learned the hard way rather than read off the help text:
+
+1. **Key on `num`.** Not the name (rooms share them — three "Mithil Stonedown Home" in one
+   village) and not the area (`"Unknown"` covers half the world).
+2. **A compass exit reverses; a special one does not.** North out is south back, almost
+   always. `in` need not come back as `out`, and `enter` need not come back at all — record
+   those one way and learn the return by walking it.
+3. **`{}` means "find out yourself".** Absent exits are hidden, not missing.
+4. **Two exits can share a destination, and an exit can point at its own room.** Neither is an
+   error to be corrected.
+
+`room.exits` lists the compass points first for exactly reason 2: those are the ones you may
+reason about in both directions, and the rest are the ones you may not.
+
+**`Comm.Channel.Text` carries more than the three documented fields, and not always the same
+ones.** A tell you sent:
+
+```json
+{ "channel": "tell", "talker": "Lobo", "text": "ahh ok fattar",
+  "prefix": "You tell Rocky:", "outgoing": 1, "targets": ["Rocky"] }
+```
+
+A channel line you received:
+
+```json
+{ "channel": "ctell", "talker": "Kimura", "text": "has reconnected.",
+  "prefix": "[Corp Notify] Kimura" }
+```
+
+Only `channel`, `talker` and `text` can be relied on. The rest follow the kind of line rather
+than appearing at random: `targets` is there when the line was aimed at somebody — a tell is
+between two characters — and absent on a public channel like `ctell`, which has no one
+recipient. `outgoing` marks lines you sent. `prefix` is the rendered line-opener and is missing
+on a soul, which is its own message rather than something somebody said:
+
+```json
+{ "channel": "soul", "talker": "Ulfr", "text": "Ketilsson nods with clear respect." }
+```
+
+Between them that is enough to route and re-render chat without touching the text stream — as
+long as nothing assumes a field it has not checked for.
+
+`Room.Contents` carries a `full` flag beside its `items`, each of which has a `type`
+(`"item"` or `"monster"`), a `name` and a `count`. An empty room sends `"items": []`, which has
+no leaves at all — so there is no `room.contents.items` in the state tree to read, and the
+previous room's contents are cleared rather than left behind.
+
+`Room.Map` comes as `kind:"compass"` below cartography skill 1 and as `kind:"los"` once the
+skill is trained. `w` and `h` give the grid's size and **`h` varies room by room** — from a
+single row in a closed space to nine in the open. `up`, `down` and `enter` are flags for this
+room rather than the map: `enter: 1` alongside an `enter` exit, `down: 1` alongside a `v` glyph.
+
+**`Core.Supported` arrives twice, and the first one is every package at `0`.** The server
+answers once before your subscription lands — "subscribed to nothing" — and again after it, with
+each package at `1`. `.gmcp` calls it out if the *latest* answer is all zeros, because that is
+what a subscription that did not take looks like, and from the output pane it is
+indistinguishable from a server that has no GMCP at all.
+
+**A monster's name is not spelled the same in every package.** `Room.Contents` gives
+`"A misfigured thing {somewhat chaotic}"` and `Char.Combat` gives the same creature as
+`"a misfigured thing {somewhat chaotic}"`. Match them case-insensitively, and strip the
+`{…}` qualifier before putting a name in a command.
+
+The `Guild.*` packages are advertised in `Core.Supported` for every character, but four captures
+across two different guilds — including one of nearly two hours and ten thousand messages — saw
+**no `Guild.*` message at all**. Treat them as announced but not yet flowing, and keep reading
+guild state from MIP until one turns up.
+
+Guild *notices* do arrive, though, as ordinary chat on their own channel:
+
+```json
+{ "channel": "vnotify", "talker": "Skadi", "prefix": "-~* Viking Notify *~-",
+  "text": "Skadi has committed 9 hirdmadrs to patrol (auto-patrol)." }
+```
+
+So a guild plugin can follow what the guild is doing through `Comm.Channel.Text` today, even
+with `Guild.*` silent.
+
+**Reading a capture.** A package's message count is not the number of *things* it told you:
+`Room.Info` announcing 534 times across a long walk is a few hundred rooms, most of them
+announced more than once. The report counts both — "534 message(s), 187 of them different" —
+and opens with the rooms it named, grouped by area, because on a capture taken to find out where
+you have been that is the answer and the last payload is not.
+
+**On volume.** In that same session `Char.Combat` was 5,769 messages and `Char.Vitals` 2,989 —
+between them 84% of everything that arrived, against 534 for `Room.Info`. Whatever a plugin
+hangs off `scrye.onGmcp("Char.Combat", …)` runs about once a second while you are fighting, so
+keep it to reading a field and setting a flag, and do the thinking somewhere less busy.
+
+**A value above its maximum is normal, not a glitch, and it can stay that way for good.**
+A wiz boost puts you over your ceiling and drains back down as you spend it. A guild change can
+strand you there permanently: spell points earned in a guild that used them, carried into one
+whose abilities do not, have nothing to spend them on — a capture showed `sp` 4885 against a
+`maxsp` of 53 for exactly that reason. So `cur <= max` is not a rule on any field, and "it will
+even out shortly" is not a safe assumption either.
+
+Scrye carries both numbers across unchanged. The bundled `progress` and `gauge` widgets show the
+true reading in their caption — `315/45` — and draw the bar full rather than overflowing it. If
+you compute a percentage yourself, clamp it: `math.min(cur / max, 1)`. And a maximum of **zero**
+is a real reading too — a character with no morgue coffin reports `0/0` — so guard the divisor
+rather than the numbers.
+
+### Field paths vs state paths
+
+`.gmcp fields` prints two columns for each field, because they are not the same string. The
+**field** column is the server's own spelling, which is what would show you a `maxHP` where you
+expected `maxhp`. The **state path** column is what you type into `scrye.getState`: the state
+tree lowercases every key and numbers array elements with a dot, so `Room.Contents`'s
+`items[0].name` is read as `room.contents.items.0.name`.
 
 ### Turning it off
 
@@ -401,7 +554,30 @@ out which one a panel or a plugin is actually being driven by.
 
 MXP is markup a MUD can send inline: clickable commands, links, colours, and a few things that
 reach further into the client. Scrye turns it on only when the MUD negotiates it (telnet option
-91), so nothing changes on a MUD that doesn't use it.
+91), so nothing changes on a MUD that doesn't use it. When it does, the output says
+`[MXP] enabled` as you connect.
+
+### Seeing what the server actually sends — `.mxp`
+
+| Command | What it does |
+|---|---|
+| `.mxp` | Whether MXP is on for this world, whether the server negotiated it, and every tag it has sent — with a count, whether it arrived on a secure line, and whether Scrye acted on it or stripped it. |
+| `.mxp raw on` / `off` | Echo every tag into the output as it arrives. |
+
+Three kinds of silence look identical in the output pane and mean completely different things,
+so the report names which one you have: MXP **turned off** for this world (the option was
+refused, and nothing you see says anything about the server), **negotiated but quiet** (the
+server can, and has not yet — MXP rides in the ordinary text, so look at a room with exits), and
+**not negotiated at all**.
+
+The column worth reading is the last one. Markup a client does not implement is stripped
+silently — which is the right thing to do with it, and which also means "the server sends
+something we ignore" reads exactly like "the server sends nothing". Each stripped tag is
+something the MUD is offering that you are not getting.
+
+The other column that earns its place is secure/open. A `<SEND>` on an ordinary line is ignored
+by design (see below), so a server that never marks its lines secure produces a stream full of
+link tags and not one clickable link — which looks like a broken client and is not.
 
 The whole design rests on **secure mode**. A MUD marks a line secure before sending anything
 powerful; on an ordinary line those tags are ignored. That's what stops another player's `say`
@@ -603,6 +779,23 @@ routine operation.
    an oversized payload is a visible sentence instead of a silent shrug.
 3. If the test delivers but the game never notifies — nothing is *configured* to notify.
    Set the **Notify** flag on a trigger or use the chat commands above.
+
+### Working on a plugin where it lives
+
+Scrye looks for plugins in two folders: the ones bundled beside the executable, and your own
+under `%APPDATA%\Scrye\plugins`. **Global Settings → Plugins** adds a third of your choosing —
+so a plugin you are writing can be loaded from wherever you keep it, instead of being copied
+into place after every edit.
+
+It is searched **first**, so a plugin there overrides a bundled one with the same id. That is
+deliberate: a folder you deliberately pointed the client at should beat what shipped, or
+pointing at it achieves nothing. The new folder is picked up by worlds you connect after
+saving, so reconnect to load a change.
+
+Everything else works as normal — every immediate subfolder holding a `plugin.json` is a
+plugin, and the Plugins panel lists them alongside the rest. Only "Remove" treats them
+differently: it deletes from your own `%APPDATA%` folder and never from an extra one, since a
+plugin you are in the middle of editing is not something a button should delete.
 
 ## Where files live
 

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using Avalonia.Controls;
 using Avalonia.Input.Platform;   // Avalonia 12: SetTextAsync is an extension method (ClipboardExtensions)
@@ -614,12 +615,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         StateInspector = new StateViewModel(_session.GameState);
 
         // plugins: discover the ones for this world, load them, and fan session events to them.
-        var pluginRoots = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, "plugins"),                                 // bundled (next to exe)
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), // user plugins
-                "Scrye", "plugins"),
-        };
+        var roots = new List<string>();
+        // An extra folder from Global Settings goes FIRST, so a plugin worked on in place
+        // overrides the bundled copy of the same id. Last would mean the bundled one silently
+        // wins and the folder you pointed at appears to do nothing.
+        string? extraRoot = PluginCatalog.NormaliseRoot(Services.PluginPreferences.ExtraRoot);
+        if (extraRoot is not null) roots.Add(extraRoot);
+        roots.Add(Path.Combine(AppContext.BaseDirectory, "plugins"));                           // bundled (next to exe)
+        roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Scrye", "plugins"));                                                               // user plugins
+        string[] pluginRoots = roots.ToArray();
         // persistent scrye.store data, scoped per world: %APPDATA%/Scrye/plugin-data/<world>/<pluginId>.json
         var pluginData = new PluginDataStore(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "plugin-data"),
@@ -634,7 +639,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             pluginData,
             HudColor.ResolveRgb,
             PluginColour);
-        string userPluginRoot = pluginRoots[1];   // %APPDATA%/Scrye/plugins — writable, removable
+        // The removable root is the USER one, wherever it landed in the list: a plugin under an
+        // extra folder is yours and being edited, and "Remove" deleting it would be a surprise.
+        string userPluginRoot = roots[^1];   // %APPDATA%/Scrye/plugins — writable, removable
         // Plugins are opt-in per character: the manager offers everything discovered for this
         // MUD but loads only what this character enabled (empty for quick-connect). Toggling in
         // the manager persists to the connected node's profile via PersistPluginEnable.
@@ -646,6 +653,23 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             () => PluginCatalog.AvailableForMud(profile.Name, pluginRoots),   // rescan disk for add/remove
             userPluginRoot,
             (id, enabled) => Dispatcher.UIThread.Post(() => PersistPluginEnable?.Invoke(id, enabled)));
+        // Say what the extra folder did. A configured folder that finds nothing is the one
+        // failure mode with no symptom -- the plugin simply is not in the list, which looks
+        // identical to never having set it. Name the folder and the count either way.
+        if (extraRoot is not null)
+        {
+            if (!Directory.Exists(extraRoot))
+                AppendSystem($"extra plugin folder: {extraRoot} — no such folder");
+            else
+            {
+                int n = PluginCatalog.Discover(extraRoot).Count;
+                AppendSystem(n > 0
+                    ? $"extra plugin folder: {n} plugin{(n == 1 ? "" : "s")} from {extraRoot}"
+                    : $"extra plugin folder: {extraRoot} — nothing in it. A plugin is a "
+                      + "subfolder holding a plugin.json.");
+            }
+        }
+
         Plugins = new PluginsViewModel(
             () => _plugins.ListPlugins(),
             (id, done) => _session.Post(() => { _plugins.Reload(id); Dispatcher.UIThread.Post(() => { EnsureDeclaredPanes(); done(); }); }),
@@ -1202,6 +1226,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".companion": HandleCompanionCommand(arg); return true;
             case ".mip": HandleMipCommand(arg); return true;
             case ".gmcp": HandleGmcpCommand(arg); return true;
+            case ".mxp": HandleMxpCommand(arg); return true;
             case ".import": HandleImportCommand(arg); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
@@ -1209,6 +1234,37 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 return true;
             default: return false;
         }
+    }
+
+    /// <summary>
+    /// <c>.mxp</c> — whether MXP was negotiated, which tags the server actually sends, and
+    /// which of them Scrye strips. <c>.mxp raw on</c> echoes each tag as it arrives.
+    ///
+    /// <para>The stripped list is the point. Markup a client does not implement is thrown away
+    /// silently, which is correct and which also means "the server sends something we ignore"
+    /// and "the server sends nothing" read identically in the output pane.</para>
+    /// </summary>
+    private void HandleMxpCommand(string arg)
+    {
+        string a = arg.Trim().ToLowerInvariant();
+        if (a is "raw on" or "raw off")
+        {
+            bool on = a.EndsWith("on");
+            _session.Post(() => _session.MxpAudit.Raw = on);
+            AppendSystem(on ? "MXP raw echo ON - every tag is printed as it arrives"
+                            : "MXP raw echo off");
+            return;
+        }
+        if (a.Length > 0)
+        {
+            AppendSystem("usage: .mxp | .mxp raw on|off");
+            return;
+        }
+        _session.Post(() =>
+        {
+            IReadOnlyList<string> lines = _session.MxpAudit.Report();
+            Dispatcher.UIThread.Post(() => { foreach (string l in lines) AppendSystem(l); });
+        });
     }
 
     /// <summary>

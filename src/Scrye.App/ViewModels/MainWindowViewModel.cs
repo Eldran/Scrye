@@ -170,6 +170,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Services.ThemeService.Apply(startupGlobal.Theme);
         Services.ThemeService.ApplyAnsiPalette(startupGlobal.AnsiPalette);
         Services.InputPreferences.KeepAfterSend = startupGlobal.KeepInputAfterSend ?? false;
+        Services.PluginPreferences.ExtraRoot = startupGlobal.ExtraPluginRoot;
 
         ConnectCommand = new RelayCommand(() => { QuickConnectOpen = false; QuickConnect(); });
         OpenQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = true);
@@ -339,6 +340,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Services.ThemeService.Apply(layer.Theme);   // scheme change takes effect immediately
         Services.ThemeService.ApplyAnsiPalette(layer.AnsiPalette);
         Services.InputPreferences.KeepAfterSend = layer.KeepInputAfterSend ?? false;
+        Services.PluginPreferences.ExtraRoot = layer.ExtraPluginRoot;
         if (close) Settings = null;
         else RaiseToast("Saved", "Settings saved. The form is still open — Done closes it.");
         ReapplyToConnected();   // global merges into every chain

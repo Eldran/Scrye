@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -861,10 +861,26 @@ public sealed class GaugeWidgetViewModel : ViewModelBase, IReThemable
     public double Maximum
     {
         get => _maximum;
-        set { if (SetField(ref _maximum, value <= 0 ? 1 : value)) Changed(); }
+        set { if (SetField(ref _maximum, value)) Changed(); }
     }
 
     public string Caption => $"{_value:0}/{_maximum:0}";
+
+    // ---- what the BAR is given, as opposed to what the numbers say -------------
+    //
+    // A value ABOVE the maximum is a normal state on 3Scapes, not a glitch: a wiz boost puts
+    // you over your ceiling and it drains back down as you spend it. So 315/45 is a real
+    // reading and the caption has to show it.
+    //
+    // The control must not be handed it, though. ProgressBar coerces Value into its range and
+    // its Value property binds two-way by default, so an out-of-range value would be clamped
+    // and written straight back into this view model -- the caption would then read 45/45 and
+    // the boost would vanish from a display whose whole job is to show it. Binding the bar to
+    // its own clamped properties keeps the control in range and the numbers true.
+
+    public double BarMaximum => _maximum > 0 ? _maximum : 1;
+    public double BarValue => Math.Clamp(_value, 0, BarMaximum);
+
     public Avalonia.Media.IBrush BarBrush
     {
         get
@@ -884,6 +900,8 @@ public sealed class GaugeWidgetViewModel : ViewModelBase, IReThemable
     {
         OnPropertyChanged(nameof(Caption));
         OnPropertyChanged(nameof(BarBrush));
+        OnPropertyChanged(nameof(BarValue));
+        OnPropertyChanged(nameof(BarMaximum));
     }
 }
 
@@ -1078,15 +1096,43 @@ public sealed class ProgressWidgetViewModel : ViewModelBase, IReThemable
     public double Value
     {
         get => _value;
-        set { if (SetField(ref _value, value)) OnPropertyChanged(nameof(Caption)); }
+        set { if (SetField(ref _value, value)) Changed(); }
     }
 
     private double _maximum = 100;
     public double Maximum
     {
         get => _maximum;
-        set { if (SetField(ref _maximum, value <= 0 ? 1 : value)) OnPropertyChanged(nameof(Caption)); }
+        set { if (SetField(ref _maximum, value)) Changed(); }
     }
 
     public string Caption => $"{_value:0}/{_maximum:0}";
+
+    // ---- what the BAR is given, as opposed to what the numbers say -------------
+    //
+    // A value ABOVE the maximum is a normal state on 3Scapes, not a glitch: a wiz boost puts
+    // you over your ceiling and it drains back down as you spend it. So 315/45 is a real
+    // reading and the caption has to show it.
+    //
+    // The control must not be handed it, though. ProgressBar coerces Value into its range and
+    // its Value property binds two-way by default, so an out-of-range value would be clamped
+    // and written straight back into this view model -- the caption would then read 45/45 and
+    // the boost would vanish from a display whose whole job is to show it. Binding the bar to
+    // its own clamped properties keeps the control in range and the numbers true.
+
+    /// <summary>The maximum the bar is drawn against. A real maximum of zero is a legitimate
+    /// reading -- a character with no morgue coffin reports 0/0 -- so the caption keeps it and
+    /// only the bar substitutes a divisor it can use.</summary>
+    public double BarMaximum => _maximum > 0 ? _maximum : 1;
+
+    /// <summary>The value the bar is drawn with: clamped, so a boost fills it rather than
+    /// overflowing it.</summary>
+    public double BarValue => Math.Clamp(_value, 0, BarMaximum);
+
+    private void Changed()
+    {
+        OnPropertyChanged(nameof(Caption));
+        OnPropertyChanged(nameof(BarValue));
+        OnPropertyChanged(nameof(BarMaximum));
+    }
 }

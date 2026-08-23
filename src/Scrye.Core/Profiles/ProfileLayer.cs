@@ -50,6 +50,12 @@ public sealed class ProfileLayer
     /// asked for this expects.</summary>
     public bool? KeepInputAfterSend { get; set; }
 
+    /// <summary>An extra folder to look for plugins in, on top of the bundled and user ones.
+    /// For working on a plugin where it lives instead of copying it into place after every
+    /// edit. Searched FIRST, so a plugin here overrides a bundled one with the same id — which
+    /// is the point of pointing the client at it.</summary>
+    public string? ExtraPluginRoot { get; set; }
+
     /// <summary>Dead-man's switch for unattended automation: stop when nobody has done anything
     /// for <see cref="IdleGuardSeconds"/>. Null inherits; see
     /// <see cref="Scrye.Core.Session.IdleGuard"/>. Off unless asked for.</summary>

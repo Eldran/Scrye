@@ -17,6 +17,34 @@ public static class PluginCatalog
         AllowTrailingCommas = true,
     };
 
+    /// <summary>
+    /// Tidy a hand-typed plugin root. Blank (or a path that is nothing but quotes and spaces)
+    /// comes back null, so callers can test one thing. Surrounding quotes are stripped —
+    /// Explorer's "Copy as path" puts them there and pasting is how such a box gets filled.
+    /// A folder that IS a plugin (it holds a <c>plugin.json</c> itself) is read as its parent:
+    /// "the plugin folder" is the obvious thing to point at, and pointing there would otherwise
+    /// scan a level too deep and silently find nothing.
+    /// </summary>
+    public static string? NormaliseRoot(string? path)
+    {
+        if (path is null) return null;
+        string p = path.Trim().Trim('"').Trim();
+        if (p.Length == 0) return null;
+        try
+        {
+            if (File.Exists(Path.Combine(p, "plugin.json")))
+            {
+                string? parent = Path.GetDirectoryName(Path.GetFullPath(p.TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+                if (!string.IsNullOrEmpty(parent)) return parent;
+            }
+        }
+        catch (ArgumentException) { }        // malformed path — hand it back as typed, so the
+        catch (PathTooLongException) { }     // caller reports "folder not found" against what
+        catch (NotSupportedException) { }    // the user actually wrote rather than a rewrite
+        return p;
+    }
+
     /// <summary>All valid plugins found under the given roots (missing roots skipped;
     /// a folder with no <c>plugin.json</c>, unparseable JSON, or no <c>id</c> is ignored).</summary>
     public static IReadOnlyList<PluginDescriptor> Discover(params string[] roots)

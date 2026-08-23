@@ -334,8 +334,8 @@
                                                         <StackPanel Spacing="1" Margin="0,1">
                                                             <TextBlock Text="{Binding Label}" FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
                                                             <Grid>
-                                                                <ProgressBar Minimum="0" Maximum="{Binding Maximum}"
-                                                                             Value="{Binding Value}" Height="15"
+                                                                <ProgressBar Minimum="0" Maximum="{Binding BarMaximum}"
+                                                                             Value="{Binding BarValue, Mode=OneWay}" Height="15"
                                                                              Classes.wc="{Binding HasColor}" />
                                                                 <TextBlock Text="{Binding Caption}" FontSize="10" Foreground="{DynamicResource ScryeOnBar}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -347,7 +347,7 @@
                                                             <TextBlock DockPanel.Dock="Left" Text="{Binding Label}" FontSize="10" Width="52"
                                                                        Foreground="{DynamicResource ScryeTextDim}" VerticalAlignment="Center" />
                                                             <Grid>
-                                                                <ProgressBar Minimum="0" Maximum="{Binding Maximum}" Value="{Binding Value}"
+                                                                <ProgressBar Minimum="0" Maximum="{Binding BarMaximum}" Value="{Binding BarValue, Mode=OneWay}"
                                                                              Height="14" Foreground="{Binding BarBrush}" />
                                                                 <TextBlock Text="{Binding Caption}" FontSize="9.5" Foreground="{DynamicResource ScryeOnBar}"
                                                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
@@ -1057,7 +1057,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"
@@ -1185,7 +1185,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"
@@ -1282,7 +1282,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:TimerRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"
@@ -1470,6 +1470,21 @@
                             </StackPanel>
                         </TabItem>
 
+                        <!-- PLUGINS -->
+                        <TabItem Header="Plugins">
+                            <StackPanel Spacing="6" Margin="0,8,0,0">
+                                <TextBlock Text="Extra plugin folder" />
+                                <TextBox Text="{Binding Settings.ExtraPluginRoot}"
+                                         PlaceholderText="e.g. C:\3ScapesMUD\Scrye\Scrye\_lab\plugins" />
+                                <TextBlock Text="A folder to look for plugins in, on top of the ones bundled with Scrye and your own under %APPDATA%\Scrye\plugins. Every immediate subfolder holding a plugin.json is a plugin, exactly as in the other two."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                <TextBlock Text="For working on a plugin where it lives instead of copying it into place after every edit. It is searched FIRST, so a plugin here overrides a bundled one with the same id — which is the point of pointing Scrye at it. Applies to worlds you connect after saving."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                <TextBlock Text="Leave it empty unless you are developing a plugin: anything you put here runs with the same reach as one you installed deliberately."
+                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </TabItem>
+
                         <!-- GLOBAL TRIGGERS -->
                         <TabItem Header="Triggers">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
@@ -1522,7 +1537,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"
@@ -1650,7 +1665,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / %1 %&lt;name&gt; ${var} template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"
@@ -1747,7 +1762,7 @@
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:TimerRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
-                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function."
+                                                      ToolTip.Tip="World: straight to the MUD.&#10;Client: run it the way a typed line is run - plugin aliases, then your own aliases, then the MUD if nothing claims it. This is how a rule reaches a plugin command like &quot;cs pause&quot;. Semicolons in the box below split it into several commands.&#10;Output: echo locally.&#10;Variable: store into the named variable.&#10;Script: only run the script function." 
                                                       HorizontalAlignment="Left" Width="180" />
                                             <TextBlock Text="Send (text / template — one command per line)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Send}" AcceptsReturn="True" TextWrapping="NoWrap"

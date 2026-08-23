@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 
 namespace Scrye.Core.Text;
 
@@ -91,6 +91,15 @@ public sealed class AnsiParser
 
     /// <summary>A server-set gauge: name, value, max (0 when absent) and caption.</summary>
     public event Action<string, double, double, string>? MxpGauge;
+
+    /// <summary>Every MXP tag as it is read: (name, was the line secure, was it a closing tag).
+    /// Observe-only, for <c>.mxp</c>.</summary>
+    public event Action<string, bool, bool>? MxpTagSeen;
+
+    /// <summary>A tag that fell through to the default branch and was stripped. Raised
+    /// separately from <see cref="MxpTagSeen"/> and FROM the default branch itself, so the
+    /// list of what Scrye implements cannot drift away from the list it reports.</summary>
+    public event Action<string>? MxpTagIgnored;
 
     /// <summary>Client name/version used in the VERSION reply.</summary>
     public string ClientName { get; set; } = "Scrye";
@@ -258,12 +267,16 @@ public sealed class AnsiParser
         // an open line must not have.
         if (content.StartsWith('!'))
         {
+            string kind = content[1..].TrimStart();
+            int sp = kind.IndexOfAny(new[] { ' ', '\t' });
+            MxpTagSeen?.Invoke("!" + (sp > 0 ? kind[..sp] : kind).ToUpperInvariant(), secure, false);
             if (secure) HandleDefinition(content[1..].TrimStart());
             return;
         }
 
         (string name, List<(string key, string val)> attrs) = ParseTag(content);
         name = name.ToUpperInvariant();
+        MxpTagSeen?.Invoke(name, secure, closing);
 
         if (closing)
         {
@@ -319,7 +332,10 @@ public sealed class AnsiParser
 
             case "GAUGE": if (secure) HandleGauge(attrs); break;
 
-            // IMAGE / SOUND / FRAME and anything unrecognised: stripped on purpose.
+            // IMAGE / SOUND / FRAME and anything unrecognised: stripped on purpose -- but
+            // SAID, because stripped-in-silence and never-sent look the same from the output
+            // pane and only one of them is a feature waiting to be supported.
+            default: MxpTagIgnored?.Invoke(name); break;
         }
     }
 

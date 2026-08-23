@@ -177,31 +177,34 @@ public class GmcpTests
     {
         // This is what lets a HUD panel and every plugin already written against
         // character.health.current work from either protocol without knowing which.
+        // Verbatim from the capture, sp ABOVE maxsp and all: whatever the server means by those
+        // two, the mirror's job is to carry them across unchanged, not to tidy them up.
         MudSession s = Connected(out TelnetLayer t, out _);
-        t.Process(Sub("{\"hp\":842,\"maxhp\":900,\"sp\":120,\"maxsp\":150,\"enc\":34,\"coffin\":2,\"coffin_max\":6}"
-                      .Insert(0, "Char.Vitals ")));
+        t.Process(Sub("Char.Vitals {\"maxsp\":45,\"sp\":315,\"hp\":9576,\"coffin\":2,"
+                      + "\"maxhp\":9576,\"coffin_max\":25,\"enc\":40}"));
         StateStore st = s.GameState;
 
-        Assert.Equal(842, st.Get("char.vitals.hp").AsNumber());        // the raw tree
-        Assert.Equal(842, st.Get("character.health.current").AsNumber());
-        Assert.Equal(900, st.Get("character.health.max").AsNumber());
-        Assert.Equal(120, st.Get("character.spell.current").AsNumber());
-        Assert.Equal(150, st.Get("character.spell.max").AsNumber());
-        Assert.Equal(34, st.Get("character.encumbrance").AsNumber());
+        Assert.Equal(9576, st.Get("char.vitals.hp").AsNumber());        // the raw tree
+        Assert.Equal(9576, st.Get("character.health.current").AsNumber());
+        Assert.Equal(9576, st.Get("character.health.max").AsNumber());
+        Assert.Equal(315, st.Get("character.spell.current").AsNumber());
+        Assert.Equal(45, st.Get("character.spell.max").AsNumber());
+        Assert.Equal(40, st.Get("character.encumbrance").AsNumber());
         Assert.Equal(2, st.Get("character.coffin.current").AsNumber());
-        Assert.Equal(6, st.Get("character.coffin.max").AsNumber());
+        Assert.Equal(25, st.Get("character.coffin.max").AsNumber());
     }
 
     [Fact]
     public void Combat_mirrors_onto_the_enemy_paths()
     {
         MudSession s = Connected(out TelnetLayer t, out _);
-        t.Process(Sub("Char.Combat {\"attacker\":\"a grey ooze\",\"attacker_hp\":72,\"rounds\":3,\"target\":\"you\"}"));
+        t.Process(Sub("Char.Combat {\"target\":\"you\",\"rounds\":8,"
+                      + "\"attacker\":\"A giant guard manning the wall\",\"attacker_hp\":96}"));
         StateStore st = s.GameState;
 
-        Assert.Equal("a grey ooze", st.Get("enemy.name").Text);
-        Assert.Equal(72, st.Get("enemy.health").AsNumber());
-        Assert.Equal(3, st.Get("combat.round").AsNumber());
+        Assert.Equal("A giant guard manning the wall", st.Get("enemy.name").Text);
+        Assert.Equal(96, st.Get("enemy.health").AsNumber());
+        Assert.Equal(8, st.Get("combat.round").AsNumber());
         Assert.Equal("you", st.Get("combat.target").Text);   // no MIP equivalent; keeps its own path
     }
 
@@ -211,6 +214,23 @@ public class GmcpTests
         // "When combat ends one empty snapshot arrives and the stream goes quiet." A mirror
         // that only ever copies would leave the last enemy sitting there for good, and every
         // consumer treats a non-empty enemy.name as "still fighting".
+        // The real snapshot sends the fields PRESENT AND EMPTY rather than omitting them, which
+        // is a different path through the mirror than a bare {} — an empty string is a value,
+        // and a copy that only skipped nulls would carry the last enemy straight through it.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Char.Combat {\"target\":\"you\",\"rounds\":2,"
+                      + "\"attacker\":\"a misfigured thing {somewhat chaotic}\",\"attacker_hp\":59}"));
+        t.Process(Sub("Char.Combat {\"target\":\"\",\"rounds\":0,\"attacker\":\"\",\"attacker_hp\":0}"));
+        StateStore st = s.GameState;
+
+        Assert.Equal("", st.Get("enemy.name").Text);
+        Assert.Equal(0, st.Get("enemy.health").AsNumber());
+        Assert.Equal(0, st.Get("combat.round").AsNumber());
+    }
+
+    [Fact]
+    public void An_omitted_combat_payload_clears_the_enemy_too()
+    {
         MudSession s = Connected(out TelnetLayer t, out _);
         t.Process(Sub("Char.Combat {\"attacker\":\"a grey ooze\",\"attacker_hp\":72,\"rounds\":3,\"target\":\"you\"}"));
         t.Process(Sub("Char.Combat {}"));
@@ -218,17 +238,153 @@ public class GmcpTests
         Assert.Equal("", s.GameState.Get("enemy.name").Text);
     }
 
+    // Every payload below is verbatim from a real capture (3Scapes, 2026-08-21), not from the
+    // help text. Two of them differ from what the help text implied, which is the whole reason
+    // for capturing before writing anything against them.
+
     [Fact]
     public void A_room_arrives_with_a_real_number_and_area()
     {
         MudSession s = Connected(out TelnetLayer t, out _);
-        t.Process(Sub("Room.Info {\"num\":18422,\"name\":\"The Carpentry Workshop\",\"area\":\"Pinnacle\",\"exits\":\"w,n,s\"}"));
+        t.Process(Sub("Room.Info {\"exits\":{\"w\":3873,\"e\":0},\"area\":\"Angarboda\","
+                      + "\"name\":\"On the outer wall\",\"num\":3872}"));
         StateStore st = s.GameState;
 
-        Assert.Equal(18422, st.Get("room.num").AsNumber());
-        Assert.Equal("The Carpentry Workshop", st.Get("room.name").Text);
-        Assert.Equal("Pinnacle", st.Get("room.area").Text);
-        Assert.Equal("w,n,s", st.Get("room.exits").Text);
+        Assert.Equal(3872, st.Get("room.num").AsNumber());
+        Assert.Equal("On the outer wall", st.Get("room.name").Text);
+        Assert.Equal("Angarboda", st.Get("room.area").Text);
+    }
+
+    [Fact]
+    public void Exits_are_a_direction_to_room_number_map_not_a_string()
+    {
+        // The help text says "exits" and the room header always gave "(w,n,s)", so a string was
+        // the obvious guess. It is an object: which way, and WHICH ROOM that way leads to. That
+        // is the whole graph, handed over, and it is what makes dead reckoning unnecessary.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Info {\"exits\":{\"w\":3873,\"e\":0},\"area\":\"Angarboda\","
+                      + "\"name\":\"On the outer wall\",\"num\":3872}"));
+        StateStore st = s.GameState;
+
+        Assert.Equal(3873, st.Get("room.info.exits.w").AsNumber());
+        Assert.Equal(0, st.Get("room.info.exits.e").AsNumber());   // there, but not saying where
+        Assert.Equal("e,w", st.Get("room.exits").Text);            // compass order, both counted
+    }
+
+    [Fact]
+    public void Exits_are_not_all_compass_points_and_need_not_lead_somewhere_different()
+    {
+        // The gatehouse of Midgard, verbatim: 'in' is an exit like any other, and it leads to
+        // the same room the southwest exit does. A mapper that assumed one destination per
+        // room, or that every key is a compass point, would be wrong about both.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Info {\"exits\":{\"nw\":50940,\"sw\":50943,\"in\":50943},"
+                      + "\"area\":\"Midgard\",\"name\":\"The gatehouse of Midgard\",\"num\":50942}"));
+        StateStore st = s.GameState;
+
+        Assert.Equal("sw,nw,in", st.Get("room.exits").Text);   // compass first, then the rest
+        Assert.Equal(50943, st.Get("room.info.exits.in").AsNumber());
+        Assert.Equal(50943, st.Get("room.info.exits.sw").AsNumber());
+        Assert.Equal("Midgard", st.Get("room.area").Text);
+    }
+
+    [Fact]
+    public void The_exit_list_is_in_compass_order_and_keeps_what_the_compass_does_not_cover()
+    {
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Info {\"num\":1,\"name\":\"A room\",\"area\":\"Here\","
+                      + "\"exits\":{\"d\":9,\"ne\":2,\"n\":3,\"out\":4,\"w\":5}}"));
+
+        Assert.Equal("n,ne,w,d,out", s.GameState.Get("room.exits").Text);
+    }
+
+    [Fact]
+    public void Leaving_a_room_does_not_leave_its_exits_behind()
+    {
+        // The destinations live where SetJson put them, which is what keeps this true: a leaf
+        // the new payload does not contain is removed. A hand-rolled second copy of the tree
+        // would have had to remember to do that, and would not have.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Info {\"num\":1,\"name\":\"A\",\"area\":\"X\",\"exits\":{\"w\":3873,\"e\":0}}"));
+        t.Process(Sub("Room.Info {\"num\":2,\"name\":\"B\",\"area\":\"X\",\"exits\":{\"n\":7}}"));
+        StateStore st = s.GameState;
+
+        Assert.False(st.Has("room.info.exits.w"));
+        Assert.False(st.Has("room.info.exits.e"));
+        Assert.Equal(7, st.Get("room.info.exits.n").AsNumber());
+        Assert.Equal("n", st.Get("room.exits").Text);
+    }
+
+    [Fact]
+    public void A_room_with_no_exits_at_all_reads_as_empty_rather_than_stale()
+    {
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Info {\"num\":1,\"name\":\"A\",\"area\":\"X\",\"exits\":{\"w\":3873}}"));
+        t.Process(Sub("Room.Info {\"num\":2,\"name\":\"B\",\"area\":\"X\",\"exits\":{}}"));
+
+        Assert.Equal("", s.GameState.Get("room.exits").Text);
+    }
+
+    [Fact]
+    public void The_room_contents_list_survives_the_trip_to_the_state_tree()
+    {
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Room.Contents {\"full\":1,\"items\":[{\"type\":\"monster\",\"count\":1,"
+                      + "\"name\":\"A giant guard manning the wall\"}]}"));
+        StateStore st = s.GameState;
+
+        Assert.Equal("A giant guard manning the wall", st.Get("room.contents.items.0.name").Text);
+        Assert.Equal("monster", st.Get("room.contents.items.0.type").Text);
+        Assert.Equal(1, st.Get("room.contents.full").AsNumber());   // undocumented, but there
+    }
+
+    [Theory]
+    // A soul, which carries no prefix at all — so prefix is optional too, not just the two
+    // that follow the channel.
+    [InlineData("{\"text\":\"Ketilsson nods with clear respect.\",\"talker\":\"Ulfr\",\"channel\":\"soul\"}",
+                "soul", "Ulfr")]
+    // A public channel: a talker, no single recipient, so no targets.
+    [InlineData("{\"text\":\"has reconnected.\",\"talker\":\"Kimura\","
+                + "\"prefix\":\"[Corp Notify] Kimura\",\"channel\":\"ctell\"}", "ctell", "Kimura")]
+    public void Only_channel_talker_and_text_can_be_relied_on(string payload, string channel, string talker)
+    {
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Comm.Channel.Text " + payload));
+        StateStore st = s.GameState;
+
+        Assert.Equal(channel, st.Get("comm.channel.text.channel").Text);
+        Assert.Equal(talker, st.Get("comm.channel.text.talker").Text);
+        Assert.NotEqual("", st.Get("comm.channel.text.text").Text);
+    }
+
+    [Fact]
+    public void A_chat_line_carries_more_than_the_help_text_lists()
+    {
+        // Documented as { channel, talker, text }. It also carries the rendered prefix, whether
+        // the line is yours, and who it was aimed at — enough to route and re-render chat
+        // without touching the text stream at all.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Comm.Channel.Text {\"text\":\"ahh ok fattar\",\"prefix\":\"You tell Rocky:\","
+                      + "\"outgoing\":1,\"talker\":\"Lobo\",\"targets\":[\"Rocky\"],\"channel\":\"tell\"}"));
+        StateStore st = s.GameState;
+
+        Assert.Equal("tell", st.Get("comm.channel.text.channel").Text);
+        Assert.Equal("Lobo", st.Get("comm.channel.text.talker").Text);
+        Assert.Equal("You tell Rocky:", st.Get("comm.channel.text.prefix").Text);
+        Assert.Equal(1, st.Get("comm.channel.text.outgoing").AsNumber());
+        Assert.Equal("Rocky", st.Get("comm.channel.text.targets.0").Text);
+    }
+
+    [Fact]
+    public void Core_supported_is_an_object_not_a_list()
+    {
+        // Another one the help text left to inference: it answers with a map of package to
+        // whether you are subscribed, not an array of names.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Core.Supported { \"Room.Contents\": 1, \"Char.Vitals\": 1, \"Guild.Info\": 1 }"));
+
+        Assert.NotNull(s.GmcpAudit.Supported);
+        Assert.Contains("Room.Contents", s.GmcpAudit.Supported!);
     }
 
     // ---- the audit behind .gmcp ---------------------------------------------
@@ -278,9 +434,160 @@ public class GmcpTests
         string md = string.Join("\n", a.FieldReport("3Scapes"));
 
         Assert.Contains("## Room.Contents", md);
-        Assert.Contains("items[0].name", md);
+        Assert.Contains("items[0].name", md);                       // the server's spelling
+        Assert.Contains("room.contents.items.0.name", md);          // ...and where to read it
         Assert.Contains("Birch the Handy Hippie", md);
         Assert.Contains("```json", md);   // a summary is not evidence
+    }
+
+    [Theory]
+    [InlineData("Room.Contents", "items[0].name", "room.contents.items.0.name")]
+    [InlineData("Char.Vitals", "maxHP", "char.vitals.maxhp")]
+    [InlineData("Room.Map", "rows[2]", "room.map.rows.2")]
+    public void A_field_path_and_a_state_path_are_not_the_same_string(
+        string package, string field, string expected) =>
+        Assert.Equal(expected, GmcpAudit.StatePath(package, field));
+
+    // ---- what the feed DID, not just what it looks like ---------------------
+
+    private static GmcpAudit Walked()
+    {
+        var a = new GmcpAudit { Negotiated = true };
+        void Room(int num, string name, string area) =>
+            a.Observe("Room.Info", $"{{\"num\":{num},\"name\":\"{name}\",\"area\":\"{area}\",\"exits\":{{\"n\":0}}}}");
+
+        Room(50942, "The gatehouse of Midgard", "Midgard");
+        Room(50940, "Inside the gate", "Midgard");
+        Room(50942, "The gatehouse of Midgard", "Midgard");   // walked back through it
+        Room(21001, "A mushroom clearing", "Smurfs");
+        Room(21002, "Under a toadstool", "Smurfs");
+        Room(30500, "A dusty track", "The Land");
+        return a;
+    }
+
+    [Fact]
+    public void Every_room_walked_through_is_kept_not_just_the_last_one()
+    {
+        // The report used to hold one payload per package, so a walk through three areas came
+        // out as whichever room you were standing in when you ran it — 534 messages counted
+        // and one of them shown. "What does this package look like" and "what did the feed do"
+        // are different questions, and the second is why you take a capture.
+        IReadOnlyList<GmcpAudit.RoomSeen> rooms = Walked().Rooms();
+
+        Assert.Equal(5, rooms.Count);                                  // the repeat is one room
+        Assert.Equal(new[] { "Midgard", "Midgard", "Smurfs", "Smurfs", "The Land" },
+                     rooms.Select(r => r.Area));
+        Assert.Equal(50942, rooms[0].Num);
+        Assert.Equal("A dusty track", rooms[4].Name);
+    }
+
+    [Fact]
+    public void The_report_says_which_areas_you_walked_through()
+    {
+        string report = string.Join("\n", Walked().Report());
+        Assert.Contains("5 room(s) in 3 area(s)", report);
+        Assert.Contains("The Land", report);
+
+        string md = string.Join("\n", Walked().FieldReport("3Scapes"));
+        Assert.Contains("## Rooms visited", md);
+        Assert.Contains("| Smurfs | 2 |", md);
+        Assert.Contains("A mushroom clearing", md);
+    }
+
+    [Fact]
+    public void One_room_that_changed_is_still_one_room()
+    {
+        // A room can send a genuinely different payload for the same number — a gate opens and
+        // the exits are not what they were. That is two payloads worth keeping and one room.
+        var a = new GmcpAudit { Negotiated = true };
+        a.Observe("Room.Info", "{\"num\":50942,\"name\":\"The gatehouse\",\"area\":\"Midgard\",\"exits\":{\"nw\":1}}");
+        a.Observe("Room.Info", "{\"num\":50942,\"name\":\"The gatehouse\",\"area\":\"Midgard\",\"exits\":{\"nw\":1,\"in\":2}}");
+
+        Assert.Equal(2, a.DistinctCount("Room.Info"));   // both payloads kept
+        Assert.Single(a.Rooms());                        // one room walked through
+    }
+
+    [Fact]
+    public void A_package_that_repeats_itself_is_counted_once_as_distinct()
+    {
+        var a = new GmcpAudit { Negotiated = true };
+        a.Observe("Char.Vitals", "{\"hp\":100}");
+        a.Observe("Char.Vitals", "{\"hp\":100}");
+        a.Observe("Char.Vitals", "{\"hp\":90}");
+
+        Assert.Equal(2, a.DistinctCount("Char.Vitals"));
+        Assert.Equal(3, a.Find("Char.Vitals")!.Count);
+        Assert.Contains("3 message(s), 2 of them different",
+                        string.Join("\n", a.FieldReport("w")));
+    }
+
+    [Fact]
+    public void A_capture_with_no_rooms_in_it_grows_no_rooms_section()
+    {
+        var a = new GmcpAudit { Negotiated = true };
+        a.Observe("Char.Vitals", "{\"hp\":100}");
+        Assert.DoesNotContain("Rooms visited", string.Join("\n", a.FieldReport("w")));
+        Assert.DoesNotContain("room(s) in", string.Join("\n", a.Report()));
+    }
+
+    [Fact]
+    public void An_all_zero_supported_answer_is_called_out_as_subscribed_to_nothing()
+    {
+        // The server answers TWICE — once before the subscription with every package at 0, and
+        // once after with them at 1. That first answer is what "negotiated but subscribed to
+        // nothing" looks like from the wire, and if it is ever the LAST one, nothing will
+        // arrive and the output pane will look exactly like a server with no GMCP.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        t.Process(Sub("Core.Supported { \"Room.Info\": 0, \"Char.Vitals\": 0 }"));
+        Assert.Contains("SUBSCRIBED TO NOTHING", string.Join("\n", s.GmcpAudit.Report()));
+
+        t.Process(Sub("Core.Supported { \"Room.Info\": 1, \"Char.Vitals\": 1 }"));
+        Assert.DoesNotContain("SUBSCRIBED TO NOTHING", string.Join("\n", s.GmcpAudit.Report()));
+    }
+
+    [Theory]
+    [InlineData("{ \"A\": 0, \"B\": 0 }", true)]
+    [InlineData("{ \"A\": 0, \"B\": 1 }", false)]
+    [InlineData("{ }", false)]                      // nothing said is not "nothing on"
+    [InlineData("not json", false)]
+    [InlineData(null, false)]
+    public void Subscribed_to_nothing_is_every_package_at_zero_and_at_least_one_package(
+        string? payload, bool expected) =>
+        Assert.Equal(expected, GmcpAudit.SubscribedToNothing(payload));
+
+    [Fact]
+    public void An_empty_array_is_shown_without_a_state_path_it_does_not_have()
+    {
+        // A room with nothing in it sends "items": []. That contributes no leaves, so the
+        // state tree holds no room.contents.items at all — and a report that printed the path
+        // anyway would be inviting you to read something that is not there.
+        var a = new GmcpAudit { Negotiated = true };
+        a.Observe("Room.Contents", "{\"full\":1,\"items\":[]}");
+        string md = string.Join("\n", a.FieldReport("3Scapes"));
+
+        Assert.Contains("(empty array)", md);
+        Assert.DoesNotContain("`room.contents.items`", md);
+        Assert.Contains("`room.contents.full`", md);      // the real leaf still points somewhere
+    }
+
+    [Fact]
+    public void A_pipe_in_the_data_is_carried_across_rather_than_corrupted()
+    {
+        // Room.Map has '|' as a legend KEY and as its value, and draws its rows with it. The
+        // first version of this report replaced a pipe with a backslash, which kept the table
+        // intact by quietly changing the data -- in a document whose whole purpose is to say
+        // what the server actually sent.
+        var a = new GmcpAudit { Negotiated = true };
+        a.Observe("Room.Map", "{\"rows\":[\"  |  \"],\"legend\":{\"|\":\"link\"}}");
+        string md = string.Join("\n", a.FieldReport("3Scapes"));
+
+        Assert.DoesNotContain("\\|", md);          // no backslash escape, honoured or not
+        Assert.Contains("&#124;", md);            // the pipe is there, and rendered as one
+        Assert.Contains("\"|\": \"link\"", md);     // ...and the raw payload is untouched
+
+        foreach (string line in md.Split('\n'))
+            if (line.StartsWith("| `"))
+                Assert.Equal(4, line.Split('|').Length - 1);   // three columns, no broken rows
     }
 
     [Fact]

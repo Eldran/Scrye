@@ -96,6 +96,16 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         set => SetField(ref _keepInputAfterSend, value);
     }
 
+    // ---- plugins ----
+    private string _extraPluginRoot = "";
+    /// <summary>An extra folder to discover plugins in, on top of the bundled and user ones.
+    /// Empty = just those two.</summary>
+    public string ExtraPluginRoot
+    {
+        get => _extraPluginRoot;
+        set => SetField(ref _extraPluginRoot, value);
+    }
+
     // ---- global rule sets + variables ----
     public ObservableCollection<TriggerRowViewModel> Triggers { get; } = new();
     public ObservableCollection<AliasRowViewModel> Aliases { get; } = new();
@@ -152,6 +162,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _ansiPalette = string.Equals(layer.AnsiPalette, "classic", StringComparison.OrdinalIgnoreCase)
             ? PaletteClassic : PaletteModern;
         _keepInputAfterSend = layer.KeepInputAfterSend ?? false;
+        _extraPluginRoot = layer.ExtraPluginRoot ?? "";
 
         // monospaced fonts on this machine, "Default" first; include any current custom
         // value so it stays visible/selectable in the dropdown even if it isn't monospaced
@@ -249,6 +260,7 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
         _layer.Theme = Theme.Key;
         _layer.AnsiPalette = (AnsiPalette == PaletteClassic) ? "classic" : "modern";
         _layer.KeepInputAfterSend = KeepInputAfterSend ? true : null;   // null = the default, not written
+        _layer.ExtraPluginRoot = string.IsNullOrWhiteSpace(ExtraPluginRoot) ? null : ExtraPluginRoot.Trim();
 
         var triggers = new List<TriggerDef>();
         foreach (TriggerRowViewModel r in Triggers) if (!string.IsNullOrWhiteSpace(r.Name)) triggers.Add(r.ToDef());

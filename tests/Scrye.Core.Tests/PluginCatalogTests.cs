@@ -88,4 +88,90 @@ public class PluginCatalogTests : IDisposable
         }
         finally { Directory.Delete(root2, true); }
     }
+
+    // The shape Scrye actually calls Discover with once an extra plugin folder is configured:
+    // extra, bundled, user. The extra folder is passed FIRST precisely so a plugin worked on in
+    // place overrides the bundled copy of the same id -- if the bundled one won, pointing the
+    // client at the folder would appear to do nothing.
+    [Fact]
+    public void ExtraRootFirstOverridesTheBundledCopyOfTheSameId()
+    {
+        string bundled = Path.Combine(Path.GetTempPath(), "scrye_bundled_" + Guid.NewGuid().ToString("N"));
+        string user = Path.Combine(Path.GetTempPath(), "scrye_user_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(bundled, "3s-map"));
+        File.WriteAllText(Path.Combine(bundled, "3s-map", "plugin.json"),
+            "{\"id\":\"3s-map\",\"name\":\"shipped\",\"version\":\"1.0.0\"}");
+        Directory.CreateDirectory(Path.Combine(user, "other"));
+        File.WriteAllText(Path.Combine(user, "other", "plugin.json"), "{\"id\":\"other\"}");
+        Make("3s-map", "{\"id\":\"3s-map\",\"name\":\"in progress\",\"version\":\"1.1.0\"}");
+        try
+        {
+            var found = PluginCatalog.Discover(_root, bundled, user);
+            PluginDescriptor map = found.Single(d => d.Manifest.Id == "3s-map");
+            Assert.Equal("in progress", map.Manifest.Name);
+            Assert.Equal(_root, Directory.GetParent(map.FolderPath)!.FullName);   // loaded from where it lives
+            Assert.Equal(2, found.Count);                                     // the other root still contributes
+        }
+        finally { Directory.Delete(bundled, true); Directory.Delete(user, true); }
+    }
+
+    // Empty is the default for the setting, and a path can be typed wrong or point at a folder
+    // that has since moved. Neither may cost the user the plugins they do have.
+    [Fact]
+    public void AnEmptyOrMissingExtraRootIsSkippedNotFatal()
+    {
+        Make("keeper", "{\"id\":\"keeper\"}");
+        string gone = Path.Combine(Path.GetTempPath(), "scrye_absent_" + Guid.NewGuid().ToString("N"));
+
+        Assert.Equal("keeper", Assert.Single(PluginCatalog.Discover("", _root)).Manifest.Id);
+        Assert.Equal("keeper", Assert.Single(PluginCatalog.Discover(gone, _root)).Manifest.Id);
+    }
+
+    [Fact]
+    public void NormaliseRootTreatsBlankAsUnset()
+    {
+        Assert.Null(PluginCatalog.NormaliseRoot(null));
+        Assert.Null(PluginCatalog.NormaliseRoot(""));
+        Assert.Null(PluginCatalog.NormaliseRoot("   "));
+        Assert.Null(PluginCatalog.NormaliseRoot("\"\""));       // a pasted empty quoted path
+    }
+
+    // Explorer's "Copy as path" wraps the path in quotes, and pasting is exactly how this box
+    // gets filled. Quoted or not, it has to mean the same folder.
+    [Fact]
+    public void NormaliseRootStripsQuotesAndSpace()
+    {
+        Make("keeper", "{\"id\":\"keeper\"}");
+        Assert.Equal(_root, PluginCatalog.NormaliseRoot("  " + _root + "  "));
+        Assert.Equal(_root, PluginCatalog.NormaliseRoot("\"" + _root + "\""));
+        Assert.Equal("keeper", Assert.Single(
+            PluginCatalog.Discover(PluginCatalog.NormaliseRoot("\"" + _root + "\"")!)).Manifest.Id);
+    }
+
+    // Pointing at the plugin itself is the obvious mistake: the folder you have open while
+    // editing is the plugin's, not the folder above it. Scanning that would look a level too
+    // deep and find nothing at all -- a silence indistinguishable from never having set it.
+    [Fact]
+    public void NormaliseRootAcceptsThePluginFolderItselfAndMeansItsParent()
+    {
+        Make("keeper", "{\"id\":\"keeper\"}");
+        string pluginFolder = Path.Combine(_root, "keeper");
+
+        Assert.Equal(_root, PluginCatalog.NormaliseRoot(pluginFolder));
+        Assert.Equal(_root, PluginCatalog.NormaliseRoot(pluginFolder + Path.DirectorySeparatorChar));
+        Assert.Equal("keeper", Assert.Single(
+            PluginCatalog.Discover(PluginCatalog.NormaliseRoot(pluginFolder)!)).Manifest.Id);
+    }
+
+    // A real plugin root is left exactly as typed -- the parent rewrite must not fire just
+    // because the folder exists, or every correctly-typed path would scan one level too high.
+    [Fact]
+    public void NormaliseRootLeavesARealRootAlone()
+    {
+        Make("keeper", "{\"id\":\"keeper\"}");
+        Assert.Equal(_root, PluginCatalog.NormaliseRoot(_root));
+
+        string missing = Path.Combine(Path.GetTempPath(), "scrye_absent_" + Guid.NewGuid().ToString("N"));
+        Assert.Equal(missing, PluginCatalog.NormaliseRoot(missing));   // reported, not rewritten
+    }
 }
