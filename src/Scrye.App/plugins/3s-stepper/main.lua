@@ -703,19 +703,70 @@ local function rec_export(name)
   for _, line in ipairs(b) do scrye.print(line) end
 end
 
+-- ---------- GMCP: the room and its contents, without the display markers ----------
+-- The '=S=', '=M=' and '=P=' markers are MUD display settings a player has to switch on,
+-- and they sit in the output where you read it. GMCP carries the same three facts out of
+-- band: Room.Info that you changed room, Room.Contents typed as monster / player / item.
+--
+-- The markers stay wired as a FALLBACK rather than being deleted. They cost nothing when
+-- GMCP is feeding us -- each stands down for any room GMCP has already described -- and
+-- they mean this still works on a character or a MUD without GMCP, and that the settings
+-- can be switched off one at a time rather than all at once.
+--
+-- Unlike the chaos sea, the real world gives Room.Info for every move: two different rooms
+-- have different numbers, so the payload always differs and is never suppressed. And this
+-- bot acts on the PROMPT rather than on arrival, by which time the whole burst -- Room.Info,
+-- then Room.Contents, then the text -- has landed. So there is no race to guard against.
+local gmcp_live     = false   -- a Room.Info has arrived at least once: GMCP is feeding us
+local gmcp_room     = false   -- ...and it has described the room we are standing in
+local gmcp_contents = false   -- Room.Contents has described this room
+
+local function on_gmcp_room()
+  gmcp_live, gmcp_room, gmcp_contents = true, true, false
+  on_room()
+end
+
+local function on_gmcp_contents(json)
+  local ok, info = pcall(scrye.json.decode, json)
+  if not ok or type(info) ~= "table" then return end
+  gmcp_contents = true
+  if type(info.items) ~= "table" then return end
+  for _, it in ipairs(info.items) do
+    if type(it) == "table" then
+      local name = tostring(it.name or "")
+      local kind = tostring(it.type or ""):lower()
+      -- Items are not read: this bot has no '=A|W|I=' trigger and nothing to do with them.
+      if name ~= "" then
+        if kind == "player" then on_player(name)
+        elseif kind == "monster" then on_mob(name) end
+      end
+    end
+  end
+end
+
 -- ---------- wiring ----------
 
-scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true, run = function() on_room() end }
+scrye.onGmcp("Room.Info", on_gmcp_room)
+scrye.onGmcp("Room.Contents", on_gmcp_contents)
+
+-- The markers, standing down for any room GMCP has already spoken for. Letting both run
+-- would be worse than either alone: on_room() clears a pending kill, so a '=S=' arriving
+-- after Room.Contents had armed one would drop the mob the bot was about to attack.
+scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true,
+  run = function() if not gmcp_room then on_room() end end }
 scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
-  run = function(name) on_mob(name) end }
+  run = function(name) if not gmcp_contents then on_mob(name) end end }
 scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
-  run = function(name) on_player(name) end }
+  run = function(name) if not gmcp_contents then on_player(name) end end }
 scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.$]], regex = true,
   run = function() bot_path_undo() end }
 scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], regex = true,
   run = function() bot_path_undo() end }
 scrye.addTrigger{ pattern = [[collapses, unblocking the escape routes\.]], regex = true,
-  run = function() if bot.active then scrye.send("!glance") end end }
+  -- A collapse CHANGES the room's exits, so GMCP re-sends Room.Info by itself and the
+  -- glance is asking for something already on its way. Worse than redundant with the
+  -- markers off: '!glance' then produces nothing this plugin can read.
+  run = function() if bot.active and not gmcp_live then scrye.send("!glance") end end }
 scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true,
   run = function(name)
     if bot.active and not bot.user_paused and bot.paused_on_mob and bot.autoresume
@@ -739,7 +790,10 @@ scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true,
     end
   end }
 
-scrye.onPrompt(function() on_prompt() end)
+-- The prompt is the last thing in a room's output, so clearing here is what makes the
+-- marker fallback per-ROOM rather than permanent: if GMCP were to go quiet mid-session the
+-- next '=S=' is heard again, instead of being suppressed for ever by one old Room.Info.
+scrye.onPrompt(function() on_prompt() ; gmcp_room = false end)
 
 scrye.addAlias{ pattern = [[^(?:-|walker )\s*(\w+)$]], regex = true,
   run = function(a) bot_start(a) end }

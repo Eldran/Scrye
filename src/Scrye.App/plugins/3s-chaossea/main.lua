@@ -24,6 +24,23 @@
 --    a room with a down exit shows as 'v' (the original's blue dot).
 --    Original colours kept in the palette.
 -- ============================================================
+-- Reads the room from GMCP and from the MUD's own room header, so none of the '=S=',
+-- '=M=', '=P=' or '=A|W|I=' display markers are needed. Those triggers remain as a fallback
+-- for a character or MUD without GMCP; each stands down for any room GMCP has described.
+--
+-- The sea has NO room identity: Room.Info.num is 60494 for every room on every layer,
+-- and every exit destination is 60494 or 0. The whole sea is one room object re-dressed
+-- as you walk, so the 3s-map-gmcp trick -- key rooms by the number the server gives them
+-- and position can never drift -- does not apply here. x/y is still dead-reckoned.
+--
+-- What GMCP does give the sea:
+--   * Room.Info fires on a room CHANGE and at no other time ('look' produces none), so
+--     its arrival IS the move. That retires the whole sent_q apparatus.
+--   * Room.Info.name is the LAYER, so depth is told rather than counted.
+--   * Room.Info.exits keys are the exit list, authoritative and complete.
+-- and, the point of the exercise: none of it costs a MUD display setting, so the '=S='
+-- markers can be switched off and the room read the way a player reads it.
+-- ============================================================
 
 local P = "plugin." .. scrye.id .. "."
 
@@ -39,36 +56,23 @@ local idle_fight_prompts = 0   -- self-heal counter when combat fizzles out
 local armed = false            -- a room was parsed; ok to auto-step on next prompt
 local plan = nil               -- walking plan: one confirmed move at a time
 local last_dir = nil           -- last direction actually sent (avoid instant backtrack)
--- Commands on the wire whose output we have not finished reading, oldest first
--- (first word, lowercased). Tells a REPRINTED room header ('look', 'finger') apart
--- from an actual move, and an actual move apart from a wimpy retreat.
+-- The last movement direction YOU typed, and when. Observe-only, and deliberately a
+-- SCALAR: nothing about correctness depends on it any more, so it needs no queue.
 --
--- A QUEUE, not a single "last command", because commands pipeline: scrye.onCommand
--- reports every send on the wire -- yours, ours, and other plugins' -- and the
--- auto-trader in 3s-viking-status fires one `vtrade goods <x>` per second for 16
--- goods. A scalar is overwritten by that timer in the gap between our step going out
--- and its room header coming back, so our own move gets read as somebody's redisplay
--- and never confirmed. The MUD answers commands in the order it received them, so
--- the block being printed belongs to sent_q[1] and nothing else.
--- Strictly one push per command, one pop per prompt: any cleverer bookkeeping
--- (popping on the room header as well) drifts the queue by one and puts it
--- permanently out of step with the output it is supposed to be labelling.
+-- It used to. Arrival was learned by parsing the '=S=' room header out of the output,
+-- which meant working out which command that block of output was answering -- a real
+-- problem, because commands pipeline and every plugin's sends share the stream. That is
+-- what sent_q existed for, with a TTL, a self-limit, a prune on every prompt and the
+-- watchdog's '!glance' to shake a header loose; and it still drifted by one whenever a
+-- command produced no prompt at all.
 --
--- One push per command is not enough on its own, because SOME COMMANDS PRODUCE NO
--- PROMPT and so are never popped. Scrye's own MIP handshake is four of them
--- ('3klient ...' x3, 'forcehp'), CommandSent reports every one, and they go out on
--- every connect. A single un-popped entry puts sent_q permanently one behind: from
--- then on sent_q[1] names the command BEFORE the one whose output is printing, so
--- every one of the bot's own moves reads as somebody else's redisplay, never
--- confirms, and only the watchdog's 15s !glance shakes it loose -- one room per
--- watchdog tick, indefinitely. The drift is stable, which is why it never recovers.
--- Each entry therefore carries the tick it went out on, and anything that has been
--- sitting here for seconds is dropped: a MUD answers in milliseconds, so an old
--- entry is not a pending command, it is one that will never be popped.
-local sent_q = {}              -- { { cmd = "n", at = tick }, ... }
-local SENT_MAX = 16            -- self-limit: a lost prompt must not grow this forever
-local SENT_TTL = 3             -- ticks an unanswered command stays believable
-local glance_unstick = false   -- the watchdog's !glance is asking for a move to be re-confirmed
+-- GMCP removes the question instead of answering it: Room.Info is sent when you change
+-- room and at no other time, so its arrival IS the move. All that survives is telling
+-- "you walked out of a fight" from "wimpy dragged you out" -- which picks the wording of
+-- a message and decides nothing.
+local last_typed = nil         -- { dir = "n", at = tick } -- a direction the USER sent
+local TYPED_TTL = 3            -- ticks a typed direction stays a plausible explanation
+local layer_base = nil         -- pos.z + layer, at the room where the two were tied together
 local blind_steps = 0          -- consecutive re-orient steps after a maze shift
 local killname = "mutant"
 local goal = "cask portal"
@@ -85,31 +89,47 @@ local room_goal_word = nil     -- the matched word, acted on at the prompt
 local excluded = {}            -- mob long names never to attack
 local party = {}               -- lowercased group member names: seeing one is NOT "a player is here"
 local steps_done = 0
+local kills = 0                -- mobs killed since the map was last reset (a new sea zeroes
+                               -- it, so it reads as "this sea" rather than "for ever")
 local seanum = 1
 local sea_time = nil           -- `now` value when the current sea was entered
 local sea_started_here = false -- true only if THIS session started the sea (see cs_new_sea)
 local sea_entering = false     -- New Sea sequence in flight: the swap is sent over several
-                               -- seconds and the map reset + opening glance come at the end
-                               -- of it, so nothing may walk, unpause or re-glance until then.
+                               -- seconds, and TWO of those commands change room -- 'retreat
+                               -- from the sea' and 'enter sea' -- so Room.Info arrives twice
+                               -- mid-swap. Nothing may walk or unpause while it is set, and
+                               -- arrivals are ignored: the first is a room outside the sea
+                               -- and mapping it would seed the new maze with a phantom.
 local now = 0                  -- seconds since plugin load (1 s ticker)
 
--- Drop the entries at the head that the MUD has certainly already answered. This is
--- the queue correcting its own model rather than a heuristic: it holds commands whose
--- output has not finished printing, and after SENT_TTL seconds that is no longer what
--- an entry means.
-local function sent_prune()
-  while sent_q[1] and now - sent_q[1].at >= SENT_TTL do table.remove(sent_q, 1) end
-end
-
--- The command whose block of output is printing now, or nil for the server itself.
-local function sent_head()
-  sent_prune()
-  return sent_q[1] and sent_q[1].cmd or nil
+-- A direction the user typed recently enough to still explain a move we did not order.
+-- Only ever used to word a message.
+local function typed_recently()
+  if last_typed and now - last_typed.at < TYPED_TTL then return last_typed.dir end
+  return nil
 end
 local map_serial = 1           -- bumped on every GRAPH change (rooms/exits), not moves —
                                -- the wasm pathfinder caches the graph keyed on this
 
 local cs_flags = { item = false, gold = false, player = false }
+-- Has Room.Contents spoken for the room we are standing in? It arrives BEFORE the MUD
+-- prints the same contents as text, so when it has, the '=M=' / '=P=' / '=A|W|I=' triggers
+-- are redundant and must not run: they would set the same flags a second time from lines
+-- naming the same creatures. Cleared on arrival, so a room whose contents only ever come
+-- as text still works exactly as before -- which is what lets the markers be turned off one
+-- at a time rather than all at once.
+local contents_seen = false
+-- The sea moves you without being asked: "Suddenly you find yourself elsewhere..". The
+-- Room.Info that follows is NOT the step we sent, and confirming it as one would advance
+-- pos by a direction we never travelled and quietly poison every plan after it.
+local teleported = false
+-- A real wimpy retreat announces itself AND names the direction: "Your legs run away with
+-- you east". So it costs us nothing -- we know exactly where we ended up. What matters more
+-- is what its ABSENCE means: an arrival mid-fight with no retreat line and nothing typed is
+-- not a retreat at all, it is the maze rearranging itself around us, which it does
+-- constantly. Guessing "wimpy" from the absence of everything else stopped the bot several
+-- times an hour for nothing.
+local wimpy_dir = nil
 
 -- forward declarations (mutually recursive)
 local cs_draw, cs_step, cs_advance, mark_dirty, build_panel
@@ -182,15 +202,25 @@ local function room_count()
   return n
 end
 
-local function add_exit(p, dir)
+-- `state` is what the SERVER says about this exit: "new" (never walked), "old" (walked), or
+-- nil when we only know the exit's name -- the room header lists directions and no
+-- destinations, so it must not overwrite what we already knew.
+local function add_exit(p, dir, state)
   local room = get_room(p) or add_room(p)
   if not room.exits[dir] then
-    room.exits[dir] = true
+    room.exits[dir] = state or true
     map_serial = map_serial + 1
     local target = moved(p, dir)
-    if target and not get_room(target) then
+    -- The server's answer comes FIRST. Our own test -- "is there a room at the coordinate
+    -- this exit leads to?" -- is only as good as the dead reckoning behind it, and a
+    -- collision (two real rooms landing on one square) makes an unwalked exit look visited.
+    -- That is how a barely-touched sea once reported "Out of rooms!". An exit the server
+    -- still reports as 0 has never been walked, whatever our coordinates believe.
+    if state == "new" or (target and not get_room(target)) then
       frontier[#frontier + 1] = { x = p.x, y = p.y, z = p.z, dir = dir }
     end
+  elseif state then
+    room.exits[dir] = state
   end
 end
 
@@ -409,28 +439,68 @@ local function bfs(src, dst, allow_up)
   return path
 end
 
--- ---------- room exit parsing ----------
-local function parse_exits(short)
-  local exit_desc = short:match("%((.*)%)")
-  if exit_desc then
-    -- the maze shifts: trust what the room says NOW over what we recorded
-    local room = get_room(pos) or add_room(pos)
-    room.exits = {}
-    for exit in exit_desc:gmatch("[^,%s]+") do
-      if exit == "out" then
-        -- the way out of the sea, don't queue it
-      elseif exit == "u" or exit == "up" then
-        -- remember it for pathing back, but never queue it for exploring
-        local r = get_room(pos) or add_room(pos)
-        r.exits[exit] = true
-      elseif DELTA[exit] then
-        add_exit(pos, exit)
-        if exit == "d" or exit == "down" then
-          local t = moved(pos, exit)
-          if t and not get_room(t) then note("DOWN exit here!") end
-        end
+-- ---------- room exits (from Room.Info) ----------
+-- The server states exits as an OBJECT, direction -> destination room number. In the sea
+-- every destination is the sea's own number or 0, so the VALUES carry nothing at all. The
+-- KEYS are the answer, and they are complete -- which the '(n,s,e)' text in the room header
+-- was not always, and which no longer costs a MUD display setting to obtain.
+-- `dests` is Room.Info's exits object: direction -> destination room number. Optional,
+-- because the room header gives names only.
+--
+-- The destination NUMBER is worthless in the maze -- every room is 60494 -- but whether it is
+-- zero is not. 0 means you have not taken that exit; a number means you have. That is the
+-- server keeping the exploration record for us, and it cannot drift the way our coordinates
+-- can. `out` is the exception that proves it: it always points at 266, the sea's entrance.
+local function set_exits(keys, dests)
+  local room = get_room(pos) or add_room(pos)
+  local prev = room.exits or {}
+  room.exits = {}
+  for _, exit in ipairs(keys) do
+    -- What the server says about this exit, or what we already knew if it said nothing.
+    -- Never downgrade: the header path carries no destinations and must not erase the bit.
+    local state
+    local d = dests and dests[exit]
+    if d ~= nil then state = (d == 0) and "new" or "old"
+    else               state = prev[exit] end
+
+    if exit == "out" then
+      -- the way out of the sea, don't queue it
+    elseif exit == "u" or exit == "up" then
+      -- remember it for pathing back, but never queue it for exploring
+      room.exits[exit] = state or true
+    elseif DELTA[exit] then
+      add_exit(pos, exit, state)
+      if exit == "d" or exit == "down" then
+        local t = moved(pos, exit)
+        if state == "new" or (t and not get_room(t)) then note("DOWN exit here!") end
       end
     end
+  end
+end
+
+-- "Layer three of the Sea of Chaos" -> 3. Word forms, because that is what the server
+-- writes; anything unrecognised returns nil and dead reckoning simply stands.
+local LAYER_WORD = { one=1, two=2, three=3, four=4, five=5, six=6, seven=7, eight=8,
+  nine=9, ten=10, eleven=11, twelve=12, thirteen=13, fourteen=14, fifteen=15,
+  sixteen=16, seventeen=17, eighteen=18, nineteen=19, twenty=20 }
+local function layer_of(name)
+  local w = tostring(name or ""):match("^[Ll]ayer%s+(%w+)")
+  if not w then return nil end
+  return LAYER_WORD[w:lower()] or tonumber(w)
+end
+
+-- The layer the server names is the one coordinate in the sea that cannot drift, so where
+-- dead reckoning disagrees with it the server wins. ANCHORED rather than assigned: nothing
+-- here assumes which way the layer numbers run or where they start, only that the layer and
+-- z move together by one. The first layer seen ties the two together; every one after that
+-- is checked against it.
+local function anchor_layer(layer)
+  if not layer then return end
+  if not layer_base then layer_base = pos.z + layer return end
+  local z = layer_base - layer
+  if z ~= pos.z then
+    note(string.format("layer %d: z corrected %d -> %d", layer, pos.z, z))
+    pos.z = z
   end
 end
 
@@ -489,7 +559,22 @@ cs_advance = function()
     plan = nil
     if kind == "explore" then
       steps_done = steps_done + 1
-      if auto then armed = false; cs_step() end
+      -- Deliberately NOT cs_step() here. This runs on the PROMPT, and the prompt can arrive
+      -- before Room.Map does -- Room.Map being what ends an arrival burst. Stepping straight
+      -- on would put the next move on the wire while the burst for the room we are standing
+      -- in is still coming, and that burst's Room.Map would then confirm the step that had
+      -- only just gone out. The real arrival would find nothing awaiting it, and mid-fight
+      -- that reads as a wimpy retreat.
+      --
+      -- What it does instead is ASK whether the burst has ended, and `armed` is exactly that
+      -- answer: only Room.Map sets it. So when Room.Map has already been and gone, stepping
+      -- straight on is safe and the walk keeps its old pace; when it has not, this does
+      -- nothing and the arming itself starts the step on the next prompt.
+      --
+      -- Waiting unconditionally was wrong, and visibly so: after every kill the prompt that
+      -- retires the plan is the one AFTER the fight, by which time Room.Map is long past.
+      -- The bot sat there until the watchdog nudged it, twenty seconds a corpse.
+      if auto then cs_step() end   -- the gate in cs_advance decides whether it may go
     else
       note("arrived back at start")
       auto = false
@@ -497,43 +582,117 @@ cs_advance = function()
     cs_draw()
     return
   end
+  -- THE GATE, and the only one. Every movement this plugin ever sends leaves through the
+  -- line below -- the idle step, the continuation of a route, the blind re-orient step -- so
+  -- this is where the rule belongs rather than in each caller.
+  --
+  -- The rule: a step may go out only once Room.Map has ended the burst for the room we are
+  -- standing in, and `armed` is exactly that fact -- nothing else sets it. Send inside a
+  -- burst and that burst's own Room.Map, still in flight, confirms the step which has only
+  -- just left; pos then advances twice for one real move, two rooms land on one coordinate,
+  -- and the router starts planning through exits that are not there. The symptom is a
+  -- refusal for a direction the room visibly does not have.
+  --
+  -- Gating the callers one at a time missed this. The CONTINUATION of a multi-step route
+  -- goes out from here on the prompt, which can beat Room.Map -- so single-step plans were
+  -- fine and long routes drifted, which is why it only happened sometimes.
+  if not armed then return end
+  armed = false
   plan.awaiting = true
   plan.sent_at = now            -- anything older than this is not what is printing
-  glance_unstick = false        -- a fresh step: any earlier unstick request is spent
+  -- The room we are leaving stops being interesting the moment we commit to leaving it, and
+  -- clearing HERE rather than on arrival is what makes a Room.Info-less move safe: the new
+  -- room's Room.Contents can land before anything confirms we arrived.
+  cs_flags.item = false; cs_flags.gold = false; cs_flags.player = false
+  room_goal_idx = nil; room_goal_word = nil
+  pending_mob = nil
+  contents_seen = false
   last_dir = plan.dirs[plan.idx]
   scrye.send(plan.dirs[plan.idx])
 end
 
-local function cs_on_room(short)
+-- ---------- arrival (Room.Info) ----------
+-- Room.Info is sent when you CHANGE ROOM and at no other time -- 'look' and '!glance'
+-- produce none -- so this firing IS a move. None of the old "was that our step, or a
+-- redisplay somebody else asked for?" reasoning is needed; what remains is only WHOSE
+-- move it was, and the bot already knows whether it ordered one.
+local function on_room_info(json)
   if not enabled then return end
-  -- What produced this room header? Consume the answer: it is only valid for the
-  -- block of output the command generated, and the prompt clears it again.
-  local cmd = sent_head()   -- the command this block of output is answering (nil = the server)
-  -- A command that was already on the wire BEFORE we stepped and still has not printed
-  -- is one that never will: nothing pops an entry but a prompt, and it produced none.
-  -- The block arriving is ours. Drop the impostor instead of spending a watchdog cycle
-  -- on it -- otherwise the first silent command of the session costs 15s, and the next
-  -- one 15s more.
-  while cmd and not DELTA[cmd]
-        and plan and plan.awaiting and plan.sent_at and sent_q[1].at < plan.sent_at do
-    table.remove(sent_q, 1)
-    cmd = sent_head()
-  end
-  -- ...except the watchdog's own re-glance, which exists precisely to shake a room
-  -- header out of the MUD when a step went unconfirmed. Its reply IS the confirmation.
-  if glance_unstick and cmd == "!glance" and plan and plan.awaiting then
-    glance_unstick = false
-    cmd = plan.dirs[plan.idx]
-  end
-  if cmd and not DELTA[cmd] then
-    -- Something that REPRINTS the room header without moving you: 'look', 'finger bob',
-    -- 'exits', or the bot's own '!glance'. Only a direction (or the server itself) can
-    -- move you, so this is a redisplay, whatever it is. Re-read the exits and arm the
-    -- stepper from it -- but do not advance the walking plan, and do not call it a wimpy
-    -- retreat, which is what used to happen here.
-    if not paused then parse_exits(short); armed = true; cs_draw() end
+  local ok, info = pcall(scrye.json.decode, json)
+  if not ok or type(info) ~= "table" then
+    note("Room.Info did not decode as an object - ignoring")
     return
   end
+  -- Keys AND destinations. The number itself says nothing -- every maze room is 60494 -- but
+  -- whether it is ZERO is the server's own record of which exits you have walked, which is
+  -- worth more than anything dead reckoning can work out. Sorted so the exit list is stable
+  -- between rooms and can be compared.
+  local keys, dests = {}, {}
+  if type(info.exits) == "table" then
+    for d, v in pairs(info.exits) do
+      local k = tostring(d):lower()
+      keys[#keys + 1] = k
+      local n = tonumber(v)
+      if n then dests[k] = n end     -- unparseable: leave it unknown rather than guess
+    end
+    table.sort(keys)
+  end
+  local layer = layer_of(info.name)
+  local tp = teleported
+  teleported = false
+
+  -- Two ways the arrival is not ours to confirm.
+  --
+  -- A teleport: the sea moved us, so the room is real but our position is not. Nothing in
+  -- the payload can tell us where we are -- every maze room is num 60494 -- so the honest
+  -- answer is to stop and say so, exactly as a wimpy retreat does.
+  --
+  -- Or we are not in the maze at all. The layer rooms are named "Layer N of the Sea of
+  -- Chaos"; the sea's entrance is "A swirling Sea of Chaos", num 266, area "The Sea of
+  -- Chaos", with 'out' for an exit. A room that names no layer is not one of the maze rooms
+  -- this bot maps, and mapping it would put a room that does not belong onto the grid.
+  if not paused and (tp or not layer) then
+    plan = nil
+    paused = true
+    -- Three cases, and they need three different things done about them. You cannot leave
+    -- the maze by accident -- the only ways out are the 'out' exit (never queued), 'retreat
+    -- from the sea', and 'enter portal' at the cask -- so a room outside it means either the
+    -- sea threw us out or you took one of those deliberately. Either way the recovery is to
+    -- go back IN, not to reset a map that is about to be replaced.
+    if tp and not layer then
+      note(string.format("the sea threw us out to %s - 'enter sea' to go back in.", tostring(info.name)))
+      pnotify("Chaos sea: thrown out of the maze - bot paused")
+    elseif tp then
+      note("teleported inside the maze - pos is now unknown. 'cs reset' here, then unpause.")
+      pnotify("Chaos sea: teleported - bot paused, position unknown")
+    else
+      note(string.format("left the maze (%s) - bot PAUSED.", tostring(info.name)))
+      pnotify("Chaos sea: left the maze - bot paused")
+    end
+    cs_draw()
+    return
+  end
+
+  -- A retreat we were told about, with the direction it took. Apply it: the map stays
+  -- right, the pause happens at a position we actually know, and 'cs pause' is enough to
+  -- carry on -- no 'cs set x y z' guessing.
+  if wimpy_dir and not (plan and plan.awaiting) then
+    local d = wimpy_dir
+    wimpy_dir = nil
+    local p2 = moved(pos, d)
+    if p2 then pos = p2 end
+    add_room(pos)
+    plan = nil
+    paused = true
+    fighting = false
+    set_exits(keys, dests)
+    note(string.format("WIMPY - your legs ran away with you %s. Bot PAUSED at [%d %d %d];"
+      .. " 'cs pause' to carry on.", d, pos.x, pos.y, pos.z))
+    pnotify("Chaos sea: wimpy retreat " .. d .. " - bot paused")
+    cs_draw()
+    return
+  end
+
   if plan and plan.awaiting then
     -- the bot's own move arriving: always confirm it, even mid-pause
     local p2 = moved(pos, plan.dirs[plan.idx])
@@ -541,33 +700,52 @@ local function cs_on_room(short)
     add_room(pos)
     plan.idx = plan.idx + 1
     plan.awaiting = false
+    last_typed = nil          -- our step, not yours: do not let it explain a later move
+    anchor_layer(layer)
     if paused then
-      parse_exits(short)   -- it's the bot's own maze room: map it
+      set_exits(keys, dests)         -- it's the bot's own maze room: map it
       cs_draw()
       return
     end
   elseif paused then
-    return   -- frozen: rooms you walk through while paused are ignored
+    -- Frozen: rooms you walk through while paused are ignored. This also covers the New Sea
+    -- swap, which runs entirely while paused and changes room twice on the way -- 'retreat
+    -- from the sea' lands somewhere that is not in the sea at all, and mapping it would seed
+    -- the new maze with a phantom room and a frontier pointing at rooms that do not exist.
+    return
   elseif fighting then
-    -- A move the bot did not order, during a fight. Two different things:
-    if cmd then
-      note("You walked " .. cmd .. " during a fight - bot PAUSED. Walk back to the fight room,")
+    local typed = typed_recently()
+    if typed then
+      -- You walked out of the fight yourself. Still worth stopping for: the bot was mid-kill
+      -- and you have taken the controls.
+      note("You walked " .. typed .. " during a fight - bot PAUSED. Walk back to the fight room,")
       pnotify("Chaos sea: you moved mid-fight - bot paused")
-    else
-      -- nothing was typed, so the server moved us: wimpy kicked in (HP retreat)
-      note("WIMPY! Moved during combat - bot PAUSED. Walk back to the fight room,")
-      pnotify("Chaos sea: WIMPY - bot paused mid-fight")
+      paused = true
+      note("then 'cs pause' to continue (or 'cs set x y z' if unsure where you are).")
+      cs_draw()
+      return
     end
-    paused = true
-    note("then 'cs pause' to continue (or 'cs set x y z' if unsure where you are).")
+    -- Nothing ordered a move and nothing announced one. A retreat SAYS so and names its
+    -- direction, so this is not one: the maze rearranged itself around us and the server
+    -- re-sent the room because its exits changed. We have not moved. Re-read the exits and
+    -- carry on fighting -- calling this a wimpy is what was pausing the bot mid-kill and
+    -- leaving the monster it had just walked up to unattacked.
+    set_exits(keys, dests)
     cs_draw()
     return
   end
+  anchor_layer(layer)
   cs_flags.item = false; cs_flags.gold = false; cs_flags.player = false
   room_goal_idx = nil; room_goal_word = nil
   pending_mob = nil
-  parse_exits(short)
-  armed = true
+  contents_seen = false          -- a new room: nothing has spoken for it yet
+  set_exits(keys, dests)
+  -- NOT armed here. Room.Info is the FIRST thing in an arrival burst, not the last; arming
+  -- on it let the bot send its next step while Room.Contents and Room.Map for the room it
+  -- was standing in were still in flight -- and Room.Map confirms an outstanding step, so
+  -- the tail of the old burst would confirm the step that had only just gone out. The step
+  -- then had nothing awaiting it when the real arrival landed, and a Room.Info during a
+  -- fight with no step outstanding reads as a wimpy retreat. It was not one.
   cs_draw()
 end
 
@@ -613,6 +791,10 @@ local function cs_blocked()
   plan.awaiting = false
   local room = get_room(pos)
   if room and d then room.exits[d] = nil end
+  -- The refused step consumed the arming, and no Room.Map follows a move that did not
+  -- happen -- so nothing would re-arm us and the bot would sit here. We are still standing
+  -- in a room whose burst ended long ago; say so.
+  armed = true
   note("blocked going " .. (d or "?") .. " - exit removed, replanning")
   if plan.entry then table.insert(frontier, 1, plan.entry) end   -- don't lose the in-flight target
   plan = nil
@@ -659,18 +841,216 @@ end
 
 local function cs_killblow()
   if not (enabled and fighting) then return end
+  kills = kills + 1
+  cs_draw()          -- the count is on the panel; show it now, not at the next redraw
   -- wait kill_delay so your own killing-blow triggers act first
   scrye.after(math.max(1, kill_delay), cs_after_kill)
 end
 
+-- ---------- exits from the line-of-sight map ----------
+-- Room.Map draws the rooms in sight as a grid: rooms every 2 columns and 2 rows, with the
+-- link characters between them. The links touching '@' ARE the current room's exits.
+--
+-- This exists because Room.Info is not sent for every move. The server appears to send it
+-- only when the payload CHANGES, and in the maze every room is num 60494, area "Unknown",
+-- named for its layer -- so stepping between two rooms with the same exit set produces a
+-- byte-identical payload and nothing goes out at all. Room.Map is sent every time.
+--
+-- Planar exits only. Up and down are not read from the payload's 'up'/'down' fields: they
+-- have been 0 in every capture, so what a non-zero value means is unverified, and a phantom
+-- down exit is the most damaging kind of error this bot can make -- DOWN always wins.
+-- A room that gains or loses a 'd' has an exit set that DIFFERS, so Room.Info is sent for
+-- it, and the map is not the only thing describing it.
+local function exits_from_map(m)
+  local rows = m and m.rows
+  if type(rows) ~= "table" then return {} end
+  local function at(r, c)
+    local line = rows[r]
+    if type(line) ~= "string" or c < 1 then return " " end
+    return line:sub(c, c)
+  end
+  local r0, c0
+  for r = 1, #rows do
+    local line = rows[r]
+    if type(line) == "string" then
+      local c = line:find("@", 1, true)
+      if c then r0, c0 = r, c break end
+    end
+  end
+  if not r0 then
+    -- No '@'. That is not a broken map: when the room you are standing in has a down exit,
+    -- the marker for it REPLACES you at your own cell -- 'v' where '@' would be. '@' has
+    -- been horizontally centred in every capture (col 8 of w:17), so look down that column
+    -- for a marker instead.
+    --
+    -- What is deliberately NOT done here is turning that 'v' into a 'd' exit. Reading the
+    -- position slightly wrong shows up immediately, because the exits then disagree with
+    -- Room.Info. A phantom DOWN sends the bot hunting a descent that does not exist, and
+    -- DOWN outranks everything in valid_entry -- the costs are not symmetric, and one
+    -- sighting is not enough to spend the expensive one on. A room that HAS a 'd' has an
+    -- exit set that differs from its neighbour's, so Room.Info is sent for it anyway.
+    local mid = math.floor((tonumber(m.w) or 17) / 2) + 1
+    for r = 1, #rows do
+      local ch = at(r, mid)
+      if ch == "v" or ch == "^" or ch == "+" then r0, c0 = r, mid break end
+    end
+  end
+  -- Still nothing to stand on. Return nil rather than an empty list: an empty list would be
+  -- written over the room's exits as "dead end", which is a far worse answer than "I could
+  -- not read this map, keep what Room.Info already told us".
+  if not r0 then return nil end
+  local function orth(ch) return ch == "-" or ch == "|" end
+  local found = {}
+  if orth(at(r0, c0 - 1)) then found[#found + 1] = "w" end
+  if orth(at(r0, c0 + 1)) then found[#found + 1] = "e" end
+  if orth(at(r0 - 1, c0)) then found[#found + 1] = "n" end
+  if orth(at(r0 + 1, c0)) then found[#found + 1] = "s" end
+  -- Diagonals are drawn with the slash that points along them. 'X' is two links crossing
+  -- and says nothing about which of them touches us, so it is not read.
+  if at(r0 - 1, c0 - 1) == "\\" then found[#found + 1] = "nw" end
+  if at(r0 - 1, c0 + 1) == "/"  then found[#found + 1] = "ne" end
+  if at(r0 + 1, c0 - 1) == "/"  then found[#found + 1] = "sw" end
+  if at(r0 + 1, c0 + 1) == "\\" then found[#found + 1] = "se" end
+  table.sort(found)
+  return found
+end
+
+-- ---------- arrival with no Room.Info (Room.Map) ----------
+-- The step landed, the server redrew the map, and said nothing about the room because there
+-- was nothing new to say. Confirm from the map instead of sitting out the step timeout.
+--
+-- Nothing here clears the per-room flags. Room.Contents arrives BEFORE Room.Map in the
+-- burst, so by now it may already have told us what is in the room we just walked into --
+-- clearing here would throw that away. The clearing happens when the step is SENT.
+local function on_room_map(json)
+  if not enabled or paused then return end
+  local ok, m = pcall(scrye.json.decode, json)
+  if not ok or type(m) ~= "table" then return end
+  if not (plan and plan.awaiting) then
+    -- Not an arrival -- Room.Map also fires when something moves in sight. Arm anyway: it
+    -- is the end of whatever burst it belongs to, and arming is only permission to think
+    -- about a step, not a step.
+    armed = true
+    return
+  end
+
+  if teleported then
+    teleported = false
+    plan = nil
+    paused = true
+    note("teleported - the sea moved us and pos is now unknown. 'cs reset' here, then unpause.")
+    pnotify("Chaos sea: teleported - bot paused, position unknown")
+    cs_draw()
+    return
+  end
+
+  local p2 = moved(pos, plan.dirs[plan.idx])
+  if p2 then pos = p2 end
+  add_room(pos)
+  plan.idx = plan.idx + 1
+  plan.awaiting = false
+  last_typed = nil
+  local ex = exits_from_map(m)
+  if ex then set_exits(ex) end   -- unreadable map: keep what we were told, do not blank it
+  -- The burst is over: the room is as described as it is going to get, and only now may the
+  -- next step go out. Everything after this belongs to the room we walk into next.
+  armed = true
+  cs_draw()
+end
+
+-- ---------- the sea's own room header ----------
+-- The one arrival signal the server never suppresses.
+--
+-- GMCP withholds ANY package whose payload has not changed since the last one -- Room.Info,
+-- Room.Map and Room.Contents alike. Walk a uniform corridor and all three can be identical
+-- to the room before, so NOTHING is sent and there is no arrival to detect. Captured over
+-- four steps in one corridor: two produced no Room.Map whatsoever, and 'look' produces no
+-- GMCP at all.
+--
+-- The MUD's own header prints every time regardless, carries the exits, and needs no display
+-- setting switched on:
+--     Layer five of the Sea of Chaos (s,n)
+-- It is also the LAST thing in a room's output before the prompt, which makes it a better
+-- burst terminator than Room.Map: nothing can still be in flight behind it.
+--
+-- 'look' prints it too, which is why only the CONFIRM half is gated on a step being
+-- outstanding. Typing 'look' in the moment a step is in flight would confirm it wrongly --
+-- the same risk the old '=S=' design carried, and rarer than the stall it replaces.
+local function on_sea_header(exitstr)
+  if not enabled or paused then return end
+  local keys = {}
+  for d in tostring(exitstr or ""):gmatch("[^,%s]+") do keys[#keys + 1] = d:lower() end
+  table.sort(keys)
+
+  if plan and plan.awaiting then
+    if teleported then
+      teleported = false
+      plan = nil
+      paused = true
+      note("teleported - the sea moved us and pos is now unknown. 'cs reset' here, then unpause.")
+      pnotify("Chaos sea: teleported - bot paused, position unknown")
+      cs_draw()
+      return
+    end
+    local p2 = moved(pos, plan.dirs[plan.idx])
+    if p2 then pos = p2 end
+    add_room(pos)
+    plan.idx = plan.idx + 1
+    plan.awaiting = false
+    last_typed = nil
+    if #keys > 0 then set_exits(keys) end
+    cs_draw()
+  end
+  -- Arms whether or not it confirmed anything: the header is the end of the room's output
+  -- either way, and that is all `armed` claims.
+  armed = true
+end
+
+-- ---------- room contents (Room.Contents) ----------
+-- Typed, named and counted, so the mob / player / item triggers -- and the '=M=', '=P='
+-- and '=A|W|I=' display markers they depend on -- are not needed to read a room.
+--
+-- It is NOT sent for every room -- 78 messages against 134 arrivals in one capture -- but
+-- when it does come for an empty room it comes as { "full": 1, "items": [] }, an explicit
+-- "nothing here" rather than silence. So absence still proves nothing and the flags are
+-- cleared on ARRIVAL; an empty payload is simply a room with nothing to loop over.
+-- Ordering is settled by capture: Room.Info, then Room.Contents, then Room.Map.
+--
+-- Names arrive whole ("A warband in service to Goran [Legendary] [Grey-bearded] [6]"), and
+-- go to the same handlers the text triggers fed, so `excluded` and the party whitelist keep
+-- working -- provided their entries match the name the SERVER gives, which is not always
+-- the one the '=M=' line printed.
+local function on_room_contents(json)
+  if not enabled then return end
+  local ok, info = pcall(scrye.json.decode, json)
+  if not ok or type(info) ~= "table" then
+    note("Room.Contents did not decode as an object - ignoring")
+    return
+  end
+  -- Set even for an EMPTY payload. Room.Contents arrives as { "full": 1, "items": [] } for
+  -- a room with nothing in it, which is a positive statement that the room is empty -- and
+  -- the marker triggers must stand down for it just as firmly as for a room full of mobs.
+  contents_seen = true
+  if type(info.items) ~= "table" then return end
+  for _, it in ipairs(info.items) do
+    if type(it) == "table" then
+      local name = tostring(it.name or "")
+      local kind = tostring(it.type or ""):lower()
+      if name ~= "" then
+        -- Anything not named a monster or a player is treated as an item, which is what
+        -- the '=A|W|I=' markers covered between them: armour, weapon, item. A type we have
+        -- never seen is more likely to be another kind of thing lying there than a
+        -- creature, and reading it as an item risks nothing worse than a goal match.
+        if kind == "monster" then cs_on_mob(name)
+        elseif kind == "player" then cs_on_player(name)
+        else cs_on_item(name) end
+      end
+    end
+  end
+end
+
 -- ---------- prompt: goals + keep the plan moving ----------
 local function cs_on_prompt()
-  -- Before the guards: the prompt ends the block of output the oldest unanswered
-  -- command produced, so drop it -- what comes next belongs to the command behind it,
-  -- or, with the queue empty, to the server itself. That empty queue is what makes a
-  -- real wimpy retreat distinguishable at all.
-  sent_prune()
-  if sent_q[1] then table.remove(sent_q, 1) end
   if not enabled or paused or resting then return end
   -- whole room is printed now: if a goal item was here, act on the
   -- highest-priority one (cask before portal), ignoring print order.
@@ -708,8 +1088,7 @@ local function cs_on_prompt()
   if plan then
     cs_advance()
   elseif auto and armed then
-    armed = false
-    cs_step()
+    cs_step()          -- cs_advance consumes `armed` when the step actually goes out
   end
 end
 
@@ -717,9 +1096,11 @@ end
 local function valid_entry(e)
   local from_room = get_room({ x = e.x, y = e.y, z = e.z })
   local t = moved({ x = e.x, y = e.y, z = e.z }, e.dir)
-  if t and not get_room(t) and from_room and from_room.exits[e.dir] then
-    return t
-  end
+  if not (t and from_room and from_room.exits[e.dir]) then return nil end
+  -- Unexplored by the server's reckoning, or by ours. The server's is the one that survives a
+  -- coordinate collision; ours is the fallback for an exit it has told us nothing about.
+  if from_room.exits[e.dir] == "new" then return t end
+  if not get_room(t) then return t end
   return nil
 end
 
@@ -784,10 +1165,21 @@ local function cs_pause_toggle()
   cs_draw()
 end
 
-cs_step = function()
+-- `asked` marks a step YOU asked for -- the 'cs step' command or the Step button -- as
+-- opposed to one the bot took on its own.
+--
+-- The burst gate in cs_advance refuses to send until Room.Map or the room header has ended
+-- the arrival burst, which is what stops a step being sent inside somebody else's output and
+-- confirmed by it. Nothing has ended a burst when you have only just enabled the bot on a map
+-- restored from the store, so a deliberate 'cs step' would sit there doing nothing at all,
+-- silently. One step you asked for is not the race the gate exists to stop: the automatic
+-- paths -- the walk continuation, the watchdog, the post-kill resume -- stay gated, and they
+-- are the ones that fire in the middle of arriving output.
+cs_step = function(asked)
   if not enabled then note("not enabled - 'cs enable' first") return end
   if paused then note("paused - unpause first") return end
   if resting then note("resting (Seid low) - back in " .. math.max(0, rest_until - now) .. "s") return end
+  if asked then armed = true end
   if rest_below > 0 then
     local seid = get_seid()
     if seid and seid < rest_below then
@@ -845,7 +1237,15 @@ cs_step = function()
     -- unexplored exit. Rather than dropping auto, step blindly through a REAL exit of this room
     -- (exits are re-parsed accurately every room) to re-orient, then keep exploring. The fresh
     -- room's exits become a reachable frontier, so normal pathing resumes on the next tick.
-    if auto and #stash > 0 and blind_steps < 20 then
+    -- Not conditional on there being unreachable exits left. An EMPTY frontier in the sea
+    -- does not mean the sea is explored -- it means our dead-reckoned map says so, and in a
+    -- maze that rearranges itself that is a statement about the map, not about the sea.
+    -- Two different rooms collide onto one x,y often enough that every neighbour ends up
+    -- "known" while most of the sea has never been walked; the giveaway is the router
+    -- planning a direction the room in front of you does not have, and being told so.
+    -- Blind-stepping is the same remedy either way: walk a real exit, let the fresh room's
+    -- exits become a reachable frontier, and normal pathing resumes.
+    if auto and blind_steps < 20 then
       local cur = get_room(pos)
       local choices = {}
       if cur then
@@ -868,13 +1268,18 @@ cs_step = function()
         return
       end
     end
+    -- Nothing left to try: no route, and no exit to step blindly through either (or twenty
+    -- re-orients have not found one). Only now is stopping the honest answer.
     if #stash > 0 then
       note(string.format("%d unexplored exits but no path and no exit to blind-step from [%d %d %d] - stopping",
         #stash, pos.x, pos.y, pos.z))
       pnotify("Chaos sea: stuck - unexplored exits but no path (bot stopped)")
+    elseif blind_steps >= 20 then
+      note("20 blind steps and still no reachable exit - stopping. 'cs reset' here clears a stale map.")
+      pnotify("Chaos sea: re-orienting got nowhere - bot stopped")
     else
-      note("Out of rooms!")
-      pnotify("Chaos sea: out of rooms - sea fully explored (bot stopped)")
+      note("no exits to walk at all - stopping")
+      pnotify("Chaos sea: nowhere to go - bot stopped")
     end
     auto = false
     blind_steps = 0
@@ -910,10 +1315,14 @@ end
 
 local function reset()
   rooms = {}; frontier = {}
-  sent_q = {}                  -- "start over" includes what we thought was on the wire
+  wimpy_dir = nil              -- ...and a retreat nobody acted on
+  contents_seen = false        -- ...and what we thought had described the room
+  teleported = false           -- ...and a teleport nobody acted on
+  last_typed = nil             -- "start over" includes what we thought explained a move
+  layer_base = nil             -- a new sea re-numbers the layers: re-anchor on the next one
   map_serial = map_serial + 1
   pos = { x = 0, y = 0, z = 0 }
-  plan = nil; fighting = false; steps_done = 0
+  plan = nil; fighting = false; steps_done = 0; kills = 0
   goal_found = false; paused = false
   add_room(pos)
   cs_draw()
@@ -922,7 +1331,6 @@ end
 -- ---------- watchdog (every 5 s) ----------
 local stuck_since = nil
 local idle_ticks = 0
-local awaiting_ticks = 0
 local cs_last_sea_min = nil
 
 local function cs_watchdog()
@@ -947,22 +1355,6 @@ local function cs_watchdog()
     return
   end
   stuck_since = nil
-  -- move sent but the room never arrived: re-glance to unstick the confirm
-  if plan and plan.awaiting then
-    awaiting_ticks = awaiting_ticks + 1
-    if awaiting_ticks >= 3 then
-      awaiting_ticks = 0
-      note("watchdog: move unconfirmed - glancing")
-      -- The queue said our own room header belonged to someone else, and it was wrong.
-      -- Whatever is left in it has been overtaken by events, so stop believing it: the
-      -- glance's reply then reads as the server's, which confirms the move.
-      sent_q = {}
-      glance_unstick = true
-      scrye.send("!glance")
-    end
-    return
-  end
-  awaiting_ticks = 0
   -- auto mode but nothing happening at all for ~20s: nudge it
   if auto and not plan and not fighting and not in_combat() then
     idle_ticks = idle_ticks + 1
@@ -974,6 +1366,48 @@ local function cs_watchdog()
   else
     idle_ticks = 0
   end
+end
+
+-- ---------- a step that was never confirmed (every second) ----------
+-- A step went out and no Room.Info came back. With GMCP that is evidence rather than a
+-- guess -- the server reports every room change -- so after a few seconds the step did not
+-- land. Re-sending the direction is not an option: if it DID land and only the report was
+-- lost, sending it again walks us one room further than we think.
+--
+-- The likeliest cause in the sea is the maze moving the exit out from under the step, which
+-- is why the exit is DROPPED as well as the plan. Without that, the router keeps finding
+-- the same phantom exit, walking into it, and waiting again -- which is what a stuck bot
+-- looks like from the outside. Nothing is lost by being wrong: the next arrival in that
+-- room rewrites its exits from Room.Info wholesale.
+--
+-- On its own second, not the 5 s watchdog's: three seconds of silence is the whole of the
+-- pause a player sees, and waiting three watchdog ticks made it fifteen.
+local STEP_TIMEOUT = 3
+local awaiting_secs = 0
+
+local function cs_step_timeout()
+  if not enabled or paused or resting then awaiting_secs = 0 return end
+  if not (plan and plan.awaiting) then awaiting_secs = 0 return end
+  awaiting_secs = awaiting_secs + 1
+  if awaiting_secs < STEP_TIMEOUT then return end
+  awaiting_secs = 0
+  local d = plan.dirs[plan.idx]
+  -- The exit is NOT dropped any more. A wall announces itself -- "You cannot go north."
+  -- fires cs_blocked at once, with evidence, and removes it there. Silence is not evidence
+  -- of a wall; it has an innocent cause. Walk a uniform corridor and every room is the same
+  -- layer, the same exits, the same num, and the same picture on the LOS map -- so nothing
+  -- in the payload CHANGES and the server sends nothing at all. There is no arrival signal
+  -- to miss, and dropping an exit each time deleted the corridor out from under the bot:
+  -- first 'n', then 's', until the room had no exits and it stopped with "no exit to
+  -- blind-step from". It had walked into a perfectly ordinary corridor and dismantled it.
+  note(string.format("no room from '%s' in %ds - the step is unconfirmed, replanning (the exit is kept)",
+    tostring(d or "?"), STEP_TIMEOUT))
+  plan.awaiting = false
+  armed = true       -- as with a refusal: we never left, so nothing else would re-arm us
+  if plan.entry then table.insert(frontier, 1, plan.entry) end
+  plan = nil
+  if auto then scrye.after(1, function() cs_step() end) end
+  cs_draw()
 end
 
 -- ---------- new sea (only while paused at the cask) ----------
@@ -1004,15 +1438,19 @@ local function cs_new_sea()
   scrye.after(2, function() scrye.send("retreat from the sea") end)
   scrye.after(3, function() scrye.send("unsetsea") end)
   scrye.after(4, function() scrye.send("setsea " .. seanum) end)
-  scrye.after(5, function() scrye.send("enter sea") end)
-  -- ...and once we are actually in it, finish the job the user used to finish by hand:
-  -- a new sea is a NEW MAZE, so the old map is not stale, it is wrong. reset() drops it,
-  -- recentres on 0,0,0 and clears paused/goal_found; the glance then maps the room we
-  -- landed in and arms the stepper. Two seconds after `enter sea` so the room has printed.
-  scrye.after(7, function()
-    sea_entering = false
+  -- The reset goes HERE, immediately before the command that enters the new sea, and not
+  -- after it. A new sea is a NEW MAZE, so the old map is not stale, it is wrong; reset()
+  -- drops it, recentres on 0,0,0 and clears paused/goal_found. Entering IS a room change,
+  -- so Room.Info maps the arrival room and arms the stepper by itself -- but only if the
+  -- map it lands in is already the fresh one. Resetting afterwards, as this did while a
+  -- glance was doing the mapping, would wipe the one arrival that mattered and leave the
+  -- bot in a new sea with no room and nothing able to seed it.
+  scrye.after(5, function()
     reset()                  -- clears the old maze, the goal flag and the pause
-    scrye.send("!glance")    -- map the arrival room; its reply arms the stepper
+    sea_entering = false     -- ...and from here the next arrival is the new sea's own
+    scrye.send("enter sea")
+  end)
+  scrye.after(7, function()
     if auto then
       note("new sea #" .. seanum .. " ready - auto-exploring")
     else
@@ -1061,8 +1499,14 @@ cs_draw = function()
   else                      modetxt = "READY - Step or Auto"
   end
   scrye.setState(P .. "status", modetxt)
-  scrye.setState(P .. "stats", string.format("%d,%d  level %d  rooms %d  left %d  dives %d",
-    pos.x, pos.y, 1 - pos.z, room_count(), #frontier, steps_done))
+  -- The layer the SERVER named, not one inferred from z. `1 - pos.z` was the old guess and
+  -- it assumed you entered on layer one: on a sea entered at layer two it read 4 where the
+  -- game said "Layer five". layer_base ties z to the layer the first Room.Info reported, so
+  -- this is the same number the room header prints. Falls back to the old guess only before
+  -- anything has been anchored.
+  local layer_now = layer_base and (layer_base - pos.z) or (1 - pos.z)
+  scrye.setState(P .. "stats", string.format("%d   rooms %d   kills %d",
+    layer_now, room_count(), kills))
   scrye.setState(P .. "hunt", string.format("%s  (stops at: %s, delay %.1fs)", killname, goal, kill_delay))
 
   -- sea timer: time since the last New Sea (unsetsea only works after 60 min)
@@ -1128,7 +1572,7 @@ scrye.addPanel{
   accent = "#0B9DB3",          -- signature: chaos-sea teal (validated accent set)
   widgets = {
     { type = "value", text = "", bind = P .. "status", color = "info" },      -- semantic: status line
-    { type = "value", text = "pos ",   bind = P .. "stats" },
+    { type = "value", text = "layer ", bind = P .. "stats" },
     -- Marker colours are OKLCH-stepped and validated all-pairs on the map surface
     -- (worst pair ΔE 13.0 under simulated colour-blindness); labels draws the marker
     -- letters on their tiles, so the markers never rely on colour alone.
@@ -1145,7 +1589,9 @@ scrye.addPanel{
     { type = "label", text = "f frontier",  color = "#DA950B" },
     { type = "label", text = "v down exit", color = "#3BAECE" },
     { type = "label", text = "S start",     color = "#FFFFFF" },
-    { type = "value", text = "kills: ", bind = P .. "hunt", color = "error" },     -- semantic: kills
+    -- "hunt", not "kills": this row is what the bot is LOOKING for, and the stats row above
+    -- now carries an actual kill count. Two rows labelled kills would be a puzzle.
+    { type = "value", text = "hunt: ",  bind = P .. "hunt", color = "error" },
     { type = "value", text = "sea ",    bind = P .. "sea",  color = "#0B9DB3" },   -- sea id echoes the panel accent
     -- controls laid out two per row (Delay +/- dropped; use "cs delay <n>" if needed)
     -- The three state buttons carry their own colour: green when the thing they control
@@ -1154,7 +1600,7 @@ scrye.addPanel{
     { type = "buttonrow", buttons = {
         { text = enabled and "On" or "Off", color = enabled and LIT or nil,
           action = function() cs_interface(enabled and "disable" or "enable") end },
-        { text = "Step", action = function() cs_step() end },
+        { text = "Step", action = function() cs_step(true) end },   -- you asked for it
     } },
     { type = "buttonrow", buttons = {
         { text = auto and "Auto ON" or "Auto", color = auto and LIT or nil,
@@ -1213,8 +1659,9 @@ function cs_interface(args)
     -- hold the world automapper: the sea is a fresh random instance, and our steps
     -- must not dead-reckon phantom rooms into whatever real area 3s-map was in
     scrye.emit("map.hold", scrye.json.encode({ on = true }))
-    note("enabled - glance to map this room, then 'cs step' or 'cs auto on'")
-    scrye.send("!glance")
+    -- Nothing can re-describe the room you are STANDING in any more: Room.Info is sent on
+    -- a room change, and 'look' produces none. The map seeds itself on your first step.
+    note("enabled - walk one step to seed the map, then 'cs step' or 'cs auto on'")
   elseif args == "disable" then
     enabled = false; auto = false
     scrye.emit("map.hold", scrye.json.encode({ on = false }))   -- release the automapper
@@ -1222,7 +1669,7 @@ function cs_interface(args)
   elseif args == "reset" then
     reset(); note("map reset")
   elseif args == "step" then
-    cs_step()
+    cs_step(true)          -- you asked for it
   elseif args == "auto on" then
     if not enabled then scrye.emit("map.hold", scrye.json.encode({ on = true })) end
     enabled = true; auto = true; goal_found = false; blind_steps = 0
@@ -1235,7 +1682,8 @@ function cs_interface(args)
     -- and the map is about to be thrown away. Arming `auto` here is the whole point -- New
     -- Sea's own glance, seconds from now, is what will start the walking.
     if sea_entering then note("...as soon as the new sea is ready")
-    elseif #frontier > 0 then cs_step() else scrye.send("!glance") end
+    elseif #frontier > 0 then cs_step()
+    else note("no room known yet - walk one step and the server will name it") end
   elseif args == "auto off" then
     auto = false; note("auto off")
   elseif args == "pause" then
@@ -1329,19 +1777,50 @@ function cs_interface(args)
 end
 
 -- ---------- triggers ----------
-scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true,
-  run = function(w1) cs_on_room(w1 or "") end }
+-- The room header. Not a marker -- this prints with every display setting off -- and the
+-- only thing that arrives for EVERY move.
+--
+-- Unanchored at the END because the client renders the map on the same line, and the '=S='
+-- marker (when the player still has it switched on) appears there too.
+--
+-- Optional '=S=' at the START for the same reason, and it is not cosmetic: the marker is a
+-- PREFIX, so with it enabled the line does not begin with "Layer" at all --
+--     =S=Layer three of the Sea of Chaos (s,n)                   =S=
+-- and a pattern anchored on "Layer" misses every one of them. That would have handed the
+-- corridor stall straight back to anyone who had not turned the markers off.
+scrye.addTrigger{ pattern = [[^(?:=S=)?Layer \w+ of the Sea of Chaos \(([^)]*)\)]], regex = true,
+  run = function(ex) on_sea_header(ex or "") end }
+
+-- A wimpy retreat, which names the direction it dragged you. GMCP reports the room that
+-- results, never why -- and "why" is the whole difference between a retreat and the maze
+-- shifting under a fight.
+scrye.addTrigger{ pattern = [[^Your legs run away with you (\w+)]], regex = true,
+  run = function(w1) if enabled then wimpy_dir = tostring(w1 or ""):lower() end end }
+
+-- The sea's own teleport. Text, because GMCP does not say WHY a room arrived -- only that
+-- one did -- and this is the difference between our step landing and being thrown across
+-- the maze.
+scrye.addTrigger{ pattern = [[^Suddenly you find yourself elsewhere]], regex = true,
+  run = function() if enabled then teleported = true end end }
+
+-- The marker triggers are now the FALLBACK, not the source: they stand down for any room
+-- Room.Contents has already described. Keeping them means the markers can be switched off
+-- one at a time, and that a MUD or a character without GMCP still works.
 scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
-  run = function(w1) cs_on_mob(w1 or "") end }
+  run = function(w1) if not contents_seen then cs_on_mob(w1 or "") end end }
 scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
-  run = function(w1) cs_on_player(w1 or "") end }
+  run = function(w1) if not contents_seen then cs_on_player(w1 or "") end end }
 scrye.addTrigger{ pattern = [[^=[AWI]= ?(.*)$]], regex = true,
-  run = function(w1) cs_on_item(w1 or "") end }
+  run = function(w1) if not contents_seen then cs_on_item(w1 or "") end end }
 scrye.addTrigger{ pattern = [[ gold coins\.$]], regex = true,
   run = function() cs_flags.gold = true end }
 scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true,
   run = function(w1) cs_no_mob(w1 or "") end }
-scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.$]], regex = true,
+-- Deliberately NOT anchored at the end. This was [[^You cannot go (\w+)\.$]], which fails
+-- on a single trailing space -- and a refusal that does not match costs the full step
+-- timeout before the bot works out for itself that it did not move. The direction was
+-- captured and then ignored anyway: cs_blocked reads the one it sent.
+scrye.addTrigger{ pattern = [[^You cannot go ]], regex = true,
   run = function() cs_blocked() end }
 scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], regex = true,
   run = function() cs_blocked() end }
@@ -1351,23 +1830,32 @@ scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true,
 -- the original's "^>\s*$" prompt trigger
 scrye.onPrompt(cs_on_prompt)
 
--- Every command that goes to the MUD, whoever sent it -- you, an alias, the bot's own
--- scrye.send, ANOTHER PLUGIN's timer. Observe-only. Records just the first word,
--- lowercased, so 'finger bob' and 'look at chest' collapse to 'finger' / 'look' and a
--- bare direction stays a direction. Queued, because several can be in flight at once.
+-- Every command that goes to the MUD, whoever sent it. Observe-only, and now ONLY so
+-- that "you walked out of a fight" can be told from "wimpy dragged you out" -- which
+-- words a message and decides nothing. Directions alone are worth recording, and not
+-- while the bot has a step of its own in flight: that one is already accounted for.
 scrye.onCommand(function(text)
   local first = tostring(text or ""):match("^%s*(%S+)")
   if not first then return end
-  sent_q[#sent_q + 1] = { cmd = first:lower(), at = now }
-  if #sent_q > SENT_MAX then table.remove(sent_q, 1) end
+  first = first:lower()
+  if DELTA[first] and not (plan and plan.awaiting) then
+    last_typed = { dir = first, at = now }
+  end
 end)
+
+-- Room.Info is the arrival signal; Room.Contents is what is in the room when there is
+-- anything. Nothing else is subscribed to.
+scrye.onGmcp("Room.Info", on_room_info)
+scrye.onGmcp("Room.Contents", on_room_contents)
+-- Room.Map is the only one sent for EVERY move, so it is the backstop arrival signal.
+scrye.onGmcp("Room.Map", on_room_map)
 
 -- ---------- alias ----------
 scrye.addAlias{ pattern = [[^cs(?:\s+(.*))?$]], regex = true,
   run = function(w1) cs_interface(w1) end }
 
 -- ---------- timers ----------
-scrye.every(1, function() now = now + 1 end)   -- the clock (no os.time in Scrye)
+scrye.every(1, function() now = now + 1; cs_step_timeout() end)   -- the clock (no os.time in Scrye)
 scrye.every(5, cs_watchdog)
 
 -- MUSHclient called OnPluginSaveState on world save/close; Scrye has no such hook, so
