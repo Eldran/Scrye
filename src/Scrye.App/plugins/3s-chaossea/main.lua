@@ -202,6 +202,27 @@ local function room_count()
   return n
 end
 
+-- We took this exit, so it is walked -- whatever the server has got round to saying. The
+-- server's own bit only reaches us inside a Room.Info for the room we LEFT, and Room.Info is
+-- suppressed whenever the payload has not changed, so waiting for it left exits reading
+-- "never walked" long after we had walked them, and the frontier kept handing them back.
+local function mark_walked(p, dir)
+  local room = get_room(p)
+  if room and room.exits[dir] then room.exits[dir] = "old" end
+end
+
+-- Is this exit already queued? set_exits blanks the room and re-adds every exit each time
+-- the room is described, and a room is described on every visit, so without this each visit
+-- queued the same unwalked exits again. The pile then outgrew the bounded BFS sweep and the
+-- reachable entries sat behind forty stale copies of the unreachable ones.
+local function queued(p, dir)
+  for i = 1, #frontier do
+    local e = frontier[i]
+    if e.dir == dir and e.x == p.x and e.y == p.y and e.z == p.z then return true end
+  end
+  return false
+end
+
 -- `state` is what the SERVER says about this exit: "new" (never walked), "old" (walked), or
 -- nil when we only know the exit's name -- the room header lists directions and no
 -- destinations, so it must not overwrite what we already knew.
@@ -216,7 +237,7 @@ local function add_exit(p, dir, state)
     -- collision (two real rooms landing on one square) makes an unwalked exit look visited.
     -- That is how a barely-touched sea once reported "Out of rooms!". An exit the server
     -- still reports as 0 has never been walked, whatever our coordinates believe.
-    if state == "new" or (target and not get_room(target)) then
+    if (state == "new" or (target and not get_room(target))) and not queued(p, dir) then
       frontier[#frontier + 1] = { x = p.x, y = p.y, z = p.z, dir = dir }
     end
   elseif state then
@@ -451,10 +472,15 @@ end
 -- zero is not. 0 means you have not taken that exit; a number means you have. That is the
 -- server keeping the exploration record for us, and it cannot drift the way our coordinates
 -- can. `out` is the exception that proves it: it always points at 266, the sea's entrance.
-local function set_exits(keys, dests)
+-- `replace` says the caller's list is the WHOLE truth about this room and anything missing
+-- from it is gone. Only two sources may claim that: Room.Info's exits object and the room
+-- header's '(n,s,e)' list, both of which state every exit the room has. The LOS picture is a
+-- reading of a drawing that is cropped to what is in sight, so it merges: it may add an exit
+-- it can see and may never remove one it cannot.
+local function set_exits(keys, dests, replace)
   local room = get_room(pos) or add_room(pos)
   local prev = room.exits or {}
-  room.exits = {}
+  if replace ~= false then room.exits = {} end
   for _, exit in ipairs(keys) do
     -- What the server says about this exit, or what we already knew if it said nothing.
     -- Never downgrade: the header path carries no destinations and must not erase the bit.
@@ -695,6 +721,7 @@ local function on_room_info(json)
 
   if plan and plan.awaiting then
     -- the bot's own move arriving: always confirm it, even mid-pause
+    mark_walked(pos, plan.dirs[plan.idx])
     local p2 = moved(pos, plan.dirs[plan.idx])
     if p2 then pos = p2 end
     add_room(pos)
@@ -912,6 +939,13 @@ local function exits_from_map(m)
   if at(r0 + 1, c0 - 1) == "/"  then found[#found + 1] = "sw" end
   if at(r0 + 1, c0 + 1) == "\\" then found[#found + 1] = "se" end
   table.sort(found)
+  -- No link touching us is NOT "this room is a dead end". It is "this drawing did not show
+  -- me one" -- the picture is cropped to what is in sight, and a link to a room outside it
+  -- is simply not drawn. Returning the empty list here let it be written over the room as a
+  -- dead end, which stranded the room: no exits meant no edges for BFS to walk and no
+  -- frontier entry to walk to, and the bot re-oriented until it gave up. Same answer as an
+  -- unreadable map: keep what we were told.
+  if #found == 0 then return nil end
   return found
 end
 
@@ -944,6 +978,7 @@ local function on_room_map(json)
     return
   end
 
+  mark_walked(pos, plan.dirs[plan.idx])
   local p2 = moved(pos, plan.dirs[plan.idx])
   if p2 then pos = p2 end
   add_room(pos)
@@ -951,7 +986,9 @@ local function on_room_map(json)
   plan.awaiting = false
   last_typed = nil
   local ex = exits_from_map(m)
-  if ex then set_exits(ex) end   -- unreadable map: keep what we were told, do not blank it
+  -- MERGE, never replace: see set_exits. The header is a line behind this and states the
+  -- room's exits in full, so the picture is only ever a head start on it.
+  if ex then set_exits(ex, nil, false) end
   -- The burst is over: the room is as described as it is going to get, and only now may the
   -- next step go out. Everything after this belongs to the room we walk into next.
   armed = true
@@ -982,6 +1019,7 @@ local function on_sea_header(exitstr)
   for d in tostring(exitstr or ""):gmatch("[^,%s]+") do keys[#keys + 1] = d:lower() end
   table.sort(keys)
 
+  local confirmed = false
   if plan and plan.awaiting then
     if teleported then
       teleported = false
@@ -992,15 +1030,26 @@ local function on_sea_header(exitstr)
       cs_draw()
       return
     end
+    mark_walked(pos, plan.dirs[plan.idx])
     local p2 = moved(pos, plan.dirs[plan.idx])
     if p2 then pos = p2 end
     add_room(pos)
     plan.idx = plan.idx + 1
     plan.awaiting = false
     last_typed = nil
-    if #keys > 0 then set_exits(keys) end
-    cs_draw()
+    confirmed = true
   end
+  -- Applied whether or not it confirmed anything, and this is the point of the header.
+  --
+  -- Room.Map arrives a moment BEFORE this line and confirms the step too, so gating the
+  -- exits on "did I confirm" handed the room to whichever of the two got there first -- and
+  -- the LOS picture is a cropped drawing, while this list is the room's exits in full. A
+  -- room whose picture showed fewer exits than it has kept the shorter set for good: no
+  -- edges for BFS, no frontier entry to walk to, and the bot re-orienting until it stopped
+  -- with "unexplored exits but no path". The header is the LAST thing the room prints, so
+  -- letting it have the final word costs nothing and settles the disagreement the right way.
+  if #keys > 0 then set_exits(keys) end
+  if confirmed then cs_draw() end
   -- Arms whether or not it confirmed anything: the header is the end of the room's output
   -- either way, and that is all `armed` claims.
   armed = true

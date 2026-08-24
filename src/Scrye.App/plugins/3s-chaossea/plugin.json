@@ -1,7 +1,7 @@
 {
   "id": "3s-chaossea",
   "name": "3S Chaos Sea",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "author": "Joakim",
   "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Reads the room, its contents and combat from GMCP, and takes its arrival signal from the MUD's own room header - so none of the '=S=', '=M=', '=P=' or '=A|W|I=' display markers need to be switched on. Those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. Which exits are still unexplored comes from the server rather than from dead reckoning: in the sea an exit's destination is 0 until you have walked it, so the frontier survives the coordinate collisions a dead-reckoned map cannot avoid.",
   "mudIds": [
