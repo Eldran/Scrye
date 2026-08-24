@@ -74,6 +74,7 @@ local last_typed = nil         -- { dir = "n", at = tick } -- a direction the US
 local TYPED_TTL = 3            -- ticks a typed direction stays a plausible explanation
 local layer_base = nil         -- pos.z + layer, at the room where the two were tied together
 local blind_steps = 0          -- consecutive re-orient steps after a maze shift
+local relearns = 0             -- map relearns this sea (see cs_step's last resort)
 local killname = "mutant"
 local goal = "cask portal"
 local goals = {}
@@ -133,6 +134,7 @@ local wimpy_dir = nil
 
 -- forward declarations (mutually recursive)
 local cs_draw, cs_step, cs_advance, mark_dirty, build_panel
+local soft_relearn
 -- what the buttons last showed, so the panel is only rebuilt when it would look different
 local panel_on, panel_auto, panel_paused = nil, nil, nil
 
@@ -1298,12 +1300,20 @@ cs_step = function(asked)
       local cur = get_room(pos)
       local choices = {}
       if cur then
+        -- Never DOWN. A blind step is a recovery walk, and a descent is a one-way door: BFS
+        -- does not path up, so dropping a layer mid-recovery strands every queued exit above
+        -- us for the rest of the sea. A descent worth taking is found as a dive candidate by
+        -- the normal selection, never stumbled into here.
+        local function usable(d, allow_back)
+          return DELTA[d] and d ~= "u" and d ~= "up" and d ~= "d" and d ~= "down"
+                 and (allow_back or d ~= OPP[last_dir])
+        end
         for d in pairs(cur.exits) do
-          if DELTA[d] and d ~= "u" and d ~= "up" and d ~= OPP[last_dir] then choices[#choices + 1] = d end
+          if usable(d, false) then choices[#choices + 1] = d end
         end
         if #choices == 0 then   -- only the way we came: take it rather than stall
           for d in pairs(cur.exits) do
-            if DELTA[d] and d ~= "u" and d ~= "up" then choices[#choices + 1] = d end
+            if usable(d, true) then choices[#choices + 1] = d end
           end
         end
       end
@@ -1317,15 +1327,54 @@ cs_step = function(asked)
         return
       end
     end
-    -- Nothing left to try: no route, and no exit to step blindly through either (or twenty
-    -- re-orients have not found one). Only now is stopping the honest answer.
-    if #stash > 0 then
+    -- Nothing left to try: no route to any queued exit, and blind wandering has used its
+    -- budget (or there is nothing to wander through). That is not a fact about the sea --
+    -- the sea is static -- it is a fact about OUR MAP: somewhere it went wrong, and every
+    -- path the router plans crosses the wrong part. The map is the one thing we can replace.
+    --
+    -- So: forget it. Keep the exits of the room we are standing in -- they were read off
+    -- this room's own header moments ago -- wipe everything else, and relearn from here.
+    -- The sea has not changed and the server still marks every exit 0-or-not, so nothing is
+    -- lost but the bad data, and every frontier entry from now on emanates from a room we
+    -- have actually walked, which BFS can always reach. Three strikes a sea, so a map that
+    -- goes bad for a REASON (something is desyncing us) stops instead of thrashing.
+    if auto and relearns < 3 then
+      relearns = relearns + 1
+      local byz = {}
+      for _, e in ipairs(frontier) do byz[e.z] = (byz[e.z] or 0) + 1 end
+      local parts = {}
+      for z, n in pairs(byz) do parts[#parts + 1] = string.format("z%+d:%d", z, n) end
+      table.sort(parts)
+      note(string.format(
+        "map went bad at [%d %d %d]: %d queued exits, none reachable (%s). Forgetting the map"
+        .. " and relearning from this room (%d/3).",
+        pos.x, pos.y, pos.z, #frontier, table.concat(parts, " "), relearns))
+      soft_relearn()
+      blind_steps = 0
+      cs_draw()
+      local fresh = get_room(pos)
+      if fresh and next(fresh.exits) ~= nil then
+        cs_step()   -- the kept exits are the new frontier, one step away by construction
+      else
+        -- Nothing to keep: refusals have eaten this room's own record too, which is what a
+        -- position desync does - every refusal deleted a REAL exit from the WRONG room.
+        -- The one describer left is the room itself: 'look' prints the sea's own header,
+        -- the header's exit list always applies, and it re-arms. The prompt after it
+        -- drives the next step. This is the only place the bot ever asks the MUD to
+        -- re-describe a room, and it is one command deep in the last resort.
+        note("this room's own exits are gone from the map too - asking it to describe itself")
+        scrye.send("look")
+      end
+      return
+    end
+    if relearns >= 3 then
+      note(string.format("still stuck after %d relearns - stopping. Something is desyncing the"
+        .. " bot; a capture of the last few rooms would tell us what.", relearns))
+      pnotify("Chaos sea: stuck after relearning - bot stopped")
+    elseif #stash > 0 then
       note(string.format("%d unexplored exits but no path and no exit to blind-step from [%d %d %d] - stopping",
         #stash, pos.x, pos.y, pos.z))
       pnotify("Chaos sea: stuck - unexplored exits but no path (bot stopped)")
-    elseif blind_steps >= 20 then
-      note("20 blind steps and still no reachable exit - stopping. 'cs reset' here clears a stale map.")
-      pnotify("Chaos sea: re-orienting got nowhere - bot stopped")
     else
       note("no exits to walk at all - stopping")
       pnotify("Chaos sea: nowhere to go - bot stopped")
@@ -1362,6 +1411,33 @@ local function cs_leave()
   cs_advance()
 end
 
+-- cs_step's last resort. Unlike reset() this keeps what the current room's own header just
+-- told us, so the relearn starts with a frontier it can reach, and it does NOT touch the
+-- relearn counter -- reset() clears it, because a hand reset or a new sea is a fresh start.
+soft_relearn = function()
+  local cur = get_room(pos)
+  local keep = {}
+  if cur then for d, st in pairs(cur.exits) do keep[d] = st end end
+  rooms = {}; frontier = {}
+  map_serial = map_serial + 1
+  pos = { x = 0, y = 0, z = 0 }   -- coordinates are labels; the character has not moved
+  layer_base = nil                -- re-anchor on the next Room.Info
+  plan = nil
+  add_room(pos)
+  for d, st in pairs(keep) do
+    if d == "u" or d == "up" then
+      get_room(pos).exits[d] = st
+    else
+      -- "new"/"old" ride along for honesty's sake, though no behavioural difference is
+      -- constructible: a room with a "new" exit never stalls (a new exit is always
+      -- immediately walkable), so a relearn can only ever inherit walked or unknown ones,
+      -- and those two act identically everywhere. The suite deliberately does not claim to
+      -- isolate this line -- mutating it to nil is an equivalent mutant.
+      add_exit(pos, d, (st == "new" or st == "old") and st or nil)
+    end
+  end
+end
+
 local function reset()
   rooms = {}; frontier = {}
   wimpy_dir = nil              -- ...and a retreat nobody acted on
@@ -1373,6 +1449,7 @@ local function reset()
   pos = { x = 0, y = 0, z = 0 }
   plan = nil; fighting = false; steps_done = 0; kills = 0
   goal_found = false; paused = false
+  blind_steps = 0; relearns = 0
   add_room(pos)
   cs_draw()
 end
