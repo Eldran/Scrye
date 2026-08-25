@@ -455,6 +455,50 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         });
         l.SetField(-2, "store");
 
+        // MUD-shared storage (scrye.shared, 1.14) - the same surface as scrye.store, backed
+        // by the host's shared root. On a host with no shared backing every get returns nil
+        // and writes vanish, which is why plugins that care fall back:
+        //     local ST = scrye.shared or scrye.store
+        // (the table always exists on this runtime; the FALLBACK idiom is for scripts that
+        // must also run on hosts predating 1.14, where scrye.shared is absent entirely).
+        l.NewTable();
+        Bind("get", cl =>
+        {
+            string? v = _host.SharedGet(Id, LuaHost.ArgString(cl, 1));
+            if (v is null) cl.PushNil(); else cl.PushString(v);
+            return 1;
+        });
+        Bind("set", cl => { _host.SharedSet(Id, LuaHost.ArgString(cl, 1), LuaHost.ArgString(cl, 2)); return 0; });
+        Bind("setMany", cl =>
+        {
+            if (cl.GetTop() >= 1 && cl.IsTable(1))
+            {
+                var batch = new Dictionary<string, string>(StringComparer.Ordinal);
+                cl.PushNil();
+                while (cl.Next(1))
+                {
+                    string? key = LuaHost.ToStringLoose(cl, cl.GetTop() - 1);
+                    if (!string.IsNullOrEmpty(key)) batch[key] = LuaHost.ToStringLoose(cl, cl.GetTop()) ?? "";
+                    cl.Pop(1);
+                }
+                if (batch.Count > 0) _host.SharedSetMany(Id, batch);
+            }
+            return 0;
+        });
+        Bind("delete", cl => { _host.SharedDelete(Id, LuaHost.ArgString(cl, 1)); return 0; });
+        Bind("keys", cl =>
+        {
+            cl.NewTable();
+            string[] ks = _host.SharedKeys(Id);
+            for (int i = 0; i < ks.Length; i++)
+            {
+                cl.PushString(ks[i]);
+                cl.RawSetInteger(-2, i + 1);
+            }
+            return 1;
+        });
+        l.SetField(-2, "shared");
+
         // scrye.addPanel{...} — same rebuild-retires-old-callbacks scheme as MoonSharp,
         // plus Unref so the abandoned closures are actually collectable.
         Bind("addPanel", cl =>

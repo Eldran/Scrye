@@ -35,6 +35,7 @@ public static class PluginPermissions
     public const string AliasesManage = "aliases.manage";
     public const string TimersManage = "timers.manage";
     public const string StoragePrivate = "storage.private";
+    public const string StorageShared = "storage.shared";
     public const string NotificationsShow = "notifications.show";
     public const string SoundPlay = "sound.play";
     public const string UiPanels = "ui.panels";
@@ -47,7 +48,7 @@ public static class PluginPermissions
     {
         CommandsSend, OutputModify, OutputRead, TriggersManage, AliasesManage,
         VariablesWrite, VariablesRead, StateWrite, StateRead, TimersManage,
-        StoragePrivate, NotificationsShow, SoundPlay, CaptureWrite, LogWrite, UiPanels,
+        StoragePrivate, StorageShared, NotificationsShow, SoundPlay, CaptureWrite, LogWrite, UiPanels,
     };
 
     /// <summary>A short user-facing phrase for a permission, or null when the name is unknown
@@ -65,6 +66,7 @@ public static class PluginPermissions
         StateRead => "Read character and game state",
         TimersManage => "Run code on a timer",
         StoragePrivate => "Save data of its own between sessions",
+        StorageShared => "Save data shared by every character on this MUD",
         NotificationsShow => "Show notifications (and push to your phone)",
         SoundPlay => "Play sounds",
         CaptureWrite => "Route lines into capture panes",

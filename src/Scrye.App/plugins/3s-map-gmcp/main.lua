@@ -80,6 +80,13 @@
 
 local ROOM_PKG   = "Room.Info"
 local STORE_KEY  = "rooms"
+-- The MAP lives in the MUD-shared store (scrye.shared, API 1.14) when the host offers one:
+-- 3Scapes' map is the same for every character, so a map built on one character should not
+-- need rebuilding on the next - every profile on the same host reads one file. Preferences
+-- (talking, drawing) stay in scrye.store: those are this profile's, not the world's. On an
+-- older host scrye.shared is absent and WORLD degrades to the private store, exactly as
+-- before this existed.
+local WORLD = scrye.shared or scrye.store
 local STORE_VER  = 1
 
 local QUIET_SECS = 20     -- decide the feed is not coming
@@ -273,13 +280,23 @@ local function save(force)
   end
   local names = {}
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
-  scrye.store.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names })
+  WORLD.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names })
   dirty = false
   return #list
 end
 
 local function load()
-  local raw = scrye.store.get(STORE_KEY)
+  -- One-time migration: a map saved before scrye.shared existed sits in the private
+  -- store. If the shared store is real and empty while the private one has a map, adopt
+  -- it - the private copy is left in place as a backup (nothing writes it again).
+  if scrye.shared and scrye.shared.get(STORE_KEY) == nil then
+    local old = scrye.store.get(STORE_KEY)
+    if old ~= nil then
+      scrye.shared.set(STORE_KEY, old)
+      note("map moved to the MUD-shared store - every character on this world sees it now")
+    end
+  end
+  local raw = WORLD.get(STORE_KEY)
   if not raw then return end
   local ok, data = pcall(scrye.json.decode, raw)
   if not ok or type(data) ~= "table" or type(data.rooms) ~= "table" then
@@ -436,6 +453,13 @@ local function on_room_info(json)
 
   view_z = nil          -- moving means we care about our own level again
   draw()
+  -- The position oracle for other plugins: every mapped arrival, exactly as stored. Held
+  -- and sea arrivals never reach this line, so the feed goes quiet exactly when the map
+  -- does. Emitted before walk_arrived so a listener hears the room before any step the
+  -- walker takes because of it.
+  scrye.emit("map.room", scrye.json.encode({
+    num = num, name = name, area = area, exits = exits,
+  }))
   walk_arrived()        -- last, so 'here' and the store are already correct
 end
 
@@ -820,7 +844,13 @@ walk_stop = function(why)
   if not walk then return end
   walk = nil
   if walk_timer then scrye.cancel(walk_timer) ; walk_timer = nil end
-  if why then note(why) end
+  if why then
+    note(why)
+    -- Stopped-with-a-reason is the abnormal end; a finished walk emits map.walk.arrived
+    -- from walk_step instead. A listener that requested the walk gets exactly one of the
+    -- two, never both.
+    scrye.emit("map.walk.stopped", scrye.json.encode({ reason = why }))
+  end
   draw()
 end
 
@@ -843,6 +873,7 @@ local function walk_step()
     local n = #walk.steps
     walk_stop(nil)
     note(string.format("arrived - %d step(s), %d %s", n, here, name_of(here)))
+    scrye.emit("map.walk.arrived", scrye.json.encode({ num = here }))
     return
   end
   walk.sent = st.dir              -- so on_command knows this one was ours
@@ -861,6 +892,7 @@ local function walk_begin(steps, what)
   local dirs = {}
   for _, st in ipairs(steps) do dirs[#dirs + 1] = st.dir end
   note(string.format("walking to %s - %d step(s): %s", what, #steps, table.concat(dirs, " ")))
+  scrye.emit("map.walk.started", scrye.json.encode({ target = walk.target, steps = #steps }))
   note("  'mapg stop' stops it; so does moving yourself, or anything unexpected")
   walk_step()
 end
@@ -1053,7 +1085,8 @@ local function wipe(confirmed)
   stats = { told = 0, walked = 0, contradictions = 0, desyncs = 0, new = 0 }
   wipe_armed = false
   dirty = false
-  scrye.store.delete(STORE_KEY)   -- delete, not save-empty: nothing left behind
+  WORLD.delete(STORE_KEY)         -- delete, not save-empty: nothing left behind
+  scrye.store.delete(STORE_KEY)   -- and the pre-shared backup goes too: a wipe means gone
   forget_adjacency()
   draw()
   note("erased " .. n .. " room(s). Walk into a room and it starts again from there.")
@@ -1344,6 +1377,79 @@ scrye.on("map.hold", function(data, _, source)
     here = nil ; moves = {}     -- the first room back is a fresh start, not a step
     note("mapping resumed (" .. who .. " released the hold)")
   end
+end)
+
+-- The request half of the contract. Another plugin asks; the walker answers with the same
+-- machinery, the same caution and the same narration a typed 'mapg go' gets - a requested
+-- walk is a walk, and everything that stops one stops this one. The requester hears the
+-- outcome as exactly one of map.walk.arrived / map.walk.stopped.
+--
+-- 'map.goto' takes { num = <room> } or { area = "<name>" }; area means the NEAREST known
+-- room whose area matches (case-insensitive substring, like every other lookup here). A
+-- request that cannot be served emits map.walk.stopped with the reason, so a requester
+-- never has to parse our chat to learn its walk is not coming.
+local function refuse_goto(reason)
+  note("map.goto refused - " .. reason)
+  scrye.emit("map.walk.stopped", scrye.json.encode({ reason = reason }))
+end
+
+scrye.on("map.goto", function(data, _, source)
+  local ok, t = pcall(scrye.json.decode, data)
+  if not ok or type(t) ~= "table" then refuse_goto("unreadable request") ; return end
+  if held_by then refuse_goto("mapping is held by " .. held_by) ; return end
+  if not here then refuse_goto("we are not anywhere yet") ; return end
+  if walk then refuse_goto("already walking - map.stop first") ; return end
+  local who = tostring(source or "?")
+  local num = tonumber(t.num)
+  if num then
+    if num == here then scrye.emit("map.walk.arrived", scrye.json.encode({ num = here })) ; return end
+    if not rooms[num] then refuse_goto("room " .. num .. " is not in the store") ; return end
+    local steps, why = bfs(here, function(at) return at == num end)
+    if not steps then refuse_goto("no known route to " .. num .. (why and (" - " .. why) or "")) ; return end
+    walk_begin(steps, string.format("%d %s (for %s)", num, name_of(num), who))
+    return
+  end
+  local want = tostring(t.area or "")
+  if want == "" then refuse_goto("no num and no area in the request") ; return end
+  local lw = want:lower()
+  local function in_area(_, r) return area_of(r):lower():find(lw, 1, true) ~= nil end
+  if in_area(here, rooms[here]) then
+    scrye.emit("map.walk.arrived", scrye.json.encode({ num = here }))
+    return
+  end
+  local steps, why = bfs(here, in_area)
+  if not steps then refuse_goto("no known route into '" .. want .. "'" .. (why and (" - " .. why) or "")) ; return end
+  local d = steps[#steps].to
+  walk_begin(steps, string.format("%d %s [%s] (for %s)", d, name_of(d), area_of(rooms[d]), who))
+end)
+
+scrye.on("map.stop", function()
+  if walk then walk_stop("walk stopped (map.stop)") end
+end)
+
+-- 'map.query.area' { area = "<name>" }: hand over everything known about an area, as
+-- 'map.area.rooms' { area, rooms = [ { num, name, area, exits = {dir=dest} } ] }. This is
+-- how the farmer knows what "explored" means without a second map: its fence is the rooms
+-- somebody actually stood in, and this store is the record of that - including every
+-- earlier session, which the farmer's own eyes cannot have seen. Exits are handed over
+-- RESOLVED (walked beats told, like everything here); an unexplored exit has no
+-- destination to hand over and is simply absent. Always answers, even with an empty list -
+-- a requester left hanging cannot tell silence from absence.
+scrye.on("map.query.area", function(data)
+  local ok, t = pcall(scrye.json.decode, data)
+  if not ok or type(t) ~= "table" then return end
+  local want = tostring(t.area or "")
+  if want == "" then return end
+  local lw = want:lower()
+  local out = {}
+  for num, r in pairs(rooms) do
+    if area_of(r):lower():find(lw, 1, true) then
+      local ex = {}
+      for _, e in ipairs(neighbours(r)) do ex[e.dir] = e.to end
+      out[#out + 1] = { num = num, name = r.name, area = r.area, exits = ex }
+    end
+  end
+  scrye.emit("map.area.rooms", scrye.json.encode({ area = want, rooms = out }))
 end)
 
 scrye.onGmcp(ROOM_PKG, on_room_info)

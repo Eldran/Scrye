@@ -77,6 +77,34 @@ public interface IPluginHost
         foreach (KeyValuePair<string, string> kv in values) StoreSet(pluginId, kv.Key, kv.Value);
     }
 
+    // ---- shared per-MUD storage (scrye.shared, API 1.14) ----------------------
+    // The same key/value surface as scrye.store, but scoped to the MUD rather than the
+    // profile: every character logged into the same world reads and writes the same file.
+    // This is where world-truth belongs (a mapper's rooms - the MUD's map is the same for
+    // everyone) while per-character truth (the chaos-sea bot's sea, which is generated per
+    // character) stays in scrye.store. Opt-in per key, decided by the plugin author.
+    // Defaults are no-ops so headless hosts and tests need not care; a script must treat a
+    // missing binding as "no shared store on this host" and fall back to scrye.store.
+
+    /// <summary>Shared stored value for a key, or null if unset. Default: nothing stored.</summary>
+    string? SharedGet(string pluginId, string key) => null;
+
+    /// <summary>Persist a key/value pair in the MUD-shared store. Default no-op.</summary>
+    void SharedSet(string pluginId, string key, string value) { }
+
+    /// <summary>Remove a shared key. Default no-op.</summary>
+    void SharedDelete(string pluginId, string key) { }
+
+    /// <summary>All shared keys for the plugin. Default: empty.</summary>
+    string[] SharedKeys(string pluginId) => Array.Empty<string>();
+
+    /// <summary>Batched shared write - one file save for the whole batch, like
+    /// <see cref="StoreSetMany"/>. The default falls back to per-key <see cref="SharedSet"/>.</summary>
+    void SharedSetMany(string pluginId, IReadOnlyDictionary<string, string> values)
+    {
+        foreach (KeyValuePair<string, string> kv in values) SharedSet(pluginId, kv.Key, kv.Value);
+    }
+
     /// <summary>Broadcast an inter-plugin event (the <c>scrye.emit</c> backing, API 1.6). The
     /// host fans it out to every loaded plugin's <c>scrye.on(name, fn)</c> handlers — including
     /// the sender's own. Default no-op so headless hosts and tests need not care.</summary>

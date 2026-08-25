@@ -47,6 +47,11 @@ Accepted by the mapper:
 
 - `map.goto` `{ num }` or `{ area }` — walk there; `area` means the nearest known room whose
   area matches. Refused (with a `map.walk.stopped`) if unknown or unreachable.
+- `map.query.area` `{ area }` → answered as `map.area.rooms` `{ area, rooms }` with exits
+  resolved. Added after the first live run: the farmer's own graph only grows while it is
+  loaded, but "explored" must mean every room anybody ever stood in — and that record is
+  the mapper's. `farm start` asks; the farmer adopts what it does not already know
+  (its own fresher rooms always win, and the area fence is applied to the answer too).
 - `map.stop` `{}` — same as `mapg stop`.
 - `map.hold` — unchanged.
 

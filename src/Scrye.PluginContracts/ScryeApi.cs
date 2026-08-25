@@ -135,7 +135,17 @@ public static class ScryeApi
     //      Additive, and the same shape a label already uses: the colour drives a `.wc`
     //      class rather than binding Foreground directly, because a NULL brush on a Button
     //      paints its text with nothing. A host that predates it ignores the field.
-    public static readonly Version Current = new(1, 13);
+    // 1.14 scrye.shared - the scrye.store surface (get/set/setMany/delete/keys), scoped to
+    //      the MUD instead of the profile: every character on the same host reads and writes
+    //      one file (%APPDATA%/Scrye/plugin-shared/<host>/<pluginId>.json). World-truth goes
+    //      here - a mapper's rooms are the same map for every character - while per-character
+    //      truth (the chaos-sea bot's sea is generated per character) stays in scrye.store.
+    //      The split is the plugin author's call, key by key.
+    //
+    //      Additive, with a fallback idiom: on a pre-1.14 host scrye.shared is absent, so a
+    //      plugin that wants to run on both writes `local ST = scrye.shared or scrye.store`
+    //      and reads/writes through ST - degrading to per-profile storage, never breaking.
+    public static readonly Version Current = new(1, 14);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

@@ -24,6 +24,7 @@ public sealed class SessionPluginHost : IPluginHost
     private readonly Action<string, Line> _print;               // (pluginId, rendered line)
     private readonly Action<string, PanelSpec> _addPanel;       // (pluginId, panel) → App builds the HUD VM
     private readonly PluginDataStore? _data;                    // persistent scrye.store backing (optional)
+    private readonly PluginDataStore? _shared;                  // MUD-shared scrye.shared backing (optional, 1.14)
     private readonly Func<string, Rgb?>? _resolveColour;        // theme-token lookup for markup
     private readonly Rgb _printFore;                            // default colour for plugin output
 
@@ -35,13 +36,14 @@ public sealed class SessionPluginHost : IPluginHost
     /// <param name="printFore">Colour for uncoloured plugin output (the App's plugin green).</param>
     public SessionPluginHost(MudSession session, Action<string, Line> print, Action<string, PanelSpec> addPanel,
                              PluginDataStore? data = null, Func<string, Rgb?>? resolveColour = null,
-                             Rgb? printFore = null)
+                             Rgb? printFore = null, PluginDataStore? shared = null)
     {
         _session = session;
         _actions = session;   // MudSession implements IWorldActions
         _print = print;
         _addPanel = addPanel;
         _data = data;
+        _shared = shared;
         _resolveColour = resolveColour;
         _printFore = printFore ?? Rgb.DefaultFore;
     }
@@ -103,6 +105,15 @@ public sealed class SessionPluginHost : IPluginHost
     // ---- persistent per-plugin storage (scrye.store) --------------------------
 
     public string? StoreGet(string pluginId, string key) => _data?.Get(pluginId, key);
+
+    // ---- MUD-shared storage (scrye.shared, 1.14): the same store class, a different root,
+    // so every profile on one MUD shares the file (see WorldViewModel for the scoping) ----
+    public string? SharedGet(string pluginId, string key) => _shared?.Get(pluginId, key);
+    public void SharedSet(string pluginId, string key, string value) => _shared?.Set(pluginId, key, value);
+    public void SharedDelete(string pluginId, string key) => _shared?.Delete(pluginId, key);
+    public string[] SharedKeys(string pluginId) => _shared?.Keys(pluginId) ?? Array.Empty<string>();
+    public void SharedSetMany(string pluginId, IReadOnlyDictionary<string, string> values) =>
+        _shared?.SetMany(pluginId, values);
     public void StoreSet(string pluginId, string key, string value) => _data?.Set(pluginId, key, value);
     public void StoreDelete(string pluginId, string key) => _data?.Delete(pluginId, key);
     public string[] StoreKeys(string pluginId) => _data?.Keys(pluginId) ?? Array.Empty<string>();

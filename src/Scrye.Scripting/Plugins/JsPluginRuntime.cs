@@ -344,6 +344,35 @@ public sealed class JsPluginRuntime : IPluginRuntime
             @delete = (Action<string>)(key => _host.StoreDelete(Id, key ?? "")),
             keys = (Func<string[]>)(() => _host.StoreKeys(Id)),
         },
+
+        // MUD-shared storage (scrye.shared, 1.14): the same surface, the host's shared root,
+        // mirroring the Lua runtime feature-for-feature as this class promises.
+        shared = (object)new
+        {
+            get = (Func<string, object?>)(key => _host.SharedGet(Id, key ?? "")),
+            set = (Action<string, string>)((key, value) => _host.SharedSet(Id, key ?? "", value ?? "")),
+            setMany = (Action<JsValue>)(obj =>
+            {
+                if (obj is null || !obj.IsObject()) return;
+                try
+                {
+                    JsValue stringify = _engine.Evaluate("JSON.stringify");
+                    JsValue json = _engine.Invoke(stringify, obj);
+                    if (!json.IsString()) return;
+                    var raw = System.Text.Json.JsonSerializer
+                        .Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json.AsString());
+                    if (raw is null || raw.Count == 0) return;
+                    var batch = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach ((string k, System.Text.Json.JsonElement v) in raw)
+                        batch[k] = v.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? v.GetString() ?? "" : v.GetRawText();
+                    _host.SharedSetMany(Id, batch);
+                }
+                catch (Exception ex) { _host.Print(Id, "shared.setMany: " + ex.Message); }
+            }),
+            @delete = (Action<string>)(key => _host.SharedDelete(Id, key ?? "")),
+            keys = (Func<string[]>)(() => _host.SharedKeys(Id)),
+        },
     };
 
     private void AddRule(JsValue def, List<PluginRule> into)

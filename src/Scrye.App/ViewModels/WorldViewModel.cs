@@ -629,6 +629,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         var pluginData = new PluginDataStore(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "plugin-data"),
             profile.Name, AppendSystem);
+        // MUD-shared scrye.shared data (API 1.14), scoped by HOST so every character/profile
+        // on the same MUD reads one file: %APPDATA%/Scrye/plugin-shared/<host>/<pluginId>.json.
+        // The 3Scapes map is the same for everyone, so a map built on one character should not
+        // need rebuilding on the next. A profile with no host (rare) falls back to the profile
+        // name, which degrades to per-profile - never to a collision between MUDs.
+        string sharedScope = string.IsNullOrWhiteSpace(profile.Host)
+            ? profile.Name : profile.Host.Trim().ToLowerInvariant();
+        var pluginShared = new PluginDataStore(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "plugin-shared"),
+            sharedScope, AppendSystem);
         // The host renders the line itself: it applies the plugin's inline colour markup and
         // prepends the "[id] " tag in PluginColour, so uncoloured plugins look exactly as before
         // and coloured ones arrive ready to enqueue. Token names resolve through HudColor, the
@@ -638,7 +648,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             (id, spec) => Hud.AddPanel(id, spec),
             pluginData,
             HudColor.ResolveRgb,
-            PluginColour);
+            PluginColour,
+            shared: pluginShared);
         // The removable root is the USER one, wherever it landed in the list: a plugin under an
         // extra folder is yours and being edited, and "Remove" deleting it would be a surprise.
         string userPluginRoot = roots[^1];   // %APPDATA%/Scrye/plugins — writable, removable
