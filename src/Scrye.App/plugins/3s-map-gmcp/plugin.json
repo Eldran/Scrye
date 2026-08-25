@@ -1,0 +1,25 @@
+{
+  "id": "3s-map-gmcp",
+  "name": "3S Map (GMCP)",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "The automapper rebuilt on GMCP: rooms identified by the number the server gives them rather than by dead reckoning, so position is never inferred and so never drifts. Links are room number to room number, learned from what the server states and from what you actually walk; where the two disagree it says so and believes the walk. Draws one grid per area, and one more for each unconnected piece of an area - so 'Unknown', which labels every stretch of connective realm on the MUD rather than one place, becomes a handful of readable maps instead of one tangle. Coordinates are a layout recomputed from the links, never an identity. Walks routes on request, one confirmed step at a time: the next step goes out only when the server says we reached the room the route expected, and anything unexpected stops it. Everything it ever sends is a single bare movement direction. Runs alongside the shipped 3s-map without touching it.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.7 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "ui.panels",
+    "aliases.manage",
+    "timers.manage",
+    "storage.private"
+  ],
+  "enabled": true
+}
