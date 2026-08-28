@@ -17,9 +17,14 @@ namespace Scrye.Core.Text;
 /// <para><b>Clickable runs.</b> <c>click=</c> makes the run a link that runs its text the way
 /// typing it would — so it hits the plugin's own aliases first and the MUD only after, which is
 /// why a plugin needs no callback to make text clickable. <c>prompt=</c> puts the text in the
-/// input box instead of running it. Everything after <c>click=</c>/<c>prompt=</c> to the closing
-/// brace is the command verbatim, commas and spaces included, so it must come last in the spec:
-/// <c>@{accent,click=vbuild start warehouse}Warehouse@{}</c>.</para>
+/// input box instead of running it. <c>rclick=</c> (API 1.16) attaches a SECOND command to the
+/// same run for the right button — how one report row carries a primary and a secondary action,
+/// the way colorgrid/button widgets carry onClick and onRightClick. The LAST verb's command runs
+/// verbatim to the closing brace, commas and spaces included; an EARLIER verb's command ends at
+/// the next verb (so it must not itself contain a literal ",click=" / ",rclick=" / ",prompt=").
+/// Emit <c>rclick=</c> BEFORE <c>click=</c>: a pre-1.16 host does not recognise the verb and
+/// parses it as an unknown (ignored) flag, leaving the left click intact —
+/// <c>@{accent,rclick=atrade floorset bread,click=atrade exempt bread}Bread@{}</c>.</para>
 ///
 /// <para><b>It never throws and never eats text.</b> Malformed markup renders literally rather
 /// than vanishing: an unterminated <c>@{</c>, a stray <c>@</c>, or an unmatched <c>@{}</c> all
@@ -182,15 +187,29 @@ public static class Markup
     {
         Style s = cur;
 
-        // Split off a trailing click=/prompt= FIRST: its value is taken verbatim to the end of the
-        // spec, because a command legitimately contains spaces and commas ("vtrade dispatch sell
-        // 65 bread uppsala"). Everything before it is the ordinary comma-separated style spec.
-        int cut = ActionStart(spec, out bool isPrompt, out int verbLen);
+        // Split off the action verbs FIRST: a command legitimately contains spaces and commas
+        // ("vtrade dispatch sell 65 bread uppsala"), so the LAST verb's value runs verbatim to
+        // the end of the spec, and an earlier verb's value runs to the next verb's start (1.16:
+        // one run may carry both a click= and an rclick=). Everything before the first verb is
+        // the ordinary comma-separated style spec.
+        int cut = ActionStart(spec, 0, out Verb verb, out int verbLen);
         if (cut >= 0)
         {
-            string cmd = spec[(cut + verbLen)..].Trim();
-            if (cmd.Length > 0) s = s with { Link = new LinkInfo(cmd, IsUrl: false, Prompt: isPrompt) };
-            spec = cut == 0 ? "" : spec[..cut].TrimEnd(',');
+            string style = cut == 0 ? "" : spec[..cut].TrimEnd(',');
+            string? click = null, rclick = null;
+            bool isPrompt = false;
+            int at = cut;
+            while (at >= 0)
+            {
+                int next = ActionStart(spec, at + verbLen, out Verb nextVerb, out int nextLen);
+                string val = (next >= 0 ? spec[(at + verbLen)..next].TrimEnd(',') : spec[(at + verbLen)..]).Trim();
+                if (verb == Verb.RClick) { if (val.Length > 0) rclick = val; }
+                else if (val.Length > 0) { click = val; isPrompt = verb == Verb.Prompt; }
+                at = next; verb = nextVerb; verbLen = nextLen;
+            }
+            if (click is not null || rclick is not null)
+                s = s with { Link = new LinkInfo(click ?? "", IsUrl: false, Prompt: isPrompt, RightAction: rclick) };
+            spec = style;
         }
 
         string[] parts = spec.Split(',');
@@ -220,19 +239,23 @@ public static class Markup
         return s;
     }
 
+    private enum Verb { Click, Prompt, RClick }
+
     /// <summary>
-    /// Index of a <c>click=</c> or <c>prompt=</c> verb in <paramref name="spec"/>, or -1. Only
-    /// matches at the start or just after a comma, so a colour named "onclick=" (there is no such
-    /// thing, but the parser should not care) cannot be mistaken for one.
+    /// Index of the first <c>click=</c>, <c>prompt=</c> or <c>rclick=</c> verb at or after
+    /// <paramref name="from"/>, or -1. Only matches at the start of the spec or just after a
+    /// comma, so a colour named "onclick=" (there is no such thing, but the parser should not
+    /// care) — and the "click=" inside "rclick=" — cannot be mistaken for one.
     /// </summary>
-    private static int ActionStart(string spec, out bool isPrompt, out int verbLen)
+    private static int ActionStart(string spec, int from, out Verb verb, out int verbLen)
     {
-        isPrompt = false; verbLen = 0;
-        for (int i = 0; i < spec.Length; i++)
+        verb = Verb.Click; verbLen = 0;
+        for (int i = from; i < spec.Length; i++)
         {
             if (i != 0 && spec[i - 1] != ',') continue;
-            if (string.CompareOrdinal(spec, i, "click=", 0, 6) == 0) { verbLen = 6; return i; }
-            if (string.CompareOrdinal(spec, i, "prompt=", 0, 7) == 0) { isPrompt = true; verbLen = 7; return i; }
+            if (string.CompareOrdinal(spec, i, "click=", 0, 6) == 0) { verb = Verb.Click; verbLen = 6; return i; }
+            if (string.CompareOrdinal(spec, i, "prompt=", 0, 7) == 0) { verb = Verb.Prompt; verbLen = 7; return i; }
+            if (string.CompareOrdinal(spec, i, "rclick=", 0, 7) == 0) { verb = Verb.RClick; verbLen = 7; return i; }
         }
         return -1;
     }

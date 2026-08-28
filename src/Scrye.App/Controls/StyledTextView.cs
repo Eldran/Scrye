@@ -21,7 +21,9 @@ namespace Scrye.App.Controls;
 /// <para>Runs carrying a <c>click=</c> action are clickable: the pointer position maps to a
 /// character cell, the cell to a run, and the run's <see cref="LinkInfo"/> goes to
 /// <see cref="LinkCommand"/>. That is how a plugin report replaces a row of buttons with the
-/// report text itself.</para>
+/// report text itself. A run may also carry an <c>rclick=</c> action (API 1.16): the right
+/// button runs that one instead, through the same command — one report row, two actions,
+/// mirroring onClick/onRightClick on the widget kinds that have callbacks.</para>
 ///
 /// <para>Layout is otherwise deliberately dumb — no wrapping, no selection. Reports are
 /// column-aligned, so every glyph advances by the same measured character width; that keeps
@@ -197,6 +199,18 @@ public class StyledTextView : Control
         ICommand? cmd = LinkCommand;
         if (cmd is null) return;
         if (LinkAt(e.GetPosition(this)) is not { } link) return;
+        // The right button runs the run's rclick= action (API 1.16) and ONLY that. Before
+        // rclick existed a right press fell through to the click= action, which no plugin
+        // ever asked for; a run without an rclick= is simply inert to the right button.
+        if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
+        {
+            if (link.RightAction is not { Length: > 0 } ra) return;
+            link = link with { Action = ra, Prompt = false };
+        }
+        else if (link.Action.Length == 0 && !link.IsUrl)
+        {
+            return;   // an rclick=-only run: nothing bound to the left button
+        }
         if (cmd.CanExecute(link)) cmd.Execute(link);
         e.Handled = true;
     }

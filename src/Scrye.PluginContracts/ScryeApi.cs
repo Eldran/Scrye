@@ -154,7 +154,17 @@ public static class ScryeApi
     //      "click the name and walk there" into a command to type. No new runtime surface -
     //      the id rides WidgetSpec.Action and the existing choice invoke - so a host that
     //      predates it renders the same inert table it always did.
-    public static readonly Version Current = new(1, 15);
+    // 1.16 The text markup gains `rclick=`: a second command on the same clickable run, fired
+    //      by the right button (the same two-action idea onClick/onRightClick already gives
+    //      colorgrid/button/buttonrow, brought to report text). The last verb in a spec takes
+    //      its command verbatim to the closing brace; an earlier verb's command ends at the
+    //      next verb. Plugins emit rclick= BEFORE click= so a pre-1.16 host reads it as an
+    //      unknown flag and keeps the left click working - additive, no fallback idiom needed.
+    //      The right button also stops falling through to click= on runs without an rclick=.
+    //
+    //      The Trade tab's floor-by-right-click is why: left click holds a good, right click
+    //      floors it, one row.
+    public static readonly Version Current = new(1, 16);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

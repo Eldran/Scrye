@@ -130,6 +130,44 @@ public class MarkupTests
 
     private static LinkInfo? LinkOf(string s) => Parse(s).SingleOrDefault(r => r.Link is not null).Link;
 
+    // ---- rclick= (API 1.16): a second, right-button action on the same run ----
+    // Emitted BEFORE click= by plugins (a pre-1.16 host reads it as an unknown flag),
+    // but the parser accepts either order.
+
+    [Theory]
+    [InlineData("@{accent,rclick=atrade floorset bread,click=atrade exempt bread}Bread@{}",
+                "atrade exempt bread", "atrade floorset bread")]
+    [InlineData("@{accent,click=atrade exempt bread,rclick=atrade floorset bread}Bread@{}",
+                "atrade exempt bread", "atrade floorset bread")]
+    [InlineData("@{rclick=mapg shift s}s@{}", "", "mapg shift s")]
+    public void ParsesARightClickActionBesideTheClick(string input, string click, string? rclick)
+    {
+        LinkInfo? l = LinkOf(input);
+        Assert.NotNull(l);
+        Assert.Equal(click, l!.Action);
+        Assert.Equal(rclick, l.RightAction);
+    }
+
+    [Fact]
+    public void TheLastVerbStillTakesItsCommandVerbatimToTheBrace()
+    {
+        LinkInfo? l = LinkOf("@{rclick=atrade floorset x,click=say hello, friend}Hi@{}");
+        Assert.Equal("say hello, friend", l?.Action);
+        Assert.Equal("atrade floorset x", l?.RightAction);
+    }
+
+    [Fact]
+    public void RclickNeverLeaksIntoTheStyleOrThePlainText()
+    {
+        StyledRun run = Assert.Single(Parse("@{accent,rclick=atrade floorset bread,click=x}Bread@{}"));
+        Assert.Equal("Bread", run.Text);
+        Assert.Equal("#FF2E88", run.Fore.ToHex());   // 'rclick=...' did not eat the colour
+    }
+
+    [Fact]
+    public void ARunWithoutRclickHasNoRightAction() =>
+        Assert.Null(LinkOf("@{click=look}Look@{}")?.RightAction);
+
     [Theory]
     [InlineData("@{click=look}Look@{}", "look")]
     [InlineData("@{accent,click=score}Score@{}", "score")]
