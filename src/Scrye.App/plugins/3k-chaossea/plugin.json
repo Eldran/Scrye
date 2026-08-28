@@ -1,0 +1,29 @@
+{
+  "id": "3k-chaossea",
+  "name": "Chaos Sea (classic)",
+  "version": "1.3.0",
+  "author": "Joakim",
+  "description": "The marker/dead-reckoning chaos-sea stepper, frozen at its long-proven pre-GMCP state - for 3K-3Kingdoms and any character or world without GMCP (needs the '=S='/'=M='/'=P' display settings and MIP for combat truth). Alias 'csc', so it loads beside the GMCP 3s-chaossea ('cs') without a fight. Maps rooms on a 3D grid by dead reckoning, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Frozen legacy: bugfixes only - new features go to the GMCP bot.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.6 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "notifications.show",
+    "variables.read",
+    "variables.write",
+    "storage.private",
+    "timers.manage",
+    "triggers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}

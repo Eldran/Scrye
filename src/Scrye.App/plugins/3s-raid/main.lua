@@ -1,4 +1,10 @@
--- 3S Raid — Scrye port of MUSHclient ThreeS_Raid (auto-raid dispatcher).
+-- 3S Auto-Raid (classic, MIP) — Scrye port of MUSHclient ThreeS_Raid (auto-raid dispatcher).
+--
+-- CLASSIC: this is the MIP-fed original, frozen for 3Scapes players still running
+-- MIP (the Viking guild does not exist on 3K). The maintained line is
+-- 3s-raid-gmcp ("3S Auto-Raid (GMCP)"), fed by Guild.Fleet + Guild.City.
+-- To let both load at once, this classic answers to 'araidc' (not 'araid'),
+-- and its panel is titled "Auto-Raid (classic)". No other changes; frozen.
 --
 -- NOTE: dropped / simplified vs the original:
 --   * 'araidwin' + the whole miniwindow (buttons, town grid, inputboxes, drag)
@@ -7,13 +13,13 @@
 --   * GRUDGES parsing + grudge cooldown formatting were only used for window
 --     tooltips — dropped with the window.
 --   * Clicking a town to target it IS reproduced — but as the heat table itself:
---     each town name in the list is a click link (araid target <town>), so one list
+--     each town name in the list is a click link (araidc target <town>), so one list
 --     carries names, heat, calm/target marks AND the picking. The old button grid
 --     (truncated names, rebuilt from the RTARGETS feed on a signature guard) is
 --     gone, and with it the whole rebuild machinery: the panel is static now and
 --     the input fields are never re-seeded mid-typing.
 --   * The per-town heat table is that list: bound to plugin.3s-raid.heat, sorted
---     calmest-first (also printable with 'araid heat', where the links still work).
+--     calmest-first (also printable with 'araidc heat', where the links still work).
 --     Calm towns — those within AR_MARGIN of the lowest heat, i.e. the auto-target
 --     pool — are marked, as is the live target.
 --   * math.randomseed(os.time()) dropped (no os.* in sandbox); math.random is
@@ -82,9 +88,9 @@ local last_docked = nil   -- previous docked count; nil = no baseline yet
 
 local function publish_notify_state()
   scrye.setState(SP .. "notify", table.concat({
-    string.format("Fleet returns\tships arriving back in dock\t%s\taraid notify fleet %s",
+    string.format("Fleet returns\tships arriving back in dock\t%s\taraidc notify fleet %s",
       nf.fleet and "on" or "off", nf.fleet and "off" or "on"),
-    string.format("Dispatches\teach convoy/raid the bot sends\t%s\taraid notify send %s",
+    string.format("Dispatches\teach convoy/raid the bot sends\t%s\taraidc notify send %s",
       nf.send and "on" or "off", nf.send and "off" or "on"),
   }, "\n"))
 end
@@ -182,7 +188,7 @@ local function publish()
       ar.convoy and "on" or "off", tostring(ar.ships), ar.keep,
       ar.hold or 60, ar.reserve ~= "" and ar.reserve or "none"))
     -- Per-town heat table, calmest first — and it IS the target picker: each town
-    -- name is a click link that runs 'araid target <town>' (the miniwindow's colour
+    -- name is a click link that runs 'araidc target <town>' (the miniwindow's colour
     -- coding comes back as theme tokens: green calm pool, blue live target).
     local map, order = heat_of()
     local hl = {}
@@ -215,7 +221,7 @@ local function publish()
         elseif h <= minh + AR_MARGIN then mark = "  @{success}calm@{}" end
         -- pad by the RAW length (markup characters are not drawn), inside the link
         local padded = esc(t) .. string.rep(" ", math.max(0, 18 - #t))
-        hl[#hl + 1] = string.format("@{accent,click=araid target %s}%s@{} %5d%s", t, padded, h, mark)
+        hl[#hl + 1] = string.format("@{accent,click=araidc target %s}%s@{} %5d%s", t, padded, h, mark)
       end
     end
     scrye.setState(SP .. "heat", table.concat(hl, "\n"))
@@ -331,7 +337,7 @@ local function ar_config(rest)
   local nk, nv = low:match("^notify%s+(%w+)%s+(%w+)$")
   if nk then
     if nf[nk] == nil or (nv ~= "on" and nv ~= "off") then
-      note("usage: araid notify fleet|send on|off") return
+      note("usage: araidc notify fleet|send on|off") return
     end
     nf[nk] = (nv == "on")
     scrye.store.set("notify_" .. nk, nf[nk] and "1" or "0")
@@ -340,7 +346,7 @@ local function ar_config(rest)
     return
   end
   if low == "notify" then
-    note(string.format("phone notify: fleet %s, send %s (araid notify fleet|send on|off)",
+    note(string.format("phone notify: fleet %s, send %s (araidc notify fleet|send on|off)",
       nf.fleet and "on" or "off", nf.send and "on" or "off"))
     return
   end
@@ -366,7 +372,7 @@ local function ar_config(rest)
       if ship:lower() == "none" or ship:lower() == "off" then ship = "" end
       ar.reserve = ship; scrye.store.set("reserve", ship)
     elseif low ~= "" then
-      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat | notify")
+      note("usage: araidc on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat | notify")
       return
     end
   end
@@ -379,7 +385,7 @@ end
 -- name is a click link), so the panel has nothing to rebuild when the feed arrives —
 -- and the Settings inputs can never be re-seeded while you're typing in them.
 scrye.addPanel{
-  title = "Auto-Raid",
+  title = "Auto-Raid (classic)",
   width = 320,
   accent = "#E7574E",          -- signature: raid red (validated accent set)
   tabs = {
@@ -407,13 +413,13 @@ scrye.addPanel{
   },
 }
 
-scrye.addAlias{ pattern = "^araid$",         regex = true, run = function() ar_status() end }
-scrye.addAlias{ pattern = "^araid targets$", regex = true, run = function() ar_list_targets() end }
-scrye.addAlias{ pattern = "^araid (.+)$",    regex = true, run = function(rest) ar_config(rest) end }
+scrye.addAlias{ pattern = "^araidc$",         regex = true, run = function() ar_status() end }
+scrye.addAlias{ pattern = "^araidc targets$", regex = true, run = function() ar_list_targets() end }
+scrye.addAlias{ pattern = "^araidc (.+)$",    regex = true, run = function(rest) ar_config(rest) end }
 -- 'araidwin' is consumed rather than passed to the MUD: the HUD panel replaces the
 -- miniwindow and its visibility is app-managed.
-scrye.addAlias{ pattern = "^araidwin$", regex = true, run = function()
-  note("the Auto-Raid panel is managed by Scrye - show or hide it from the HUD. ('araid heat' prints the town heat table.)")
+scrye.addAlias{ pattern = "^araidcwin$", regex = true, run = function()
+  note("the Auto-Raid panel is managed by Scrye - show or hide it from the HUD. ('araidc heat' prints the town heat table.)")
 end }
 
 -- ---------- timers / feed hooks ----------
@@ -430,4 +436,4 @@ scrye.watch("vik.buildings", function() publish() end)
 
 publish()
 publish_notify_state()
-note("loaded - OFF (armed state is never persisted; 'araid on' to arm, 'araid' for status).")
+note("loaded - OFF (armed state is never persisted; 'araidc on' to arm, 'araidc' for status).")

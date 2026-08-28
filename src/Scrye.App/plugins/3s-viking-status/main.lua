@@ -1,4 +1,10 @@
--- 3S Viking Status -- Scrye conversion of ThreeS_VikingStatus (MUSHclient)
+-- 3S Viking Status (classic, MIP) -- Scrye conversion of ThreeS_VikingStatus (MUSHclient)
+--
+-- CLASSIC: fed by the MIP viking feed (vik.* state), frozen for 3Scapes players
+-- still running MIP. The maintained line is 3s-viking-status-gmcp (+ 3s-viking-sea,
+-- 3s-viking-kingdom). Same commands as the GMCP plugins - enable one or the other,
+-- never both at once. Only this header, the panel title and the manifest changed.
+--
 --
 -- NOTE: dropped / simplified vs the original:
 --  * vikbar / viktab dropped: the HUD manages panel visibility and tab switching.
@@ -4018,7 +4024,7 @@ end)()
 
 
 scrye.addPanel{
-  title = "Viking Status",
+  title = "Viking Status (classic)",
   width = 560,
   accent = "#6288E1",          -- signature: viking steel-blue (validated accent set)
   tabs = {

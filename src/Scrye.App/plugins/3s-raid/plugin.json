@@ -1,9 +1,9 @@
 {
   "id": "3s-raid",
-  "name": "3S Raid",
-  "version": "1.0.0",
+  "name": "3S Auto-Raid (classic, MIP)",
+  "version": "1.1.0",
   "author": "Joakim",
-  "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy)",
+  "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy). CLASSIC: fed by the MIP viking feed (vik.* state) \u2014 for 3Scapes with MIP on; the Viking guild does not exist on 3K. The maintained GMCP line is '3S Auto-Raid (GMCP)' (3s-raid-gmcp). So both can load at once, this classic answers to 'araidc' instead of 'araid'. Otherwise frozen.",
   "mudIds": [
     "*"
   ],

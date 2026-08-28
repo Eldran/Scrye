@@ -522,7 +522,13 @@ bot_resume_step = function()
   bot.user_paused = false
   bot.paused_on_mob = false
   bot.mob_pending = nil
-  bot.armed = false
+  -- ARMED DIRECTLY, not via the glance's answer. Starting or resuming is a person saying
+  -- "I am in a room, walk from it" - but the glance only re-describes a room the feed
+  -- already described, and GMCP suppresses re-sends of unchanged payloads, so on a GMCP
+  -- character standing still NOTHING arrived to arm the step and the bot sat silent
+  -- (Joakim, 25 Aug: '- megacity', the =S= text, a prompt, no move). The glance stays:
+  -- its text is what lets the markers spot a mob and arm a kill BEFORE the prompt walks.
+  bot.armed = true
   scrye.send("!glance")
   draw()
 end
@@ -752,11 +758,13 @@ scrye.onGmcp("Room.Contents", on_gmcp_contents)
 -- The markers, standing down for any room GMCP has already spoken for. Letting both run
 -- would be worse than either alone: on_room() clears a pending kill, so a '=S=' arriving
 -- after Room.Contents had armed one would drop the mob the bot was about to attack.
-scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true,
+-- '^\s*': 3Scapes prints the markers INDENTED ("  =S=Floor 10 ..."), and the anchored
+-- pattern never matched a real line - unnoticed for as long as GMCP covered arrivals.
+scrye.addTrigger{ pattern = [[^\s*=S=(.*)=S=]], regex = true,
   run = function() if not gmcp_room then on_room() end end }
-scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^\s*(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
   run = function(name) if not gmcp_contents then on_mob(name) end end }
-scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^\s*(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
   run = function(name) if not gmcp_contents then on_player(name) end end }
 scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.$]], regex = true,
   run = function() bot_path_undo() end }

@@ -1,0 +1,29 @@
+{
+  "id": "3s-map",
+  "name": "3S Map (classic)",
+  "version": "0.7.0",
+  "author": "Joakim",
+  "description": "The dead-reckoning automapper, frozen at its long-proven pre-GMCP state - for 3K-3Kingdoms and any character or world without GMCP (needs the display markers the 'aset' config switches on). Restored 25 Aug: the GMCP mapper (3s-map-gmcp) replaced it on 3Scapes, but 3K speaks only MIP, so this one ships again beside it, id and stores unchanged - old maps load as they were. Automapper: learns rooms as you walk, draws a live HUD map with exit connections between rooms on a woven grid, walks you to any mapped room, detects reckoning drift, stitches per-area maps together at their boundaries (compass or portal, with automatic return links for compass crossings), seeds areas from maps.json, and emits map.room / map.walk.* events other plugins can listen to. Frozen legacy: bugfixes only - new features go to the GMCP mapper.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "enabled": true,
+  "requires": {
+    "scryeApi": ">=1.7 <2.0"
+  },
+  "permissions": [
+    "output.read",
+    "commands.send",
+    "aliases.manage",
+    "triggers.manage",
+    "timers.manage",
+    "state.write",
+    "storage.private",
+    "ui.panels"
+  ],
+  "data": {
+    "maps": "maps.json"
+  }
+}

@@ -532,16 +532,57 @@ local function anchor_layer(layer)
   end
 end
 
--- ---------- MIP-fed truths ----------
+-- ---------- Seid, from the best feed available ----------
+-- Guild.State (the Viking GMCP, live 27 Aug) carries Seid as points.vitka - the number
+-- in the status line's S[cur|max] slot - and the MIP vik.* state is dead on a GMCP
+-- world, so the GMCP number wins once seen. The vik.* reads stay as the fallback for a
+-- MIP character. (vitka = Seid is read off the live capture where points.vitka tracked
+-- S[..] exactly; if resting ever floors on the wrong number, re-check that mapping.)
+local seid_gmcp = nil
+scrye.onGmcp("Guild.State", function(json)
+  local ok, t = pcall(scrye.json.decode, json)
+  if not ok or type(t) ~= "table" then return end
+  local p = t.points
+  if type(p) == "table" and tonumber(p.vitka) then seid_gmcp = tonumber(p.vitka) end
+end)
+
 local function get_seid()
+  if seid_gmcp then return seid_gmcp end
   local s = tonumber(scrye.getState("vik.seid"))
   if s then return s end
   local ser = scrye.getState("vik.ser") or ""
   return tonumber(ser:match("%f[%w]SEID=(%d+)"))
 end
 
--- the MIP feed knows the truth about combat: enemy name set = fighting
+-- The truth about combat, from the best feed available. The client's enemy.name state is
+-- fed by MIP as well as GMCP - but 3Scapes cannot run MIP and GMCP together (Joakim,
+-- 25 Aug: MIP off is the price of GMCP), and with MIP gone the fight END went unreliable:
+-- whether a terminal Char.Combat arrives at the kill, and what it carries, is unverified.
+-- Every recovery path in this bot gates on in_combat(), so one stale enemy.name wedged it
+-- over a corpse for good. So: track the RAW Char.Combat stream ourselves, and give
+-- activity a shelf life - rounds arrive every couple of seconds while anything is hitting
+-- us, and silence longer than CC_STALE means the fight is over no matter what the last
+-- payload said. No terminal needed; any terminal shape accepted. A character still on
+-- MIP without GMCP never sees a Char.Combat and keeps the old state fallback.
+local cc_seen   = false   -- a Char.Combat has arrived: GMCP is the combat authority now
+local cc_active = false   -- ...and the last one said something is hitting us
+local cc_at     = 0       -- clock stamp of the last one that said so
+local CC_STALE  = 8       -- seconds of silence after which a "fight" is a memory
+
+scrye.onGmcp("Char.Combat", function(json)
+  local ok, c = pcall(scrye.json.decode, json)
+  if not ok or type(c) ~= "table" then return end
+  cc_seen = true
+  -- BOTH attacker and live rounds: a terminal that keeps the attacker's name but zeroes
+  -- the rounds is a fight report, not a fight.
+  cc_active = tostring(c.attacker or "") ~= "" and (tonumber(c.rounds) or 0) > 0
+  if cc_active then cc_at = now end
+end)
+
 local function in_combat()
+  if cc_seen then
+    return cc_active and (now - cc_at) < CC_STALE
+  end
   local e = scrye.getState("enemy.name")
   return e ~= nil and e ~= ""
 end
