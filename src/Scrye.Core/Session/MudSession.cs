@@ -1259,7 +1259,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mailbox.Writer.TryWrite(new SessionMessage.SendText($"3klient {_mipId}~~Scrye"));
         _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient LINEFEED on"));
         _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient HAA off"));
-        _mailbox.Writer.TryWrite(new SessionMessage.SendText("forcehp"));
+        // 'forcehp' used to follow, kicking an immediate HP line out of the MUD so the vitals
+        // populated before the first natural prompt. Removed (28 Aug, Joakim): the prompt after
+        // the handshake carries the same fields moments later, and the forced line was noise -
+        // on every connect AND on each of the up-to-3 handshake retries. If vitals ever seem
+        // slow to fill right after login, this is the line that used to hurry them.
         _mipSent = true;
         _mipRetries++;
         _mipSecondsSinceHandshake = 0;

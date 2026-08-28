@@ -61,8 +61,8 @@ local last_dir = nil           -- last direction actually sent (avoid instant ba
 -- permanently out of step with the output it is supposed to be labelling.
 --
 -- One push per command is not enough on its own, because SOME COMMANDS PRODUCE NO
--- PROMPT and so are never popped. Scrye's own MIP handshake is four of them
--- ('3klient ...' x3, 'forcehp'), CommandSent reports every one, and they go out on
+-- PROMPT and so are never popped. Scrye's own MIP handshake is three of them
+-- ('3klient ...' x3), CommandSent reports every one, and they go out on
 -- every connect. A single un-popped entry puts sent_q permanently one behind: from
 -- then on sent_q[1] names the command BEFORE the one whose output is printing, so
 -- every one of the bot's own moves reads as somebody else's redisplay, never
