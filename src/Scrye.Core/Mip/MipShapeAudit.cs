@@ -84,7 +84,7 @@ public sealed class MipShapeAudit
         // 3s-viking-status draw a stock row called "7367", and not knowing what it meant left
         // both plugins sizing the warehouse from a base-per-tier table that is only right until
         // the character raises a storage skill.
-        new("WSTOCK", 0, '\0', "3s-viking-status warehouse() + 3s-market at_warehouse()/stock",
+        new("WSTOCK", 0, '\0', "3s-viking-status warehouse() + its Trade tabs at_warehouse()/stock",
             new MipRecordExpectation(1, ';', '|', new[] { 1, 3, 4 })),
     };
 

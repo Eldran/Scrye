@@ -33,7 +33,7 @@ stepping outside the area you chose.*
 | `3s-stepper` | shipped | **stays for good**: dual GMCP/marker, it IS the no-GMCP farmer for 3K |
 | `3s-map` (classic) | shipped | the dead-reckoning mapper, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
 | `3k-chaossea` (`csc`) | shipped | the marker-era sea bot, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
-| `lab-areabot` | `_lab` | revived by `map.room` as a side effect; retires when the farmer works |
+| `lab-areabot` | `_lab` | RETIRED 28 Aug - the farmer beat it (deleted from `_lab`) |
 
 Two MUDs, one client (25 Aug): 3K-3Kingdoms speaks only MIP; 3Scapes now speaks GMCP (and
 cannot run both protocols at once server-side). The GMCP plugins are 3Scapes'; the classic
