@@ -37,7 +37,13 @@ queue, per-village livestock markets - a possible Herds tab of its own); Guild.W
 full schema now visible (all-zero while inactive). Room.Info now sends se/sw
 diagonals (mapg copes as-is).
 
-Remaining: vqpath/vresolve shapes, active campaign/war payloads, raid 2.1 extras
+Raid **2.1.0** (28 Aug): both target groups in the town table (foreign/historical
+towns were fed but never shown) and 'araid pool home|foreign' picks the auto-
+target pool - foreign has no heat in the feed, so it spreads at random under the
+same hold rotation. VERIFY LIVE: the first foreign auto-dispatch (vlongship
+raid/convoy is assumed to accept historical towns).
+
+Remaining: vqpath/vresolve shapes, active campaign/war payloads, raid extras
 (grudge-aware targeting, raid log), the rest of §5, the TradeGoods code->good
 mapping (needs one in-game paste), and the dev report (Guild.Map terrain still the
 big one; chat channels now flow via Comm.Channel.Text - vnotify confirmed; absent

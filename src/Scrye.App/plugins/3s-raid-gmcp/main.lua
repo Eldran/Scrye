@@ -23,7 +23,16 @@
 --   * ships[].held was always 0 in the capture; its semantics are unknown, so only
 --     state=="docked" admits a ship to the raid pool (as the MIP port did).
 --   * Guild.Kingdom carries per-town grudge cooldowns and Guild.Fleet a raidlog —
---     both planned as 2.1 upgrades once this feed layer has soaked live (plan §4a).
+--     both planned as later upgrades once this feed layer has soaked live (plan §4a).
+--
+-- 2.1.0: BOTH target groups in the town table (foreign/historical towns were fed
+-- but never shown), and the auto-target pool is a setting: 'araid pool home'
+-- (default, the classic lowest-heat behaviour) or 'araid pool foreign' - the feed
+-- carries no heat for foreign towns, so that pool picks at random and the hold
+-- timer rotates it. Switching pools drops the current lock. VERIFY LIVE: the
+-- first foreign auto-dispatch - the same 'vlongship raid/convoy <town>' commands
+-- are assumed to accept historical towns (araid targets has always listed them
+-- as valid raid targets).
 
 local AR_INTERVAL = 30   -- seconds between raid passes
 local AR_MARGIN   = 2    -- heat margin for the auto-target pool
@@ -108,7 +117,8 @@ local ar = {
   keep        = tonumber(scrye.store.get("keep")) or 0,       -- always leave this many docked
   reserve     = scrye.store.get("reserve") or "",             -- named ship to always keep docked (voyages)
   convoy      = scrye.store.get("convoy") == "1",
-  auto_target = scrye.store.get("autotarget") == "1",         -- pick the lowest-heat home town
+  auto_target = scrye.store.get("autotarget") == "1",         -- pick a town from the pool below
+  pool        = scrye.store.get("pool") or "home",            -- auto-target pool: home | foreign
   hold        = tonumber(scrye.store.get("hold")) or 60,      -- seconds to raid one town before rotating
   last        = 0,
   locked_target = nil,
@@ -184,9 +194,29 @@ local function lowest_heat_town()
   return best, bh
 end
 
--- pick a raid target: random among the towns within AR_MARGIN heat of the lowest, so it
--- spreads across the calm towns instead of always hammering the first tied one
+-- the foreign (historical) towns - Guild.Fleet rtargets_historical[], names only.
+-- The feed carries NO heat for them (heat[] is exactly as long as the lineage list),
+-- so foreign targeting cannot be heat-guided; see pick_raid_town.
+local function foreign_towns()
+  local out = {}
+  for _, e in ipairs(FLEET.rtargets_historical or {}) do
+    local t = tostring(e):match("^([^:]+)")
+    if t and t ~= "" then out[#out + 1] = t end
+  end
+  return out
+end
+
+-- pick a raid target from the chosen pool.
+--   home:    random among the towns within AR_MARGIN heat of the lowest, so it
+--            spreads across the calm towns instead of always hammering the first tied one
+--   foreign: random among all foreign towns - no heat rides the feed for them, so an
+--            even spread is the only honest strategy (the hold timer still rotates it)
 local function pick_raid_town()
+  if ar.pool == "foreign" then
+    local f = foreign_towns()
+    if #f == 0 then return nil end
+    return f[math.random(#f)], nil
+  end
   local map, order = heat_of()
   if #order == 0 then return nil end
   local minh
@@ -209,9 +239,10 @@ local function publish()
     local avail, maxs = fleet()
     local tgt
     if ar.auto_target then
+      -- foreign pool: nothing to predict before the first pick (no heat to rank by)
       local shown = (ar.locked_target and ar.locked_target ~= "") and ar.locked_target
-                    or (lowest_heat_town() or "?")
-      tgt = "auto: " .. shown
+                    or (ar.pool == "foreign" and "?" or (lowest_heat_town() or "?"))
+      tgt = "auto (" .. ar.pool .. "): " .. shown
     else
       tgt = ar.target ~= "" and ar.target or "(none)"
     end
@@ -228,44 +259,66 @@ local function publish()
     end
     last_docked = #avail
     scrye.setState(SP .. "status", string.format(
-      "convoy %s - ships %s - keep %d - hold %ds - reserve %s",
-      ar.convoy and "on" or "off", tostring(ar.ships), ar.keep,
+      "pool %s - convoy %s - ships %s - keep %d - hold %ds - reserve %s",
+      ar.pool, ar.convoy and "on" or "off", tostring(ar.ships), ar.keep,
       ar.hold or 60, ar.reserve ~= "" and ar.reserve or "none"))
-    -- Per-town heat table, calmest first — and it IS the target picker: each town
-    -- name is a click link that runs 'araid target <town>' (the miniwindow's colour
-    -- coding comes back as theme tokens: green calm pool, blue live target).
+    -- Per-town table, home (calmest first) then foreign — and it IS the target
+    -- picker: each town name is a click link that runs 'araid target <town>' (the
+    -- miniwindow's colour coding comes back as theme tokens: green calm pool, blue
+    -- live target). Foreign towns carry NO heat in the feed, so their column is '-'
+    -- and 'calm' never marks them; the auto pool's section header is highlighted.
     local map, order = heat_of()
+    local foreign = foreign_towns()
     local hl = {}
-    if #order == 0 then
-      hl[1] = "no heat data yet (waiting on Guild.Fleet + Guild.City GMCP bursts)"
+    local cur
+    if ar.auto_target then
+      cur = (ar.locked_target and ar.locked_target ~= "") and ar.locked_target
+            or (ar.pool ~= "foreign" and lowest_heat_town() or nil)
+    elseif ar.target ~= "" then
+      cur = ar.target
+    end
+    local function town_row(t, heatcol, mark)
+      -- pad by the RAW length (markup characters are not drawn), inside the link
+      local padded = esc(t) .. string.rep(" ", math.max(0, 18 - #t))
+      return string.format("@{accent,click=araid target %s}%s@{} %5s%s", t, padded, heatcol, mark)
+    end
+    local function section(title, is_pool)
+      hl[#hl + 1] = string.format("%s%-18s %5s%s%s",
+        is_pool and "@{warning,bold}" or "@{dim}", title, "Heat",
+        is_pool and "  <- auto pool" or "", "@{}")
+    end
+    if #order == 0 and #foreign == 0 then
+      hl[1] = "no target data yet (waiting on Guild.Fleet + Guild.City GMCP bursts)"
     else
-      local minh
-      for _, t in ipairs(order) do
-        local h = map[t] or 0
-        if not minh or h < minh then minh = h end
+      if #order > 0 then
+        local minh
+        for _, t in ipairs(order) do
+          local h = map[t] or 0
+          if not minh or h < minh then minh = h end
+        end
+        local picks = {}
+        for _, t in ipairs(order) do picks[#picks + 1] = t end
+        table.sort(picks, function(x, y)
+          local hx, hy = map[x] or 0, map[y] or 0
+          if hx ~= hy then return hx < hy end
+          return x < y
+        end)
+        section("Home", ar.pool ~= "foreign")
+        for _, t in ipairs(picks) do
+          local h = map[t] or 0
+          local mark = ""
+          if cur and t:lower() == tostring(cur):lower() then mark = "  @{info}<- target@{}"
+          elseif h <= minh + AR_MARGIN then mark = "  @{success}calm@{}" end
+          hl[#hl + 1] = town_row(t, string.format("%5d", h), mark)
+        end
       end
-      local cur
-      if ar.auto_target then
-        cur = (ar.locked_target and ar.locked_target ~= "") and ar.locked_target or lowest_heat_town()
-      elseif ar.target ~= "" then
-        cur = ar.target
-      end
-      local picks = {}
-      for _, t in ipairs(order) do picks[#picks + 1] = t end
-      table.sort(picks, function(x, y)
-        local hx, hy = map[x] or 0, map[y] or 0
-        if hx ~= hy then return hx < hy end
-        return x < y
-      end)
-      hl[#hl + 1] = string.format("@{dim}%-18s %5s@{}", "Town", "Heat")
-      for _, t in ipairs(picks) do
-        local h = map[t] or 0
-        local mark = ""
-        if cur and t:lower() == tostring(cur):lower() then mark = "  @{info}<- target@{}"
-        elseif h <= minh + AR_MARGIN then mark = "  @{success}calm@{}" end
-        -- pad by the RAW length (markup characters are not drawn), inside the link
-        local padded = esc(t) .. string.rep(" ", math.max(0, 18 - #t))
-        hl[#hl + 1] = string.format("@{accent,click=araid target %s}%s@{} %5d%s", t, padded, h, mark)
+      if #foreign > 0 then
+        if #hl > 0 then hl[#hl + 1] = "" end
+        section("Foreign", ar.pool == "foreign")
+        for _, t in ipairs(foreign) do
+          local mark = (cur and t:lower() == tostring(cur):lower()) and "  @{info}<- target@{}" or ""
+          hl[#hl + 1] = town_row(t, "    -", mark)
+        end
       end
     end
     scrye.setState(SP .. "heat", table.concat(hl, "\n"))
@@ -325,15 +378,16 @@ local function auto_raid_tick()
 
   -- convoy picks ships by count (the game chooses which), so it can't protect a named ship.
   -- When the reserved ship is docked, dispatch by name from the pool instead.
+  local how = ar.auto_target
+    and (ar.pool == "foreign" and " (auto foreign)" or " (lowest heat)") or ""
   if ar.convoy and want >= 2 and not reserved_docked then
     scrye.send(string.format("vlongship convoy %d %s", want, raid_town(target)))
-    local msg = string.format("convoy of %d -> %s%s", want, target, ar.auto_target and " (lowest heat)" or "")
+    local msg = string.format("convoy of %d -> %s%s", want, target, how)
     note(msg)
     if nf.send then scrye.notify(msg) end
   else
     for i = 1, want do scrye.send(string.format("vlongship raid %s %s", pool[i], raid_town(target))) end
-    local msg = string.format("%d ship%s -> %s%s", want, want == 1 and "" or "s", target,
-      ar.auto_target and " (lowest heat)" or "")
+    local msg = string.format("%d ship%s -> %s%s", want, want == 1 and "" or "s", target, how)
     note(msg)
     if nf.send then scrye.notify(msg) end
   end
@@ -348,8 +402,13 @@ end
 -- ---------- commands ----------
 
 local function ar_status()
-  local tgt = ar.auto_target and ("lowest-heat, rotate " .. (ar.hold or 60) .. "s")
-              or (ar.target ~= "" and ar.target or "(none)")
+  local tgt
+  if ar.auto_target then
+    tgt = (ar.pool == "foreign" and "foreign towns" or "lowest-heat home town")
+          .. ", rotate " .. (ar.hold or 60) .. "s"
+  else
+    tgt = ar.target ~= "" and ar.target or "(none)"
+  end
   note(string.format("auto-raid %s | target %s | ships %s | keep %d | voyage ship %s | convoy %s",
     ar.on and "ON" or "OFF", tgt, tostring(ar.ships), ar.keep,
     ar.reserve ~= "" and ar.reserve or "(none)", ar.convoy and "yes" or "no"))
@@ -402,6 +461,12 @@ local function ar_config(rest)
   elseif low == "all" or low == "ships all" then ar.ships = "all"; scrye.store.set("ships", "all")
   elseif low == "auto on"  then ar.auto_target = true;  scrye.store.set("autotarget", "1")
   elseif low == "auto off" then ar.auto_target = false; scrye.store.set("autotarget", "0")
+  elseif low == "pool home" or low == "pool foreign" then
+    -- switching pools mid-run drops the lock, so the next pass picks from the new
+    -- pool instead of riding out the hold on a town from the old one
+    ar.pool = low:match("^pool%s+(%w+)$")
+    scrye.store.set("pool", ar.pool)
+    ar.locked_target, ar.locked_at = nil, nil
   else
     local n  = low:match("^ships%s+(%d+)$")
     local k  = low:match("^keep%s+(%d+)$")
@@ -417,7 +482,7 @@ local function ar_config(rest)
       if ship:lower() == "none" or ship:lower() == "off" then ship = "" end
       ar.reserve = ship; scrye.store.set("reserve", ship)
     elseif low ~= "" then
-      note("usage: araid on|off | target <name> | auto on|off | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat | notify")
+      note("usage: araid on|off | target <name> | auto on|off | pool home|foreign | ships <n>|all | keep <n> | reserve <ship>|none | hold <sec> | convoy on|off | targets | heat | notify")
       return
     end
   end
@@ -442,9 +507,10 @@ scrye.addPanel{
         { type = "buttonrow", buttons = {
             { text = "Arm on/off", action = function() ar_config(ar.on and "off" or "on") end },
             { text = "Auto-target", action = function() ar_config(ar.auto_target and "auto off" or "auto on") end },
+            { text = "Home/Foreign", action = function() ar_config(ar.pool == "foreign" and "pool home" or "pool foreign") end },
             { text = "Convoy",     action = function() ar_config(ar.convoy and "convoy off" or "convoy on") end },
         } },
-        { type = "label", text = "Click a town to target it (calm = auto pool):", color = "dim" },
+        { type = "label", text = "Click a town to target it (calm = home auto pool):", color = "dim" },
         { type = "text", bind = SP .. "heat" },
     } },
     { title = "Settings", widgets = {
