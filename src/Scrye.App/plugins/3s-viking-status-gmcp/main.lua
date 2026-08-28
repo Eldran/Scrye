@@ -30,6 +30,18 @@
 --     Guild.City raid{faction,strength,secs} + bdmg[] appeared 28 Aug pm (wired:
 --     Stats' War section and the Builds tab).
 --
+-- 2.8.0: floors get a UI - a Floor box on the Trade tab (above Units), and a
+-- RIGHT-CLICK on a good's name in the report applies it as that good's floor
+-- (rclick= markup, API 1.16; same value again toggles it off; box at 0 = the
+-- right button clears). On a pre-1.16 host the right button does nothing and
+-- everything else still works.
+--
+-- 2.7.0: per-good stock FLOORS for the auto-trader ('atrade floor <good> <n>'):
+-- the trader never sells a floored good below its floor (the floor RAISES the
+-- raw/refined category reserve, never lowers it - manual Dispatch respects it
+-- too), and a floored RAW restocks up to the floor instead of Raw>. Floored
+-- names wear info-blue in the Trade tab; held (exempt) amber still wins.
+--
 -- NOTE: dropped / simplified vs the original:
 --  * vikbar / viktab dropped: the HUD manages panel visibility and tab switching.
 --    Both are still consumed by the plugin (with a note) rather than being sent to
@@ -2485,8 +2497,16 @@ local at = {
   pending = 0, last_carts = nil, cd_wait = false, pending_check = false,
   stats = { buys = 0, sells = 0, spent = 0, earned = 0, since = os.time(), recent = {} },
   exempt = {},
+  floors = {},   -- per-good minimum stock: cmd -> units. The trader never sells a
+                 -- floored good below its floor (the floor RAISES the category
+                 -- reserve, never lowers it), and restock tops a floored raw up to
+                 -- the floor instead of Raw>. "grain=500,mead=750" in the store.
 }
 for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
+for pair in (sget("at_floors") or ""):gmatch("[^,]+") do
+  local g, n = pair:match("^(.-)=(%d+)$")
+  if g and g ~= "" and tonumber(n) and tonumber(n) > 0 then at.floors[g] = tonumber(n) end
+end
 
 -- Manual dispatch cart size (the MUSHclient window had a Units hotspot, 20-350). The ceiling
 -- is only a sanity clamp on what you type -- the game rejects an over-large cart itself, and
@@ -2495,6 +2515,13 @@ for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
 -- rather than tracking each capacity rise. It was 350 and carts outgrew it.
 local MK_UNITS_MIN, MK_UNITS_MAX = 20, 1000
 local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk_units")) or 100))
+
+-- The Trade tab's Floor box (2.8.0): the value a RIGHT-CLICK on a good's name in
+-- the report applies as that good's floor ('atrade floorset <good>', via the
+-- rclick= markup, API 1.16). Right-clicking a good already floored at exactly
+-- this value clears it - the same toggle feel as the exempt left-click. 0 turns
+-- the right button into an eraser: it only clears floors.
+local mk_floorset = math.max(0, math.floor(tonumber(sget("mk_floorset")) or 500))
 
 -- forward declarations (mk_finish / the feed watch call these before they're defined)
 local at_schedule, at_draw, auto_trade_tick, publish_dispatch
@@ -2651,9 +2678,14 @@ local function mk_render(status)
         profit = "sell"          -- sell-only good, no buy side
       end
       -- the good's name toggles held/released on click; held goods wear amber
-      -- (the MUSHclient window tinted them blue -- same idea, theme-aware colour)
-      local goodcell = string.format("@{%s,click=atrade exempt %s}%s@{}",
-        at.exempt[cmd] and "warning" or "text", cmd, padr(esc(r.res), 11))
+      -- (the MUSHclient window tinted them blue -- same idea, theme-aware colour),
+      -- FLOORED goods wear info-blue (held wins when a good is both: held means
+      -- it is not traded at all, which is the stronger statement)
+      -- rclick= FIRST: a pre-1.16 host parses it as an unknown flag and keeps the
+      -- left click working; a 1.16 host gives the right button the floor toggle
+      local goodcell = string.format("@{%s,rclick=atrade floorset %s,click=atrade exempt %s}%s@{}",
+        at.exempt[cmd] and "warning" or (at.floors[cmd] and "info" or "text"),
+        cmd, cmd, padr(esc(r.res), 11))
       local function row(label, b)
         return label .. " " .. padl(b.bp, 4) .. " " .. town_link(b.bt, "buy", cmd) .. " "
           .. padl(b.bq, 6) .. "  " .. padl(b.sp, 4) .. " " .. town_link(b.st, "sell", cmd) .. " "
@@ -3130,11 +3162,15 @@ auto_trade_tick = function()
   -- cart of something cheap.
   local cand = {}
   for _, r in ipairs(results) do
-    if not at.exempt[disp_cmd(r.cmd)] and r.sells and r.sells[1] then
+    local dc = disp_cmd(r.cmd)
+    if not at.exempt[dc] and r.sells and r.sells[1] then
       local have  = have_of(r)
       local isref = REFINED[r.cmd] and true or false
       local reserve = at.keep or 20
       if not (isref or SPECIAL[r.cmd]) then reserve = math.max(reserve, at.stock or 300) end
+      -- a per-good floor RAISES the reserve, never lowers it: "keep 500 grain"
+      -- protects the pile whatever category the good falls into
+      reserve = math.max(reserve, at.floors[dc] or 0)
       local avail = have - reserve
       if isref and not at.refined then avail = 0 end
       -- Candidacy needs only a dispatchable amount (the game minimum), NOT the cart
@@ -3197,7 +3233,9 @@ auto_trade_tick = function()
          and not inbound[disp_cmd(r.cmd)] and r.buys and r.buys[1] then
         local buy = r.buys[1]
         local have = have_of(r)
-        if have < (at.stock or 300) and (buy.price or 0) > 0 then
+        -- a floored raw restocks up to its floor, not just to Raw>
+        local goal = math.max(at.stock or 300, at.floors[disp_cmd(r.cmd)] or 0)
+        if have < goal and (buy.price or 0) > 0 then
           local supply = tonumber(buy.qty) or cap
           local afford = math.floor(budget / buy.price)
           local qty = math.min(cap, supply, afford, space)
@@ -3317,6 +3355,71 @@ local function at_toggle_exempt(word)
   mk_render(nil)          -- refresh the "#" held markers in the Market report
 end
 
+-- ---------- per-good stock floors ----------
+-- A floor is "keep at least this many": Grain at 500 means the trader sells only
+-- the surplus above 500, whatever the raw/refined category reserve would allow.
+local function at_save_floors()
+  local list = {}
+  for k, n in pairs(at.floors) do list[#list + 1] = k .. "=" .. n end
+  table.sort(list); sset("at_floors", table.concat(list, ","))
+end
+local function at_list_floors()
+  local l = {}
+  for k, n in pairs(at.floors) do l[#l + 1] = k .. "=" .. n end
+  table.sort(l)
+  note("floors (never sold below): " .. (#l > 0 and table.concat(l, ", ") or "(none)")
+    .. "  - atrade floor <good> <n>; 0 or off clears")
+end
+local function at_set_floor(args)
+  local word, n = trim(args or ""):lower():match("^(.-)%s+(%S+)$")
+  if not word or word == "" then
+    note("usage: atrade floor <good> <n>  (0 or off clears; bare 'atrade floor' lists)")
+    return
+  end
+  word = DCMD[word] or word           -- same name normalisation the held list uses
+  if n == "off" or tonumber(n) == 0 then
+    if not at.floors[word] then note("no floor on " .. word); return end
+    at.floors[word] = nil
+    at_save_floors()
+    note("floor cleared: " .. word .. " sells down to the normal reserve again")
+  elseif tonumber(n) then
+    at.floors[word] = math.floor(tonumber(n))
+    at_save_floors()
+    note(string.format("floor set: keep at least %d %s in the warehouse", at.floors[word], word))
+  else
+    note("usage: atrade floor <good> <n>  (0 or off clears)")
+    return
+  end
+  mk_render(nil)          -- refresh the blue floored names in the Market report
+end
+-- the right-click path: apply (or toggle off) the Floor box's value on one good
+local function at_floorset(word)
+  word = trim(word or ""):lower(); word = DCMD[word] or word
+  if word == "" then return end
+  if mk_floorset <= 0 then
+    if at.floors[word] then at_set_floor(word .. " off")
+    else note("Floor box is 0 - right-click only clears floors (type a value above Units to set one)") end
+    return
+  end
+  if at.floors[word] == mk_floorset then
+    at_set_floor(word .. " off")             -- same value again: the toggle clears it
+  else
+    at_set_floor(word .. " " .. mk_floorset)
+  end
+end
+local function mk_setfloorset(t)
+  local n = math.floor(tonumber(t) or -1)
+  if n < 0 then
+    note("floor value must be a number (0 = right-click clears floors instead of setting)")
+  else
+    mk_floorset = n
+    sset("mk_floorset", n)
+    note(n > 0 and ("floor value " .. n .. " - right-click a good in the report to apply it")
+               or "floor value 0 - right-click now clears a good's floor")
+  end
+  if at_draw then at_draw() end
+end
+
 -- ---------- numeric settings ----------
 local AT_KEY   = { reserve="at_reserve", margin="at_margin", stock="at_stock", flush="at_flush",
                    min="at_minpct", rel="at_minrel", keep="at_keep", soft="at_soft",
@@ -3363,6 +3466,10 @@ at_draw = function()
   for k, on in pairs(at.exempt) do if on then held[#held+1] = k end end
   table.sort(held)
   if #held > 0 then L[#L+1] = "held (never sold): " .. table.concat(held, ", ") end
+  local fl = {}
+  for k, n in pairs(at.floors) do fl[#fl+1] = k .. "=" .. n end
+  table.sort(fl)
+  if #fl > 0 then L[#L+1] = "floors (never sold below): " .. table.concat(fl, ", ") end
   scrye.setState(P .. "atstatus", table.concat(L, "\n"))
 
   scrye.setState(P .. "v_keep",    tostring(at.keep))
@@ -3378,6 +3485,7 @@ at_draw = function()
   scrye.setState(P .. "v_clear",   tostring(at.clear_pct))
   scrye.setState(P .. "v_escort",  tostring(at.escort))
   scrye.setState(P .. "v_units",   tostring(mk_units))
+  scrye.setState(P .. "v_floorset", tostring(mk_floorset))
 
   local s = at.stats
   local mins = math.floor((os.time() - (s.since or os.time())) / 60)
@@ -3444,9 +3552,13 @@ local function at_config(rest)
   elseif rest == "exempt"       then local l={}; for k,on in pairs(at.exempt) do if on then l[#l+1]=k end end; table.sort(l); note("held: " .. (#l>0 and table.concat(l, ", ") or "(none)")); return
   elseif rest == "exempt clear" then at.exempt = {}; sset("at_exempt", ""); note("held list cleared"); mk_render(nil); at_draw(); return
   elseif rest:match("^exempt%s+") then at_toggle_exempt(rest:gsub("^exempt%s+", "")); at_draw(); return
+  elseif rest == "floor" or rest == "floors" then at_list_floors(); return
+  elseif rest == "floor clear"  then at.floors = {}; sset("at_floors", ""); note("all floors cleared"); mk_render(nil); at_draw(); return
+  elseif rest:match("^floorset%s+") then at_floorset(rest:gsub("^floorset%s+", "")); at_draw(); return
+  elseif rest:match("^floor%s+") then at_set_floor(rest:gsub("^floor%s+", "")); at_draw(); return
   elseif key and AT_FIELD[key] then at_setnum(key, val); return
   else
-    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | stats | log")
+    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | floor <good> <n> | floorset <good> | stats | log")
     return
   end
   at_status()
@@ -3541,9 +3653,10 @@ publish_dispatch = function()
     for _, r in ipairs(results) do
       local best = r.sells[1]
       if best then
+        local dc = disp_cmd(r.cmd)
         local have = (stock[(r.cmd or ""):gsub("_", " ")] or stock[(r.res or ""):lower()] or 0)
-                     - (at.keep or 0)                       -- respect the mission reserve
-        if have > 0 and not at.exempt[disp_cmd(r.cmd)] then  -- and the held list
+                     - math.max(at.keep or 0, at.floors[dc] or 0)  -- mission reserve AND floor
+        if have > 0 and not at.exempt[dc] then               -- and the held list
           local qty = math.floor(math.min(have, cap, best.qty))
           if qty >= MK_UNITS_MIN then
             cand[#cand + 1] = {
@@ -3695,6 +3808,7 @@ return {
   armed          = function() return at.on end,
   refresh        = function(quiet) mk_refresh(quiet) end,
   setunits       = function(t) mk_setunits(t) end,
+  setfloorset    = function(t) mk_setfloorset(t) end,
   -- the panel's label, built from the clamp rather than repeating it: the two drifted apart
   -- once already, and a field labelled with the wrong range is worse than an unlabelled one
   units_hint     = string.format("Units (%d-%d) ", MK_UNITS_MIN, MK_UNITS_MAX),
@@ -3772,6 +3886,8 @@ scrye.addPanel{
         { type = "text",   bind = P .. "report" },
         { type = "label",  text = "Quick dispatch - click a cart to send it:", color = "dim" },
         { type = "text",   bind = P .. "carts" },
+        { type = "input",  text = "Floor (right-click a good) ", bind = P .. "v_floorset",
+          onSubmit = function(t) MK.setfloorset(t) end },
         { type = "input",  text = MK.units_hint, bind = P .. "v_units",
           onSubmit = function(t) MK.setunits(t) end },
         { type = "input",  text = "Escort (1-20) ",  bind = P .. "v_escort",
@@ -3801,6 +3917,7 @@ scrye.addPanel{
         { type = "input", text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) MK.setnum("clear", t) end },
         { type = "input", text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) MK.setnum("escort", t) end },
         { type = "label", text = "Hold a good: click its name in the Trade tab (or: atrade exempt <good>)", color = "dim" },
+        { type = "label", text = "Floor a good: atrade floor <good> <n> - never sold below n; its name turns blue", color = "dim" },
     } },
     { title = "Trade Log", widgets = {
         { type = "text", bind = P .. "atlog" },

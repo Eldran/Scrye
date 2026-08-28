@@ -43,6 +43,20 @@ target pool - foreign has no heat in the feed, so it spreads at random under the
 same hold rotation. VERIFY LIVE: the first foreign auto-dispatch (vlongship
 raid/convoy is assumed to accept historical towns).
 
+Status **2.7.0** (28 Aug): per-good stock floors for the auto-trader - 'atrade
+floor <good> <n>' keeps at least n of that good (raises the raw/refined reserve,
+never lowers it; manual Dispatch respects it; floored raws restock up to the
+floor). Floored names show info-blue in the Trade tab; held amber wins.
+
+Status **2.8.0** + host **API 1.16** (28 Aug): the floors get a UI. The text
+markup gains `rclick=` (a second, right-button command on the same clickable
+run; emitted before click= so pre-1.16 hosts degrade to left-click-only; the
+right button also stops falling through to click=). The Trade tab gets a Floor
+box above Units; right-clicking a good's name applies the box's value as its
+floor, the same value again toggles it off, box at 0 = the right button only
+clears. NEEDS A VS BUILD + dotnet test: Markup.cs, StyledRun.cs (LinkInfo),
+StyledTextView.cs, ScryeApi.cs 1.16, MarkupTests grown.
+
 Remaining: vqpath/vresolve shapes, active campaign/war payloads, raid extras
 (grudge-aware targeting, raid log), the rest of §5, the TradeGoods code->good
 mapping (needs one in-game paste), and the dev report (Guild.Map terrain still the
