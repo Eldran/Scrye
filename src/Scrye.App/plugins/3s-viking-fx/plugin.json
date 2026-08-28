@@ -1,0 +1,25 @@
+{
+  "id": "3s-viking-fx",
+  "name": "3S Viking Effects",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Status-effect timer bar for the 3Scapes Viking guild, fed by the Guild.State GMCP package (fx.stfx). Every active effect as a countdown bar scaled to the longest duration seen this session, ticked down locally between server refreshes, sorted soonest-first. Warns on screen - and optionally on the phone - when an effect drops under the warn threshold (vfx warn <secs>, default 30). Also shows the god name + focus (no countdown: expires_at is a wall-clock epoch the plugin sandbox cannot anchor). 3Scapes only; needs GMCP.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.2 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "state.write",
+    "notifications.show",
+    "storage.private",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}
