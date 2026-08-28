@@ -32,6 +32,14 @@ namespace Scrye.Core.Plugins;
 /// measured to their widest cell.</item>
 /// </list>
 ///
+/// <para><b>Row clicks (API 1.15).</b> A <c>list</c> or <c>table</c> whose script sets an
+/// <c>onRowClick</c> function becomes row-clickable: the callback id lands in
+/// <see cref="Action"/> and the host fires it through the choice path with the clicked row's
+/// first cell and its 1-based index — the same (label, index) shape a bound buttonrow
+/// reports, because a clickable row IS a choice from a dynamic set. The header row is
+/// structure, not content, and never fires it. Hosts that render panels as plain text (the
+/// companion) ignore it, exactly as they ignore colorgrid clicks.</para>
+///
 /// <para><b>Colours.</b> <see cref="Color"/> and the values in <see cref="Palette"/> accept
 /// either a <c>"#RRGGBB"</c> literal or one of the semantic names in <see cref="ThemeToken"/>
 /// (<c>"accent"</c>, <c>"warning"</c>, <c>"dim"</c>, …). Prefer the token — a literal hard-codes
@@ -103,7 +111,9 @@ public sealed record WidgetSpec
     public string? Align { get; init; }
 
     /// <summary>For <c>button</c> widgets: an opaque action id the host calls back with when
-    /// clicked (the plugin runtime maps it to a Lua callback). Set by the runtime, not authors.</summary>
+    /// clicked (the plugin runtime maps it to a Lua callback). Set by the runtime, not authors.
+    /// For <c>list</c>/<c>table</c> (API 1.15) it carries the <c>onRowClick</c> callback id,
+    /// fired through the choice path with (first cell, 1-based row index).</summary>
     public string? Action { get; init; }
 
     /// <summary>

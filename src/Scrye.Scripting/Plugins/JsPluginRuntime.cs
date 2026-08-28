@@ -185,6 +185,15 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Safe("submit", () => _engine.Invoke(fn!, text));
     }
 
+    /// <summary>Invoke a choice-shaped callback with (label, 1-based index): a bound
+    /// buttonrow's button, or a list/table row click (onRowClick, API 1.15). Was the
+    /// interface's no-op default before 1.15, which silently ate the click here.</summary>
+    public void InvokeChoice(string actionId, string label, int index)
+    {
+        if (_actions.TryGetValue(actionId, out JsValue? fn))
+            Safe("choice", () => _engine.Invoke(fn!, label, index));
+    }
+
     private void FireAll(List<JsValue> hooks, string what)
     {
         for (int i = 0; i < hooks.Count; i++)
@@ -494,11 +503,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
     private WidgetSpec ToWidgetSpec(JsValue w)
     {
-        // 'action' (button) / 'onClick' (colorgrid) / 'onSubmit' (input) — a function stored under an id.
+        // 'action' (button) / 'onClick' (colorgrid) / 'onSubmit' (input) / 'onRowClick'
+        // (list/table row, 1.15) — a function stored under an id. One slot: a widget has at
+        // most one of these, and a clickable row reports through the choice path.
         string? actionId = null;
         JsValue action = Get(w, "action");
         if (!IsFn(action)) action = Get(w, "onClick");
         if (!IsFn(action)) action = Get(w, "onSubmit");
+        if (!IsFn(action)) action = Get(w, "onRowClick");
         if (IsFn(action))
         {
             actionId = "a" + _nextActionId++;

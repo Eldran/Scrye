@@ -119,6 +119,63 @@ public class GmcpTests
         Assert.Equal("", json);
     }
 
+    // ---- Comm.Channel.Text → the chat path (the MIP replacement) ------------
+
+    [Fact]
+    public void Gmcp_chat_raises_the_same_channel_event_mip_did()
+    {
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        var got = new List<(string Ch, string Msg)>();
+        s.ChannelMessage += (ch, msg) => got.Add((ch, msg));
+
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"Rictor: Interesting\", \"talker\": \"Rictor\", \"prefix\": \"-~* Viking *~-\", \"channel\": \"vik\" }"));
+
+        (string ch, string msg) = Assert.Single(got);
+        Assert.Equal("vik", ch);
+        Assert.Equal("Rictor: Interesting", msg);
+    }
+
+    [Fact]
+    public void Gmcp_chat_names_the_talker_when_the_text_does_not()
+    {
+        // Channels are inconsistent: vik embeds "Rictor: neigh", gossip sends a bare "yep"
+        // with the name only in `talker`. The bridge prepends the talker exactly when the
+        // text does not already carry it - so vik lines stay as sent, gossip gains its
+        // speaker, and a notify narrative that mentions the name mid-sentence stays whole.
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        var got = new List<(string Ch, string Msg)>();
+        s.ChannelMessage += (ch, msg) => got.Add((ch, msg));
+
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"yep\", \"talker\": \"Brynhild\", \"prefix\": \"Brynhild <Gossip>:\", \"channel\": \"gossip\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"Rictor: neigh\", \"talker\": \"Rictor\", \"channel\": \"vik\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"The Norns cut the thread. Bjorndraugr fades from the hall.\", \"talker\": \"Bjorndraugr\", \"channel\": \"vnotify\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"anonymous whisper\", \"channel\": \"soul\" }"));
+
+        Assert.Equal(4, got.Count);
+        Assert.Equal(("gossip", "Brynhild: yep"), got[0]);                 // named
+        Assert.Equal(("vik", "Rictor: neigh"), got[1]);                    // already named
+        Assert.Equal(("vnotify", "The Norns cut the thread. Bjorndraugr fades from the hall."),
+                     got[2]);                                              // narrative untouched
+        Assert.Equal(("soul", "anonymous whisper"), got[3]);               // no talker to add
+    }
+
+    [Fact]
+    public void Gmcp_chat_without_a_channel_or_text_is_not_delivered()
+    {
+        // A payload this bridge cannot FILE is not chat it can deliver: no channel means no
+        // pane to route to, no text means nothing to show. Neither may throw or fire.
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        int fired = 0;
+        s.ChannelMessage += (_, _) => fired++;
+
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"orphaned\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"channel\": \"vik\" }"));
+        telnet.Process(Sub("Comm.Channel.Text not json at all"));
+        telnet.Process(Sub("Comm.Channel.Text [1, 2]"));
+
+        Assert.Equal(0, fired);
+    }
+
     // ---- the handshake ------------------------------------------------------
 
     [Fact]

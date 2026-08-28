@@ -341,6 +341,7 @@ public sealed class HudViewModel : IDisposable
             {
                 var vm = new TableWidgetViewModel(textColor, w.Separator, columns: null,
                                                   align: w.Align ?? "lr", dimTrailing: true);
+                WireRowClick(vm, w, pluginId);
                 BindText(w.Bind, s => vm.Rows = s, subs);
                 return vm;
             }
@@ -349,6 +350,7 @@ public sealed class HudViewModel : IDisposable
                 var vm = new TableWidgetViewModel(textColor, w.Separator,
                                                   w.Columns is null ? null : System.Linq.Enumerable.ToArray(w.Columns),
                                                   w.Align, dimTrailing: false);
+                WireRowClick(vm, w, pluginId);
                 BindText(w.Bind, s => vm.Rows = s, subs);
                 return vm;
             }
@@ -395,6 +397,17 @@ public sealed class HudViewModel : IDisposable
                 return vm;
             }
         }
+    }
+
+    /// <summary>Wire a list/table's <c>onRowClick</c> (API 1.15): the clicked row reports
+    /// through the choice path with (first cell, 1-based row index) — the same shape a bound
+    /// buttonrow reports, because a clickable row is a choice from a dynamic set.</summary>
+    private void WireRowClick(TableWidgetViewModel vm, WidgetSpec w, string pluginId)
+    {
+        if (string.IsNullOrEmpty(w.Action)) return;
+        string actionId = w.Action;
+        vm.RowCommand = new RelayCommand<Controls.TableRow>(row =>
+            _invokeChoice?.Invoke(pluginId, actionId, row.Label, row.Index));
     }
 
     /// <summary>Repopulate a bound buttonrow from a newline-separated list of labels. Blank
@@ -990,6 +1003,10 @@ public sealed class TableWidgetViewModel : ViewModelBase, IReThemable
 
     private string _rows = "";
     public string Rows { get => _rows; set => SetField(ref _rows, value); }
+
+    /// <summary>Set when the widget declared <c>onRowClick</c> (API 1.15); null keeps the
+    /// table inert exactly as before the feature existed.</summary>
+    public System.Windows.Input.ICommand? RowCommand { get; set; }
 }
 
 /// <summary>A grid of coloured cells: newline-separated rows of characters, coloured

@@ -145,7 +145,16 @@ public static class ScryeApi
     //      Additive, with a fallback idiom: on a pre-1.14 host scrye.shared is absent, so a
     //      plugin that wants to run on both writes `local ST = scrye.shared or scrye.store`
     //      and reads/writes through ST - degrading to per-profile storage, never breaking.
-    public static readonly Version Current = new(1, 14);
+    // 1.15 A `list` or `table` widget may set an `onRowClick` function, and its rows become
+    //      clickable: the callback gets (first cell text, 1-based row index) - the same
+    //      shape a bound buttonrow reports, because a clickable row IS a choice from a
+    //      dynamic set. The header row is structure, not content, and never fires it.
+    //
+    //      The mapper's Maps tab is why: a table of maps you can read but not act on turns
+    //      "click the name and walk there" into a command to type. No new runtime surface -
+    //      the id rides WidgetSpec.Action and the existing choice invoke - so a host that
+    //      predates it renders the same inert table it always did.
+    public static readonly Version Current = new(1, 15);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

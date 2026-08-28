@@ -380,7 +380,8 @@
                                                         <controls:DataTableView Rows="{Binding Rows}" Separator="{Binding Separator}"
                                                                                 Columns="{Binding Columns}" Align="{Binding Align}"
                                                                                 Foreground="{Binding ColorBrush}"
-                                                                                DimTrailing="{Binding DimTrailing}" Margin="0,3" />
+                                                                                DimTrailing="{Binding DimTrailing}"
+                                                                                RowCommand="{Binding RowCommand}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"

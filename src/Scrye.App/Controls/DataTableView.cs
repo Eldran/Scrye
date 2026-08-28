@@ -1,11 +1,18 @@
 using System;
 using System.Globalization;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Immutable;
 
 namespace Scrye.App.Controls;
+
+/// <summary>A clicked body row: its 1-based index and its first cell's text — the same
+/// (label, index) pair a bound buttonrow reports, because a clickable row IS a choice from
+/// a dynamic set. The header row is structure, not content, and never reports.</summary>
+public readonly record struct TableRow(int Index, string Label);
 
 /// <summary>
 /// Renders the <c>list</c> and <c>table</c> plugin widgets: newline-separated
@@ -50,12 +57,19 @@ public class DataTableView : Control
     public static readonly StyledProperty<bool> DimTrailingProperty =
         AvaloniaProperty.Register<DataTableView, bool>(nameof(DimTrailing));
 
+    /// <summary>Optional command run when a body row is clicked, with a <see cref="TableRow"/>
+    /// parameter (the plugin <c>onRowClick</c> callback, API 1.15). Null = the table is inert,
+    /// exactly as before the property existed. The header row never fires it.</summary>
+    public static readonly StyledProperty<ICommand?> RowCommandProperty =
+        AvaloniaProperty.Register<DataTableView, ICommand?>(nameof(RowCommand));
+
     public string Rows { get => GetValue(RowsProperty); set => SetValue(RowsProperty, value); }
     public string Separator { get => GetValue(SeparatorProperty); set => SetValue(SeparatorProperty, value); }
     public string[]? Columns { get => GetValue(ColumnsProperty); set => SetValue(ColumnsProperty, value); }
     public string? Align { get => GetValue(AlignProperty); set => SetValue(AlignProperty, value); }
     public IBrush? Foreground { get => GetValue(ForegroundProperty); set => SetValue(ForegroundProperty, value); }
     public bool DimTrailing { get => GetValue(DimTrailingProperty); set => SetValue(DimTrailingProperty, value); }
+    public ICommand? RowCommand { get => GetValue(RowCommandProperty); set => SetValue(RowCommandProperty, value); }
 
     private const string Mono = "Cascadia Mono, Consolas, monospace";
     private const double FontSize = 10.5;
@@ -191,6 +205,12 @@ public class DataTableView : Control
         double running = 0;
         for (int c = 0; c < cols; c++) { x0[c] = running; running += widths[c] + ColGap; }
 
+        // When clickable, fill a transparent background so every row is hit-testable across
+        // its full width (a bare Control only receives pointer events where it has drawn
+        // something) — same trick as ColorGridView.
+        if (RowCommand is not null)
+            context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
+
         IImmutableBrush body = BodyBrush;
         IImmutableBrush dim = DimBrush;
         string align = Align ?? "";
@@ -216,6 +236,35 @@ public class DataTableView : Control
             }
             y += rowH;
         }
+    }
+
+    /// <summary>The body row under a point, or null: header space (and its gap) is skipped,
+    /// gaps between rows count as the row above them (a click between two lines of text is
+    /// aimed at a row, not at typography).</summary>
+    private TableRow? RowAt(Point p)
+    {
+        string[][] grid = Grid();
+        if (grid.Length == 0) return null;
+        double y = p.Y;
+        if (Columns is { Length: > 0 })
+        {
+            y -= LineHeight() + HeaderGap;
+            if (y < 0) return null;                       // the header is not a row
+        }
+        int row = (int)(y / LineHeight());
+        if (row < 0 || row >= grid.Length) return null;
+        string label = grid[row].Length > 0 ? grid[row][0].Trim() : "";
+        return new TableRow(row + 1, label);
+    }
+
+    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    {
+        base.OnPointerPressed(e);
+        ICommand? cmd = RowCommand;
+        if (cmd is null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        if (RowAt(e.GetPosition(this)) is not { } hit) return;
+        if (cmd.CanExecute(hit)) cmd.Execute(hit);
+        e.Handled = true;
     }
 
     private void DrawCell(DrawingContext context, string text, IImmutableBrush brush,

@@ -295,6 +295,55 @@ public sealed class PluginRuntimeApiTests : IDisposable
         Assert.Equal("-1,-1,", host.State["hover"]);
     }
 
+    // ---- list/table onRowClick (API 1.15) -------------------------------------
+
+    /// <summary>A table with <c>onRowClick</c> registers the callback under the widget's
+    /// Action id, and the choice invoke path delivers (first cell, 1-based row index) to it —
+    /// no new runtime surface, which is the whole design.</summary>
+    [Fact]
+    public void TableRowClickRidesTheChoicePath()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("rows", """
+            scrye.addPanel{
+              title = "Maps",
+              widgets = { { type = "table", bind = "maplist", columns = { "Map", "Rooms" },
+                            onRowClick = function(label, index) scrye.setState("picked", label .. "@" .. index) end } },
+            }
+            """, host);
+
+        PanelSpec panel = Assert.Single(host.Panels);
+        WidgetSpec table = Assert.Single(panel.Widgets);
+        Assert.Equal("table", table.Type);
+        Assert.False(string.IsNullOrEmpty(table.Action));
+
+        rt.InvokeChoice(table.Action!, "Smurfland", 3);
+        Assert.Equal("Smurfland@3", host.State["picked"]);
+    }
+
+    /// <summary>The same widget through the Jint runtime: onRowClick lands in Action and the
+    /// choice invoke reaches the JS function with the same (label, index) pair.</summary>
+    [Fact]
+    public void JsTableRowClickRidesTheChoicePath()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("jsrows", """
+            scrye.addPanel({
+              title: "Maps",
+              widgets: [ { type: "table", bind: "maplist",
+                           onRowClick: function (label, index) { scrye.setState("picked", label + "@" + index); } } ],
+            });
+            """, lang: "js"), host);
+        rt.Load();
+
+        PanelSpec panel = Assert.Single(host.Panels);
+        WidgetSpec table = Assert.Single(panel.Widgets);
+        Assert.False(string.IsNullOrEmpty(table.Action));
+
+        rt.InvokeChoice(table.Action!, "Smurfland 2", 5);
+        Assert.Equal("Smurfland 2@5", host.State["picked"]);
+    }
+
     // ---- JS parity ------------------------------------------------------------
 
     [Fact]

@@ -190,6 +190,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             if (!string.IsNullOrWhiteSpace(json)) _state.SetJson(pkg, json);   // GMCP → structured state
             MapGmcpState(pkg);
             if (GmcpAudit.Raw) RaiseLine(Line.FromText($"[GMCP] {pkg} {json}", SysColour));
+            if (pkg.Equals("Comm.Channel.Text", StringComparison.OrdinalIgnoreCase))
+                RaiseGmcpChannel(json);
             GmcpReceived?.Invoke(pkg, json);
         };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
@@ -810,6 +812,45 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.ResetCompression();
         _events.Emit(SessionEventKind.Notice, "MCCP2 compression ended");
         RaiseLine(Line.FromText("[MCCP2] compression ended", SysColour));
+    }
+
+    /// <summary>
+    /// <c>Comm.Channel.Text</c> → the same <see cref="ChannelMessage"/> event MIP chat raises,
+    /// so chat panes, plugin <c>onChannel</c> hooks, and cross-world relay all keep working on
+    /// a world that has moved to GMCP (3Scapes cannot run MIP and GMCP together, so a GMCP
+    /// character loses the MIP feed entirely). The payload's <c>text</c> arrives display-ready
+    /// ("Rictor: Interesting"); <c>talker</c>/<c>prefix</c> are metadata and not re-composed
+    /// into it. The two feeds never both fire on one world, so nothing is delivered twice —
+    /// though unlike MIP frames, GMCP chat is out-of-band and the line ALSO prints in the main
+    /// output; the panes are a second view of it, not its only home.
+    /// </summary>
+    private void RaiseGmcpChannel(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            System.Text.Json.JsonElement root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+            string channel = root.TryGetProperty("channel", out System.Text.Json.JsonElement c)
+                ? c.GetString() ?? "" : "";
+            string text = root.TryGetProperty("text", out System.Text.Json.JsonElement t)
+                ? t.GetString() ?? "" : "";
+            if (channel.Length == 0 || text.Length == 0) return;   // not a chat line we can file
+            // WHO said it: channels are inconsistent about embedding the speaker - vik sends
+            // "Rictor: neigh" while gossip sends a bare "yep" with the name only in `talker`.
+            // When the talker is nowhere in the text, prepend it; when it already appears -
+            // a "Name: ..." chat line, or a notify narrative like "... Bjorndraugr fades
+            // from the hall" - the text stands as sent. A contains-check is a heuristic
+            // (a name that happens to occur mid-word would suppress the prefix), accepted:
+            // the failure mode is a missing name, never a mangled line.
+            string talker = root.TryGetProperty("talker", out System.Text.Json.JsonElement tk)
+                ? tk.GetString() ?? "" : "";
+            if (talker.Length > 0
+                && text.IndexOf(talker, StringComparison.OrdinalIgnoreCase) < 0)
+                text = talker + ": " + text;
+            ChannelMessage?.Invoke(channel, text);
+        }
+        catch (System.Text.Json.JsonException) { }                 // hostile payload: not chat
     }
 
     private void OnLineCompleted(Line line)

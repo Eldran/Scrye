@@ -683,8 +683,10 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
     private WidgetSpec ToWidgetSpec(NativeLua cl, int w)
     {
-        // 'action' (button) / 'onClick' (colorgrid cell) / 'onSubmit' (input) — first
-        // function found is registered under an opaque id the host calls back with.
+        // 'action' (button) / 'onClick' (colorgrid cell) / 'onSubmit' (input) /
+        // 'onRowClick' (list/table row, 1.15) — first function found is registered under an
+        // opaque id the host calls back with. One slot, because a widget has at most one of
+        // these; a clickable row reports through the choice path like a bound buttonrow.
         string? actionId = null;
         foreach (string key in ActionKeys)
         {
@@ -817,7 +819,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         };
     }
 
-    private static readonly string[] ActionKeys = { "action", "onClick", "onSubmit" };
+    private static readonly string[] ActionKeys = { "action", "onClick", "onSubmit", "onRowClick" };
 
     /// <summary>t[key] as a loose string, or null when nil — the MoonSharp Field twin.
     /// <paramref name="tblIndex"/> must be absolute.</summary>
