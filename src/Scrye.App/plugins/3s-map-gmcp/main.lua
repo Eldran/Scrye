@@ -125,13 +125,25 @@ local TILE_MARKS = "^v%>!"
 
 -- ---------- state ----------
 local talking = true
-local rooms   = {}        -- num -> { name, area, exits, walked, visits }
+local rooms   = {}        -- num -> { name, area, exits, walked, visits, shift?, vary? }
+                          -- shift: dir -> true, an exit marked SHIFTING (elevator, portal:
+                          -- it genuinely ends somewhere different each ride, so no single
+                          -- destination is the truth). vary: dir -> how many times a WALK
+                          -- through it has ended somewhere new, the auto-mark's evidence.
 local known   = 0         -- #rooms
 local here    = nil       -- num of the room we are in
 local msgs    = 0
 local dirty   = false
 local moves   = {}        -- queued { dir, from, at } awaiting a Room.Info
 local mapnames = {}       -- seed room number -> a name you gave that map
+local maplist_seeds = {}  -- Maps tab row index -> that row's map seed, for row clicks
+local maplist_filter = "" -- Maps tab search text (lowercased); "" = show everything
+local favs = {}           -- favourite maps, as ROOM numbers (any member room): a room
+                          -- resolves to whatever map contains it at display time, so a
+                          -- favourite survives its map growing or merging with another.
+                          -- Persisted with the store, shared like it; capped at FAV_CAP.
+local favlist_nums = {}   -- Favs tab row index -> that row's resolved room, for clicks
+local FAV_CAP = 20
 local walk    = nil       -- { steps, idx, target, sent, why } while walking
 local stats   = { told = 0, walked = 0, contradictions = 0, desyncs = 0, new = 0 }
 local quiet_timer, flush_timer
@@ -147,6 +159,8 @@ local held_by = nil       -- transient hold via the "map.hold" event (never pers
 local in_sea  = false     -- last arrival was a Sea of Chaos layer; kept so entering and
                           -- leaving are each said once rather than once per room
 local refresh_maplist                      -- defined with the panel, called by the drawing
+local refresh_favlist                      -- likewise, for the Favs tab
+local fav_toggle                           -- defined with the panel, used by the alias too
 local now     = 0         -- seconds, advanced by the flush tick
 
 local function note(s) scrye.print("[mapg] " .. s) end
@@ -202,6 +216,10 @@ local function area_of(r) return (r and r.area ~= "" and r.area) or "?" end
 --   "walked" beats "told": if the server said 0 and we went there anyway,
 --   we know better than the thing that declined to say.
 local function link(r, dir)
+  -- A shifting exit has no destination worth reporting: whatever we walked or
+  -- were told is one ride's answer, not the exit's. Everything downstream --
+  -- routes, layout, the farmer's handover -- treats it as no link at all.
+  if r.shift and r.shift[dir] then return nil, "shift" end
   local w = r.walked and r.walked[dir]
   if w and w ~= 0 then return w, "walked" end
   local t = r.exits and r.exits[dir]
@@ -218,7 +236,7 @@ local function neighbours(r)
     if dest then out[#out + 1] = { dir = dir, to = dest } end
   end
   for _, dir in ipairs(sorted_dirs(r.walked)) do   -- walked a way not listed
-    if not (r.exits and r.exits[dir]) then
+    if not (r.exits and r.exits[dir]) and not (r.shift and r.shift[dir]) then
       out[#out + 1] = { dir = dir, to = r.walked[dir] }
     end
   end
@@ -235,8 +253,13 @@ end
 local function frontier_dirs(r)
   local out = {}
   for _, dir in ipairs(sorted_dirs(r.exits)) do
-    local dest = link(r, dir)
-    if not dest or not rooms[dest] then out[#out + 1] = dir end
+    -- A shifting exit is never unexplored: there is nothing behind it to LEARN,
+    -- only somewhere to be taken. Without this guard link()'s nil would make it
+    -- eternal frontier and the explorer would ride the elevator forever.
+    if not (r.shift and r.shift[dir]) then
+      local dest = link(r, dir)
+      if not dest or not rooms[dest] then out[#out + 1] = dir end
+    end
   end
   return out
 end
@@ -249,7 +272,9 @@ local function describe_exits(r, num)
   for _, dir in ipairs(dirs) do
     local dest, how = link(r, dir)
     local shown
-    if not dest then
+    if how == "shift" then
+      shown = "~"                                    -- marked shifting: no ONE destination
+    elseif not dest then
       shown = "?"                                    -- a way out, destination withheld
     elseif num and dest == num then
       shown = tostring(dest) .. "(self)"
@@ -276,11 +301,13 @@ local function save(force)
   local list = {}
   for num, r in pairs(rooms) do
     list[#list + 1] = { num = num, name = r.name, area = r.area,
-                        exits = r.exits, walked = r.walked, visits = r.visits }
+                        exits = r.exits, walked = r.walked, visits = r.visits,
+                        shift = r.shift, vary = r.vary }
   end
   local names = {}
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
-  WORLD.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names })
+  WORLD.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names,
+                                          favs = favs })
   dirty = false
   return #list
 end
@@ -311,12 +338,19 @@ local function load()
                      exits = type(r.exits) == "table" and r.exits or {},
                      walked = type(r.walked) == "table" and r.walked or {},
                      visits = tonumber(r.visits) or 0 }
+      -- only kept when non-empty, so an old save (no such fields) loads unchanged
+      if type(r.shift) == "table" and next(r.shift) ~= nil then rooms[num].shift = r.shift end
+      if type(r.vary) == "table" and next(r.vary) ~= nil then rooms[num].vary = r.vary end
       known = known + 1
     end
   end
   for _, n in ipairs(type(data.names) == "table" and data.names or {}) do
     local seed = tonumber(n.seed)
     if seed and type(n.name) == "string" and n.name ~= "" then mapnames[seed] = n.name end
+  end
+  for _, f in ipairs(type(data.favs) == "table" and data.favs or {}) do
+    local num = tonumber(f)
+    if num and #favs < FAV_CAP then favs[#favs + 1] = num end
   end
 end
 
@@ -387,6 +421,13 @@ local function on_room_info(json)
 
   local from = here
   local prev = rooms[num]
+  -- A shifting exit's TOLD destination is one ride's noise -- the elevator names
+  -- whichever floor it happens to be at -- so storing it would flag EXITS CHANGED
+  -- on every visit and re-teach the lie the mark exists to unlearn. Neutered to 0
+  -- (a way out, destination unknown); the mark itself still draws it as '~'.
+  if prev and prev.shift then
+    for d in pairs(prev.shift) do if exits[d] ~= nil then exits[d] = 0 end end
+  end
   local changed = prev and exits_differ(prev.exits, exits)
 
   local shape_changed = (not prev) or changed or (prev and prev.area ~= area)
@@ -405,7 +446,7 @@ local function on_room_info(json)
   -- Pair this arrival with the move that caused it.
   prune_moves()
   local mv = table.remove(moves, 1)
-  local learned, contradiction = nil, nil
+  local learned, contradiction, rode_shift, auto_shift = nil, nil, false, false
   if mv then
     if mv.from ~= from then
       -- Our idea of where that move started is not where we actually were.
@@ -420,13 +461,39 @@ local function on_room_info(json)
       local src = rooms[from]
       local told = src.exits and src.exits[mv.dir]
       src.walked = src.walked or {}
-      if src.walked[mv.dir] ~= num then
+      if src.shift and src.shift[mv.dir] then
+        -- Marked shifting: the ride is real -- 'here' has already moved -- but the
+        -- link would be one ride's lie, so nothing is learned from it.
+        rode_shift = true
+      elseif src.walked[mv.dir] ~= num then
+        local old = src.walked[mv.dir]
         src.walked[mv.dir] = num
         stats.walked = stats.walked + 1
         learned = (told == nil or told == 0)
         forget_adjacency()          -- a new edge changes what connects to what
+        -- Our own feet have now seen this exit end somewhere NEW. Once is a
+        -- correction and the fresh walk deserves the belief it just got; twice is
+        -- an elevator (Joakim's Megacity lift, 28 Aug 2026: 44346's 's' names a
+        -- different floor's lobby every ride). At twice the exit is marked
+        -- shifting automatically and stops being believed at all.
+        if old and old ~= 0 then
+          src.vary = src.vary or {}
+          src.vary[mv.dir] = (src.vary[mv.dir] or 0) + 1
+          if src.vary[mv.dir] >= 2 then
+            src.shift = src.shift or {}
+            src.shift[mv.dir] = true
+            src.walked[mv.dir] = nil
+            if src.exits and src.exits[mv.dir] ~= nil then src.exits[mv.dir] = 0 end
+            src.vary[mv.dir] = nil
+            if next(src.vary) == nil then src.vary = nil end
+            auto_shift = true
+            forget_adjacency()
+          end
+        end
       end
-      if told and told ~= 0 and told ~= num then
+      -- No DISAGREES for a shifting exit: disagreement is its nature, not news --
+      -- and the ride that just triggered the auto-mark said something better.
+      if told and told ~= 0 and told ~= num and not (rode_shift or auto_shift) then
         stats.contradictions = stats.contradictions + 1
         contradiction = told
       end
@@ -448,6 +515,17 @@ local function on_room_info(json)
       note(string.format("  DISAGREES: %d says %s leads to %d, but walking it arrived at %d",
                          from, mv.dir, contradiction, num))
       note("  a shifting exit, a portal, or a randomly generated map. The walk is believed.")
+      note("  (an elevator or portal? 'mapg shift " .. from .. " " .. mv.dir
+           .. "' stops it being believed at all)")
+    end
+    if rode_shift and from then
+      note(string.format("  %s from %d is marked shifting - arrived at %d, nothing recorded",
+                         mv.dir, from, num))
+    end
+    if auto_shift and from then
+      note(string.format("  %s from %d has now ended somewhere new twice - marked SHIFTING", mv.dir, from))
+      note("  an elevator or a portal: ride it yourself; routes will not use it"
+           .. " ('mapg shift " .. from .. " " .. mv.dir .. " off' undoes this)")
     end
   end
 
@@ -466,6 +544,16 @@ end
 local function on_command(cmd)
   local word = tostring(cmd or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
   local dir = MOVE[word]
+  -- The server NAMES nonstandard exits in Room.Info ("exit", "vortex", "portal"...), and
+  -- typing one of those names from this room IS a move - the room's own feed says so. Pair
+  -- it like any compass step, or the door only ever gets learned one way and the map ends
+  -- up with islands no route crosses (Joakim's roads, 25 Aug: every road<->area crossing
+  -- was such a door, and 'walk to that map' could not leave the roads). Only words the
+  -- CURRENT room's exits table names qualify - a guess ("look"? "flee"?) queued here would
+  -- pair with the next real arrival and write a link nobody walked.
+  if not dir and here and rooms[here] and rooms[here].exits and rooms[here].exits[word] ~= nil then
+    dir = word
+  end
   if dir then queue_move(dir) end
   if walk and dir then
     if walk.sent == dir then
@@ -739,6 +827,10 @@ draw = function()
   if not L then
     scrye.setState(P .. "grid", "")
     scrye.setState(P .. "status", here and "no layout yet" or "not anywhere yet")
+    -- The Maps and Favs tabs are lists, not layouts: they must not go stale just
+    -- because there is nothing to draw a grid FROM - a wipe lands exactly here, and
+    -- lists still showing the erased maps would be a lie.
+    if refresh_maplist then refresh_maplist() end
     return
   end
   local me = L.at[here]
@@ -933,6 +1025,11 @@ local function status()
   end
   note(string.format("  links walked %d, disagreements %d, out-of-step %d",
                      stats.walked, stats.contradictions, stats.desyncs))
+  local shifts = 0
+  for _, r in pairs(rooms) do shifts = shifts + count(r.shift) end
+  if shifts > 0 then
+    note("  " .. shifts .. " exit(s) marked shifting - 'mapg shift' lists them")
+  end
   note("  commentary is " .. (talking and "ON" or "off") .. "  ('mapg on' / 'mapg off')")
 end
 
@@ -987,6 +1084,11 @@ local function room_detail(num)
     end
     note("  unexplored: " .. table.concat(parts, " ")
       .. "  (bare = destination withheld, >n? = told but never seen)")
+  end
+  local sh = sorted_dirs(r.shift)
+  if #sh > 0 then
+    note("  shifting: " .. table.concat(sh, " ")
+      .. "  (ends somewhere different each ride - drawn ~, never routed through)")
   end
 end
 
@@ -1082,6 +1184,7 @@ local function wipe(confirmed)
   rooms, known, here = {}, 0, nil
   moves = {}
   mapnames = {}
+  favs = {}                       -- favourites of maps that no longer exist would dangle
   stats = { told = 0, walked = 0, contradictions = 0, desyncs = 0, new = 0 }
   wipe_armed = false
   dirty = false
@@ -1116,23 +1219,132 @@ local function name_map(text)
   note("this map is now '" .. text .. "'")
 end
 
-local function maps_list()
+-- Maps sorted for READING: alphabetically by label, case-insensitive. The old
+-- biggest-first order answered "what have I explored most", which nobody was asking;
+-- finding an area by its name in a list of forty is the actual job.
+local function sorted_maps()
   local maps = all_maps()
-  if #maps == 0 then note("no rooms known yet"); return end
   table.sort(maps, function(a, b)
-    if a.size ~= b.size then return a.size > b.size end
+    local la, lb = tostring(a.label):lower(), tostring(b.label):lower()
+    if la ~= lb then return la < lb end
     return a.seed < b.seed
   end)
-  note(#maps .. " map(s) over " .. known .. " room(s):")
-  for i, m in ipairs(maps) do
-    if i > LIST_CAP then note("  ... and " .. (#maps - LIST_CAP) .. " more"); break end
-    local mine = here and m.set[here] and " <- you are here" or ""
+  return maps
+end
+
+-- Does this map match the search text? By its own label, or by a BORDERING map's label -
+-- the second half is what makes "chaos" list every area hanging off Chaos realm: an
+-- area's realm is its neighbour, and the borders already carry the names you gave them.
+local function map_matches(m, borders, f)
+  if f == "" then return true end
+  if tostring(m.label):lower():find(f, 1, true) then return true end
+  for _, lbl in ipairs(borders) do
+    if tostring(lbl):lower():find(f, 1, true) then return true end
+  end
+  return false
+end
+
+local function maps_list(filter)
+  filter = tostring(filter or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+  local maps = sorted_maps()
+  if #maps == 0 then note("no rooms known yet"); return end
+  local shown, total = 0, #maps
+  local head_said = false
+  for _, m in ipairs(maps) do
     local b = borders_of(m.set)
-    local touch = #b > 0 and ("  borders " .. table.concat(b, ", ", 1, math.min(#b, 3))) or ""
-    note(string.format("  %-30s %3d room(s)%s%s", m.label, m.size, touch, mine))
+    if map_matches(m, b, filter) then
+      shown = shown + 1
+      if not head_said then
+        head_said = true
+        note((filter == "" and (total .. " map(s) over " .. known .. " room(s):")
+                            or ("maps matching '" .. filter .. "' by name or border:")))
+      end
+      if shown > LIST_CAP then note("  ... and more") ; break end
+      local mine = here and m.set[here] and " <- you are here" or ""
+      local touch = #b > 0 and ("  borders " .. table.concat(b, ", ", 1, math.min(#b, 3))) or ""
+      note(string.format("  %-30s %3d room(s)%s%s", m.label, m.size, touch, mine))
+    end
+  end
+  if filter ~= "" then
+    if shown == 0 then note("nothing matches '" .. filter .. "' by name or border") end
+    return
   end
   note("an area in two unconnected pieces gets a map each - 'Unknown' is usually several,")
   note("because it labels every stretch of connective realm on the MUD, not one place")
+end
+
+-- ---------- shifting exits ----------
+-- An elevator, a portal, a random door: an exit that genuinely ends somewhere
+-- different each time it is taken. The ROOMS are never the problem -- each floor
+-- is its own number and maps fine -- the LINK is the lie, so the mark lives on
+-- the exit: marked shifting, it is never learned, never routed through, never
+-- counted unexplored, and its told destination is neutered. You ride it
+-- yourself; the map picks you up again on arrival, wherever that turns out to be.
+local function shift_list()
+  local out = {}
+  for num, r in pairs(rooms) do
+    for _, dir in ipairs(sorted_dirs(r.shift)) do out[#out + 1] = { num = num, dir = dir } end
+  end
+  if #out == 0 then
+    note("no exits are marked shifting")
+    note("  'mapg shift <dir>' marks one here, 'mapg shift <room> <dir>' anywhere;")
+    note("  the map also marks one itself after walking it to two different places")
+    return
+  end
+  table.sort(out, function(a, b)
+    if a.num ~= b.num then return a.num < b.num end
+    return a.dir < b.dir
+  end)
+  note(#out .. " shifting exit(s) - ridden, never routed:")
+  for _, e in ipairs(out) do
+    note(string.format("  %-6d %-34s %s", e.num, name_of(e.num), e.dir))
+  end
+end
+
+local function shift_cmd(rest)
+  local words = {}
+  for w in tostring(rest or ""):lower():gmatch("%S+") do words[#words + 1] = w end
+  if #words == 0 then shift_list() return end
+  local num = tonumber(words[1])
+  local i = num and 2 or 1
+  num = num or here
+  local dir, off = words[i], words[i + 1]
+  if not num then note("we are not anywhere yet - 'mapg shift <room> <dir>' names one"); return end
+  if not dir or (off and off ~= "off") or words[i + 2] then
+    note("mapg shift [room] <dir> [off] - or bare 'mapg shift' to list them")
+    return
+  end
+  dir = MOVE[dir] or dir            -- "south" means s; a special word stays itself
+  local r = rooms[num]
+  if not r then note("room " .. num .. " is not in the store"); return end
+  if off then
+    if not (r.shift and r.shift[dir]) then
+      note(dir .. " from " .. num .. " is not marked shifting")
+      return
+    end
+    r.shift[dir] = nil
+    if next(r.shift) == nil then r.shift = nil end
+    -- the evidence goes too, or one changed walk would re-mark it instantly
+    if r.vary then r.vary[dir] = nil; if next(r.vary) == nil then r.vary = nil end end
+    dirty = true ; forget_adjacency() ; draw()
+    note(dir .. " from " .. num .. " unmarked - the next walk through it is believed again")
+    return
+  end
+  if r.shift and r.shift[dir] then
+    note(dir .. " from " .. num .. " is already marked shifting")
+    return
+  end
+  if not ((r.exits and r.exits[dir] ~= nil) or (r.walked and r.walked[dir])) then
+    note("nothing known lists a '" .. dir .. "' exit from " .. num .. " - marking it anyway")
+  end
+  r.shift = r.shift or {}
+  r.shift[dir] = true
+  if r.walked then r.walked[dir] = nil end                        -- the lie already learned
+  if r.exits and r.exits[dir] ~= nil then r.exits[dir] = 0 end    -- and the one told
+  if r.vary then r.vary[dir] = nil; if next(r.vary) == nil then r.vary = nil end end
+  dirty = true ; forget_adjacency() ; draw()
+  note(dir .. " from " .. num .. " marked SHIFTING - drawn " .. dir
+       .. ">~, never learned, never routed through")
 end
 
 local function forget(num)
@@ -1193,7 +1405,8 @@ scrye.addAlias{
     elseif verb == "stop" then
       if walk then walk_stop("walk stopped") else note("not walking") end
     elseif verb == "frontier" then frontier()
-    elseif verb == "maps"     then maps_list()
+    elseif verb == "maps"     then maps_list(rest)
+    elseif verb == "fav"      then fav_toggle()
     elseif verb == "name"     then name_map(rest)
     elseif verb == "map"      then
       local L = current_layout()
@@ -1218,6 +1431,7 @@ scrye.addAlias{
     elseif verb == "draw" then
       if rest == "off" then drawing = false; scrye.store.set("drawing", "0"); note("panel off")
       else drawing = true; scrye.store.set("drawing", "1"); draw(); note("panel on") end
+    elseif verb == "shift"    then shift_cmd(rest)
     elseif verb == "forget"   then
       local n = tonumber(rest)
       if n then forget(n) else note("mapg forget <room number>") end
@@ -1236,16 +1450,19 @@ scrye.addAlias{
       note("mapg explore      the nearest room with an exit nobody has been through")
       note("mapg frontier     every unexplored exit")
       note("mapg map          which map you are on and what it borders")
-      note("mapg maps         every map: one per area, one more per unconnected piece")
+      note("mapg maps [text]  every map, alphabetically - text filters by name or border")
+      note("mapg fav          save/unsave the map you are on to the Favs tab (max 20)")
       note("mapg name <text>  call this map something you will recognise ('mapg name -' undoes it)")
       note("mapg level up|down   look at another level; 'mapg level' comes back")
       note("mapg redraw       lay the current map out again from the links")
       note("mapg draw on|off  the HUD panel")
+      note("mapg shift [n] <dir> [off]  mark an exit shifting (elevator, portal): drawn ~, never routed")
       note("mapg forget <n>   drop one room")
       note("mapg wipe         erase the whole store and start again (asks first)")
       note("mapg save         write the store to disk now")
       note("mapg on|off       the running commentary")
       note("a '*' after a destination means we walked it; no star means the server said so")
+      note("a '~' is a shifting exit: it ends somewhere different each ride, so you ride it yourself")
     else
       note("don't know 'mapg " .. verb .. "' - try 'mapg help'")
     end
@@ -1278,6 +1495,63 @@ local function peek(col, row)
   return num
 end
 
+-- A click on a panel row: walk to the map containing that room. The same guards a
+-- 'map.goto' request gets, as notes rather than events - the clicker is a person looking
+-- at this panel, not a plugin waiting on an answer. The walk itself is an ordinary
+-- requested walk and still emits the walk contract, because listeners deserve to know
+-- the mapper is moving whoever asked for it.
+local function walk_to_map(num, whence)
+  if not num or not rooms[num] then note("that map is not in the store any more - redraw") ; return end
+  if held_by then note("mapping is held by " .. held_by .. " - not walking") ; return end
+  if not here then note("we are not anywhere yet - walk one room first") ; return end
+  if walk then note("already walking - 'mapg stop' first") ; return end
+  local set = component_of(num)
+  if set[here] then note("you are on that map already") ; return end
+  local steps, why = bfs(here, function(at) return set[at] ~= nil end)
+  if not steps then
+    if why then
+      note("no known route to that map from here - " .. why)
+    else
+      -- The search ran dry: no chain of KNOWN rooms connects here to there. That is not
+      -- "it cannot be reached" - it is unexplored ground in between, or a door crossed
+      -- with a command the mapper could not read as a move. Say which cure works.
+      note("no route through rooms this map knows - unexplored ground (or an unlearned")
+      note("  door) lies between. Walk the way once and this click works from then on")
+    end
+    return
+  end
+  local d = steps[#steps].to
+  walk_begin(steps, string.format("%d %s [%s] (from %s)", d, name_of(d), area_of(rooms[d]), whence))
+end
+
+local function row_go(index) walk_to_map(maplist_seeds[index], "the Maps tab") end
+local function fav_go(index) walk_to_map(favlist_nums[index], "Favourites") end
+
+-- 'mapg fav' and the Favs tab's button: toggle the map you are STANDING ON in the
+-- favourites. Toggling (rather than separate add/remove) means the removal path needs no
+-- extra UI: stand on it, press again. Membership is by component, so a favourite saved
+-- from any room of a map is found again from any other.
+fav_toggle = function()
+  if not here or not rooms[here] then note("we are not anywhere yet - walk one room first") ; return end
+  local set = component_of(here)
+  local lbl = label_of()[here] or area_of(rooms[here])
+  for i, n in ipairs(favs) do
+    if set[n] then
+      table.remove(favs, i)
+      dirty = true ; draw()
+      note("no longer a favourite: " .. lbl)
+      return
+    end
+  end
+  if #favs >= FAV_CAP then
+    note("favourites are full (" .. FAV_CAP .. ") - stand on one and 'mapg fav' drops it")
+    return
+  end
+  favs[#favs + 1] = here
+  dirty = true ; draw()
+  note(string.format("favourite %d/%d: %s", #favs, FAV_CAP, lbl))
+end
+
 scrye.addPanel{
   title = "3S Map (GMCP)",
   width = 280,
@@ -1307,31 +1581,123 @@ scrye.addPanel{
       { type = "value", text = "", bind = P .. "peek" },
     } },
     { title = "Maps", widgets = {
-      { type = "label", text = "one per area, one more per unconnected piece", color = "dim" },
-      { type = "table", bind = P .. "maplist", columns = { "Map", "Rooms", "Borders" }, align = "lrl" },
+      { type = "label", text = "click a map to walk there", bind = P .. "mapshint", color = "dim" },
+      -- The search box: filters the list by map name OR bordering map's name - so a
+      -- realm's name (once you have named it below) lists every area hanging off it.
+      -- Blank Set clears. Session-local on purpose: a filter that survived a restart
+      -- would read as a half-empty map store.
+      { type = "input", text = "search", bind = P .. "mapfilter",
+        onSubmit = function(text)
+          maplist_filter = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          scrye.setState(P .. "mapfilter", maplist_filter)
+          refresh_maplist()
+        end },
+      { type = "table", bind = P .. "maplist", columns = { "Map", "Rooms", "Borders" }, align = "lrl",
+        -- The row click IS 'walk to that map' (API 1.15): the row's index looks up the
+        -- map's seed recorded when the list was composed, and the walk is an ordinary
+        -- requested walk - same caution, same narration, stopped by everything that stops
+        -- one. The label argument is ignored: it carries the "> " you-are-here prefix,
+        -- and the seed under the index is the identity the label only displays.
+        onRowClick = function(_, index) row_go(index) end },
+      -- Naming from the panel, for the maps the feed cannot name itself: the realms are
+      -- "Unknown" connective space (Chaos, Science... - each hangs off ONE special town
+      -- room), so they all land in auto labels like "Unknown #2". The box shows the name
+      -- of the map you are STANDING ON and renames that map - same machinery and rules
+      -- as 'mapg name': '-' puts the auto label back, blank does nothing. Renaming edits
+      -- a label and nothing else, so a slip of the finger cannot damage the map.
+      { type = "input", text = "this map", bind = P .. "mapname",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+          if text ~= "" then name_map(text) end
+        end },
+    } },
+    { title = "Favs", widgets = {
+      { type = "label", bind = P .. "favhint", color = "dim" },
+      { type = "buttonrow", buttons = {
+        -- One button, a toggle: stand on a map, press to save it; press again to drop
+        -- it. Twenty slots. The rows below walk there, exactly like the Maps tab.
+        { text = "Fav this map", action = function() fav_toggle() end },
+      } },
+      { type = "table", bind = P .. "favlist", columns = { "Map", "Rooms" }, align = "lr",
+        onRowClick = function(_, index) fav_go(index) end },
     } },
   },
 }
 
--- The Maps tab, refreshed with the drawing.
+-- The Maps tab, refreshed with the drawing. Alphabetical, and filtered by the search box
+-- (a map shows when the text matches its label OR a bordering map's label - so searching
+-- a realm's name lists the areas hanging off it).
 refresh_maplist = function()
-  local maps = all_maps()
-  table.sort(maps, function(a, b)
-    if a.size ~= b.size then return a.size > b.size end
-    return a.seed < b.seed
-  end)
+  local maps = sorted_maps()
   -- The table widget takes tab-separated columns, newline-separated rows --
-  -- a plain string, not JSON. Same as the shipped map's Rooms tab.
+  -- a plain string, not JSON. Same as the shipped map's Rooms tab. The seeds are
+  -- recorded per row AS COMPOSED - filtered, sorted, capped - so a click can never
+  -- act on a map the composition moved: index and seed change together or not at all.
   local rows = {}
-  for i, m in ipairs(maps) do
-    if i > 60 then break end
+  maplist_seeds = {}
+  local standing = ""          -- the name box shows the map under your feet
+  local total = 0
+  for _, m in ipairs(maps) do
+    if here and m.set[here] then standing = m.label end
     local b = borders_of(m.set)
-    rows[#rows + 1] = string.format("%s\t%d\t%s",
-      (here and m.set[here] and "> " or "") .. m.label,
-      m.size,
-      table.concat(b, ", ", 1, math.min(#b, 2)))
+    if map_matches(m, b, maplist_filter) then
+      total = total + 1
+      if total <= 60 then
+        maplist_seeds[total] = m.seed
+        rows[total] = string.format("%s\t%d\t%s",
+          (here and m.set[here] and "> " or "") .. m.label,
+          m.size,
+          table.concat(b, ", ", 1, math.min(#b, 2)))
+      end
+    end
   end
   scrye.setState(P .. "maplist", table.concat(rows, "\n"))
+  scrye.setState(P .. "mapname", standing)
+  scrye.setState(P .. "mapshint",
+    maplist_filter == "" and "click a map to walk there"
+    or string.format("matching '%s' - %d map(s). Blank search shows all", maplist_filter, total))
+  refresh_favlist(maps)
+end
+
+-- The Favs tab: each saved room resolved to the map that CONTAINS it now - so a
+-- favourite follows its map through growth and merges. A room the store no longer has is
+-- pruned from the saved list (a wipe or a forget took it); two favourites resolved to
+-- the same map (their maps merged) display once. Alphabetical, like the Maps tab.
+refresh_favlist = function(maps)
+  maps = maps or sorted_maps()
+  local entries, seen, keep = {}, {}, {}
+  for _, num in ipairs(favs) do
+    if rooms[num] then
+      keep[#keep + 1] = num
+      for _, m in ipairs(maps) do
+        if m.set[num] then
+          if not seen[m.seed] then
+            seen[m.seed] = true
+            entries[#entries + 1] = { label = m.label, size = m.size, num = num }
+          end
+          break
+        end
+      end
+    else
+      dirty = true                 -- a favourite of a forgotten room: quietly let it go
+    end
+  end
+  favs = keep
+  table.sort(entries, function(a, b)
+    local la, lb = tostring(a.label):lower(), tostring(b.label):lower()
+    if la ~= lb then return la < lb end
+    return a.num < b.num
+  end)
+  local rows = {}
+  favlist_nums = {}
+  for i, e in ipairs(entries) do
+    favlist_nums[i] = e.num
+    rows[i] = string.format("%s\t%d", e.label, e.size)
+  end
+  scrye.setState(P .. "favlist", table.concat(rows, "\n"))
+  scrye.setState(P .. "favhint",
+    #entries == 0 and "no favourites yet - stand on a map, press the button"
+    or string.format("%d of %d saved - click one to walk there", #entries, FAV_CAP))
 end
 
 -- ---------- the quiet case ----------

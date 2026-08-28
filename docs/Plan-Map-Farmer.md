@@ -30,8 +30,15 @@ stepping outside the area you chose.*
 | `3s-map-gmcp` (`mapg`) | shipped | world model, walking, events, clickable Maps panel |
 | `3s-map-explorer` (`mapx`) | `_lab` | mapg + `explore all`; folds into mapg once proven, then retires |
 | `3s-farmer` (`farm`) | `_lab` → shipped | area farming on the contract below |
-| `3s-stepper` | shipped | untouched until the farmer replaces it |
+| `3s-stepper` | shipped | **stays for good**: dual GMCP/marker, it IS the no-GMCP farmer for 3K |
+| `3s-map` (classic) | shipped | the dead-reckoning mapper, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
+| `3k-chaossea` (`csc`) | shipped | the marker-era sea bot, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
 | `lab-areabot` | `_lab` | revived by `map.room` as a side effect; retires when the farmer works |
+
+Two MUDs, one client (25 Aug): 3K-3Kingdoms speaks only MIP; 3Scapes now speaks GMCP (and
+cannot run both protocols at once server-side). The GMCP plugins are 3Scapes'; the classic
+plugins - restored from the pre-GMCP line, identity-only changes - are 3K's, frozen at their
+proven state, bugfixes only. The stepper alone is dual-protocol and serves both.
 
 ## The contract (phase 1)
 
@@ -115,7 +122,34 @@ kills this run, excludes.
    pattern has caught real bugs twice.
 4. Travel + clickable maps.
 5. Live proving, then shipping: farmer beside the stepper; explorer's sweep folds into mapg;
-   stepper and areabot retire when Joakim says they have been beaten.
+   areabot retires when Joakim says it has been beaten. The stepper does NOT retire: it is
+   the marker-world (3K / no-GMCP) bot for good.
+
+## Shifting exits (added 28 Aug, from live testing)
+
+Joakim rode a Megacity elevator and mapx said `DISAGREES: 44346 says s leads to 44345, but
+walking it arrived at 44362 ... The walk is believed.` The floors were never the problem -
+each lobby is its own room number and mapped fine (44362 arrived as NEW) - the elevator
+CAR's `s` exit is the lie: it ends at a different lobby every ride, and walk-adoption kept
+rewriting it, going stale the moment the lift moved.
+
+Mapg 1.6.0 answers with **shifting-exit marks** (`rooms[n].shift[dir]`, persisted):
+
+- Marked, an exit is never learned, never routed through (`link()` returns nil), never
+  counted frontier (so `explore all` cannot ride the lift forever), and drawn `s>~`. Its
+  told destination is neutered to 0 on every arrival so the per-floor value stops churning
+  EXITS CHANGED. You ride it yourself; Room.Info picks you up wherever you land.
+- `mapg shift [room] <dir> [off]` marks/unmarks by hand (bare `mapg shift` lists all);
+  the DISAGREES message now points at the command.
+- Auto-mark: a walk through the same exit ending somewhere NEW twice (`vary` counter,
+  persisted) marks it automatically - once is a correction, twice is an elevator. Marking
+  unlearns the walked link for good; `off` also clears the evidence so re-marking must be
+  earned again.
+- The farmer inherits safety free: `map.query.area` resolves exits through `link()`, so no
+  fence ever crosses a shifting exit.
+
+Gated like everything else: mapgmcp_test 325 checks, mapx_test 280 (sweep never probes a
+marked exit), 14 mutants killed, 3 equivalent mutants documented in the harness header.
 
 ## Known risks, named now
 
