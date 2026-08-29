@@ -23,12 +23,27 @@
 --     the fallback for a server without the patch (ws_feed_live gates it off).
 --   * production-per-tick, errand, staff, monuments, weather word,
 --     kap/aud/vis/soemd: still absent - their lines say "?" or "none".
---   * Guild.TradeGoods (28 Aug pm) carries per-village market prices but names
---     goods by 30 short CODES; unwired until the code->good mapping is confirmed
---     against a `vtrade market` paste (guessing would poison the auto-trader).
+--   * Guild.TradeGoods: WIRED (29 Aug) - per-village market prices straight off
+--     the feed; the 30 good codes were solved mechanically from two in-game
+--     pastes cross-validated against the 23:09 capture (zero mismatches; see the
+--     CODE2RES decoder ring). The 30-command mkref text scan is retired to a
+--     fallback for a server without the package.
 --   * cidle live-confirmed 28 Aug; routes appeared 28 Aug am (situational);
 --     Guild.City raid{faction,strength,secs} + bdmg[] appeared 28 Aug pm (wired:
 --     Stats' War section and the Builds tab).
+--
+-- 2.10.0: the MARKET FEED - Guild.TradeGoods wired via the cracked code map
+-- (CODE2RES): prices per village arrive pushed, the report/dispatch/auto-trader
+-- all read them live, mkref answers "feed live" instead of scanning, and the
+-- price staleness clock never triggers a scan burst again.
+--
+-- 2.9.0: the CARTYARD CLOCK - the game allows one caravan per ~3 min and the
+-- trader used to bounce a doomed dispatch off "The cartyard is preparing your
+-- last caravan" every retry tick for the whole cooldown (live soak, 28 Aug).
+-- Now every dispatch starts an at.yard hold (default 180 s, 'atrade yard <n>',
+-- 0 = off), the refusal's own "Ready in: XmYs" corrects the clock and quietly
+-- takes back the refused dispatch, and a never-left timeout releases a hold
+-- that was only guessed. The Trade Auto tab shows the countdown.
 --
 -- 2.8.0: floors get a UI - a Floor box on the Trade tab (above Units), and a
 -- RIGHT-CLICK on a good's name in the report applies it as that good's floor
@@ -1892,6 +1907,7 @@ keymap("plan", "cplan cpb")
 -- scrye.watch("vik") did per key-change happens here instead, driven by the
 -- Guild.* adapters at the bottom of the file.
 local mk_on_feed   -- set after MK is built; called so the auto-trader settles/reacts
+local mk_goods_feed, mk_set_towns   -- likewise: the Guild.TradeGoods market feed
 
 local function vset(key, value)
   key = key:lower()
@@ -2493,6 +2509,11 @@ local at = {
   full    = tonumber(sget("at_full"))     or 90,    -- % full that switches to clearing mode
   clear_pct = tonumber(sget("at_clearpct")) or 25,  -- min cart fill % while clearing
   escort  = tonumber(sget("at_escort")) or 5,       -- escort size for auto-dispatched carts
+  yard    = tonumber(sget("at_yard")) or 180,       -- cartyard cooldown after each cart (secs);
+                                                    -- a hold this long starts at every dispatch,
+                                                    -- and the yard's own "Ready in" refusal
+                                                    -- corrects the clock. 0 = no provisional
+                                                    -- hold (refusals still set it).
   notify  = (sget("at_notify") == "1"),             -- buzz the phone per auto-dispatch (default off)
   pending = 0, last_carts = nil, cd_wait = false, pending_check = false,
   stats = { buys = 0, sells = 0, spent = 0, earned = 0, since = os.time(), recent = {} },
@@ -2758,7 +2779,41 @@ mk_finish = function()
   if at.on and at_schedule then at_schedule() end   -- dispatch on the freshly-refreshed prices
 end
 
+-- ---------- Guild.TradeGoods: the market straight from the feed ----------
+-- Server-side since 28 Aug pm; the codes cracked 29 Aug. The per-village price
+-- table the 30-command `vtrade goods` TEXT SCAN collects arrives pushed, every
+-- burst carrying one village's rows. Goods come as 30 SHORT CODES; this decoder
+-- ring was solved MECHANICALLY, never guessed: the overview's PP..DD symbol grid
+-- (14 villages) and a `vtrade goods midgard` price table were each matched to
+-- the 23:09 capture by assignment optimisation, and the two independent answers
+-- agreed on all 30 codes with zero mismatches (the codes are arbitrary - c is
+-- wool, d is eggs, x is beef - which is exactly why guessing was refused).
+-- lin 0 is Midgard (confirmed numerically); lin i>=1 is rtargets_lineage[i]
+-- (Guild.Fleet hands the live list over; TG_ORDER is the 29 Aug overview's
+-- order as fallback). From its first rows the feed OWNS the market: mkref stops
+-- sending, the staleness clock stays fresh, and the text scan remains only for
+-- a server without the package.
+local CODE2RES = { a="sunstone", b="bread", c="wool", cs="cheese", d="eggs",
+  e="fine furs", f="furs", g="grain", h="fish", hm="horsemeat", i="iron",
+  j="gemstones", k="salted fish", l="tools", m="mead", mi="milk", n="finery",
+  o="ore", p="pork", q="mutton", r="runestones", s="spoils", sm="smoked meat",
+  t="timber", u="armour", v="poultry", w="weapons", x="beef", y="honey", z="cloth" }
+local AFF = { [-3]="export+", [-2]="export", [-1]="minor export", [0]="neutral",
+              [1]="slight demand", [2]="in demand", [3]="high demand" }
+local TG_ORDER = { [0]="Midgard", "Lodbrok's Hold", "Eiriksby", "Imaird", "Holmgard",
+  "Hafrfjord", "Uppsala", "Borgarfjord", "Vestergotland", "Sverkersby", "Ericsgard",
+  "Birka", "Lejre", "Nidaros" }
+local tg_feed_live = false
+local tg_towns = nil          -- lin -> town, live from Guild.Fleet rtargets_lineage
+local tg_pending = false      -- one recompute per burst run, not one per page
+
 local function mk_refresh(is_quiet)
+  if tg_feed_live then
+    if not is_quiet then
+      scrye.print("the market feed (Guild.TradeGoods) is live - prices update on their own; nothing to scan")
+    end
+    return
+  end
   if scanning then
     if not is_quiet then scrye.print("refresh already in progress") end
     return
@@ -2794,6 +2849,46 @@ local function mk_refresh(is_quiet)
   end)
   scrye.setState(P .. "status", "refreshing market...")
   if not quiet then scrye.print("refreshing market...") end
+end
+
+-- one village's rows from a completed Guild.TradeGoods burst -> the market table
+local function tg_feed(t)
+  if type(t.goods) ~= "table" then return end
+  local changed = false
+  for _, row in ipairs(t.goods) do
+    if type(row) == "table" then
+      local res  = CODE2RES[tostring(row.good or "")]
+      local lin  = tonumber(row.lin)
+      local town = res and lin and ((tg_towns and tg_towns[lin]) or TG_ORDER[lin])
+      if res and town then
+        market[res] = market[res] or {}
+        market[res][town] = { buy = tonumber(row.buy), sup = tonumber(row.sup),
+                              sell = tonumber(row.sell), dem = tonumber(row.dem),
+                              aff = AFF[tonumber(row.score)] }
+        changed = true
+      end
+    end
+  end
+  if not changed then return end
+  if not tg_feed_live then
+    tg_feed_live = true
+    scrye.print("@{#DEB218,bold}[market]@{} Guild.TradeGoods is live - prices now arrive on their own (mkref retired)")
+  end
+  mk_refreshed_at = os.time()      -- the auto-trader's staleness clock: always fresh now
+  if not tg_pending then
+    tg_pending = true
+    scrye.after(2, function()
+      tg_pending = false
+      mk_compute()
+      scrye.store.set("market", mk_serialize())
+      mk_render("live from the feed - " .. #results .. " goods")
+      if publish_dispatch then publish_dispatch() end
+      if at_draw then at_draw() end
+      -- fresh prices are a dispatch trigger, same as mk_finish after a scan -
+      -- also what un-parks a trader that armed before the first burst computed
+      if at.on and at_schedule then at_schedule() end
+    end)
+  end
 end
 
 -- ====================== gag + parse (replaces the "market" trigger group) ======================
@@ -2989,6 +3084,17 @@ local CONFIRM_SECS = 12
 local at_pend = {}        -- dispatches sent, not yet proved by the feed; oldest first
 local at_seen = nil       -- the carts that were out when the oldest of them went
 
+-- THE CARTYARD CLOCK (2.9.0, live soak 28 Aug): the game allows one caravan
+-- roughly every 3 minutes, and answers a dispatch inside that window with a
+-- framed "The cartyard is preparing your last caravan. / Ready in: 2m 40s"
+-- instead of a cart - which the trader used to bounce off every retry tick,
+-- a doomed command every ~15s for the whole cooldown. Now a hold starts at
+-- every dispatch (at.yard secs, provisional), the refusal message corrects
+-- the clock to the yard's own number, and the tick simply waits it out.
+local at_yard_until = -math.huge   -- now_s the yard is busy until
+local at_yard_provisional = false  -- true = guessed at send; false = the yard said so
+local at_cy_at = -math.huge        -- when the "cartyard is preparing" line last passed
+
 -- The carts on the road, counted per kind+good. Counted rather than a set because two carts
 -- of the same good really can be out at once.
 local function at_cart_sigs(v)
@@ -3057,14 +3163,39 @@ local function at_settle(v)
   end
   at_seen = cur
 
-  local t = os.time()
-  while at_pend[1] and t - at_pend[1].at >= CONFIRM_SECS do
+  local dropped = false
+  while at_pend[1] and now_s - at_pend[1].at >= CONFIRM_SECS do
     local p = table.remove(at_pend, 1)
+    dropped = true
     note(string.format("%s %d %s never left (no cart went out) - not logged",
       p.side, p.qty, p.cmd))
     if at_draw then at_draw() end
   end
+  -- a dispatch that never left did not take the cartyard either: release a hold we
+  -- only GUESSED at send time (a real "Ready in" refusal re-sets the clock itself,
+  -- and that one stands - the yard said so)
+  if dropped and at_yard_provisional then
+    at_yard_until = -math.huge
+    at_yard_provisional = false
+  end
   if #at_pend == 0 then at_seen = nil end
+end
+
+-- Provisionally spend the market we just dispatched against: a sell cart consumes the
+-- town's demand, a buy cart its supply. Guild.TradeGoods pushes only when prices MOVE,
+-- so between bursts the local table is the only memory that a cart is already on the
+-- road - without this the trader re-picked the same town every pass until the feed
+-- spoke, stacking carts into demand the first one had already satisfied (29 Aug live).
+-- In-memory only (never persisted - it is a guess about the near future, not data);
+-- the next feed row for that good overwrites it with the server's truth.
+local function mk_debit(rescmd, town, side, qty)
+  local m = market[rescmd] and market[rescmd][town]
+  if not m then return end
+  if side == "sell" then
+    if m.dem then m.dem = math.max(0, m.dem - qty) end
+  else
+    if m.sup then m.sup = math.max(0, m.sup - qty) end
+  end
 end
 
 -- Queue a dispatch we have just sent. Replaces the at_record call at each send site.
@@ -3074,7 +3205,7 @@ local function at_queue(side, qty, cmd, town, amount)
   -- whoever was waiting for it.
   if #at_pend == 0 then at_seen = at_cart_sigs() end
   at_pend[#at_pend + 1] = { side = side, qty = qty, cmd = cmd, town = town,
-                            amount = amount or 0, at = os.time() }
+                            amount = amount or 0, at = now_s }
   scrye.after(CONFIRM_SECS + 1, function() at_settle() end)
 end
 
@@ -3086,6 +3217,7 @@ auto_trade_tick = function()
   if not at.on then return end
   if not connected then return end
   if scanning then return end   -- a refresh is in flight; mk_finish re-runs us on fresh data
+  if now_s < at_yard_until then return end   -- the cartyard is still preparing the last caravan
 
   local v = at_getvars()
   -- STOCK GUARD: a trader that cannot see stock reads every pile as zero - it
@@ -3127,7 +3259,13 @@ auto_trade_tick = function()
   end
   free = math.min(free, 1)   -- one dispatch per pass (each starts a fresh cooldown)
 
-  if #results == 0 or (os.time() - mk_refreshed_at) > 60 then
+  -- Staleness only matters for TEXT-SCANNED prices, exactly like the warehouse
+  -- above: once Guild.TradeGoods owns the market the server pushes every change,
+  -- so age means "nothing moved", not "we can't see". Gating the feed on this
+  -- clock BRICKED the trader (29 Aug live): the feed goes quiet whenever prices
+  -- hold still, mk_refresh under a live feed deliberately does nothing, and every
+  -- pass bailed here forever - market perfect, zero carts.
+  if #results == 0 or (not tg_feed_live and (os.time() - mk_refreshed_at) > 60) then
     mk_refresh(true); return   -- prices stale: refresh, mk_finish re-runs us
   end
 
@@ -3182,7 +3320,11 @@ auto_trade_tick = function()
         local best, bestq = nil, nil
         for _, s in ipairs(r.sells) do
           local dem = tonumber(s.qty)
-          local qty = math.min(avail, cap, (dem and dem > 0) and dem or cap)
+          -- dem 0 is an ANSWER, not a gap: the town won't buy more, so it gets no
+          -- cart (the next town in r.sells competes instead). The cap fallback is
+          -- only for a row whose demand column never parsed - treating a real 0 as
+          -- unknown shipped full carts into satisfied towns (29 Aug live).
+          local qty = math.min(avail, cap, dem or cap)
           if qty >= MK_UNITS_MIN then   -- below the game's dispatch minimum isn't a cart
             local val = qty * (s.price or 0)
             if not best or val > best.value then best = { town = s.town, qty = qty, value = val } end
@@ -3270,6 +3412,7 @@ auto_trade_tick = function()
           q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
         note(string.format("restock buy %d %s from %s (-%dd, had %d)", q, c.cmd, c.town, cost, c.have))
         at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
+        mk_debit(c.cmd, c.town, "buy", q)
         budget = budget - cost; space = space - q; seen[c.cmd] = true
         at.pending = (at.pending or 0) + 1; sent = sent + 1
       end
@@ -3289,6 +3432,7 @@ auto_trade_tick = function()
           note(string.format("scalp buy %d %s from %s (-%dd, ~+%dd margin)",
             q, c.cmd, c.town, cost, math.floor(q * (c.per or 0))))
           at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
+          mk_debit(c.cmd, c.town, "buy", q)
           budget = budget - cost; space = space - q; seen[c.cmd] = true
           at.pending = (at.pending or 0) + 1; sent = sent + 1
         end
@@ -3297,14 +3441,24 @@ auto_trade_tick = function()
           c.qty, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
         note(string.format("sell %d %s to %s (~%dd cart)", c.qty, c.cmd, c.town, c.value))
         at_queue("sell", c.qty, disp_cmd(c.cmd), c.town, c.value)
+        mk_debit(c.cmd, c.town, "sell", c.qty)
         seen[c.cmd] = true; at.pending = (at.pending or 0) + 1; sent = sent + 1
       end
     end
   end
 
   if sent > 0 then
+    mk_compute()   -- fold the mk_debit spends into `results` so the NEXT pass sees them
     mk_last_dispatch = os.time()
-    if not at.cd_wait then at.cd_wait = true; scrye.after(10, at_cd_retry) end
+    -- the yard takes ~3 min per caravan: start the hold NOW rather than bouncing a
+    -- doomed dispatch off the refusal every retry (at.yard 0 = old behaviour)
+    local wait = 10
+    if (at.yard or 0) > 0 then
+      at_yard_until = now_s + at.yard
+      at_yard_provisional = true
+      wait = at.yard + 2
+    end
+    if not at.cd_wait then at.cd_wait = true; scrye.after(wait, at_cd_retry) end
   end
 end
 
@@ -3318,6 +3472,47 @@ at_cd_retry = function()
   at.cd_wait = false
   auto_trade_tick()
 end
+
+-- The yard's own refusal: two framed lines, "The cartyard is preparing your last
+-- caravan." then "Ready in: 2m 40s". The pair sets the clock to the yard's number
+-- (authoritative - it replaces any send-time guess), quietly takes back the refused
+-- dispatch (it never left; the 'never left' timeout would only add noise), and
+-- books one retry for when the yard opens. Also fires on a MANUAL dispatch hitting
+-- the cooldown, which is right: the yard is shared, so the auto-trader should wait.
+local function at_yard_refused(txt)
+  local secs = 0
+  local m, s2 = tostring(txt or ""):match("(%d+)m%s*(%d+)s")
+  if m then secs = tonumber(m) * 60 + tonumber(s2)
+  else
+    local mo = tostring(txt or ""):match("(%d+)m")
+    local so = tostring(txt or ""):match("(%d+)s")
+    secs = (tonumber(mo) or 0) * 60 + (tonumber(so) or 0)
+  end
+  if secs <= 0 then return end
+  at_yard_until = now_s + secs + 2
+  at_yard_provisional = false
+  local p = table.remove(at_pend)         -- the refusal answers the newest dispatch
+  if p then
+    at.pending = math.max(0, (at.pending or 0) - 1)
+    if #at_pend == 0 then at_seen = nil end
+  end
+  note(string.format("cartyard busy - next cart in %ds, holding", secs))
+  if not at.cd_wait then at.cd_wait = true; scrye.after(secs + 3, at_cd_retry) end
+  if at_draw then at_draw() end
+end
+
+scrye.addTrigger{
+  pattern = [[^-~\*\s*The cartyard is preparing]],
+  regex   = true,
+  run     = function() at_cy_at = now_s end,
+}
+scrye.addTrigger{
+  pattern = [[^-~\*\s*Ready in:\s*(.*)]],
+  regex   = true,
+  -- only trust a "Ready in" that follows the cartyard line - the phrase is too
+  -- ordinary to act on alone
+  run     = function(cap) if (now_s - at_cy_at) <= 3 then pcall(at_yard_refused, cap) end end,
+}
 
 local function at_driver() if at.on then at_schedule() end end
 
@@ -3423,10 +3618,12 @@ end
 -- ---------- numeric settings ----------
 local AT_KEY   = { reserve="at_reserve", margin="at_margin", stock="at_stock", flush="at_flush",
                    min="at_minpct", rel="at_minrel", keep="at_keep", soft="at_soft",
-                   full="at_full", clear="at_clearpct", carts="at_carts", escort="at_escort" }
+                   full="at_full", clear="at_clearpct", carts="at_carts", escort="at_escort",
+                   yard="at_yard" }
 local AT_FIELD = { reserve="reserve", margin="margin", stock="stock", flush="flush",
                    min="min_pct", rel="min_rel", keep="keep", soft="soft",
-                   full="full", clear="clear_pct", carts="carts", escort="escort" }
+                   full="full", clear="clear_pct", carts="carts", escort="escort",
+                   yard="yard" }
 -- clamps for settings the game itself bounds; everything else is just floored at 0
 local AT_RANGE = { escort = { 1, 20 } }
 local function at_setnum(name, val)
@@ -3470,6 +3667,9 @@ at_draw = function()
   for k, n in pairs(at.floors) do fl[#fl+1] = k .. "=" .. n end
   table.sort(fl)
   if #fl > 0 then L[#L+1] = "floors (never sold below): " .. table.concat(fl, ", ") end
+  if at_yard_until > now_s then
+    L[#L+1] = string.format("cartyard: next cart in ~%ds", math.floor(at_yard_until - now_s))
+  end
   scrye.setState(P .. "atstatus", table.concat(L, "\n"))
 
   scrye.setState(P .. "v_keep",    tostring(at.keep))
@@ -3558,7 +3758,7 @@ local function at_config(rest)
   elseif rest:match("^floor%s+") then at_set_floor(rest:gsub("^floor%s+", "")); at_draw(); return
   elseif key and AT_FIELD[key] then at_setnum(key, val); return
   else
-    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | floor <good> <n> | floorset <good> | stats | log")
+    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | floor <good> <n> | floorset <good> | yard <sec> | stats | log")
     return
   end
   at_status()
@@ -3807,6 +4007,8 @@ return {
   on_feed        = function() at_on_feed(); publish_dispatch() end,
   armed          = function() return at.on end,
   refresh        = function(quiet) mk_refresh(quiet) end,
+  goods_feed     = function(t) tg_feed(t) end,
+  set_towns      = function(t) tg_towns = t end,
   setunits       = function(t) mk_setunits(t) end,
   setfloorset    = function(t) mk_setfloorset(t) end,
   -- the panel's label, built from the clamp rather than repeating it: the two drifted apart
@@ -3821,6 +4023,8 @@ return {
 end)()
 mk_on_feed = MK.on_feed
 mk_armed = MK.armed
+mk_goods_feed = MK.goods_feed
+mk_set_towns = MK.set_towns
 
 
 scrye.addPanel{
@@ -4221,6 +4425,22 @@ end)
 gasm("Guild.Fleet", function(t)
   -- build_city reads f1=name f3=state f4=target f5=secs (3s-viking-sea reads f3)
   vset("ships", join(T(t, "ships"), { "name", "tier", "state", "target", "secs" }))
+  -- the village order for Guild.TradeGoods: lin 0 = Midgard, lin i = lineage[i]
+  -- (the 29 Aug overview confirmed the lineage list IS the market's row order)
+  if type(t.rtargets_lineage) == "table" and t.rtargets_lineage[1] and mk_set_towns then
+    local towns = { [0] = "Midgard" }
+    for i, e in ipairs(t.rtargets_lineage) do
+      towns[i] = tostring(e):match("^([^:]+)") or tostring(e)
+    end
+    mk_set_towns(towns)
+  end
+end)
+
+-- Guild.TradeGoods: each burst is one village's price rows (see the decoder ring
+-- and CODE2RES in the market block) - handed to the MK closure, which owns the
+-- market table the report, dispatch tab and auto-trader all read.
+gasm("Guild.TradeGoods", function(t)
+  if mk_goods_feed then pcall(mk_goods_feed, t) end
 end)
 
 gasm("Guild.Roster", function(t)
