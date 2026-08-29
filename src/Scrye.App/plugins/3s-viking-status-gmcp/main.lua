@@ -253,6 +253,16 @@ local PLAN_ICONS = {
 local ROLE_DIGIT = { prod = "1", ind = "2", grim = "3", trade = "4",
                      cult = "5", home = "6", throne = "7" }
 
+-- Image tiles (host API 1.17): hand-drawn art per Plan character, living in the
+-- plugin's own tiles/ folder and riding the same Icons on/off toggle as the vector
+-- glyphs (an imaged character beats its glyph; the rest keep their glyphs). A named
+-- file that does not exist yet is harmless - the cell falls back to glyph/tile - so
+-- this table can grow ahead of the art: draw a PNG, drop it in tiles/, done. On a
+-- pre-1.17 host the field is ignored and the grid renders exactly as before.
+local PLAN_IMAGES = {
+  ["7"] = "tiles/tower.png",   -- throne district - the first hand-drawn tile
+}
+
 -- --------------------------------------------------- static logic tables
 
 -- trade-hold index -> city name (VREP gives the lineage name, which is confusing)
@@ -591,6 +601,37 @@ local function build_stats()
   add(string.format("Cycle %s   %s", dc[1] or "?", dch))
   local stfx = clean(gv("STFX")):gsub("[%[%]]", "")
   if stfx ~= "" then add("Effects: " .. stfx) end
+  do
+    -- the four gxp tracks off Guild.State.gxp: cur/threshold coloured by how close
+    -- the advance is (>=75% reads success, which covers a topped path like buandi's
+    -- millions past the threshold for free), and the last tick's gain when there
+    -- was one, which is the number you actually watch move while playing.
+    local g = split(gv("GXP"), ";")
+    if g[1] and g[1] ~= "" then
+      add("")
+      add("-- GXP --")
+      local function big(v)
+        local n = tonumber(v); if not n then return "?" end
+        local s = tostring(math.floor(n))
+        while true do
+          local a, b = s:gsub("^(%d+)(%d%d%d)", "%1,%2")
+          s = a; if b == 0 then break end
+        end
+        return s
+      end
+      for _, e in ipairs(g) do
+        local f = split(e, "|")
+        local cur, max = tonumber(f[2]), tonumber(f[3])
+        local last = tonumber(f[4]) or 0
+        local name = (f[1] or "?"):gsub("^%l", string.upper)
+        local pct = (cur and max and max > 0) and (cur * 100 / max) or 0
+        local line = string.format("%-7s", name) .. " "
+          .. col(pctcol(pct, 75, 25), big(f[2]) .. "/" .. big(f[3]))
+        if last > 0 then line = line .. "  " .. col("info", "+" .. last) end
+        add(line)
+      end
+    end
+  end
   add("")
   add("-- Combat --")
   add("Fury " .. clean(gv("FURY")):sub(1, 12))
@@ -1891,7 +1932,7 @@ local function keymap(sec, keys)
 end
 keymap("stats", "god_power god_power_focus blot lin glvl sub daler rank renown hp seid vig rad "
   .. "vmnew vmreg nexttick dcycle stfx fury threk mthrek chain bsdepth "
-  .. "rndz ldng mldng patrol craid")
+  .. "rndz ldng mldng patrol craid gxp")
 keymap("city", "ships carts refinery")
 -- wstock joined this list with the planner: affordability is half resources, so a stock
 -- change moves rows between "OK" and short exactly as a daler change does.
@@ -2702,11 +2743,17 @@ local function mk_render(status)
       -- (the MUSHclient window tinted them blue -- same idea, theme-aware colour),
       -- FLOORED goods wear info-blue (held wins when a good is both: held means
       -- it is not traded at all, which is the stronger statement)
-      -- rclick= FIRST: a pre-1.16 host parses it as an unknown flag and keeps the
-      -- left click working; a 1.16 host gives the right button the floor toggle
-      local goodcell = string.format("@{%s,rclick=atrade floorset %s,click=atrade exempt %s}%s@{}",
+      -- menu= FIRST (API 1.19): the right button offers hold/floor as a NAMED menu, with
+      -- the labels reflecting this good's current state. The value stays comma-free on
+      -- purpose - a pre-1.19 host reads menu= as unknown flags and falls through to the
+      -- rclick= behind it (the 1.16 floor toggle), and a pre-1.16 host to the click=.
+      local mtail = at.floors[cmd]
+        and string.format(";Clear floor (%d)|atrade floor %s 0", at.floors[cmd], cmd) or ""
+      local goodcell = string.format(
+        "@{%s,menu=%s|atrade exempt %s;Set floor %d|atrade floorset %s%s,rclick=atrade floorset %s,click=atrade exempt %s}%s@{}",
         at.exempt[cmd] and "warning" or (at.floors[cmd] and "info" or "text"),
-        cmd, cmd, padr(esc(r.res), 11))
+        at.exempt[cmd] and "Release from hold" or "Hold (never trade)", cmd,
+        mk_floorset, cmd, mtail, cmd, cmd, padr(esc(r.res), 11))
       local function row(label, b)
         return label .. " " .. padl(b.bp, 4) .. " " .. town_link(b.bt, "buy", cmd) .. " "
           .. padl(b.bq, 6) .. "  " .. padl(b.sp, 4) .. " " .. town_link(b.st, "sell", cmd) .. " "
@@ -4069,7 +4116,8 @@ scrye.addPanel{
     -- (Sea / Voyage / Map / Travel tabs live in 3s-viking-sea now)
     { title = "Plan", widgets = {
         { type = "value", text = "", bind = P .. "planhdr", color = "#6288E1" },   -- section header echoes the accent
-        { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL, icons = icons_on and PLAN_ICONS or nil },
+        { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL, icons = icons_on and PLAN_ICONS or nil,
+          images = icons_on and PLAN_IMAGES or nil },
         { type = "text", bind = P .. "planlist" },
     } },
     { title = "Mission", widgets = {
@@ -4252,6 +4300,19 @@ gasm("Guild.State", function(t)
   vset("god_power_focus", T(t, "god").focus)
   vset("vmnew", t.missions_newbie)
   vset("vmreg", t.missions_reg)
+  do
+    -- the four guild-xp tracks (Guild.State.gxp, in the 28 Aug captures): current,
+    -- the advance threshold (_max), and the last tick's gain (_last). Serialized in
+    -- a fixed order; a track the server drops simply stops appearing.
+    local g = T(t, "gxp")
+    local out = {}
+    for _, k in ipairs({ "buandi", "drotta", "viga", "vitka" }) do
+      if g[k] ~= nil then
+        out[#out + 1] = k .. "|" .. S(g[k]) .. "|" .. S(g[k .. "_max"]) .. "|" .. S(g[k .. "_last"])
+      end
+    end
+    vset("gxp", table.concat(out, ";"))
+  end
 end)
 
 gasm("Guild.Info", function(t)
