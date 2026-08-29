@@ -1564,6 +1564,16 @@ scrye.addPanel{
         onClick = function(col, row)
           local num = peek(col, row)
           if num and num ~= here then path_to(num) end   -- prints it; never walks it
+        end,
+        -- The right-click menu (API 1.18): every entry is a command AS YOU WOULD TYPE IT,
+        -- so it goes through mapg's own aliases - same caution, same narration, and a
+        -- pre-1.18 host that ignores the return simply has no menu, nothing breaks.
+        onRightClick = function(col, row)
+          local num = peek(col, row)
+          if not num or num == here then return end
+          return { { "Walk there",   "mapg go "   .. num },
+                   { "Show route",   "mapg path " .. num },
+                   { "Room details", "mapg room " .. num } }
         end },
       { type = "buttonrow", buttons = {
         { text = "Up",     action = function()
@@ -1598,7 +1608,16 @@ scrye.addPanel{
         -- requested walk - same caution, same narration, stopped by everything that stops
         -- one. The label argument is ignored: it carries the "> " you-are-here prefix,
         -- and the seed under the index is the identity the label only displays.
-        onRowClick = function(_, index) row_go(index) end },
+        onRowClick = function(_, index) row_go(index) end,
+        -- Right-click a map row for the same three choices the grid menu offers, aimed at
+        -- the map's seed room (the identity the row's label only displays)
+        onRowMenu = function(_, index)
+          local seed = maplist_seeds[index]
+          if not seed then return end
+          return { { "Walk there",   "mapg go "   .. seed },
+                   { "Show route",   "mapg path " .. seed },
+                   { "Room details", "mapg room " .. seed } }
+        end },
       -- Naming from the panel, for the maps the feed cannot name itself: the realms are
       -- "Unknown" connective space (Chaos, Science... - each hangs off ONE special town
       -- room), so they all land in auto labels like "Unknown #2". The box shows the name
@@ -1619,7 +1638,14 @@ scrye.addPanel{
         { text = "Fav this map", action = function() fav_toggle() end },
       } },
       { type = "table", bind = P .. "favlist", columns = { "Map", "Rooms" }, align = "lr",
-        onRowClick = function(_, index) fav_go(index) end },
+        onRowClick = function(_, index) fav_go(index) end,
+        onRowMenu = function(_, index)
+          local num = favlist_nums[index]
+          if not num then return end
+          return { { "Walk there",   "mapg go "   .. num },
+                   { "Show route",   "mapg path " .. num },
+                   { "Room details", "mapg room " .. num } }
+        end },
     } },
   },
 }
