@@ -27,7 +27,10 @@
 --   * Guild.Map terrain: CONFIRMED GAP - two sessions sent only the east/south
 --     edge grids, pos and w, though enc={terrain:"glyph"} promises terrain. On
 --     the dev-report list; the Map tab waits honestly until it ships.
---   * vqpath / vresolve still unseen; their shapes follow the field names.
+--   * vqpath CONFIRMED live (23:09 capture, active voyage): an array of "x,y"
+--     strings - ["10,1"] - exactly what the adapter guessed, so vqpath_dest and
+--     the sea-nav read it unchanged. voyage_chart {width,height,chart_mode}
+--     CONFIRMED too (16x16 "advanced"). vresolve still unseen.
 --   * vmapl (named locations) has no GMCP source seen: the locations list runs
 --     on the built-in defaults + your vikloc names.
 
@@ -999,7 +1002,7 @@ gasm("Guild.Voyage", function(t)
     vset("voffers", table.concat(out, ","))
   end
   do
-    -- vqpath_dest wants the last x,y pair; VERIFY LIVE (empty in the capture)
+    -- CONFIRMED live 23:09 28 Aug: entries are "x,y" strings (["10,1"])
     local out = {}
     for _, e in ipairs(T(t, "vqpath")) do
       if type(e) == "table" then out[#out + 1] = S(e.x) .. "," .. S(e.y)
