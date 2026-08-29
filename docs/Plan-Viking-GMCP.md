@@ -57,7 +57,40 @@ floor, the same value again toggles it off, box at 0 = the right button only
 clears. NEEDS A VS BUILD + dotnet test: Markup.cs, StyledRun.cs (LinkInfo),
 StyledTextView.cs, ScryeApi.cs 1.16, MarkupTests grown.
 
-Remaining: vqpath/vresolve shapes, active campaign/war payloads, raid extras
+Status **2.9.0** (29 Aug, from live soak): the CARTYARD CLOCK. The game allows
+one caravan per ~3 min; the trader was bouncing a doomed dispatch off 'The
+cartyard is preparing your last caravan' every retry tick. Now every dispatch
+starts an at.yard hold (default 180 s, 'atrade yard <n>', 0 = off), the
+refusal's 'Ready in: XmYs' corrects the clock and quietly takes back the
+refused dispatch, a never-left timeout releases a hold that was only guessed,
+and the Trade Auto tab shows the countdown. Foreign longship raids CONFIRMED
+live (vlongship raid/convoy accept historical towns).
+
+23:09 capture (`_lab/captures/gmcp-fields-Goran-20260828-2309.md`, an ACTIVE
+voyage): **vqpath CONFIRMED** - an array of "x,y" strings, exactly the
+adapter's guess, so sea-nav reads it unchanged; voyage_chart
+{width,height,chart_mode} confirmed (16x16 advanced). New-but-empty:
+voyage_wait/vrelics/vreagent, Guild.Fleet supg[]. Guild.Livestock gains
+lneeds (per-species housing current/cap) + lpending - fodder for a Herds
+tab. Still absent: vresolve, Guild.Map terrain, routes (situational),
+cdtime never carries the cartyard cooldown (the 2.9.0 yard clock stands).
+
+Status **2.10.0** (29 Aug): **Guild.TradeGoods WIRED - the code map is
+CRACKED.** Two in-game pastes (the `vtrade goods` overview symbol grid and the
+`vtrade goods midgard` price table) were each matched to the 23:09 capture by
+assignment optimisation; the two independent solutions agreed on all 30 codes
+with zero mismatches. The map is arbitrary (c=wool, d=eggs, x=beef - guessing
+would have poisoned the trader): a=sunstone b=bread c=wool cs=cheese d=eggs
+e=fine_furs f=furs g=grain h=fish hm=horsemeat i=iron j=gemstones k=salted_fish
+l=tools m=mead mi=milk n=finery o=ore p=pork q=mutton r=runestones s=spoils
+sm=smoked_meat t=timber u=armour v=poultry w=weapons x=beef y=honey z=cloth.
+lin 0 = Midgard, lin i = rtargets_lineage[i] (live from Guild.Fleet, overview
+order as fallback). Market prices now arrive pushed; mkref's 30-command text
+scan is retired to a fallback, and the price-staleness clock stays fresh off
+the feed. Off the dev report: per-village market data (was 'market[] always
+empty').
+
+Remaining: vresolve shape, active campaign/war payloads, raid extras
 (grudge-aware targeting, raid log), the rest of §5, the TradeGoods code->good
 mapping (needs one in-game paste), and the dev report (Guild.Map terrain still the
 big one; chat channels now flow via Comm.Channel.Text - vnotify confirmed; absent

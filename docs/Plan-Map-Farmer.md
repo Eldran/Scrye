@@ -33,10 +33,11 @@ stepping outside the area you chose.*
 | `3s-stepper` | shipped | **stays for good**: dual GMCP/marker, it IS the no-GMCP farmer for 3K |
 | `3s-map` (classic) | shipped | the dead-reckoning mapper, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
 | `3k-chaossea` (`csc`) | shipped | the marker-era sea bot, frozen legacy for 3K/no-GMCP (restored 25 Aug) |
-| `lab-areabot` | `_lab` | RETIRED 28 Aug - the farmer beat it (deleted from `_lab`) |
+| `lab-areabot` | `_lab` | revived by `map.room` as a side effect; retires when the farmer works |
 
-Two MUDs, one client (25 Aug): 3K-3Kingdoms speaks only MIP; 3Scapes now speaks GMCP (and
-cannot run both protocols at once server-side). The GMCP plugins are 3Scapes'; the classic
+Two MUDs, one client: 3K-3Kingdoms speaks only MIP; 3Scapes speaks GMCP — and runs MIP
+*alongside* it (verified live 29 Aug; the 25 Aug "one protocol at a time" belief was wrong —
+the client dedupes chat, MudSession.RaiseGmcpChannel). The GMCP plugins are 3Scapes'; the classic
 plugins - restored from the pre-GMCP line, identity-only changes - are 3K's, frozen at their
 proven state, bugfixes only. The stepper alone is dual-protocol and serves both.
 

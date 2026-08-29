@@ -817,15 +817,18 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>
     /// <c>Comm.Channel.Text</c> → the same <see cref="ChannelMessage"/> event MIP chat raises,
     /// so chat panes, plugin <c>onChannel</c> hooks, and cross-world relay all keep working on
-    /// a world that has moved to GMCP (3Scapes cannot run MIP and GMCP together, so a GMCP
-    /// character loses the MIP feed entirely). The payload's <c>text</c> arrives display-ready
+    /// a world that speaks GMCP. The payload's <c>text</c> arrives display-ready
     /// ("Rictor: Interesting"); <c>talker</c>/<c>prefix</c> are metadata and not re-composed
-    /// into it. The two feeds never both fire on one world, so nothing is delivered twice —
-    /// though unlike MIP frames, GMCP chat is out-of-band and the line ALSO prints in the main
-    /// output; the panes are a second view of it, not its only home.
+    /// into it. 3Scapes verifiably runs MIP and GMCP TOGETHER on one session (live test,
+    /// 29 Aug 2026) — both feeds carry every chat line — so when MIP data has been seen this
+    /// method yields to the MIP path rather than deliver each line twice. MIP wins the tie
+    /// because it is the negotiated, per-character feed the user opted into; GMCP chat is the
+    /// fallback for sessions without it. Unlike MIP frames, GMCP chat is out-of-band and the
+    /// line ALSO prints in the main output; the panes are a second view of it, not its only home.
     /// </summary>
     private void RaiseGmcpChannel(string json)
     {
+        if (_mipGotData) return;   // MIP chat feed is live: it already raises ChannelMessage
         try
         {
             using var doc = System.Text.Json.JsonDocument.Parse(json);
@@ -1259,11 +1262,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mailbox.Writer.TryWrite(new SessionMessage.SendText($"3klient {_mipId}~~Scrye"));
         _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient LINEFEED on"));
         _mailbox.Writer.TryWrite(new SessionMessage.SendText("3klient HAA off"));
-        // 'forcehp' used to follow, kicking an immediate HP line out of the MUD so the vitals
-        // populated before the first natural prompt. Removed (28 Aug, Joakim): the prompt after
-        // the handshake carries the same fields moments later, and the forced line was noise -
-        // on every connect AND on each of the up-to-3 handshake retries. If vitals ever seem
-        // slow to fill right after login, this is the line that used to hurry them.
+        // 'forcehp' used to follow (removed 28 Aug - see the machine copy for the note)
         _mipSent = true;
         _mipRetries++;
         _mipSecondsSinceHandshake = 0;

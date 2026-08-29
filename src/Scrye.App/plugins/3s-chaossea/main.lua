@@ -555,8 +555,9 @@ local function get_seid()
 end
 
 -- The truth about combat, from the best feed available. The client's enemy.name state is
--- fed by MIP as well as GMCP - but 3Scapes cannot run MIP and GMCP together (Joakim,
--- 25 Aug: MIP off is the price of GMCP), and with MIP gone the fight END went unreliable:
+-- fed by MIP as well as GMCP - and 3Scapes runs them TOGETHER (verified live 29 Aug; the
+-- 25 Aug "one or the other" belief was wrong) - but a character that skips the MIP
+-- handshake has only GMCP, and there the fight END went unreliable:
 -- whether a terminal Char.Combat arrives at the kill, and what it carries, is unverified.
 -- Every recovery path in this bot gates on in_combat(), so one stale enemy.name wedged it
 -- over a corpse for good. So: track the RAW Char.Combat stream ourselves, and give

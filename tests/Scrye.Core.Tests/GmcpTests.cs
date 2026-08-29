@@ -39,6 +39,9 @@ public class GmcpTests
     private static T Private<T>(object o, string field) =>
         (T)o.GetType().GetField(field, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(o)!;
 
+    private static void SetPrivate(object o, string field, object value) =>
+        o.GetType().GetField(field, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(o, value);
+
     private static void Invoke(MudSession s, string method) =>
         s.GetType().GetMethod(method, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(s, null);
 
@@ -157,6 +160,28 @@ public class GmcpTests
         Assert.Equal(("vnotify", "The Norns cut the thread. Bjorndraugr fades from the hall."),
                      got[2]);                                              // narrative untouched
         Assert.Equal(("soul", "anonymous whisper"), got[3]);               // no talker to add
+    }
+
+    [Fact]
+    public void Gmcp_chat_yields_when_the_mip_feed_is_live()
+    {
+        // 3Scapes runs MIP and GMCP TOGETHER (verified live, 29 Aug 2026): both feeds carry
+        // every chat line, so a session with an active MIP feed must not deliver each line
+        // twice. _mipGotData is the "MIP feed is live" flag the session already keeps (set on
+        // the first MIP frame, cleared per connect); the bridge yields to it. Flipped by
+        // reflection here because forging a full MIP frame needs the session's generated id -
+        // the flag's own set/reset paths are pinned by the MIP tests.
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        var got = new List<(string Ch, string Msg)>();
+        s.ChannelMessage += (ch, msg) => got.Add((ch, msg));
+
+        SetPrivate(s, "_mipGotData", true);
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"Rictor: doubled?\", \"talker\": \"Rictor\", \"channel\": \"vik\" }"));
+        Assert.Empty(got);                       // MIP owns chat: GMCP copy suppressed
+
+        SetPrivate(s, "_mipGotData", false);     // a reconnect without MIP (ResetMipForConnect)
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"Rictor: single\", \"talker\": \"Rictor\", \"channel\": \"vik\" }"));
+        Assert.Equal(("vik", "Rictor: single"), Assert.Single(got));
     }
 
     [Fact]
