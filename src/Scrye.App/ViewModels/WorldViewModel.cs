@@ -580,12 +580,26 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // _plugins is assigned just below; the lambda only runs on a click, well after that.
         Hud = new HudViewModel(_session.GameState,
             (pluginId, actionId) => _session.Post(() => _plugins!.InvokeAction(pluginId, actionId)),
-            (pluginId, actionId, col, row, ch) =>
-                _session.Post(() => _plugins!.InvokeCellAction(pluginId, actionId, col, row, ch)),
+            // The invoke runs on the session loop; a context menu the callback returns (API
+            // 1.18) is marshalled back to the UI thread through onMenu, where the widget's
+            // view shows it at the pointer. The round-trip is a few milliseconds — the
+            // pointer is still where the user right-clicked.
+            (pluginId, actionId, col, row, ch, onMenu) =>
+                _session.Post(() =>
+                {
+                    var menu = _plugins!.InvokeCellAction(pluginId, actionId, col, row, ch);
+                    if (menu is { Count: > 0 } && onMenu is not null)
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => onMenu(menu));
+                }),
             (pluginId, actionId, text) =>
                 _session.Post(() => _plugins!.InvokeSubmit(pluginId, actionId, text)),
-            (pluginId, actionId, label, index) =>
-                _session.Post(() => _plugins!.InvokeChoice(pluginId, actionId, label, index)),
+            (pluginId, actionId, label, index, onMenu) =>
+                _session.Post(() =>
+                {
+                    var menu = _plugins!.InvokeChoice(pluginId, actionId, label, index);
+                    if (menu is { Count: > 0 } && onMenu is not null)
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() => onMenu(menu));
+                }),
             // click= in widget text lands on the same handler as an MXP link from the MUD
             (command, prompt) => HandleCommandLink(command, prompt));
 

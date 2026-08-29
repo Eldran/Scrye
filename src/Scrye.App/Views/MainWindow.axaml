@@ -368,7 +368,10 @@
                                                                                 ContextCommand="{Binding ContextCommand}"
                                                                                 LabelChars="{Binding LabelChars}"
                                                                                 Icons="{Binding Icons}"
+                                                                                Images="{Binding Images}"
                                                                                 MaxCell="{Binding MaxCell}"
+                                                                                PendingMenu="{Binding PendingMenu}"
+                                                                                MenuChoiceCommand="{Binding MenuChoice}"
                                                                                 Weave="{Binding Weave}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:BarListWidgetViewModel">
@@ -381,7 +384,10 @@
                                                                                 Columns="{Binding Columns}" Align="{Binding Align}"
                                                                                 Foreground="{Binding ColorBrush}"
                                                                                 DimTrailing="{Binding DimTrailing}"
-                                                                                RowCommand="{Binding RowCommand}" Margin="0,3" />
+                                                                                RowCommand="{Binding RowCommand}"
+                                                                                RowContextCommand="{Binding RowContextCommand}"
+                                                                                PendingMenu="{Binding PendingMenu}"
+                                                                                MenuChoiceCommand="{Binding MenuChoice}" Margin="0,3" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:ButtonWidgetViewModel">
                                                         <Button Content="{Binding Text}" Command="{Binding Command}"

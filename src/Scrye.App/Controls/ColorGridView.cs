@@ -90,6 +90,29 @@ public class ColorGridView : Control
     public static readonly StyledProperty<double> MaxCellProperty =
         AvaloniaProperty.Register<ColorGridView, double>(nameof(MaxCell), 12);
 
+    /// <summary>Image tiles (plugin API 1.17): maps a grid character to an image file — the
+    /// runtime hands absolute paths, having already resolved the plugin-relative spec and
+    /// dropped anything outside the plugin's own folder. An imaged cell draws the bitmap AS
+    /// the tile, nearest-neighbour scaled so pixel art keeps its fat pixels, and wins over
+    /// <see cref="Icons"/> and letters for that character. Below <see cref="MinIconCell"/>,
+    /// or when the file failed to load, the cell falls back exactly as an unknown icon does:
+    /// plain palette tile, then the letter rules — so a missing PNG costs the art, never the
+    /// map. A raid chart that wants big tiles raises <see cref="MaxCell"/>, same as icons.</summary>
+    public static readonly StyledProperty<Dictionary<char, string>?> ImagesProperty =
+        AvaloniaProperty.Register<ColorGridView, Dictionary<char, string>?>(nameof(Images));
+
+    /// <summary>A context menu handed back by the plugin's right-click callback (API 1.18).
+    /// Setting a non-null list shows it at the pointer via <see cref="PluginMenu"/>; the
+    /// bound view-model pushes a fresh list instance per menu, so every change fires. The
+    /// property holds no UI state worth reading back — it is a one-way "show this now".</summary>
+    public static readonly StyledProperty<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?> PendingMenuProperty =
+        AvaloniaProperty.Register<ColorGridView, IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?>(nameof(PendingMenu));
+
+    /// <summary>Command run with the chosen menu entry's command string — wired by the host
+    /// to the same run-as-if-typed path as <c>click=</c> markup.</summary>
+    public static readonly StyledProperty<ICommand?> MenuChoiceCommandProperty =
+        AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(MenuChoiceCommand));
+
     public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
     public ICommand? HoverCommand { get => GetValue(HoverCommandProperty); set => SetValue(HoverCommandProperty, value); }
     public ICommand? ContextCommand { get => GetValue(ContextCommandProperty); set => SetValue(ContextCommandProperty, value); }
@@ -97,6 +120,42 @@ public class ColorGridView : Control
     public bool Weave { get => GetValue(WeaveProperty); set => SetValue(WeaveProperty, value); }
     public Dictionary<char, string>? Icons { get => GetValue(IconsProperty); set => SetValue(IconsProperty, value); }
     public double MaxCell { get => GetValue(MaxCellProperty); set => SetValue(MaxCellProperty, value); }
+    public Dictionary<char, string>? Images { get => GetValue(ImagesProperty); set => SetValue(ImagesProperty, value); }
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? PendingMenu { get => GetValue(PendingMenuProperty); set => SetValue(PendingMenuProperty, value); }
+    public ICommand? MenuChoiceCommand { get => GetValue(MenuChoiceCommandProperty); set => SetValue(MenuChoiceCommandProperty, value); }
+
+    /// <summary>Loaded bitmaps per grid character; a null entry means the load was tried and
+    /// failed (missing or unreadable file), so a bad path costs one attempt, not one per frame.
+    /// Cleared when <see cref="Images"/> changes.</summary>
+    private readonly Dictionary<char, Avalonia.Media.Imaging.Bitmap?> _bitmaps = new();
+
+    public ColorGridView()
+    {
+        // pixel-art tiles must scale by fat pixels, not by smear
+        RenderOptions.SetBitmapInterpolationMode(this, Avalonia.Media.Imaging.BitmapInterpolationMode.None);
+    }
+
+    private Avalonia.Media.Imaging.Bitmap? BitmapFor(char ch, Dictionary<char, string> images)
+    {
+        if (_bitmaps.TryGetValue(ch, out Avalonia.Media.Imaging.Bitmap? cached)) return cached;
+        Avalonia.Media.Imaging.Bitmap? bmp = null;
+        if (images.TryGetValue(ch, out string? path))
+            try { bmp = new Avalonia.Media.Imaging.Bitmap(path); }
+            catch { bmp = null; }        // unreadable file: remembered as a miss, tile fallback
+        _bitmaps[ch] = bmp;
+        return bmp;
+    }
+
+    /// <summary>Draw the imaged cell at (x, y). False when the bitmap is missing or failed to
+    /// load, so the caller falls through to icons and then the plain tile.</summary>
+    private bool DrawImageTile(DrawingContext context, char ch, double x, double y, double size,
+                               Dictionary<char, string> images)
+    {
+        Avalonia.Media.Imaging.Bitmap? bmp = BitmapFor(ch, images);
+        if (bmp is null) return false;
+        context.DrawImage(bmp, new Rect(bmp.Size), new Rect(x, y, size - 1, size - 1));
+        return true;
+    }
 
     /// <summary>Last cell reported to <see cref="HoverCommand"/>; (-1,-1) = pointer not over a cell.</summary>
     private int _hoverCol = -1, _hoverRow = -1;
@@ -116,7 +175,7 @@ public class ColorGridView : Control
     static ColorGridView()
     {
         AffectsMeasure<ColorGridView>(GridTextProperty, WeaveProperty, MaxCellProperty);
-        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty, LabelCharsProperty, WeaveProperty, IconsProperty, MaxCellProperty);
+        AffectsRender<ColorGridView>(GridTextProperty, PaletteProperty, LabelCharsProperty, WeaveProperty, IconsProperty, MaxCellProperty, ImagesProperty);
     }
 
     // ---- micro-icon glyphs (API 1.8) ---------------------------------------------------
@@ -318,6 +377,8 @@ public class ColorGridView : Control
         double fontSize = System.Math.Floor(cell * 0.78);
         Dictionary<char, string>? icons = Icons;
         bool drawIcons = icons is not null && icons.Count > 0 && cell >= MinIconCell;
+        Dictionary<char, string>? images = Images;
+        bool drawImages = images is not null && images.Count > 0 && cell >= MinIconCell;
 
         for (int r = 0; r < rows.Length; r++)
         {
@@ -326,6 +387,10 @@ public class ColorGridView : Control
             {
                 char ch = row[c];
                 if (ch == ' ') continue;
+
+                // an image tile replaces everything for this char; a failed load falls through
+                if (drawImages && DrawImageTile(context, ch, c * cell, r * cell, cell, images!))
+                    continue;
 
                 // an iconed cell replaces both the flat tile and any letter for this char
                 if (drawIcons && icons!.TryGetValue(ch, out string? glyph)
@@ -360,6 +425,8 @@ public class ColorGridView : Control
         double fontSize = System.Math.Floor(node * 0.78);
         Dictionary<char, string>? icons = Icons;
         bool drawIcons = icons is not null && icons.Count > 0 && node >= MinIconCell;
+        Dictionary<char, string>? images = Images;
+        bool drawImages = images is not null && images.Count > 0 && node >= MinIconCell;
         // connector line thickness: reads at a glance yet clearly thinner than a tile
         double t = Math.Max(2, Math.Floor(node / 3));
 
@@ -409,8 +476,10 @@ public class ColorGridView : Control
                 }
 
                 // node cells — and any non-connector character that strays onto an odd cell —
-                // draw as tiles, exactly like the unwoven grid (icons on nodes only: an odd
-                // cell is too narrow for a glyph even when a stray tile character lands there)
+                // draw as tiles, exactly like the unwoven grid (icons and images on nodes only:
+                // an odd cell is too narrow for either even when a stray character lands there)
+                if (isNode && drawImages && DrawImageTile(context, ch, x, y, node, images!))
+                    continue;
                 if (isNode && drawIcons && icons!.TryGetValue(ch, out string? glyph)
                     && DrawIcon(context, ch, glyph, x, y, node, palette))
                     continue;
@@ -476,6 +545,10 @@ public class ColorGridView : Control
     {
         base.OnPropertyChanged(change);
         if (change.Property == PaletteProperty) { _brushes.Clear(); _pens.Clear(); _labels.Clear(); _iconInk.Clear(); }   // palette swap: rebuild caches
+        if (change.Property == ImagesProperty) _bitmaps.Clear();   // new image map: reload on next render
+        if (change.Property == PendingMenuProperty
+            && change.GetNewValue<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?>() is { Count: > 0 } menu)
+            PluginMenu.Show(this, menu, MenuChoiceCommand);
         if (change.Property == CellCommandProperty || change.Property == HoverCommandProperty
             || change.Property == ContextCommandProperty)
             InvalidateVisual();   // toggle hit-test background

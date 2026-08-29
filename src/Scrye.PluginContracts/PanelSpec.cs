@@ -1,5 +1,20 @@
 namespace Scrye.Core.Plugins;
 
+/// <summary>One entry of a plugin-provided context menu (API 1.18). A right-click callback
+/// (<c>onRightClick</c> on a colorgrid, <c>onRowMenu</c> on a list/table) may RETURN a list
+/// of these — <c>{ { "Walk there", "mapg go 42" }, { "-" } }</c> in script — and the host
+/// shows them as a native menu at the pointer. <see cref="Command"/> runs exactly as if the
+/// user typed it, so the plugin's own aliases get first refusal — the same philosophy as
+/// <c>click=</c> markup, which is why an entry carries a command string and never a callback.
+/// A label of <c>"-"</c> with no command is a separator. A callback that returns nothing
+/// keeps its pre-1.18 act-directly behaviour; hosts that cannot show menus (the companion)
+/// ignore the return entirely.</summary>
+public sealed record MenuEntry(string Label, string? Command)
+{
+    /// <summary>True when this entry draws as a separator line rather than an item.</summary>
+    public bool IsSeparator => Label == "-" && string.IsNullOrEmpty(Command);
+}
+
 /// <summary>
 /// A declarative UI widget in a plugin panel. Data only — no drawing. The host
 /// renders it and binds it to game state. Which fields matter depends on
@@ -87,6 +102,20 @@ public sealed record WidgetSpec
     /// the character grid remains the fallback by design.
     /// </summary>
     public IReadOnlyDictionary<string, string>? Icons { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.17): character → image file for that tile. The plugin
+    /// declares paths relative to its own folder (<c>images = { T = "tiles/tower.png" }</c>);
+    /// the runtime resolves them and DROPS any that land outside the plugin's folder, so the
+    /// spec that reaches a host only ever carries absolute paths into the declaring plugin's
+    /// own files. An imaged cell draws the bitmap as the tile — nearest-neighbour scaled, so
+    /// pixel art keeps its fat pixels — and takes precedence over <see cref="Icons"/> and
+    /// <see cref="Labels"/> for that character. A cell too small for art (&lt; 8 px), or a
+    /// file that is missing or unreadable, falls back to the plain palette tile and then the
+    /// letter rules — a lost PNG costs the art, never the map. Text-only hosts ignore this
+    /// map entirely; the character grid remains the fallback by design.
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Images { get; init; }
 
     /// <summary><c>colorgrid</c> only (API 1.8): the LARGEST cell size in pixels this grid may
     /// use — 0 means the compact default (12). Cells still shrink to fit the panel width; this

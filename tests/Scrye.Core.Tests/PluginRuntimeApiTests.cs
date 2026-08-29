@@ -295,6 +295,160 @@ public sealed class PluginRuntimeApiTests : IDisposable
         Assert.Equal("-1,-1,", host.State["hover"]);
     }
 
+    // ---- colorgrid image tiles (API 1.17) -------------------------------------
+
+    /// <summary>The `images` map reaches the WidgetSpec with each path resolved against the
+    /// plugin's OWN folder — and only those: an absolute path or a ".." climb out of the
+    /// folder is dropped, never resolved, because the spec is the only thing standing
+    /// between a script and the host drawing arbitrary files from disk.</summary>
+    [Fact]
+    public void ColorgridImagesResolveInsideThePluginFolderOnly()
+    {
+        var host = new FakeHost();
+        LoadLua("tiles", """
+            scrye.addPanel{
+              title = "War",
+              widgets = { { type = "colorgrid", bind = "board",
+                            images = { T = "tiles/tower.png",
+                                       E = "../other-plugin/steal.png",
+                                       A = "/etc/passwd" } } },
+            }
+            """, host);
+
+        PanelSpec panel = Assert.Single(host.Panels);
+        WidgetSpec grid = Assert.Single(panel.Widgets);
+        Assert.NotNull(grid.Images);
+        KeyValuePair<string, string> only = Assert.Single(grid.Images!);
+        Assert.Equal("T", only.Key);
+        string root = Path.GetFullPath(Path.Combine(_dir, "tiles"));
+        Assert.Equal(Path.Combine(root, "tiles", "tower.png"), only.Value);
+        Assert.True(Path.IsPathRooted(only.Value));
+    }
+
+    /// <summary>A grid that declares no images carries a null map — the field is additive,
+    /// so every existing colorgrid spec is untouched by 1.17.</summary>
+    [Fact]
+    public void ColorgridWithoutImagesCarriesNoMap()
+    {
+        var host = new FakeHost();
+        LoadLua("noimg", """
+            scrye.addPanel{ title = "Map", widgets = { { type = "colorgrid", bind = "g" } } }
+            """, host);
+        Assert.Null(Assert.Single(Assert.Single(host.Panels).Widgets).Images);
+    }
+
+    // ---- right-click context menus (API 1.18) ---------------------------------
+
+    /// <summary>An onRightClick that returns a menu table hands it back as MenuEntry rows:
+    /// labels and commands intact, `{ "-" }` a separator, a command-less label an entry with
+    /// a null command. The callback still RAN (its side effect is visible), because a menu
+    /// is a return value, not a replacement for acting.</summary>
+    [Fact]
+    public void RightClickCallbackMayReturnAMenu()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("menu", """
+            scrye.addPanel{
+              title = "Map",
+              widgets = { { type = "colorgrid", bind = "g",
+                            onRightClick = function(c, r, ch)
+                              scrye.setState("saw", c .. "," .. r .. "," .. ch)
+                              return { { "Walk there", "mapg go 42" },
+                                       { "-" },
+                                       { "just a caption" },
+                                       { "Details", "mapg room 42" } }
+                            end } },
+            }
+            """, host);
+
+        WidgetSpec grid = Assert.Single(Assert.Single(host.Panels).Widgets);
+        IReadOnlyList<MenuEntry>? menu = rt.InvokeCellAction(grid.ContextAction!, 3, 1, "@");
+
+        Assert.Equal("3,1,@", host.State["saw"]);          // the callback ran normally
+        Assert.NotNull(menu);
+        Assert.Equal(4, menu!.Count);
+        Assert.Equal(new MenuEntry("Walk there", "mapg go 42"), menu[0]);
+        Assert.True(menu[1].IsSeparator);
+        Assert.Equal(new MenuEntry("just a caption", null), menu[2]);
+        Assert.Equal(new MenuEntry("Details", "mapg room 42"), menu[3]);
+    }
+
+    /// <summary>A pre-1.18 callback — one that returns nothing — produces no menu, and so
+    /// does one returning junk: null is the answer, never an empty or invented menu.</summary>
+    [Fact]
+    public void CallbacksWithoutAMenuReturnNull()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("nomenu", """
+            scrye.addPanel{
+              title = "Map",
+              widgets = { { type = "colorgrid", bind = "g",
+                            onRightClick = function() scrye.setState("hit", "yes") end },
+                          { type = "colorgrid", bind = "h",
+                            onRightClick = function() return "not a table" end } },
+            }
+            """, host);
+
+        PanelSpec panel = Assert.Single(host.Panels);
+        Assert.Null(rt.InvokeCellAction(panel.Widgets[0].ContextAction!, 0, 0, "x"));
+        Assert.Equal("yes", host.State["hit"]);
+        Assert.Null(rt.InvokeCellAction(panel.Widgets[1].ContextAction!, 0, 0, "x"));
+    }
+
+    /// <summary>onRowMenu is the row flavour of the same slot: it registers under
+    /// ContextAction, fires through the choice path with (label, index), and its return
+    /// rides back as the menu.</summary>
+    [Fact]
+    public void RowMenuRegistersAsContextAndReturnsThroughTheChoicePath()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("rowmenu", """
+            scrye.addPanel{
+              title = "Maps",
+              widgets = { { type = "table", bind = "maplist", columns = { "Map", "Rooms" },
+                            onRowClick = function(label, index) scrye.setState("walk", label) end,
+                            onRowMenu = function(label, index)
+                              return { { "Walk to " .. label, "mapg go " .. index } }
+                            end } },
+            }
+            """, host);
+
+        WidgetSpec table = Assert.Single(Assert.Single(host.Panels).Widgets);
+        Assert.False(string.IsNullOrEmpty(table.Action));          // the click kept its slot
+        Assert.False(string.IsNullOrEmpty(table.ContextAction));   // the menu got its own
+        Assert.NotEqual(table.Action, table.ContextAction);
+
+        IReadOnlyList<MenuEntry>? menu = rt.InvokeChoice(table.ContextAction!, "Smurfland", 3);
+        Assert.Equal(new MenuEntry("Walk to Smurfland", "mapg go 3"),
+                     Assert.Single(menu!));
+        Assert.False(host.State.ContainsKey("walk"));              // the click fn never fired
+    }
+
+    /// <summary>The JS runtime speaks the same contract: an array of [label, command] arrays
+    /// comes back as the menu, anything else as null.</summary>
+    [Fact]
+    public void JsRightClickMenuRidesTheSameContract()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("jsmenu", """
+            scrye.addPanel({
+              title: "Map",
+              widgets: [ { type: "colorgrid", bind: "g",
+                           onRightClick: function(c, r, ch) {
+                             return [ ["Walk there", "mapg go 42"], ["-"] ];
+                           } } ],
+            });
+            """, lang: "js"), host);
+        rt.Load();
+
+        WidgetSpec grid = Assert.Single(Assert.Single(host.Panels).Widgets);
+        IReadOnlyList<MenuEntry>? menu = rt.InvokeCellAction(grid.ContextAction!, 1, 1, "x");
+        Assert.NotNull(menu);
+        Assert.Equal(2, menu!.Count);
+        Assert.Equal(new MenuEntry("Walk there", "mapg go 42"), menu[0]);
+        Assert.True(menu[1].IsSeparator);
+    }
+
     // ---- list/table onRowClick (API 1.15) -------------------------------------
 
     /// <summary>A table with <c>onRowClick</c> registers the callback under the widget's

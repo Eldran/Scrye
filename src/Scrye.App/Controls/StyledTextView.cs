@@ -23,7 +23,10 @@ namespace Scrye.App.Controls;
 /// <see cref="LinkCommand"/>. That is how a plugin report replaces a row of buttons with the
 /// report text itself. A run may also carry an <c>rclick=</c> action (API 1.16): the right
 /// button runs that one instead, through the same command — one report row, two actions,
-/// mirroring onClick/onRightClick on the widget kinds that have callbacks.</para>
+/// mirroring onClick/onRightClick on the widget kinds that have callbacks. A run carrying a
+/// <c>menu=</c> (API 1.19) gives the right button a whole context menu instead — shown via
+/// <see cref="PluginMenu"/>, entries running through the same <see cref="LinkCommand"/> —
+/// and wins over rclick=, which then only serves as the pre-1.19 fallback.</para>
 ///
 /// <para>Layout is otherwise deliberately dumb — no wrapping, no selection. Reports are
 /// column-aligned, so every glyph advances by the same measured character width; that keeps
@@ -199,11 +202,21 @@ public class StyledTextView : Control
         ICommand? cmd = LinkCommand;
         if (cmd is null) return;
         if (LinkAt(e.GetPosition(this)) is not { } link) return;
-        // The right button runs the run's rclick= action (API 1.16) and ONLY that. Before
-        // rclick existed a right press fell through to the click= action, which no plugin
-        // ever asked for; a run without an rclick= is simply inert to the right button.
+        // The right button shows the run's menu= (API 1.19) when it has one, else runs the
+        // run's rclick= action (1.16), and ONLY those. Before rclick existed a right press
+        // fell through to the click= action, which no plugin ever asked for; a run with
+        // neither is simply inert to the right button. The menu wins over rclick= because a
+        // plugin carries both only so rclick= can serve pre-1.19 hosts. Menu entries were
+        // parsed at markup time, so this shows synchronously at the pointer; a chosen
+        // command runs through the same LinkCommand as a left click on it would.
         if (e.GetCurrentPoint(this).Properties.IsRightButtonPressed)
         {
+            if (link.Menu is { Count: > 0 } menu)
+            {
+                PluginMenu.Show(this, menu, new MenuEntryCommand(cmd));
+                e.Handled = true;
+                return;
+            }
             if (link.RightAction is not { Length: > 0 } ra) return;
             link = link with { Action = ra, Prompt = false };
         }
@@ -213,6 +226,24 @@ public class StyledTextView : Control
         }
         if (cmd.CanExecute(link)) cmd.Execute(link);
         e.Handled = true;
+    }
+
+    /// <summary>Adapts a chosen menu entry's command string onto the LinkCommand the view
+    /// already routes clicks through, as a synthetic <see cref="Scrye.Core.Text.LinkInfo"/> —
+    /// so a menu pick runs exactly as a <c>click=</c> of that command would, plugin aliases
+    /// first.</summary>
+    private sealed class MenuEntryCommand : ICommand
+    {
+        private readonly ICommand _link;
+        public MenuEntryCommand(ICommand link) => _link = link;
+        public bool CanExecute(object? p) => p is string { Length: > 0 };
+        public void Execute(object? p)
+        {
+            if (p is not string { Length: > 0 } cmd) return;
+            var li = new Scrye.Core.Text.LinkInfo(cmd, IsUrl: false);
+            if (_link.CanExecute(li)) _link.Execute(li);
+        }
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)

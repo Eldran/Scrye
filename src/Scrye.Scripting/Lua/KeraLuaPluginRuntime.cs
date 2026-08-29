@@ -187,14 +187,16 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         if (_actions.TryGetValue(actionId, out int fn)) CallRef("action", fn);
     }
 
-    public void InvokeCellAction(string actionId, int col, int row, string ch)
+    public IReadOnlyList<MenuEntry>? InvokeCellAction(string actionId, int col, int row, string ch)
     {
-        if (_actions.TryGetValue(actionId, out int fn)) CallRef("cellAction", fn, (long)col, (long)row, ch);
+        if (!_actions.TryGetValue(actionId, out int fn)) return null;
+        return CallRefMenu("cellAction", fn, (long)col, (long)row, ch);
     }
 
-    public void InvokeChoice(string actionId, string label, int index)
+    public IReadOnlyList<MenuEntry>? InvokeChoice(string actionId, string label, int index)
     {
-        if (_actions.TryGetValue(actionId, out int fn)) CallRef("choice", fn, label, (long)index);
+        if (!_actions.TryGetValue(actionId, out int fn)) return null;
+        return CallRefMenu("choice", fn, label, (long)index);
     }
 
     public void InvokeSubmit(string actionId, string text)
@@ -240,6 +242,48 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         NativeLua l = _lua.State;
         foreach (object? a in args) PushSimple(l, a);
         PCallReporting(what, args.Length, 0);
+    }
+
+    /// <summary>Like <see cref="CallRef"/>, but reads ONE result as a context menu (API 1.18):
+    /// an array of <c>{ label, command? }</c> entry tables — <c>{ "Walk there", "mapg go 42" }</c>,
+    /// <c>{ "-" }</c> for a separator. Anything else (nil, a non-table, the return every
+    /// pre-1.18 callback produces) is null: no menu, exactly the old behaviour. Entries that
+    /// are not tables or have no label are skipped rather than failing the whole menu.</summary>
+    private IReadOnlyList<MenuEntry>? CallRefMenu(string what, int fnRef, params object?[] args)
+    {
+        _lua.PushRef(fnRef);
+        NativeLua l = _lua.State;
+        foreach (object? a in args) PushSimple(l, a);
+        if (!PCallReporting(what, args.Length, 1)) return null;
+
+        List<MenuEntry>? menu = null;
+        if (l.IsTable(-1))
+        {
+            int tbl = l.GetTop();
+            long n = l.RawLen(tbl);
+            for (long i = 1; i <= n; i++)
+            {
+                l.RawGetInteger(tbl, (int)i);
+                if (l.IsTable(-1))
+                {
+                    int entry = l.GetTop();
+                    l.RawGetInteger(entry, 1);
+                    string? label = LuaHost.ToStringLoose(l, l.GetTop());
+                    l.Pop(1);
+                    l.RawGetInteger(entry, 2);
+                    string? cmd = LuaHost.ToStringLoose(l, l.GetTop());
+                    l.Pop(1);
+                    if (!string.IsNullOrEmpty(label))
+                    {
+                        menu ??= new List<MenuEntry>();
+                        menu.Add(new MenuEntry(label, string.IsNullOrEmpty(cmd) ? null : cmd));
+                    }
+                }
+                l.Pop(1);
+            }
+        }
+        l.Pop(1);   // the result
+        return menu is { Count: > 0 } ? menu : null;
     }
 
     /// <summary>pcall + the Safe/SafeCall accounting: success/failure recorded to
@@ -713,15 +757,21 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // 'onRightClick' (colorgrid / button / buttonrow, 1.9) is a THIRD callback: the
         // secondary activation — right-click on the desktop, long-press on the phone.
+        // 'onRowMenu' (list/table, 1.18) is the same slot in row clothing: a right-clicked
+        // row fires it through the choice path, and its RETURN may be a context menu.
         string? contextId = null;
-        cl.GetField(w, "onRightClick");
-        if (cl.IsFunction(-1))
+        foreach (string key in new[] { "onRightClick", "onRowMenu" })
         {
-            contextId = "a" + _nextActionId++;
-            _actions[contextId] = cl.Ref(LuaRegistry.Index);      // pops
-            _buildingActions?.Add(contextId);
+            cl.GetField(w, key);
+            if (cl.IsFunction(-1))
+            {
+                contextId = "a" + _nextActionId++;
+                _actions[contextId] = cl.Ref(LuaRegistry.Index);      // pops
+                _buildingActions?.Add(contextId);
+                break;
+            }
+            cl.Pop(1);
         }
-        else cl.Pop(1);
 
         // colorgrid palette: { ["char"] = "#RRGGBB", ... }
         Dictionary<string, string>? palette = null;
@@ -754,6 +804,38 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
                 string? key = LuaHost.ToStringLoose(cl, cl.GetTop() - 1);
                 string? val = LuaHost.ToStringLoose(cl, cl.GetTop());
                 if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(val)) iconMap[key] = val;
+                cl.Pop(1);
+            }
+        }
+        cl.Pop(1);
+
+        // colorgrid image tiles (API 1.17): { ["char"] = "tiles/tower.png", ... }. Paths are
+        // taken RELATIVE TO THE PLUGIN'S OWN FOLDER and resolved here, so hosts only ever see
+        // absolute paths into the declaring plugin's files; anything that escapes the folder
+        // (an absolute path, a ".." climb) is dropped on the floor — the cell then falls back
+        // to its palette tile, which is also what an honest typo gets.
+        Dictionary<string, string>? imageMap = null;
+        cl.GetField(w, "images");
+        if (cl.IsTable(-1))
+        {
+            string root = System.IO.Path.GetFullPath(_descriptor.FolderPath);
+            int im = cl.GetTop();
+            cl.PushNil();
+            while (cl.Next(im))
+            {
+                string? key = LuaHost.ToStringLoose(cl, cl.GetTop() - 1);
+                string? val = LuaHost.ToStringLoose(cl, cl.GetTop());
+                if (!string.IsNullOrEmpty(key) && !string.IsNullOrEmpty(val))
+                {
+                    string full;
+                    try { full = System.IO.Path.GetFullPath(System.IO.Path.Combine(root, val)); }
+                    catch (ArgumentException) { full = ""; }   // hostile characters: not a path
+                    if (full.StartsWith(root + System.IO.Path.DirectorySeparatorChar, StringComparison.Ordinal))
+                    {
+                        imageMap ??= new Dictionary<string, string>(StringComparer.Ordinal);
+                        imageMap[key] = full;
+                    }
+                }
                 cl.Pop(1);
             }
         }
@@ -807,6 +889,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Weave = FieldBool(cl, w, "weave", defaultValue: false),
             Palette = palette,
             Icons = iconMap,
+            Images = imageMap,
             Cell = cellMax,
             Columns = columns,
             Separator = Field(cl, w, "separator"),

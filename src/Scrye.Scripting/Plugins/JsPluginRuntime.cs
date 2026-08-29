@@ -171,11 +171,36 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Safe("action", () => _engine.Invoke(fn!));
     }
 
-    /// <summary>Invoke a colorgrid cell-click callback with (col, row, char).</summary>
-    public void InvokeCellAction(string actionId, int col, int row, string ch)
+    /// <summary>Invoke a colorgrid cell-click (or right-click) callback with (col, row, char).
+    /// Since 1.18 the callback's return may be a context menu; see <see cref="ToMenu"/>.</summary>
+    public IReadOnlyList<MenuEntry>? InvokeCellAction(string actionId, int col, int row, string ch)
     {
-        if (_actions.TryGetValue(actionId, out JsValue? fn))
-            Safe("cellAction", () => _engine.Invoke(fn!, col, row, ch));
+        if (!_actions.TryGetValue(actionId, out JsValue? fn)) return null;
+        IReadOnlyList<MenuEntry>? menu = null;
+        Safe("cellAction", () => menu = ToMenu(_engine.Invoke(fn!, col, row, ch)));
+        return menu;
+    }
+
+    /// <summary>An API 1.18 context menu from a callback's return: an array of
+    /// <c>[label, command?]</c> arrays — <c>[["Walk there", "mapg go 42"], ["-"]]</c>.
+    /// Anything else is null: no menu, the pre-1.18 behaviour of every callback.</summary>
+    private static IReadOnlyList<MenuEntry>? ToMenu(JsValue result)
+    {
+        // ToObject keeps this independent of Jint's array internals: a JS array of arrays
+        // lands as object[] of object[]; anything else falls through the pattern to null.
+        if (result.IsUndefined() || result.IsNull() || result.ToObject() is not object[] rows)
+            return null;
+        List<MenuEntry>? menu = null;
+        foreach (object? r in rows)
+        {
+            if (r is not object[] entry || entry.Length == 0) continue;
+            string label = entry[0]?.ToString() ?? "";
+            string? cmd = entry.Length > 1 ? entry[1]?.ToString() : null;
+            if (label.Length == 0) continue;
+            menu ??= new List<MenuEntry>();
+            menu.Add(new MenuEntry(label, string.IsNullOrEmpty(cmd) ? null : cmd));
+        }
+        return menu is { Count: > 0 } ? menu : null;
     }
 
     /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
@@ -188,10 +213,12 @@ public sealed class JsPluginRuntime : IPluginRuntime
     /// <summary>Invoke a choice-shaped callback with (label, 1-based index): a bound
     /// buttonrow's button, or a list/table row click (onRowClick, API 1.15). Was the
     /// interface's no-op default before 1.15, which silently ate the click here.</summary>
-    public void InvokeChoice(string actionId, string label, int index)
+    public IReadOnlyList<MenuEntry>? InvokeChoice(string actionId, string label, int index)
     {
-        if (_actions.TryGetValue(actionId, out JsValue? fn))
-            Safe("choice", () => _engine.Invoke(fn!, label, index));
+        if (!_actions.TryGetValue(actionId, out JsValue? fn)) return null;
+        IReadOnlyList<MenuEntry>? menu = null;
+        Safe("choice", () => menu = ToMenu(_engine.Invoke(fn!, label, index)));
+        return menu;
     }
 
     private void FireAll(List<JsValue> hooks, string what)
@@ -526,8 +553,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
             _actions[hoverId] = hover;
         }
         // 'onRightClick' (colorgrid / button / buttonrow, 1.9): the secondary activation.
+        // 'onRowMenu' (list/table, 1.18): the same slot in row clothing — fired through the
+        // choice path by a right-clicked row; its return may be a context menu.
         string? contextId = null;
         JsValue context = Get(w, "onRightClick");
+        if (!IsFn(context)) context = Get(w, "onRowMenu");
         if (IsFn(context))
         {
             contextId = "a" + _nextActionId++;

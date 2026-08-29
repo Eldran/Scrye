@@ -64,13 +64,20 @@ public interface IPluginRuntime : IDisposable
     /// <summary>Invoke a panel-button callback by its action id.</summary>
     void InvokeAction(string actionId);
 
-    /// <summary>Invoke a colorgrid cell-click callback with the clicked cell (col, row, char).</summary>
-    void InvokeCellAction(string actionId, int col, int row, string ch) { }
+    /// <summary>Invoke a colorgrid cell-click (or right-click) callback with the clicked cell
+    /// (col, row, char). Since API 1.18 the callback may RETURN a context menu — a list of
+    /// <see cref="Scrye.Core.Plugins.MenuEntry"/> the host shows at the pointer; null (the
+    /// overwhelmingly common case, and this default) means "no menu", which is every pre-1.18
+    /// callback's behaviour.</summary>
+    IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeCellAction(string actionId, int col, int row, string ch) => null;
 
     /// <summary>Invoke an input widget's submit callback with the entered text.</summary>
     void InvokeSubmit(string actionId, string text) { }
 
-    /// <summary>Invoke a bound buttonrow's callback with the clicked label and its 1-based
-    /// index. Default no-op so a runtime that predates dynamic buttonrows still compiles.</summary>
-    void InvokeChoice(string actionId, string label, int index) { }
+    /// <summary>Invoke a choice-shaped callback with the clicked label and its 1-based index:
+    /// a bound buttonrow's button, a list/table row click (1.15), or a row's context callback
+    /// (<c>onRowMenu</c>, 1.18) — the last of which may RETURN a context menu exactly as
+    /// <see cref="InvokeCellAction"/> may. Default no-op so a runtime that predates dynamic
+    /// buttonrows still compiles.</summary>
+    IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeChoice(string actionId, string label, int index) => null;
 }

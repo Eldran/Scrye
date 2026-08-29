@@ -216,4 +216,77 @@ public class MarkupTests
         Assert.Equal("Warehouse", string.Concat(Parse(input).Select(r => r.Text)));
         Assert.Equal("Warehouse", Markup.Strip(input));
     }
+
+    // ---- menu= (API 1.19): a whole context menu on the right button ----
+    // Entries 'Label|command' separated by ';'; '-' a separator, a bare label a caption.
+    // Emitted BEFORE rclick=/click= by plugins, value kept comma-free, so a pre-1.19 host
+    // reads it as unknown flags and falls back to the rclick= that follows.
+
+    [Fact]
+    public void ParsesAMenuBesideTheOtherVerbs()
+    {
+        LinkInfo? l = LinkOf(
+            "@{accent,menu=Hold|atrade exempt bread;Floor 500|atrade floorset bread;-;About,"
+            + "rclick=atrade floorset bread,click=atrade exempt bread}Bread@{}");
+        Assert.NotNull(l);
+        Assert.Equal("atrade exempt bread", l!.Action);
+        Assert.Equal("atrade floorset bread", l.RightAction);      // the pre-1.19 fallback rides along
+        Assert.NotNull(l.Menu);
+        Assert.Equal(4, l.Menu!.Count);
+        Assert.Equal(new Scrye.Core.Plugins.MenuEntry("Hold", "atrade exempt bread"), l.Menu[0]);
+        Assert.Equal(new Scrye.Core.Plugins.MenuEntry("Floor 500", "atrade floorset bread"), l.Menu[1]);
+        Assert.True(l.Menu[2].IsSeparator);
+        Assert.Equal(new Scrye.Core.Plugins.MenuEntry("About", null), l.Menu[3]);   // caption: no command
+    }
+
+    [Fact]
+    public void AMenuAloneMakesTheRunALink()
+    {
+        // no click=, no rclick= - the run is right-button-only, like an rclick=-only run
+        LinkInfo? l = LinkOf("@{menu=Walk there|mapg go 42;Details|mapg room 42}Inn@{}");
+        Assert.NotNull(l);
+        Assert.Equal("", l!.Action);
+        Assert.Null(l.RightAction);
+        Assert.Equal(2, l.Menu!.Count);
+        Assert.Equal("mapg go 42", l.Menu[0].Command);
+    }
+
+    [Fact]
+    public void MenuCommandsKeepTheirLaterBars()
+    {
+        // the label splits at the FIRST '|'; anything after belongs to the command verbatim
+        LinkInfo? l = LinkOf("@{menu=Odd|say a|b}X@{}");
+        Assert.Equal("say a|b", Assert.Single(l!.Menu!).Command);
+    }
+
+    [Fact]
+    public void AnEmptyOrJunkMenuYieldsNoMenu()
+    {
+        Assert.Null(LinkOf("@{menu=,click=x}X@{}")!.Menu);          // empty value: no menu
+        Assert.Null(LinkOf("@{menu=;;;,click=x}X@{}")!.Menu);       // only empty entries
+        Assert.Null(LinkOf("@{menu=}X@{}"));                        // menu= alone and empty: no link at all
+    }
+
+    [Fact]
+    public void MenuNeverLeaksIntoTheStyleOrThePlainText()
+    {
+        const string input = "@{accent,menu=Hold|atrade exempt bread;About}Bread@{}";
+        StyledRun run = Assert.Single(Parse(input));
+        Assert.Equal("Bread", run.Text);
+        Assert.Equal("Bread", Markup.Strip(input));
+    }
+
+    [Fact]
+    public void ALongMenuSpecStillParses()
+    {
+        // the 1.19 cap raise to 512: a four-entry menu with real commands blows past 256
+        string spec = "menu=Dispatch best|vtrade dispatch sell 310 bread lodbrok's hold escort 5"
+            + ";Dispatch half|vtrade dispatch sell 155 bread lodbrok's hold escort 5"
+            + ";Set the floor to five hundred units|atrade floorset bread"
+            + ";Clear the floor entirely|atrade floor bread 0"
+            + ";Hold this good out of trading|atrade exempt bread";
+        Assert.True(spec.Length > 256);
+        LinkInfo? l = LinkOf("@{" + spec + "}Bread@{}");
+        Assert.Equal(5, l!.Menu!.Count);
+    }
 }

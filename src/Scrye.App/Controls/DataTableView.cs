@@ -63,6 +63,24 @@ public class DataTableView : Control
     public static readonly StyledProperty<ICommand?> RowCommandProperty =
         AvaloniaProperty.Register<DataTableView, ICommand?>(nameof(RowCommand));
 
+    /// <summary>Optional command run when a body row is RIGHT-clicked, with the same
+    /// <see cref="TableRow"/> parameter (the plugin <c>onRowMenu</c> callback, API 1.18).
+    /// A right-click fires this and never <see cref="RowCommand"/>; the header never fires
+    /// either. When set, the table is hit-testable even without a click command.</summary>
+    public static readonly StyledProperty<ICommand?> RowContextCommandProperty =
+        AvaloniaProperty.Register<DataTableView, ICommand?>(nameof(RowContextCommand));
+
+    /// <summary>A context menu handed back by the plugin's row callback (API 1.18). Setting a
+    /// non-null list shows it at the pointer via <see cref="PluginMenu"/>; the bound
+    /// view-model pushes a fresh instance per menu, so every change fires.</summary>
+    public static readonly StyledProperty<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?> PendingMenuProperty =
+        AvaloniaProperty.Register<DataTableView, IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?>(nameof(PendingMenu));
+
+    /// <summary>Command run with the chosen menu entry's command string — wired by the host
+    /// to the same run-as-if-typed path as <c>click=</c> markup.</summary>
+    public static readonly StyledProperty<ICommand?> MenuChoiceCommandProperty =
+        AvaloniaProperty.Register<DataTableView, ICommand?>(nameof(MenuChoiceCommand));
+
     public string Rows { get => GetValue(RowsProperty); set => SetValue(RowsProperty, value); }
     public string Separator { get => GetValue(SeparatorProperty); set => SetValue(SeparatorProperty, value); }
     public string[]? Columns { get => GetValue(ColumnsProperty); set => SetValue(ColumnsProperty, value); }
@@ -70,6 +88,19 @@ public class DataTableView : Control
     public IBrush? Foreground { get => GetValue(ForegroundProperty); set => SetValue(ForegroundProperty, value); }
     public bool DimTrailing { get => GetValue(DimTrailingProperty); set => SetValue(DimTrailingProperty, value); }
     public ICommand? RowCommand { get => GetValue(RowCommandProperty); set => SetValue(RowCommandProperty, value); }
+    public ICommand? RowContextCommand { get => GetValue(RowContextCommandProperty); set => SetValue(RowContextCommandProperty, value); }
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? PendingMenu { get => GetValue(PendingMenuProperty); set => SetValue(PendingMenuProperty, value); }
+    public ICommand? MenuChoiceCommand { get => GetValue(MenuChoiceCommandProperty); set => SetValue(MenuChoiceCommandProperty, value); }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == PendingMenuProperty
+            && change.GetNewValue<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?>() is { Count: > 0 } menu)
+            PluginMenu.Show(this, menu, MenuChoiceCommand);
+        if (change.Property == RowContextCommandProperty)
+            InvalidateVisual();   // toggle the hit-test background
+    }
 
     private const string Mono = "Cascadia Mono, Consolas, monospace";
     private const double FontSize = 10.5;
@@ -208,7 +239,7 @@ public class DataTableView : Control
         // When clickable, fill a transparent background so every row is hit-testable across
         // its full width (a bare Control only receives pointer events where it has drawn
         // something) — same trick as ColorGridView.
-        if (RowCommand is not null)
+        if (RowCommand is not null || RowContextCommand is not null)
             context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
         IImmutableBrush body = BodyBrush;
@@ -260,8 +291,13 @@ public class DataTableView : Control
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        ICommand? cmd = RowCommand;
-        if (cmd is null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        // Which button decides which callback (the colorgrid's 1.9 rule, brought to rows):
+        // left fires RowCommand, right fires RowContextCommand, neither fires the other.
+        PointerPointProperties p = e.GetCurrentPoint(this).Properties;
+        ICommand? cmd = p.IsLeftButtonPressed ? RowCommand
+                      : p.IsRightButtonPressed ? RowContextCommand
+                      : null;
+        if (cmd is null) return;
         if (RowAt(e.GetPosition(this)) is not { } hit) return;
         if (cmd.CanExecute(hit)) cmd.Execute(hit);
         e.Handled = true;

@@ -362,11 +362,13 @@ public sealed class PluginManager : IDisposable
     }
 
     /// <summary>Fire a panel-button callback owned by <paramref name="pluginId"/>. Runs on the loop thread.</summary>
-    /// <summary>Fire a colorgrid cell-click callback with the clicked cell. Loop-thread only.</summary>
-    public void InvokeCellAction(string pluginId, string actionId, int col, int row, string ch)
+    /// <summary>Fire a colorgrid cell-click (or right-click) callback with the clicked cell.
+    /// Loop-thread only. The return is the callback's context menu (API 1.18), null for the
+    /// overwhelmingly common no-menu case.</summary>
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeCellAction(string pluginId, string actionId, int col, int row, string ch)
     {
         IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
-        rt?.InvokeCellAction(actionId, col, row, ch);
+        return rt?.InvokeCellAction(actionId, col, row, ch);
     }
 
     public void InvokeAction(string pluginId, string actionId)
@@ -382,12 +384,13 @@ public sealed class PluginManager : IDisposable
         rt?.InvokeSubmit(actionId, text);
     }
 
-    /// <summary>Fire a bound buttonrow's callback with the clicked label and its 1-based index.
-    /// Loop-thread only.</summary>
-    public void InvokeChoice(string pluginId, string actionId, string label, int index)
+    /// <summary>Fire a choice-shaped callback (buttonrow, row click, or a row's onRowMenu)
+    /// with the clicked label and its 1-based index. Loop-thread only. The return is the
+    /// callback's context menu (API 1.18), null for the no-menu case.</summary>
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeChoice(string pluginId, string actionId, string label, int index)
     {
         IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
-        rt?.InvokeChoice(actionId, label, index);
+        return rt?.InvokeChoice(actionId, label, index);
     }
 
     public void Dispose()

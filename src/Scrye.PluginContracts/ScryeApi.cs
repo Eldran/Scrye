@@ -164,7 +164,41 @@ public static class ScryeApi
     //
     //      The Trade tab's floor-by-right-click is why: left click holds a good, right click
     //      floors it, one row.
-    public static readonly Version Current = new(1, 16);
+    // 1.17 A colorgrid may set `images = { ["char"] = "tiles/tower.png" }`: the character's
+    //      cell draws that bitmap AS the tile (nearest-neighbour, so pixel art keeps its fat
+    //      pixels), winning over icons and labels. Paths are plugin-folder-relative; the
+    //      runtime resolves them and drops any that escape the folder, so hosts only ever
+    //      see paths into the declaring plugin's own files. A missing/unreadable file or a
+    //      too-small cell falls back to the palette tile then the letter rules - a lost PNG
+    //      costs the art, never the map. Additive: a pre-1.17 host ignores the field and
+    //      renders the coloured grid it always did, which is also the companion's behaviour.
+    //
+    //      Hand-drawn tiles on the settlement Plan grid (and the war board, when the war
+    //      payloads ship) are why: a kingdom should look like one, not like a heatmap.
+    // 1.18 A right-click callback may RETURN a context menu: a list of { label, command }
+    //      entries ({ "-" } = separator, command omitted = disabled caption) that the host
+    //      shows as a native menu at the pointer. Covers colorgrid `onRightClick` and the
+    //      new list/table `onRowMenu` (the row flavour of the same slot, fired through the
+    //      choice path with (label, index)). A chosen entry's command runs AS IF TYPED — the
+    //      plugin's aliases get first refusal, same philosophy as click= markup, which is
+    //      why entries carry command strings and never callbacks. Returning nothing keeps
+    //      the pre-1.18 act-directly behaviour, so every existing callback is untouched;
+    //      hosts that cannot show menus (the companion) ignore the return.
+    //
+    //      Right-click was one action per surface (1.9, 1.16) and the surfaces kept wanting
+    //      three: a map row wants walk/route/details, a war-map tile wants orders. One
+    //      command per button does not scale; a menu does.
+    // 1.19 The text markup gains `menu=`: 1.18's context menu for report text, parsed once
+    //      at markup time. Entries 'Label|command' separated by ';' ('-' = separator, bare
+    //      label = disabled caption); the menu wins the right button over rclick=. Emit
+    //      menu= FIRST with a comma-free value and keep rclick=/click= after it: a pre-1.19
+    //      host reads menu= as unknown flags and falls back to the rclick=, a pre-1.16 host
+    //      to the click= - three generations, one string. The spec cap rose 256 -> 512 so a
+    //      real menu fits. Chosen entries run as if typed, like every link action.
+    //
+    //      The Trade tab is why: a good's name wanted hold, set-floor and clear-floor at
+    //      once, and 1.16 could offer exactly one of them.
+    public static readonly Version Current = new(1, 19);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

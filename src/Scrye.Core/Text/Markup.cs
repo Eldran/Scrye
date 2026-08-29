@@ -24,7 +24,14 @@ namespace Scrye.Core.Text;
 /// the next verb (so it must not itself contain a literal ",click=" / ",rclick=" / ",prompt=").
 /// Emit <c>rclick=</c> BEFORE <c>click=</c>: a pre-1.16 host does not recognise the verb and
 /// parses it as an unknown (ignored) flag, leaving the left click intact —
-/// <c>@{accent,rclick=atrade floorset bread,click=atrade exempt bread}Bread@{}</c>.</para>
+/// <c>@{accent,rclick=atrade floorset bread,click=atrade exempt bread}Bread@{}</c>.
+/// <c>menu=</c> (API 1.19) puts a whole context menu on the right button: entries separated
+/// by ';', each <c>Label|command</c> (split at the FIRST '|'), a bare <c>-</c> a separator,
+/// a bare label a disabled caption. A menu wins over <c>rclick=</c> on a 1.19 host; emit
+/// <c>menu=</c> FIRST and keep an <c>rclick=</c> after it as the pre-1.19 fallback (older
+/// hosts read menu= as unknown flags — so keep its value comma-free). Example:
+/// <c>@{accent,menu=Hold|atrade exempt bread;Floor 500|atrade floorset bread,rclick=atrade
+/// floorset bread,click=atrade exempt bread}Bread@{}</c>.</para>
 ///
 /// <para><b>It never throws and never eats text.</b> Malformed markup renders literally rather
 /// than vanishing: an unterminated <c>@{</c>, a stray <c>@</c>, or an unmatched <c>@{}</c> all
@@ -41,9 +48,10 @@ public static class Markup
     /// Longest accepted spec. Guards the token scan against pathological input: without a cap a
     /// stray "@{" would pair with a '}' far down the line and swallow everything between them.
     /// Generous rather than tight because a click= action carries a whole command
-    /// ("click=vtrade dispatch sell 65 bread uppsala escort 5"), not just a colour name.
+    /// ("click=vtrade dispatch sell 65 bread uppsala escort 5"), not just a colour name — and
+    /// since 1.19 a menu= carries several commands in one spec, which is why 256 became 512.
     /// </summary>
-    private const int MaxSpecLength = 256;
+    private const int MaxSpecLength = 512;
 
     /// <summary>True if <paramref name="text"/> contains anything the parser would act on.
     /// Lets callers skip the parse (and the allocation) for the overwhelmingly common
@@ -197,18 +205,21 @@ public static class Markup
         {
             string style = cut == 0 ? "" : spec[..cut].TrimEnd(',');
             string? click = null, rclick = null;
+            IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? menu = null;
             bool isPrompt = false;
             int at = cut;
             while (at >= 0)
             {
                 int next = ActionStart(spec, at + verbLen, out Verb nextVerb, out int nextLen);
                 string val = (next >= 0 ? spec[(at + verbLen)..next].TrimEnd(',') : spec[(at + verbLen)..]).Trim();
-                if (verb == Verb.RClick) { if (val.Length > 0) rclick = val; }
+                if (verb == Verb.Menu) { if (val.Length > 0) menu = ParseMenu(val); }
+                else if (verb == Verb.RClick) { if (val.Length > 0) rclick = val; }
                 else if (val.Length > 0) { click = val; isPrompt = verb == Verb.Prompt; }
                 at = next; verb = nextVerb; verbLen = nextLen;
             }
-            if (click is not null || rclick is not null)
-                s = s with { Link = new LinkInfo(click ?? "", IsUrl: false, Prompt: isPrompt, RightAction: rclick) };
+            if (click is not null || rclick is not null || menu is not null)
+                s = s with { Link = new LinkInfo(click ?? "", IsUrl: false, Prompt: isPrompt,
+                                                 RightAction: rclick, Menu: menu) };
             spec = style;
         }
 
@@ -239,13 +250,13 @@ public static class Markup
         return s;
     }
 
-    private enum Verb { Click, Prompt, RClick }
+    private enum Verb { Click, Prompt, RClick, Menu }
 
     /// <summary>
-    /// Index of the first <c>click=</c>, <c>prompt=</c> or <c>rclick=</c> verb at or after
-    /// <paramref name="from"/>, or -1. Only matches at the start of the spec or just after a
-    /// comma, so a colour named "onclick=" (there is no such thing, but the parser should not
-    /// care) — and the "click=" inside "rclick=" — cannot be mistaken for one.
+    /// Index of the first <c>click=</c>, <c>prompt=</c>, <c>rclick=</c> or <c>menu=</c> verb
+    /// at or after <paramref name="from"/>, or -1. Only matches at the start of the spec or
+    /// just after a comma, so a colour named "onclick=" (there is no such thing, but the
+    /// parser should not care) — and the "click=" inside "rclick=" — cannot be mistaken for one.
     /// </summary>
     private static int ActionStart(string spec, int from, out Verb verb, out int verbLen)
     {
@@ -256,8 +267,34 @@ public static class Markup
             if (string.CompareOrdinal(spec, i, "click=", 0, 6) == 0) { verb = Verb.Click; verbLen = 6; return i; }
             if (string.CompareOrdinal(spec, i, "prompt=", 0, 7) == 0) { verb = Verb.Prompt; verbLen = 7; return i; }
             if (string.CompareOrdinal(spec, i, "rclick=", 0, 7) == 0) { verb = Verb.RClick; verbLen = 7; return i; }
+            if (string.CompareOrdinal(spec, i, "menu=", 0, 5) == 0) { verb = Verb.Menu; verbLen = 5; return i; }
         }
         return -1;
+    }
+
+    /// <summary>
+    /// Parse a <c>menu=</c> value (API 1.19): entries separated by ';', each
+    /// <c>Label|command</c> — split at the FIRST '|', so a command may contain more of them —
+    /// or a bare <c>-</c> for a separator, or a bare label for a disabled caption line. The
+    /// practical limits fall out of the grammar rather than being policed: a label cannot
+    /// contain '|' or ';', a command cannot contain ';', and neither may contain a comma
+    /// followed by a verb (the 1.16 rule every action value already lives with). Entries with
+    /// an empty label are skipped; a value that yields no entries yields no menu, exactly as
+    /// an empty click= yields no link.
+    /// </summary>
+    private static IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? ParseMenu(string val)
+    {
+        List<Scrye.Core.Plugins.MenuEntry>? menu = null;
+        foreach (string raw in val.Split(';'))
+        {
+            int bar = raw.IndexOf('|');
+            string label = (bar >= 0 ? raw[..bar] : raw).Trim();
+            string cmd = bar >= 0 ? raw[(bar + 1)..].Trim() : "";
+            if (label.Length == 0) continue;
+            menu ??= new List<Scrye.Core.Plugins.MenuEntry>();
+            menu.Add(new Scrye.Core.Plugins.MenuEntry(label, cmd.Length == 0 ? null : cmd));
+        }
+        return menu;
     }
 
     /// <summary>A '#RRGGBB' literal, else whatever <paramref name="resolve"/> makes of the name.</summary>

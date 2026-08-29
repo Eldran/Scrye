@@ -17,9 +17,14 @@ public enum RunFlags
 /// is a command to send to the MUD (<see cref="Prompt"/> = put it in the input box instead).
 /// <see cref="RightAction"/> (markup <c>rclick=</c>, API 1.16) is a SECOND command for the
 /// right button; null means the right button does nothing on this run. An empty
-/// <see cref="Action"/> with a RightAction is legal: the run is right-click-only.</summary>
+/// <see cref="Action"/> with a RightAction is legal: the run is right-click-only.
+/// <see cref="Menu"/> (markup <c>menu=</c>, API 1.19) is a context menu for the right button,
+/// parsed once at markup time; when present it WINS over <see cref="RightAction"/> — a run
+/// carries both only so rclick= can serve as the graceful fallback on a pre-1.19 host, which
+/// never sees Menu at all. Entries' commands run as if typed, like every link action.</summary>
 public sealed record LinkInfo(string Action, bool IsUrl, bool Prompt = false, string? Hint = null,
-                              string? RightAction = null);
+                              string? RightAction = null,
+                              IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? Menu = null);
 
 /// <summary>A contiguous run of text sharing one style. Immutable — the value type
 /// the renderer consumes. A <see cref="Line"/> is a sequence of these.

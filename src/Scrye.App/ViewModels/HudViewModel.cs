@@ -35,9 +35,13 @@ public sealed class HudViewModel : IDisposable
 {
     private readonly StateStore _state;
     private readonly Action<string, string>? _invokeAction;   // (pluginId, actionId) → run on loop
-    private readonly Action<string, string, int, int, string>? _invokeCellAction;  // (pluginId, actionId, col, row, char)
+    // (pluginId, actionId, col, row, char, onMenu) — the trailing callback receives the
+    // plugin callback's context menu (API 1.18) back ON THE UI THREAD when it returned one;
+    // pass null when a menu could never apply (left clicks, hover)
+    private readonly Action<string, string, int, int, string, Action<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>>?>? _invokeCellAction;
     private readonly Action<string, string, string>? _invokeSubmit;  // (pluginId, actionId, text) → input widget submit
-    private readonly Action<string, string, string, int>? _invokeChoice;  // (pluginId, actionId, label, index) → bound buttonrow
+    // (pluginId, actionId, label, index, onMenu) — same menu tail as the cell invoke
+    private readonly Action<string, string, string, int, Action<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>>?>? _invokeChoice;
     private readonly Action<string, bool>? _runCommand;   // (command, prompt) → a click= run in widget text
     // State-watch subscriptions per PANEL (keyed pluginId|title), not per plugin: rebuilding one
     // panel must drop exactly that panel's watches and leave its siblings alone. RemovePanels
@@ -82,9 +86,9 @@ public sealed class HudViewModel : IDisposable
     public Action? PanelMoved { get; set; }
 
     public HudViewModel(StateStore state, Action<string, string>? invokeAction = null,
-                        Action<string, string, int, int, string>? invokeCellAction = null,
+                        Action<string, string, int, int, string, Action<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>>?>? invokeCellAction = null,
                         Action<string, string, string>? invokeSubmit = null,
-                        Action<string, string, string, int>? invokeChoice = null,
+                        Action<string, string, string, int, Action<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>>?>? invokeChoice = null,
                         Action<string, bool>? runCommand = null)
     {
         _state = state;
@@ -364,12 +368,12 @@ public sealed class HudViewModel : IDisposable
             }
             case "colorgrid":
             {
-                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels, w.Weave, w.Icons, w.Cell);
+                var vm = new ColorGridWidgetViewModel(w.Palette, w.Labels, w.Weave, w.Icons, w.Cell, w.Images);
                 if (!string.IsNullOrEmpty(w.Action))
                 {
                     string actionId = w.Action;
                     vm.CellCommand = new RelayCommand<Controls.GridCell>(cell =>
-                        _invokeCellAction?.Invoke(pluginId, actionId, cell.Col, cell.Row, cell.Ch.ToString()));
+                        _invokeCellAction?.Invoke(pluginId, actionId, cell.Col, cell.Row, cell.Ch.ToString(), null));
                 }
                 if (!string.IsNullOrEmpty(w.HoverAction))
                 {
@@ -378,14 +382,18 @@ public sealed class HudViewModel : IDisposable
                     string hoverId = w.HoverAction;
                     vm.HoverCommand = new RelayCommand<Controls.GridCell>(cell =>
                         _invokeCellAction?.Invoke(pluginId, hoverId, cell.Col, cell.Row,
-                            cell.Ch == '\0' ? "" : cell.Ch.ToString()));
+                            cell.Ch == '\0' ? "" : cell.Ch.ToString(), null));
                 }
                 if (!string.IsNullOrEmpty(w.ContextAction))
                 {
-                    // onRightClick (1.9): same (col,row,char) shape as onClick, separate id
+                    // onRightClick (1.9): same (col,row,char) shape as onClick, separate id.
+                    // Since 1.18 its return may be a context menu — handed back on the UI
+                    // thread and pushed at the view, which shows it at the pointer.
                     string contextId = w.ContextAction;
                     vm.ContextCommand = new RelayCommand<Controls.GridCell>(cell =>
-                        _invokeCellAction?.Invoke(pluginId, contextId, cell.Col, cell.Row, cell.Ch.ToString()));
+                        _invokeCellAction?.Invoke(pluginId, contextId, cell.Col, cell.Row,
+                            cell.Ch.ToString(), menu => vm.PendingMenu = menu));
+                    vm.MenuChoice = new RelayCommand<string>(cmd => _runCommand?.Invoke(cmd, false));
                 }
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
@@ -404,10 +412,22 @@ public sealed class HudViewModel : IDisposable
     /// buttonrow reports, because a clickable row is a choice from a dynamic set.</summary>
     private void WireRowClick(TableWidgetViewModel vm, WidgetSpec w, string pluginId)
     {
-        if (string.IsNullOrEmpty(w.Action)) return;
-        string actionId = w.Action;
-        vm.RowCommand = new RelayCommand<Controls.TableRow>(row =>
-            _invokeChoice?.Invoke(pluginId, actionId, row.Label, row.Index));
+        if (!string.IsNullOrEmpty(w.Action))
+        {
+            string actionId = w.Action;
+            vm.RowCommand = new RelayCommand<Controls.TableRow>(row =>
+                _invokeChoice?.Invoke(pluginId, actionId, row.Label, row.Index, null));
+        }
+        // onRowMenu (1.18): the row's right-click, through the same choice path; the
+        // callback's returned menu comes back on the UI thread and shows at the pointer.
+        if (!string.IsNullOrEmpty(w.ContextAction))
+        {
+            string contextId = w.ContextAction;
+            vm.RowContextCommand = new RelayCommand<Controls.TableRow>(row =>
+                _invokeChoice?.Invoke(pluginId, contextId, row.Label, row.Index,
+                    menu => vm.PendingMenu = menu));
+            vm.MenuChoice = new RelayCommand<string>(cmd => _runCommand?.Invoke(cmd, false));
+        }
     }
 
     /// <summary>Repopulate a bound buttonrow from a newline-separated list of labels. Blank
@@ -426,9 +446,9 @@ public sealed class HudViewModel : IDisposable
             index++;
             int captured = index;                       // capture per iteration, not by reference
             row.Buttons.Add(new ButtonWidgetViewModel(label,
-                () => _invokeChoice?.Invoke(pluginId, actionId, label, captured),
+                () => _invokeChoice?.Invoke(pluginId, actionId, label, captured, null),
                 contextId is null ? null
-                    : () => _invokeChoice?.Invoke(pluginId, contextId, label, captured)));
+                    : () => _invokeChoice?.Invoke(pluginId, contextId, label, captured, null)));
         }
     }
 
@@ -1007,6 +1027,23 @@ public sealed class TableWidgetViewModel : ViewModelBase, IReThemable
     /// <summary>Set when the widget declared <c>onRowClick</c> (API 1.15); null keeps the
     /// table inert exactly as before the feature existed.</summary>
     public System.Windows.Input.ICommand? RowCommand { get; set; }
+
+    /// <summary>Set when the widget declared <c>onRowMenu</c> (API 1.18) — fired by a row's
+    /// right-click through the choice path; the callback's returned menu comes back through
+    /// <see cref="PendingMenu"/>.</summary>
+    public System.Windows.Input.ICommand? RowContextCommand { get; set; }
+
+    /// <summary>Runs a chosen menu entry's command as if the user typed it.</summary>
+    public System.Windows.Input.ICommand? MenuChoice { get; set; }
+
+    private IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? _pendingMenu;
+    /// <summary>A fresh list instance per menu, pushed from the invoke round-trip; the view
+    /// shows it at the pointer on every non-null change.</summary>
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? PendingMenu
+    {
+        get => _pendingMenu;
+        set => SetField(ref _pendingMenu, value);
+    }
 }
 
 /// <summary>A grid of coloured cells: newline-separated rows of characters, coloured
@@ -1033,6 +1070,19 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
     /// ColorGridView.ContextCommand. Right-click fires this INSTEAD of CellCommand.</summary>
     public System.Windows.Input.ICommand? ContextCommand { get; set; }
 
+    /// <summary>Runs a chosen menu entry's command as if the user typed it (API 1.18).</summary>
+    public System.Windows.Input.ICommand? MenuChoice { get; set; }
+
+    private IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? _pendingMenu;
+    /// <summary>The onRightClick callback's returned menu (API 1.18), pushed from the invoke
+    /// round-trip as a fresh list instance; the view shows it at the pointer on every
+    /// non-null change.</summary>
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? PendingMenu
+    {
+        get => _pendingMenu;
+        set => SetField(ref _pendingMenu, value);
+    }
+
     /// <summary>Characters drawn as a letter on top of their tile; see WidgetSpec.Labels.</summary>
     public string LabelChars { get; }
 
@@ -1044,12 +1094,18 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
     /// Bound to ColorGridView.Icons; null when the widget declared none.</summary>
     public Dictionary<char, string>? Icons { get; }
 
+    /// <summary>Image-tile map (API 1.17) — character to an absolute image path the runtime
+    /// already resolved and folder-sandboxed; see WidgetSpec.Images. Bound to
+    /// ColorGridView.Images; null when the widget declared none.</summary>
+    public Dictionary<char, string>? Images { get; }
+
     /// <summary>Cell-size ceiling (API 1.8) — the compact default 12 unless the spec raised
     /// it; see WidgetSpec.Cell. Bound to ColorGridView.MaxCell.</summary>
     public double MaxCell { get; }
 
     public ColorGridWidgetViewModel(IReadOnlyDictionary<string, string>? palette, string? labels = null,
-        bool weave = false, IReadOnlyDictionary<string, string>? icons = null, double cell = 0)
+        bool weave = false, IReadOnlyDictionary<string, string>? icons = null, double cell = 0,
+        IReadOnlyDictionary<string, string>? images = null)
     {
         MaxCell = cell > 0 ? System.Math.Clamp(cell, 3, 64) : 12;
         _paletteSpec = palette;
@@ -1062,6 +1118,13 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
             foreach ((string key, string val) in icons)
                 if (key.Length >= 1 && !string.IsNullOrWhiteSpace(val))
                     Icons[key[0]] = val.Trim().ToLowerInvariant();
+        }
+        if (images is not null && images.Count > 0)
+        {
+            Images = new Dictionary<char, string>();
+            foreach ((string key, string val) in images)
+                if (key.Length >= 1 && !string.IsNullOrWhiteSpace(val))
+                    Images[key[0]] = val;   // paths verbatim: the runtime resolved them
         }
     }
 
