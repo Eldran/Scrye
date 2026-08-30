@@ -166,6 +166,11 @@ Verified against the capture. Scrye already files each package into state under
 
 **Gaps — feed keys with no GMCP counterpart in the capture:** `production`, `errand`,
 `sevents`, and the per-good warehouse stock behind WSTOCK (only `wstock_cap` came through).
+Also **the skill listing**: no skill field appears in any of the three captures and the
+server's own `Core.Supported` answers `"Merc.Skills": 0`, so the Skills tab's `vskills`
+text scan is not a stopgap — there is nothing to wire it to. What the feed *does* carry is
+the affordability half (`Guild.State.gxp` + `daler`), which is what the tab prices against.
+One for the dev report.
 Also `Guild.Trade.market[]` exists but was empty the whole session — worth one `mkref`
 while capturing to see if the market scan can eventually drop its text triggers. Same
 category as the missing chat channels: report to the 3S devs, don't build around guesses.
@@ -225,8 +230,10 @@ The seam for the new content is where you pointed (roster/hird, kingdom), and th
 tabs carve out as a third plugin rather than staying in the core.
 
 **3s-viking-status 2.0 — the settlement.** The land half of the current plugin, GMCP-fed:
-Stats / City / Builds / Production* / People / Settlers / Holds / Plan / Mission /
-Trade / Trade Auto / Trade Log / Feeds. Consumes Guild.State, Info, City, Settlement,
+Stats / Skills / City / Builds / Production* / People / Settlers / Holds /
+Trade / Trade Auto / Trade Log / Feeds. (Plan and Mission moved to 3s-viking-world with
+the travel engine on 30 Aug; Skills arrived the same day when lab-skillwatch was merged
+in — see §2's note on the listing having no package.) Consumes Guild.State, Info, City, Settlement,
 Trade, Livestock. The `gv()` accessor is replaced by snapshot reads; tab composers
 largely survive untouched. The Feeds tab changes meaning: per-package "last burst at /
 pages / staleness" instead of `vik.*` keys seen.

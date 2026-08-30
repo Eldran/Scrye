@@ -34,6 +34,40 @@
 --     Guild.City raid{faction,strength,secs} + bdmg[] appeared 28 Aug pm (wired:
 --     Stats' War section and the Builds tab).
 --
+-- 2.20.0: the Skills tab grew an INFO column. Every row now LEADS with a
+-- clickable INFO cell (the skill name carries the same actions, since on a wide
+-- row that is what the pointer is over): left click sends `vhelp <skill>`, right
+-- click opens Info / Train, and `vtrain` is reachable ONLY through that menu -
+-- it spends points and daler and should not sit under a stray left click. The
+-- word "TRAIN" that used to appear in the last column on affordable rows is
+-- gone; that column now says one thing only, what the skill is still short of,
+-- so a blank there means nothing is. Markup: menu= (API 1.19) first, rclick=
+-- (1.16) as the pre-1.19 fallback, click= last, and the menu value kept
+-- comma-free so an older host ignores the verb instead of eating half a spec.
+--
+-- 2.19.0: SKILL WATCH merged in as the Skills tab (was the standalone
+-- lab-skillwatch). Two halves, and only one of them could be made GMCP: the
+-- skill LISTING has no package - no skill field in any of the three captures,
+-- and the server's own Core.Supported answers "Merc.Skills": 0 - so the framed
+-- `vskills` scan stays, which costs nothing since a catalogue of training costs
+-- barely moves. The half that COULD move is the half that was broken: the pools
+-- and daler it priced rows against came from the MIP-era vik.vis/kap/soe/aud and
+-- vik.daler keys, which this plugin never publishes, so under GMCP every row was
+-- costed against zero. They now come from Guild.State - daler directly, and each
+-- pool through a track pairing LEARNED at scan time by matching the listing's
+-- total against the four gxp tracks (exact equality, and only when exactly one
+-- track carries the number; an ambiguous or unmatched pool stays unpaired and
+-- falls back rather than guessing). Vitka->Visindi and Buandi->Audr look obvious
+-- by name and were still not assumed - which paid: the live scan (30 Aug, 65
+-- skills) paired all FOUR, and the two the names could not reach came back
+-- kappi=viga and soemd=drotta. So the four gxp tracks and the four skill pools
+-- are the same quantity, confirmed by the numbers rather than by reading them.
+-- The learner stays in anyway: it costs one comparison per scan, it is what a
+-- fresh install runs, and a fifth track would pair itself.
+-- `vsk feed` names the real source per pool.
+-- Also removed here: the orphaned Guild.Map adapter left behind by the 30 Aug
+-- split, which raised a rule error on every Guild.Map burst.
+--
 -- 2.10.0: the MARKET FEED - Guild.TradeGoods wired via the cracked code map
 -- (CODE2RES): prices per village arrive pushed, the report/dispatch/auto-trader
 -- all read them live, mkref answers "feed live" instead of scanning, and the
@@ -1527,6 +1561,7 @@ keymap("plan", "cplan cpb")
 -- scrye.watch("vik") did per key-change happens here instead, driven by the
 -- Guild.* adapters at the bottom of the file.
 local mk_on_feed   -- set after MK is built; called so the auto-trader settles/reacts
+local sw_on_feed   -- set after SW is built; the Skills tab prices itself off gxp/daler
 local mk_goods_feed, mk_set_towns   -- likewise: the Guild.TradeGoods market feed
 
 local function vset(key, value)
@@ -1552,6 +1587,12 @@ local function vset(key, value)
       prev_rndz = cur
     end
   end
+  -- The Skills tab prices every row against a pool total and daler, and both of
+  -- those now come out of THIS feed (gxp / daler) rather than the MIP vik.* keys
+  -- it used to watch - so the key change has to reach it, or a row would sit at
+  -- "short 18,883" long after the points landed. Cheap: it redraws only on a real
+  -- change, since vset returns early when the value is unchanged.
+  if (key == "gxp" or key == "daler") and sw_on_feed then pcall(sw_on_feed) end
   if key == "cpb" then cp_accumulate(value) end
   if key == "cplan" then
     -- a building was removed: our tracked list is stale, resync from CPB
@@ -3615,6 +3656,702 @@ mk_goods_feed = MK.goods_feed
 mk_set_towns = MK.set_towns
 
 
+-- ============================================================================
+-- SKILL WATCH -- the vskills listing, priced against the live feed
+-- ============================================================================
+-- Merged in from lab-skillwatch. The LISTING has no GMCP source: no skill field
+-- appears in any capture and the server's own Core.Supported reports
+-- "Merc.Skills": 0, so the text scan of `vskills` stays -- which is no loss, a
+-- catalogue of costs barely moves. What DID move is the half that matters: the
+-- four pools and daler now come from Guild.State (gxp + daler) read straight
+-- out of this plugin's own feed, where before they came from MIP-era vik.*
+-- paths that the GMCP plugin never set -- so under GMCP the "can I afford it"
+-- half was simply dead. That is the whole reason this belongs in here.
+--
+-- 3Scapes colour-words ("red:", "grey:") ride along on some output lines
+
+-- the four pools, by the name the listing gives them, to the live feed key
+
+-- Wrapped the same way the market block above is, and for the same reason: a
+-- Lua function may hold at most 200 locals and a file's top level IS one. This
+-- block declares ~37; the wrapper spends exactly one outer local (SW) and hands
+-- back the one thing the panel needs. It borrows gv / P / esc / clean / comma
+-- from the outer chunk as upvalues -- gv is the point of the merge -- and keeps
+-- its own store helpers.
+local SW = (function()
+
+local function sget(k) local x = scrye.store.get(k); if x == nil or x == "" then return nil end; return x end
+
+-- Renamed rather than reused: the outer chunk has a num() that returns 0 for a
+-- non-number and does not strip thousands separators, and a listing cost of
+-- "33,000" must parse as 33000 while a missing daler cost must stay nil (no cost
+-- and a cost of zero are different answers here). Same for note(): the market
+-- block's is amber [auto]; this one is the [vsk] prefix the block has always had.
+local function sw_num(s) return tonumber((tostring(s or ""):gsub(",", ""))) end
+local function sw_note(s) scrye.print("@{#E0C040,bold}[vsk]@{} " .. s) end
+
+local POOLKEY = { visindi = "vik.vis", kappi = "vik.kap", soemd = "vik.soe", audr = "vik.aud" }
+
+-- ---------- state ----------
+local skills = {}          -- lowercased name -> { name, tree, tree_name, pool, depth, level, gxp, daler, maxed }
+local order = {}           -- display order (capture order, trees contiguous)
+local pools = {}           -- tree -> { name = "Vegr Vitka", pool = "Visindi", amount = n (scanned) }
+local daler_total = nil    -- the listing header's Daler figure (fallback)
+local last_raw = {}        -- the last captured block, for `vsk peek`
+local capturing = nil      -- {} while a vskills reply is being collected
+local last_scan = nil      -- "HH:MM" stamp of the last successful scan
+local scanned = false      -- scanned once since connect
+local prompts = 0          -- prompts seen since connect
+local prev_trainable = nil -- set of trainable keys at the last render; nil = no baseline yet
+
+local auto  = sget("sw_auto") ~= "0"      -- rescan at login (default on)
+local alert = sget("sw_alert") == "1"     -- notify when a skill becomes trainable (default off)
+
+-- source overrides: read a pool/daler from a different state key. Empty = auto.
+local srcs = { daler = "", visindi = "", kappi = "", soemd = "", audr = "" }
+for k in pairs(srcs) do srcs[k] = sget("sw_src." .. k) or "" end
+
+-- ---------- persistence ----------
+local function save_all()
+  local ok, blob = pcall(scrye.json.encode,
+    { order = order, skills = skills, pools = pools, daler = daler_total })
+  if ok then scrye.store.set("sw_skills", blob) end
+end
+
+local function load_all()
+  local blob = sget("sw_skills")
+  if not blob then return 0 end
+  local ok, t = pcall(scrye.json.decode, blob)
+  if not ok or type(t) ~= "table" or type(t.skills) ~= "table" then return 0 end
+  skills = t.skills
+  order = type(t.order) == "table" and t.order or {}
+  pools = type(t.pools) == "table" and t.pools or {}
+  daler_total = tonumber(t.daler)
+  return #order
+end
+
+-- ---------- where the live numbers come from ----------
+local function first_num(v)
+  if v == nil or v == "" then return nil end
+  return sw_num(tostring(v):match("[%d][%d,]*"))
+end
+
+-- daler: override, else the GMCP feed (Guild.State.daler, right here in this
+-- plugin now), else the number the listing itself printed
+local function daler_now()
+  if srcs.daler ~= "" then
+    local v = first_num(scrye.getState(srcs.daler))
+    if v then return v, true end
+  end
+  local v = first_num(gv("DALER"))
+  if v then return v, true end
+  if daler_total then return daler_total, true end
+  return 0, false
+end
+
+-- ---------- pool names against the feed's gxp tracks ----------
+-- The listing calls the pools Visindi / Kappi / Soemd / Audr; Guild.State.gxp
+-- calls its four tracks buandi / drotta / viga / vitka. Two pair up by name
+-- (Vegr Vitka->Visindi, Vegr Buandi->Audr) and the other two are guessable, so
+-- nothing here guesses: at scan time this holds BOTH the listed totals and the
+-- live gxp numbers, and pairs them by equality -- the way the trade-good codes
+-- were solved rather than assumed. A pairing is remembered once made. A pool
+-- that never matches any track stays unmapped and falls back to the scanned
+-- number, and `vsk feed` says which are still unknown.
+local pool_track = {}          -- pool name (lower) -> gxp track name
+for pair in (sget("sw_pooltrack") or ""):gmatch("[^;]+") do
+  local a, b = pair:match("^(%w+)=(%w+)$")
+  if a then pool_track[a] = b end
+end
+
+local function gxp_tracks()
+  local out = {}
+  for e in (gv("GXP") or ""):gmatch("[^;]+") do
+    local name, cur = e:match("^(%w+)|(%d+)")
+    if name then out[name] = tonumber(cur) end
+  end
+  return out
+end
+
+-- Called when a scan finishes: pair each freshly-listed pool total with the
+-- track holding the same number. Exact equality only -- a tolerance could pair
+-- two tracks that merely sit close, and a wrong pairing is worse than none.
+local function learn_pool_tracks()
+  local tracks = gxp_tracks()
+  if not next(tracks) then return end
+  local learned = {}
+  for _, p in pairs(pools) do
+    local pname = (p.pool or ""):lower()
+    if pname ~= "" and p.amount and not pool_track[pname] then
+      local hit, hits = nil, 0
+      for track, val in pairs(tracks) do
+        if val == p.amount then hit = track; hits = hits + 1 end
+      end
+      if hits == 1 then                      -- exactly one track carries that number
+        pool_track[pname] = hit
+        learned[#learned + 1] = pname .. " = " .. hit
+      end
+    end
+  end
+  if #learned > 0 then
+    local out = {}
+    for a, b in pairs(pool_track) do out[#out + 1] = a .. "=" .. b end
+    scrye.store.set("sw_pooltrack", table.concat(out, ";"))
+    sw_note("pools matched to the feed: " .. table.concat(learned, ", "))
+  end
+end
+
+-- a tree's pool: override, else the feed key for its pool name, else the scan
+local function pool_now(tree)
+  local p = pools[tree]
+  if not p then return 0, false end
+  local pname = (p.pool or ""):lower()
+  if pname ~= "" and srcs[pname] and srcs[pname] ~= "" then
+    local v = first_num(scrye.getState(srcs[pname]))
+    if v then return v, true end
+  end
+  -- the live track this pool was matched to, straight off Guild.State.gxp
+  local track = pool_track[pname]
+  if track then
+    local v = gxp_tracks()[track]
+    if v then return v, true end
+  end
+  -- a MIP-era host still publishes the old paths; honour them when present
+  local key = POOLKEY[pname]
+  if key then
+    local v = first_num(scrye.getState(key))
+    if v then return v, true end
+  end
+  if p.amount then return p.amount, true end
+  return 0, false
+end
+
+-- ---------- the parser ----------
+-- One framed content line (the `-~* ... *~-` already stripped). Returns a
+-- skill row, or nil. The row shape is fixed by the game:
+--   + Hugarvit .............. [10 ( 33000)]       [1,571]
+--   Runakostur .............. [20 (   max)]
+local function parse_row(t)
+  local plus, name, rest = t:match("^(%+*)%s*([%a][%a' ]-)%s*%.+%s*(%[.*)$")
+  if not name then return nil end
+  local lvl, cost = rest:match("^%[%s*(%d+)%s*%(%s*([%d,]+)%s*%)%]")
+  local maxed = false
+  if not lvl then
+    lvl = rest:match("^%[%s*(%d+)%s*%(%s*[mM][aA][xX]%s*%)%]")
+    maxed = lvl ~= nil
+  end
+  if not lvl then return nil end
+  local dal = rest:match("%]%s*%[%s*([%d,]+)%s*%]")
+  return {
+    name  = name,
+    depth = #plus,
+    level = sw_num(lvl),
+    gxp   = sw_num(cost),
+    daler = sw_num(dal),
+    maxed = maxed or nil,
+  }
+end
+
+-- ---------- the capture ----------
+local render, render_counts   -- forward: finish_capture reports the counts, and
+                              -- both the alias and the tab call the renderer
+
+local function finish_capture()
+  local lines = capturing
+  capturing = nil
+  if not lines or #lines == 0 then return end
+  last_raw = lines
+
+  local found, found_order, found_pools = {}, {}, {}
+  local found_daler = nil
+  local cur_tree = nil
+
+  for _, l in ipairs(lines) do
+    -- every content line wears the -~* ... *~- frame; the command echo and the
+    -- prompt do not, and fall through clean() to be skipped by the matchers
+    local t = l:match("%-~%*(.-)%*~%-") or clean(l)
+    t = t:gsub("^%s+", ""):gsub("%s+$", "")
+    if t:find("%a") then
+      local d = t:match("^[Dd]aler:%s*([%d,]+)")
+      if d then
+        found_daler = sw_num(d)
+      else
+        local tn = t:match("^[Vv]egr%s+(.+)$")
+        if tn then
+          cur_tree = tn:lower():gsub("%s+", "")
+          found_pools[cur_tree] = found_pools[cur_tree] or { name = "Vegr " .. tn }
+        else
+          local pn, pa = t:match("^([%a]+):%s*([%d,]+)%s*points")
+          if pn and cur_tree then
+            found_pools[cur_tree].pool = pn
+            found_pools[cur_tree].amount = sw_num(pa)
+          else
+            local row = parse_row(t)
+            if row and cur_tree then
+              row.tree = cur_tree
+              row.tree_name = found_pools[cur_tree].name
+              row.pool = found_pools[cur_tree].pool
+              local key = row.name:lower()
+              if not found[key] then found_order[#found_order + 1] = key end
+              found[key] = row
+            end
+          end
+        end
+      end
+    end
+  end
+
+  if #found_order == 0 then
+    sw_note("a vskills reply arrived but nothing in it parsed - the listing kept its old numbers")
+    sw_note("  'vsk peek' shows the raw lines and what each one parsed as")
+    render()
+    return
+  end
+
+  -- a scan replaces only the trees it contained: `vskills vitka` must not wipe
+  -- berserkja/hersins/buandi. The new block is spliced where the old one sat.
+  for tree, p in pairs(found_pools) do pools[tree] = p end
+  if found_daler then daler_total = found_daler end
+  for key, r in pairs(skills) do
+    if found_pools[r.tree] then skills[key] = nil end
+  end
+  for key, r in pairs(found) do skills[key] = r end
+
+  local merged, spliced, added = {}, {}, {}
+  for _, key in ipairs(order) do
+    local r = skills[key]
+    if r and found_pools[r.tree] then
+      if not spliced[r.tree] then
+        for _, nk in ipairs(found_order) do
+          if found[nk].tree == r.tree and not added[nk] then
+            merged[#merged + 1] = nk; added[nk] = true
+          end
+        end
+        spliced[r.tree] = true
+      end
+    elseif r then
+      merged[#merged + 1] = key; added[key] = true
+    end
+  end
+  for _, nk in ipairs(found_order) do                 -- a tree never seen before
+    if not added[nk] then merged[#merged + 1] = nk; added[nk] = true end
+  end
+  order = merged
+
+  last_scan = os.date("%H:%M")
+  -- the listing and the live feed are both in hand at exactly this moment, which
+  -- is the only time the pools can be matched to their tracks by value
+  learn_pool_tracks()
+  save_all()
+  render()
+
+  local trees = {}
+  for tree in pairs(found_pools) do trees[#trees + 1] = tree end
+  table.sort(trees)
+  sw_note(string.format("scan: %d skills across %s - %d trainable now",
+    #found_order, table.concat(trees, ", "), select(2, render_counts())))
+end
+
+-- whoever sends `vskills` — this plugin's login scan, the Refresh button, or
+-- the player typing it — arms the capture. The reply ends at the next prompt.
+scrye.onCommand(function(text)
+  local cmd = tostring(text or ""):match("^%s*(%S+)")
+  if cmd and cmd:lower() == "vskills" and not capturing then
+    capturing = {}
+  end
+end)
+
+scrye.onLine(function(line)
+  if capturing then capturing[#capturing + 1] = line end
+end)
+
+-- ---------- rendering ----------
+local function status_of(r, daler, dknown, pool, pknown)
+  if r.maxed then return "max", false end
+  if not (dknown and pknown) then return "?", false end
+  local miss = {}
+  if (r.gxp or 0) > pool then
+    miss[#miss + 1] = comma(r.gxp - pool) .. " " .. ((r.pool or "points"):lower())
+  end
+  if (r.daler or 0) > daler then miss[#miss + 1] = comma(r.daler - daler) .. " daler" end
+  -- Nothing missing: the shortfall column is simply empty. The word that used to
+  -- sit here ("TRAIN") became the INFO cell at the head of EVERY row, so this
+  -- column now says one thing only - what the skill is still short of - and a
+  -- blank means nothing, next to neighbours that spell out what they lack.
+  if #miss == 0 then return "", true end
+  return "need " .. table.concat(miss, " + "), false
+end
+
+local last_rows, last_summary, last_alertstate
+local rendering = false
+
+render_counts = function()
+  local daler, dknown = daler_now()
+  local can_n, total = 0, 0
+  for _, key in ipairs(order) do
+    local r = skills[key]
+    if r then
+      total = total + 1
+      local pool, pknown = pool_now(r.tree)
+      local _, can = status_of(r, daler, dknown, pool, pknown)
+      if can then can_n = can_n + 1 end
+    end
+  end
+  return total, can_n
+end
+
+render = function()
+  if rendering then return end                    -- setState fires our own watch
+  rendering = true
+
+  local daler, dknown = daler_now()
+
+  -- bucket and status per skill
+  local rows, trainable = {}, {}
+  for _, key in ipairs(order) do
+    local r = skills[key]
+    if r then
+      local pool, pknown = pool_now(r.tree)
+      local st, can = status_of(r, daler, dknown, pool, pknown)
+      if can then trainable[key] = true end
+      local bucket = r.maxed and 3 or (can and 0 or ((dknown and pknown) and 2 or 1))
+      rows[#rows + 1] = { r = r, st = st, bucket = bucket,
+        short = ((r.gxp or 0) > pool and (r.gxp - pool) or 0)
+              + ((r.daler or 0) > daler and (r.daler - daler) or 0) }
+    end
+  end
+
+  -- sort within each tree, keeping the trees themselves in place. Maxed skills
+  -- are counted but not listed -- a maxed skill is done, and the list is the
+  -- answer to "what is left to train".
+  local by_tree, tree_order, seen_tree, maxed_n = {}, {}, {}, {}
+  for _, row in ipairs(rows) do
+    if not seen_tree[row.r.tree] then
+      seen_tree[row.r.tree] = true
+      tree_order[#tree_order + 1] = row.r.tree
+    end
+    if row.r.maxed then
+      maxed_n[row.r.tree] = (maxed_n[row.r.tree] or 0) + 1
+    else
+      by_tree[row.r.tree] = by_tree[row.r.tree] or {}
+      table.insert(by_tree[row.r.tree], row)
+    end
+  end
+  for _, list in pairs(by_tree) do
+    table.sort(list, function(x, y)
+      if x.bucket ~= y.bucket then return x.bucket < y.bucket end
+      local xc = x.bucket == 2 and x.short or (x.r.gxp or 0)
+      local yc = y.bucket == 2 and y.short or (y.r.gxp or 0)
+      if xc ~= yc then return xc < yc end
+      return x.r.name < y.r.name
+    end)
+  end
+
+  local L, can_n, total = {}, 0, 0
+  if #rows == 0 then
+    L[1] = "no scan yet - 'vsk refresh' or type vskills"
+  end
+  for _, tree in ipairs(tree_order) do
+    local p = pools[tree]
+    local pamt, pknown = pool_now(tree)
+    local mx = maxed_n[tree] or 0
+    local header = string.format("%s  ·  %s %s",
+      esc(p and p.name or tree),
+      esc(p and p.pool or "?"),
+      pknown and comma(pamt) or "?")
+    if not by_tree[tree] then
+      header = header .. "  ·  all " .. mx .. " maxed"
+    elseif mx > 0 then
+      header = header .. "  ·  " .. mx .. " maxed"
+    end
+    L[#L + 1] = "@{#7AC8E8,bold}" .. header .. "@{}"
+    for _, row in ipairs(by_tree[tree] or {}) do
+      total = total + 1
+      if row.bucket == 0 then can_n = can_n + 1 end
+      local r = row.r
+      -- Two separate things, and only one of them bit: splitting the row into
+      -- cells dropped the SPACE that used to sit between "%-17s" and "%-6s", so
+      -- a name that filled its column ran straight into "lvl" - hence the 18
+      -- below (17 columns plus that separator). The visible-width pad is the
+      -- other one, and it is precaution rather than a fix: string.format counts
+      -- BYTES, the ellipsis is three of them for one column, and any name the
+      -- game sends with a non-ASCII letter in it would under-pad the same way.
+      local name = string.rep("  ", r.depth) .. r.name
+      local vis = #name
+      if vis > 17 then name = name:sub(1, 16) .. "…"; vis = 17 end
+      local namecell = name .. string.rep(" ", 18 - vis)
+      -- pad BEFORE markup: the renderer ignores markup for width, we don't get to
+      -- Pad first, mark up second: the renderer measures a run's TEXT, and text
+      -- is what is left after the parser has eaten the markup - so every cell is
+      -- padded to width as plain text and only then wrapped, or the columns walk.
+      -- (esc() after padding is safe for the same reason: "@@" is two characters
+      -- in the string and one on screen, which is the width the padding assumed.)
+      -- One span per cell rather than one span wrapping the row: the INFO cell
+      -- keeps its own colour whatever state the row is in.
+      local rowcol = row.bucket == 0 and "#6BEF75,bold" or (row.bucket == 2 and "#E0C040" or "text")
+      local midcell  = string.format("%-6s %8s %8s  ",
+        "lvl " .. tostring(r.level or "?"),
+        r.gxp and comma(r.gxp) or "?",
+        r.daler and comma(r.daler) or "-")
+
+      -- Both actions on one run: menu= (host API 1.19) is the right button,
+      -- rclick= the pre-1.19 fallback, click= the left button. Verb order
+      -- matters - menu first, click last, since only the last verb's command
+      -- may contain commas, and the menu value must stay comma-free so a
+      -- pre-1.19 host reads it as an unknown flag rather than half a colour.
+      -- The commands carry r.name, never the cell, which is truncated to 16
+      -- characters to fit the column.
+      local function act(colour, cell)
+        return string.format(
+          "@{%s,menu=Info|vhelp %s;Train|vtrain %s,rclick=vhelp %s,click=vhelp %s}%s@{}",
+          colour, r.name, r.name, r.name, r.name, esc(cell))
+      end
+
+      -- INFO leads every row, in its own colour, so the read is one column you
+      -- can run down rather than a word that only appears where a skill happens
+      -- to be affordable. The name carries the same actions - on a wide row the
+      -- name is what the pointer is usually over - and the shortfall column is
+      -- plain text.
+      L[#L + 1] = act("accent", "INFO  ")
+        .. act(rowcol, namecell)
+        .. "@{" .. rowcol .. "}" .. esc(midcell) .. esc(row.st) .. "@{}"
+    end
+  end
+  local rows_s = table.concat(L, "\n")
+
+  local summary = string.format("%s daler   %d/%d trainable%s",
+    dknown and comma(daler) or "?", can_n, total,
+    last_scan and ("   (scanned " .. last_scan .. ")") or "")
+  local alertstate = "alerts " .. (alert and "ON" or "off")
+  if not dknown then alertstate = alertstate .. "   (no daler feed - vsk feed)" end
+
+  if rows_s ~= last_rows then scrye.setState(P .. "swrows", rows_s); last_rows = rows_s end
+  if summary ~= last_summary then scrye.setState(P .. "swsummary", summary); last_summary = summary end
+  if alertstate ~= last_alertstate then scrye.setState(P .. "swalertstate", alertstate); last_alertstate = alertstate end
+
+  -- alert on the TRANSITION, not the state: the first render after a scan sets
+  -- the baseline and stays quiet, otherwise logging in would buzz your phone
+  -- with everything you can already afford.
+  if alert and prev_trainable then
+    local new = {}
+    for key in pairs(trainable) do
+      if not prev_trainable[key] then new[#new + 1] = skills[key].name end
+    end
+    if #new > 0 then
+      table.sort(new)
+      local msg = "Skill trainable: " .. table.concat(new, ", ")
+      sw_note(msg)
+      scrye.notify(msg)
+    end
+  end
+  prev_trainable = trainable
+
+  rendering = false
+end
+
+-- live numbers move rows between TRAIN and short exactly as a rescan does
+scrye.watch("vik", function() render() end)
+
+-- ---------- the login scan ----------
+scrye.onPrompt(function()
+  prompts = prompts + 1
+  if capturing then finish_capture() end
+  if auto and not scanned then
+    -- the feed coming alive means login finished; if it never does, the third
+    -- prompt is close enough (a non-viking just gets a harmless "What?")
+    local feed_up = (scrye.getState("vik.daler") or "") ~= ""
+    if feed_up or prompts >= 3 then
+      scanned = true
+      scrye.send("vskills")
+    end
+  end
+end)
+
+scrye.onConnect(function()
+  scanned = false
+  prompts = 0
+  prev_trainable = nil
+end)
+
+scrye.onDisconnect(function()
+  capturing = nil
+end)
+
+-- ---------- the panel ----------
+local function refresh()
+  sw_note("rescanning - sending vskills")
+  scrye.send("vskills")
+end
+
+local function publish_notify()
+  scrye.setState(P .. "swnotify",
+    "Skill trainable\tskillwatch: a skill became affordable\t" ..
+    (alert and "on" or "off") .. "\tvsk alert")
+end
+
+local function toggle_alert()
+  alert = not alert
+  scrye.store.set("sw_alert", alert and "1" or "0")
+  publish_notify()
+  sw_note("alerts " .. (alert and "ON - notifies when a skill becomes trainable"
+                              or "off"))
+  render()
+end
+
+-- the Skills tab, handed to this plugin's panel builder below
+local function skills_tab()
+  return { title = "Skills", widgets = {
+    { type = "value", text = "", bind = P .. "swsummary" },
+    { type = "text", bind = P .. "swrows" },
+    { type = "value", text = "", bind = P .. "swalertstate", color = "dim" },
+    { type = "label", text = "click INFO or a name for vhelp \194\183 right-click for Info / Train \194\183 green trainable \194\183 amber short \194\183 maxed hidden \194\183 vsk / peek / feed / alert", color = "dim" },
+    { type = "buttonrow", buttons = {
+        { text = "Refresh", action = refresh },
+        { text = "Alerts on/off", action = toggle_alert },
+    } },
+  } }
+end
+
+-- ---------- commands ----------
+local function help()
+  scrye.print([[
+Skill Watch
+  vsk                this help + a one-line status
+  vsk refresh        rescan the costs (sends vskills; 'vskills <tree>' rescans one tree)
+  vsk peek           the raw last capture, with what each line parsed as
+  vsk feed           which state keys the pools/daler are read from, and their values
+  vsk auto [on|off]  rescan at login (default on)
+  vsk alert [on|off] notify when a skill becomes trainable (default off)
+  vsk src <pool|daler> <path>   read a number from this state key instead ('-' clears)
+  vsk clear          forget the scanned skills]])
+end
+
+local function peek()
+  if #last_raw == 0 then sw_note("nothing captured yet - 'vsk refresh' or type vskills") return end
+  sw_note("last vskills capture (" .. #last_raw .. " lines):")
+  for i, l in ipairs(last_raw) do
+    local t = (l:match("%-~%*(.-)%*~%-") or clean(l)):gsub("^%s+", ""):gsub("%s+$", "")
+    local tag = "(skipped)"
+    if t:find("%a") then
+      local d = t:match("^[Dd]aler:%s*([%d,]+)")
+      local tn = t:match("^[Vv]egr%s+(.+)$")
+      local pn, pa = t:match("^([%a]+):%s*([%d,]+)%s*points")
+      local row = parse_row(t)
+      if d then tag = "-> daler on hand: " .. comma(sw_num(d))
+      elseif tn then tag = "-> tree: " .. tn
+      elseif pn then tag = "-> pool: " .. pn .. " = " .. comma(sw_num(pa))
+      elseif row then
+        tag = string.format("-> %s lvl %d, %s, %s%s",
+          row.name, row.level or 0,
+          row.maxed and "maxed" or (comma(row.gxp or 0) .. " pts"),
+          row.daler and (comma(row.daler) .. " daler") or "no daler cost",
+          row.maxed and "" or "")
+      end
+    end
+    scrye.print(string.format("%3d| %s   @{#5C6B7A}%s@{}", i, esc(l), esc(tag)))
+  end
+end
+
+local function sw_feed()
+  local daler, dknown = daler_now()
+  sw_note("daler: " .. (srcs.daler ~= "" and esc(srcs.daler) or "Guild.State.daler")
+    .. "  =  " .. (dknown and comma(daler) or "not found"))
+  for _, tree in ipairs({ "vitka", "berserkja", "hersins", "buandi" }) do
+    local p = pools[tree]
+    local pamt, pknown = pool_now(tree)
+    local pname = p and p.pool or "?"
+    local lname = pname:lower()
+    -- where the number came from: an override, the gxp track it was MATCHED to,
+    -- the old MIP path, or nothing yet
+    local src
+    if (srcs[lname] or "") ~= "" then src = esc(srcs[lname])
+    elseif pool_track[lname] then src = "gxp." .. pool_track[lname]
+    elseif POOLKEY[lname] then src = POOLKEY[lname] .. " (MIP)"
+    else src = "unmatched - run vskills to pair it" end
+    sw_note(string.format("%-10s %-8s %-28s  =  %s",
+      tree, lname, src, pknown and comma(pamt) or "not found"))
+  end
+end
+
+-- ONE alias with a dispatcher, not one alias per subcommand (see lab-areabot).
+local function vsk_command(args)
+  args = tostring(args or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if args == "" then
+    help()
+    local total, can_n = render_counts()
+    local daler, dknown = daler_now()
+    sw_note(string.format("%d skills scanned%s, %d trainable, %s daler, auto %s, alerts %s",
+      total, last_scan and (" at " .. last_scan) or "", can_n,
+      dknown and comma(daler) or "?",
+      auto and "on" or "off", alert and "on" or "off"))
+    return
+  end
+  local low = args:lower()
+
+  if low == "refresh" or low == "scan" then refresh() return end
+  if low == "peek" then peek() return end
+  if low == "feed" then sw_feed() return end
+  if low == "clear" then
+    skills, order, pools, daler_total = {}, {}, {}, nil
+    scrye.store.delete("sw_skills")
+    prev_trainable = nil
+    render()
+    sw_note("forgot the scanned skills - 'vsk refresh' to rescan")
+    return
+  end
+  if low == "auto" or low == "auto on" or low == "auto off" then
+    if low == "auto on" then auto = true
+    elseif low == "auto off" then auto = false
+    else auto = not auto end
+    scrye.store.set("sw_auto", auto and "1" or "0")
+    sw_note("rescan at login " .. (auto and "ON" or "off"))
+    return
+  end
+  if low == "alert" or low == "alert on" or low == "alert off" then
+    if low == "alert on" and not alert then toggle_alert()
+    elseif low == "alert off" and alert then toggle_alert()
+    elseif low == "alert" then toggle_alert()
+    else sw_note("alerts already " .. (alert and "on" or "off")) end
+    return
+  end
+
+  local verb, a, b = args:match("^(%S+)%s+(%S+)%s+(.+)$")
+  if verb and verb:lower() == "src" then
+    local which, path = a:lower(), b:gsub("%s+$", "")
+    if not srcs[which] and which ~= "daler" then
+      sw_note("src what? one of: daler, visindi, kappi, soemd, audr")
+      return
+    end
+    if path == "-" then path = "" end
+    srcs[which] = path
+    scrye.store.set("sw_src." .. which, path)
+    if path ~= "" then scrye.watch(path, function() render() end) end
+    sw_note("src " .. which .. " = " .. (path ~= "" and esc(path) or "(auto)"))
+    sw_feed()
+    render()
+    return
+  end
+
+  sw_note("unknown subcommand - 'vsk' for help")
+end
+
+scrye.addAlias{ pattern = [[^vsk(?:\s+(.*))?$]], regex = true, run = function(a) vsk_command(a) end }
+
+-- ---------- load ----------
+local loaded = load_all()
+render()
+publish_notify()
+if loaded > 0 then
+  sw_note(loaded .. " skills loaded from the last scan - 'vsk refresh' after training")
+end
+
+-- What the rest of the file needs from this block; everything else -- the alias,
+-- the triggers, the login rescan -- registered itself on the way past. on_feed is
+-- how a gxp/daler change reaches the rows (wired into vset above).
+return { tab = skills_tab, on_feed = function() render() end }
+end)()
+sw_on_feed = SW.on_feed
+
 scrye.addPanel{
   title = "Viking Status",
   width = 560,
@@ -3628,6 +4365,7 @@ scrye.addPanel{
         { type = "text", bind = P .. "stats" },
         { type = "button", text = "Commit patrol (last count)", action = patrol_commit },
     } },
+    SW.tab(),
     { title = "City", widgets = {
         { type = "text", bind = P .. "city" },
         { type = "label", text = "-- Refinery --   one segment per quality stage, raw (amber) to refined (green) - hover a bar for the numbers", color = "dim" },
@@ -4076,34 +4814,10 @@ gasm("Guild.Kingdom", function(t)
   end
 end)
 
--- Guild.Map: the territory's passability, which nothing used to keep. The two
--- edge grids arrive in SEPARATE full=1 bursts (east in one, south in the next),
--- and a full burst clears the paged keys of the one before it -- so the snapshot
--- never holds both at once and each is latched here as it lands. Terrain is the
--- one field still missing server-side; the sea plugin's Map tab waits for it.
-gasm("Guild.Map", function(t)
-  local changed = false
-  local function rows(v)
-    if type(v) ~= "table" or not v[1] then return nil end
-    local out = {}
-    for i, r in ipairs(v) do out[i] = S(r) end
-    return out
-  end
-  local e, s2 = rows(t.east), rows(t.south)
-  if e then gmap.east = e; ST.set("gmap_east", table.concat(e, "\n")); changed = true end
-  if s2 then gmap.south = s2; ST.set("gmap_south", table.concat(s2, "\n")); changed = true end
-  local w, h = tonumber(t.w), tonumber(t.h)
-  if w and w > 0 then gmap.w = w; changed = true end
-  if h and h > 0 then gmap.h = h; changed = true end
-  if changed then
-    gmap.trusted = nil                                  -- a new map re-faces the oracle
-    ST.set("gmap_wh", S(gmap.w) .. "|" .. S(gmap.h))
-  end
-  local pos = T(t, "pos")
-  if pos.x ~= nil and pos.y ~= nil then
-    gmap_note_pos(tonumber(pos.x), tonumber(pos.y))
-  end
-end)
+-- (Guild.Map is 3s-viking-world's package now: the grids, the oracle and the
+-- pos gate went with the travel engine on 30 Aug. The adapter was left behind
+-- here by mistake, still reaching for a gmap table that moved out from under
+-- it - every Guild.Map burst raised a rule error until it was removed.)
 
 -- ------------------------------------------------------------------ init
 mark_all()

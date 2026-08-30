@@ -17,6 +17,7 @@ is the memory.
 | V5 | heat ↔ town index pairing | raid-gmcp | Sanity-check a raid target's heat number lines up with the town the UI names. |
 | V6 | MIP+GMCP chat dedupe | host (MudSession) | With both feeds live: chat panes show every line exactly once, plugin onChannel hooks fire once. |
 | V7 | Shifting exits in anger | map-gmcp 1.6.0 | Ride a few more elevators/ferries; auto-mark should catch them after two changed arrivals, `~` on the map. |
+| ~~V8~~ | ~~Skills tab pool pairing~~ | viking-status 2.19.0 | **Answered 30 Aug.** All four paired on the first scan: `visindi=vitka`, `kappi=viga`, `soemd=drotta`, `audr=buandi` — so the gxp tracks and the skill pools ARE the same quantity, and the two pairings that could only be inferred by name (Kappi/Soemd vs viga/drotta) were settled by the game rather than by guess. 65 skills, 29 trainable. The pairing is persisted; the learner stays in for a fresh install and for the day a fifth track appears. |
 
 ## Build next — code ready to write, no blockers
 
@@ -43,8 +44,12 @@ own line here.
 **B4. Dev report to the 3Scapes devs.** Short, concrete, from the captures:
 Guild.Map terrain promised (`enc={terrain:"glyph"}`) but never delivered — the
 big one, it blocks the sea Map tab; CRAID raid-end signal (V4) if none exists;
-anything V3/V5 turn up. Also the thank-yous: per-village TradeGoods and
-Guild.Warehouse made the text scans retirable, chat channels work.
+anything V3/V5 turn up. Also **no GMCP source for the skill listing** — no skill
+field in any capture and `Core.Supported` says `"Merc.Skills": 0`, so the Skills
+tab has to scan `vskills`; a `Guild.Skills` package (name, level, point cost,
+daler cost, tree) would retire it, and unlike terrain nothing was promised, so
+this is an ask rather than a chase. Also the thank-yous: per-village TradeGoods
+and Guild.Warehouse made the text scans retirable, chat channels work.
 
 ## Later — wants a decision or the server first
 
@@ -55,6 +60,15 @@ so targeting trusts the indexes.
 **L2. Guild.Livestock Herds tab (viking-status).** The feed exists in the
 captures; a tab is straightforward. Only if you actually run herds — dead UI
 is worse than no UI.
+
+**L2b. Skills tab follow-ups (viking-status, 30 Aug).** Two things the merge
+left open, both wanting live play rather than code: (a) whether Kappi and Soemd
+ever pair at all — the learner needs a scan taken while a track's value equals
+the listed pool total exactly, and if a pool never matches, `vsk feed` says so
+and `vsk src <pool> <path>` is the manual escape; (b) whether the four gxp
+tracks and the four skill pools are even the same quantity. If they are not,
+the learner simply never pairs and the scanned totals stand — no wrong answer
+gets invented, which is why it was built to match rather than assume.
 
 **L3. Voyage extras (viking-sea).** The 17:25 capture's leftovers, deferred
 while the trade work landed. Re-mine `gmcp-fields-Goran-20260828-*.md` once
