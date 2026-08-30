@@ -1,4 +1,5 @@
--- 3S Viking Sea -- the fleet's world: Sea / Voyage / Map / Travel, carved out of
+-- 3S Viking World -- everywhere that is not your own settlement: Sea / Voyage /
+-- Map / Travel, carved out of
 -- 3s-viking-status per docs/Plan-Viking-GMCP.md (the three-way split) and rebuilt
 -- on the Guild.* GMCP packages.
 --
@@ -35,6 +36,9 @@
 --     on the built-in defaults + your vikloc names.
 
 local P = "plugin." .. scrye.id .. "."
+-- the settlement plugin's prefix: state paths are global, so a tab here can
+-- show a picture that plugin computes without either owning the other
+local SP = "plugin.3s-viking-status-gmcp."
 
 -- ---------------------------------------------------------------- colour
 local function esc(s) return (tostring(s or ""):gsub("@", "@@")) end
@@ -781,12 +785,65 @@ local function toggle_icons()
   icons_on = not icons_on
   scrye.store.set("icons", icons_on and "1" or "0")
   build_panel()
-  scrye.print("[sea] map icons " .. (icons_on and "ON" or "OFF") .. " (sicons toggles)")
+  scrye.print("[world] icons " .. (icons_on and "ON" or "OFF") .. " (sicons / vicons toggle)")
 end
+
+-- ---------------------------------------------------------- the Plan grid
+-- The Plan TAB lives here with the other grids; the plan itself is still
+-- computed by 3s-viking-status-gmcp, which owns the Guild.City feed it comes
+-- from and the `vplan` command that edits it. Widget binds read the global
+-- state store, so the tab simply binds across to that plugin's paths -- the
+-- picture moves without the machinery behind it having to.
+-- The tiles/ folder had to come along: image paths resolve relative to the
+-- DECLARING plugin's folder and are sandboxed to it, so art left behind would
+-- silently render as plain tiles.
+
+local PLAN_PAL = {
+  ["."] = "#484848",  -- plain
+  ["f"] = "#246E24",  -- woods
+  ["H"] = "#8C7050",  -- hill
+  ["w"] = "#2E64A6",  -- river
+  ["c"] = "#206A6A",  -- coast
+  ["M"] = "#585858",  -- wall
+  ["W"] = "#4E4E4E",  -- wall
+  ["G"] = "#886C46",  -- gate
+  ["B"] = "#886C46",  -- gate
+  ["1"] = "#40E040",  -- producers  (green)
+  ["2"] = "#E04030",  -- industry   (red)
+  ["3"] = "#742D31",  -- grim       (maroon, darkened away from industry red)
+  ["4"] = "#40D0E0",  -- trade      (cyan)
+  ["5"] = "#E060E0",  -- culture    (magenta)
+  ["6"] = "#E0E0E0",  -- homes      (white)
+  ["7"] = "#FFD040",  -- throne     (gold)
+  ["?"] = "#383838",  -- unknown
+}
+
+-- Town-plan micro-icons: one glyph per district, terrain as on the world map.
+local PLAN_ICONS = {
+  ["f"] = "tree", ["H"] = "hill", ["w"] = "water",
+  ["G"] = "gate", ["B"] = "gate",
+  ["1"] = "grass",    -- producers (fields)
+  ["2"] = "hammer",   -- industry
+  ["3"] = "cross",    -- grim quarter
+  ["4"] = "ship",     -- trade
+  ["5"] = "star",     -- culture
+  ["6"] = "house",    -- homes
+  ["7"] = "crown",    -- throne
+}
+
+-- Image tiles (host API 1.17): hand-drawn art per Plan character, living in the
+-- plugin's own tiles/ folder and riding the same Icons on/off toggle as the vector
+-- glyphs (an imaged character beats its glyph; the rest keep their glyphs). A named
+-- file that does not exist yet is harmless - the cell falls back to glyph/tile - so
+-- this table can grow ahead of the art: draw a PNG, drop it in tiles/, done. On a
+-- pre-1.17 host the field is ignored and the grid renders exactly as before.
+local PLAN_IMAGES = {
+  ["7"] = "tiles/tower.png",   -- throne district - the first hand-drawn tile
+}
 
 build_panel = function()
 scrye.addPanel{
-  title = "Viking Sea",
+  title = "Viking World",
   width = 560,
   accent = "#3991B7",          -- signature: sea blue (validated accent set)
   tabs = {
@@ -840,6 +897,13 @@ scrye.addPanel{
         { type = "text",  bind = P .. "towns" },
         { type = "text",  bind = P .. "maplocs" },
         { type = "button", text = "Icons on/off", action = function() toggle_icons() end },
+    } },
+    { title = "Plan", widgets = {
+        { type = "value", text = "", bind = SP .. "planhdr", color = "#6288E1" },
+        { type = "colorgrid", bind = SP .. "plangrid", palette = PLAN_PAL,
+          icons = icons_on and PLAN_ICONS or nil, images = icons_on and PLAN_IMAGES or nil },
+        { type = "text", bind = SP .. "planlist" },
+        { type = "label", text = "edit the plan with  vplan  (3S Viking Status owns it)", color = "dim" },
     } },
     { title = "Travel", widgets = {
         { type = "label", text = "Walk to a settlement (the travel engine lives in 3s-viking-status-gmcp):" },
@@ -905,9 +969,11 @@ scrye.addAlias{
   end,
 }
 
--- 'sicons' rather than 'vicons': the first-registered alias wins a contested
--- pattern, and 3s-viking-status-gmcp already answers vicons for its Plan grid
+-- One toggle for every grid this plugin draws - sea chart, world map and now the
+-- Plan. `vicons` used to be the settlement plugin's, and came here with the Plan
+-- tab; `sicons` stays as the name it has answered to since the split.
 scrye.addAlias{ pattern = [[^sicons$]], regex = true, run = function() toggle_icons() end }
+scrye.addAlias{ pattern = [[^vicons$]], regex = true, run = function() toggle_icons() end }
 
 -- ================================================================================
 -- The GMCP feed layer: page assembler + adapters (same shape as the sibling

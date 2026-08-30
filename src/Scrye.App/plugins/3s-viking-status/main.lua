@@ -1,7 +1,7 @@
 -- 3S Viking Status (classic, MIP) -- Scrye conversion of ThreeS_VikingStatus (MUSHclient)
 --
 -- CLASSIC: fed by the MIP viking feed (vik.* state), frozen for 3Scapes players
--- still running MIP. The maintained line is 3s-viking-status-gmcp (+ 3s-viking-sea,
+-- still running MIP. The maintained line is 3s-viking-status-gmcp (+ 3s-viking-world,
 -- 3s-viking-kingdom). Same commands as the GMCP plugins - enable one or the other,
 -- never both at once. Only this header, the panel title and the manifest changed.
 --

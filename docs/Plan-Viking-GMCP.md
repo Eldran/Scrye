@@ -4,7 +4,7 @@ Status: **approved 2026-08-27; core builds done, in live soak.** Companion to `d
 
 Built so far (all with lab harnesses + mutation passes, all uncommitted):
 3s-raid-gmcp 2.0.0 - 3s-viking-fx 1.0.0 (effect timer bar) - 3s-viking-status-gmcp
-2.6.0 (the land tabs; classics frozen) - 3s-viking-sea 1.0.0 - 3s-viking-kingdom
+2.6.0 (the land tabs; classics frozen) - 3s-viking-world 1.0.0 - 3s-viking-kingdom
 1.0.0 - plus the `vtrade stock` scan (status 2.1.0) closing the wstock gap as a
 stopgap, and Honey added to the tradeable goods (a raw material).
 
@@ -232,7 +232,7 @@ largely survive untouched. The Feeds tab changes meaning: per-package "last burs
 pages / staleness" instead of `vik.*` keys seen.
 (*Production stays a thin tab until the feed gap in §2 is answered.)
 
-**3s-viking-sea — the fleet's world (new home for existing tabs).** Sea / Voyage / Map /
+**3s-viking-world — the fleet's world (new home for existing tabs).** Sea / Voyage / Map /
 Travel, from Guild.Voyage + Guild.Map: the sea chart, the live voyage tracker
 (x/y, hull, morale, supplies, danger, next_move_in, resolve options), the territory map
 with click-to-walk, and the settlement travel buttons. The §5 voyage-navigator idea
@@ -289,7 +289,7 @@ Ranked by my sense of value-per-effort; none started until you pick.
    assembler exists.
 4. **3s-viking-status 2.0** — the big port, tab by tab, Feeds tab first (it's the
    debugging window for the rest).
-5. **3s-viking-sea** — the four sea tabs move over.
+5. **3s-viking-world** — the four sea tabs move over.
 6. **3s-viking-kingdom** — new build, roster grid first, War board last (needs a war).
 7. Then the rest of §5 as picked; the farmer `name5` assist any time.
 8. Report the §2 feed gaps (production, errand, sevents, per-good wstock, empty

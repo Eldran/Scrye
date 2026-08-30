@@ -12,7 +12,7 @@
 --
 -- Packages consumed: Guild.State, Info, City, Settlement, Trade, Fleet, Roster,
 -- Kingdom, Warehouse. The SEA HALF IS GONE from this plugin: Sea / Voyage / Map / Travel tabs,
--- sea-nav and the charts move to 3s-viking-sea (the travel ENGINE stays here - the
+-- sea-nav and the charts move to 3s-viking-world (the travel ENGINE stays here - the
 -- mission runner walks towns - and owns the vgo/vhere aliases; the sea plugin's
 -- Travel tab clicks run vgo, which lands here).
 --
@@ -215,53 +215,10 @@ end
 -- ------------------------------------------------------------- palettes
 -- Original colours were MUSHclient BGR; converted here to #RRGGBB.
 
--- (territory-map and sea-chart palettes moved to 3s-viking-sea)
+-- (territory-map and sea-chart palettes moved to 3s-viking-world)
 
--- city plan: terrain char -> tile colour; placed buildings become role digits 1-7
-local PLAN_PAL = {
-  ["."] = "#484848",  -- plain
-  ["f"] = "#246E24",  -- woods
-  ["H"] = "#8C7050",  -- hill
-  ["w"] = "#2E64A6",  -- river
-  ["c"] = "#206A6A",  -- coast
-  ["M"] = "#585858",  -- wall
-  ["W"] = "#4E4E4E",  -- wall
-  ["G"] = "#886C46",  -- gate
-  ["B"] = "#886C46",  -- gate
-  ["1"] = "#40E040",  -- producers  (green)
-  ["2"] = "#E04030",  -- industry   (red)
-  ["3"] = "#742D31",  -- grim       (maroon, darkened away from industry red)
-  ["4"] = "#40D0E0",  -- trade      (cyan)
-  ["5"] = "#E060E0",  -- culture    (magenta)
-  ["6"] = "#E0E0E0",  -- homes      (white)
-  ["7"] = "#FFD040",  -- throne     (gold)
-  ["?"] = "#383838",  -- unknown
-}
-
--- Town-plan micro-icons: one glyph per district, terrain as on the world map.
-local PLAN_ICONS = {
-  ["f"] = "tree", ["H"] = "hill", ["w"] = "water",
-  ["G"] = "gate", ["B"] = "gate",
-  ["1"] = "grass",    -- producers (fields)
-  ["2"] = "hammer",   -- industry
-  ["3"] = "cross",    -- grim quarter
-  ["4"] = "ship",     -- trade
-  ["5"] = "star",     -- culture
-  ["6"] = "house",    -- homes
-  ["7"] = "crown",    -- throne
-}
 local ROLE_DIGIT = { prod = "1", ind = "2", grim = "3", trade = "4",
                      cult = "5", home = "6", throne = "7" }
-
--- Image tiles (host API 1.17): hand-drawn art per Plan character, living in the
--- plugin's own tiles/ folder and riding the same Icons on/off toggle as the vector
--- glyphs (an imaged character beats its glyph; the rest keep their glyphs). A named
--- file that does not exist yet is harmless - the cell falls back to glyph/tile - so
--- this table can grow ahead of the art: draw a PNG, drop it in tiles/, done. On a
--- pre-1.17 host the field is ignored and the grid renders exactly as before.
-local PLAN_IMAGES = {
-  ["7"] = "tiles/tower.png",   -- throne district - the first hand-drawn tile
-}
 
 -- --------------------------------------------------- static logic tables
 
@@ -617,7 +574,7 @@ for pair in (ST.get("gmap_coords") or ""):gmatch("([^;]+)") do
   if code and xy then TOWN_COORD[code] = xy end
 end
 
--- current live town: the map feed lives in 3s-viking-sea now, so gv(vmaph) is
+-- current live town: the map feed lives in 3s-viking-world now, so gv(vmaph) is
 -- always empty here and this returns nil - the remembered curtown carries travel
 local function live_town()
   local hd = split(gv("vmaph"), "|")
@@ -725,7 +682,7 @@ local function resolve_town(s)
   return nil
 end
 
--- (the Travel tab's clickable town list and the Map tab moved to 3s-viking-sea;
+-- (the Travel tab's clickable town list and the Map tab moved to 3s-viking-world;
 -- its clicks run `vgo <town>`, the alias THIS plugin owns)
 
 -- ...and `vikloc` moved with it, into a store scoped to THAT plugin - both
@@ -745,18 +702,9 @@ scrye.on("viking.locnames", function(data)
   if changed then rebuild_travel_towns() end
 end)
 
--- Icons on the Plan grid are a persisted preference: the toggle rebuilds the panel
--- in place (same title keeps position/size/tab; no input fields are lost - the
--- Trade/Auto inputs are re-seeded from state on every draw).
-local icons_on = scrye.store.get("icons") ~= "0"
+-- (the Plan grid moved to 3s-viking-world with the other maps, and the icons
+-- toggle went with it - `vicons` is answered there now)
 local build_panel   -- defined below, after the widget builders it needs
-
-local function toggle_icons()
-  icons_on = not icons_on
-  scrye.store.set("icons", icons_on and "1" or "0")
-  build_panel()
-  scrye.print("[viking] plan icons " .. (icons_on and "ON" or "OFF") .. " (vicons toggles)")
-end
 
 -- ---------------------------------------------------- seconds counter
 -- No os.time in the sandbox: count elapsed seconds ourselves (throttles/cooldowns).
@@ -1867,7 +1815,7 @@ local function build_holds()
   return table.concat(L, "\n")
 end
 
--- (build_voyage moved to 3s-viking-sea)
+-- (build_voyage moved to 3s-viking-world)
 
 -- The MISSIONS feed as a list we can act on, not just print:
 --   id | desc | rep | ? | expiry | (empty) | town | goods(good:qty,...)
@@ -2098,7 +2046,7 @@ local function build_feeds()
   return table.concat(L, "\n")
 end
 
--- (the Map tab moved to 3s-viking-sea)
+-- (the Map tab moved to 3s-viking-world)
 
 -- -------------------------------------------------------------- Plan tab
 local function build_plan()
@@ -2165,7 +2113,7 @@ local function build_plan()
   scrye.setState(P .. "planlist", table.concat(L, "\n"))
 end
 
--- (auto sea-navigation and the Sea tab moved to 3s-viking-sea)
+-- (auto sea-navigation and the Sea tab moved to 3s-viking-world)
 
 -- ------------------------------------------------------------ the flush
 local BUILDERS = {
@@ -2559,9 +2507,9 @@ scrye.addAlias{
   end,
 }
 
--- (vnav moved to 3s-viking-sea)
+-- (vnav moved to 3s-viking-world)
 
--- (vikloc moved to 3s-viking-sea with the Map tab)
+-- (vikloc moved to 3s-viking-world with the Map tab)
 
 -- Walk to a settlement by name or abbreviation. The clickable Travel/Map lists route through
 -- this alias rather than calling travel_to directly, so mouse and keyboard take the same path
@@ -2588,7 +2536,7 @@ scrye.addAlias{
   end,
 }
 
--- 3s-viking-sea's Map tab asks for walks over the event bus (its colorgrid click
+-- 3s-viking-world's Map tab asks for walks over the event bus (its colorgrid click
 -- cannot ride the command pipeline the way text click-links can)
 scrye.on("viking.travel", function(data)
   local ok, t = pcall(scrye.json.decode, data)
@@ -4382,13 +4330,7 @@ scrye.addPanel{
     { title = "Holds", widgets = {
         { type = "text", bind = P .. "holds" },
     } },
-    -- (Sea / Voyage / Map / Travel tabs live in 3s-viking-sea now)
-    { title = "Plan", widgets = {
-        { type = "value", text = "", bind = P .. "planhdr", color = "#6288E1" },   -- section header echoes the accent
-        { type = "colorgrid", bind = P .. "plangrid", palette = PLAN_PAL, icons = icons_on and PLAN_ICONS or nil,
-          images = icons_on and PLAN_IMAGES or nil },
-        { type = "text", bind = P .. "planlist" },
-    } },
+    -- (Sea / Voyage / Map / Travel tabs live in 3s-viking-world now)
     { title = "Mission", widgets = {
         { type = "text", bind = P .. "mission" },
         { type = "label", bind = P .. "mrun", color = "dim" },
@@ -4451,7 +4393,6 @@ scrye.addPanel{
 end
 build_panel()
 
-scrye.addAlias{ pattern = [[^vicons$]], regex = true, run = function() toggle_icons() end }
 
 
 
@@ -4753,7 +4694,7 @@ gasm("Guild.Warehouse", function(t)
 end)
 
 gasm("Guild.Fleet", function(t)
-  -- build_city reads f1=name f3=state f4=target f5=secs (3s-viking-sea reads f3)
+  -- build_city reads f1=name f3=state f4=target f5=secs (3s-viking-world reads f3)
   vset("ships", join(T(t, "ships"), { "name", "tier", "state", "target", "secs" }))
   -- the village order for Guild.TradeGoods: lin 0 = Midgard, lin i = lineage[i]
   -- (the 29 Aug overview confirmed the lineage list IS the market's row order)

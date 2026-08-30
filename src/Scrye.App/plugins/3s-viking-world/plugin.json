@@ -1,0 +1,25 @@
+{
+  "id": "3s-viking-world",
+  "name": "3S Viking World",
+  "version": "1.3.0",
+  "author": "Joakim",
+  "description": "The fleet's world, carved out of the Viking status panel per the three-way split: Sea (live voyage status, the chart with click-to-queue courses, resolve options, saga), Voyage (boons/aids/goods/curios), Map (the territory grid with click-to-travel and vikloc naming) and Travel (clickable settlement list). Fed by the Guild.Voyage / Guild.Map / Guild.Fleet / Guild.Settlement GMCP packages (3Scapes only). Includes the vnav auto sea-navigation: tours charted islands/wrecks/objectives nearest-first and auto-resolves nodes by your preference list with hull/supplies conditions. Town travel routes through 3s-viking-status-gmcp (it owns vgo/vhere and the route engine) - load both. Map terrain and chart-row field shapes are marked VERIFY LIVE where the 27 Aug capture never carried them. The Travel list holds every named place rather than the fourteen with recorded routes - the engine plans by BFS over the Guild.Map grids now, so naming a spot with `vikloc` is all it takes to be able to walk there. The Plan grid shows here with the other maps; 3s-viking-status-gmcp still computes it and owns `vplan`, and the tab binds across to its state.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.8 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "storage.private",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}
