@@ -17,12 +17,13 @@
 -- aids/goods/curios), Guild.Map (territory terrain + position), Guild.Fleet
 -- (the fleet list when no voyage is under way), Guild.Settlement (ship plots).
 --
--- Town travel: the ENGINE lives in 3s-viking-status-gmcp (its mission runner
--- needs it). This plugin owns the vgo/vhere aliases and the travel engine
--- behind them: text clicks run "vgo <town>" through the
--- command pipeline, the Map tab's colorgrid click emits the "viking.travel"
--- event that 3s-viking-status-gmcp listens for. Without that plugin loaded the
--- clicks go nowhere - the Travel tab says so.
+-- Town travel: the ENGINE lives HERE (moved 30 Aug with the mission runner,
+-- which walks every leg through travel_to and so belongs beside the walking).
+-- This plugin owns vgo/vhere and the route planner behind them. Text clicks run
+-- "vgo <town>" through the command pipeline; the Map tab's colorgrid click
+-- cannot (it is a Lua callback), so it goes through travel_to directly. The
+-- "viking.travel" event is still listened for, so another plugin can ask for a
+-- walk - it is no longer how THIS plugin's own clicks get there.
 --
 -- Capture status (27-28 Aug):
 --   * voyage_chart_rows CONFIRMED (string rows; the chart renders in play). The
@@ -581,9 +582,8 @@ end
 -- its clicks run `vgo <town>`, the alias THIS plugin owns)
 
 -- The settlement list is clickable TEXT: the click runs "vgo <town>" through the
--- command pipeline, which is 3s-viking-status-gmcp's alias (it owns the travel
--- engine). Republished whenever `vikloc` names a place, since naming one is now
--- all it takes to make it travelable.
+-- command pipeline - this plugin's own alias. Republished whenever `vikloc`
+-- names a place, since naming one is now all it takes to make it travelable.
 local function publish_town_list()
   local lines, row = {}, {}
   for _, code in ipairs(TRAVEL_TOWNS) do
@@ -609,12 +609,18 @@ end
 publish_town_list()
 publish_locnames()
 
--- the Map tab's colorgrid click cannot ride the command pipeline (it is a Lua
--- callback), so it asks the travel engine over the event bus instead
+-- The Map tab's colorgrid click cannot ride the command pipeline (it is a Lua
+-- callback), so it calls the engine directly. It used to emit "viking.travel"
+-- and let 3s-viking-status-gmcp answer; since the engine moved in here on
+-- 30 Aug that was a round trip out of this plugin and back into it, and the
+-- line it printed sent you looking for a dependency that no longer exists.
 local function ask_travel(town)
-  scrye.emit("viking.travel", scrye.json.encode({ town = town }))
-  scrye.print("[sea] asking the travel engine for " .. town
-    .. " (needs 3s-viking-status-gmcp loaded)")
+  local code = resolve_town(town)
+  if not code then
+    scrye.print("[sea] don't know a way to '" .. tostring(town) .. "'")
+    return
+  end
+  travel_to(code)
 end
 
 -- ---------------------------------------------------- the translated feed
@@ -1364,8 +1370,9 @@ scrye.addAlias{
   end,
 }
 
--- the Map tab asks for walks over the event bus (its colorgrid click
--- cannot ride the command pipeline the way text click-links can)
+-- Another plugin can ask for a walk over the event bus. This plugin's own Map
+-- click no longer comes through here - it calls travel_to directly - but the
+-- hook stays: it is the documented way in from outside.
 scrye.on("viking.travel", function(data)
   local ok, t = pcall(scrye.json.decode, data)
   if not ok or type(t) ~= "table" then return end
@@ -1518,7 +1525,7 @@ scrye.addPanel{
         { type = "label", text = "edit the plan with  vplan  (3S Viking Status owns it)", color = "dim" },
     } },
     { title = "Travel", widgets = {
-        { type = "label", text = "Walk to a settlement (the travel engine lives in 3s-viking-status-gmcp):" },
+        { type = "label", text = "Walk to a settlement - click a name (or: vgo <town>):" },
         { type = "text",  bind = P .. "towns" },
         { type = "label", text = "Walks from the wrong place? Set where you are:  vhere <town>" },
     } },

@@ -632,6 +632,599 @@ Plugins add commands and HUD panels. Manage them in the **Plugins** panel for a 
 - **Reload** re‑reads the plugin's script from disk, so you can edit a Lua plugin and reload it live — no restart needed (this works for script‑only changes; changes to Scrye itself need a rebuild).
 - **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye.
 
+## The plugins that ship with Scrye
+
+Everything below comes in the box. Like any plugin, each one is opt‑in per character — turn on the
+ones you want.
+
+### Two lines: classic and GMCP
+
+Several plugins ship twice. **3Scapes** speaks GMCP, so it gets the maintained line. **3K‑3Kingdoms**
+speaks only MIP, so the older dead‑reckoning versions are kept alive beside them, frozen (bugfixes
+only). The pairs answer to *different* aliases on purpose, so having both installed never causes a
+collision:
+
+| Job | GMCP line (3Scapes) | Classic line |
+|---|---|---|
+| Automapper | **3S Map (GMCP)** — `mapg` | **3S Map (classic)** — `map` |
+| Chaos‑sea bot | **3S Chaos Sea** — `cs` | **Chaos Sea (classic)** — `csc` |
+| Auto‑raid | **3S Auto‑Raid (GMCP)** — `araid` | **3S Auto‑Raid (classic)** — `araidc` |
+| Viking HUD | **Viking Status / World / Kingdom** | **3S Viking Status (classic)** |
+
+The classic mapper and chaos‑sea bot are for **3K**, or any character without GMCP. The two Viking
+classics are **not** — the Viking guild doesn't exist on 3K at all; they're for a 3Scapes character
+still running MIP.
+
+The one exception is the Viking HUD: the classic and the GMCP plugins answer to the **same**
+commands (`vgo`, `build`, `atrade`, …), because the classic predates the split. **Run one or the
+other, never both.**
+
+### Every alias at a glance
+
+| Alias | Plugin |
+|---|---|
+| `mapg` | 3S Map (GMCP) |
+| `map` | 3S Map (classic) |
+| `cs` · `csc` | Chaos Sea (GMCP / classic) |
+| `-` `..` `.stop` `record` `pa` … | 3S Stepper |
+| `chat` | 3S Chat |
+| `vitals` | 3S Vitals |
+| `build` `atrade` `mkref` `mkdispatch` `mkunits` `vsk` `vstock` `vtick` `vikdump` `vplan clear` | Viking Status |
+| `vgo` `vhere` `vikloc` `vnav` `vmgo` `vmrun` `vicons` | Viking World |
+| `vgrudge` | Viking Kingdom |
+| `vfx` | Viking Effects |
+| `araid` · `araidc` | Auto‑Raid (GMCP / classic) |
+
+---
+
+### 3S Map (GMCP) — `mapg`
+
+The automapper for a world that gives rooms numbers. Position is never inferred, so it never
+drifts: a room is the number the server states, and links are room‑number to room‑number, learned
+both from what the server says and from what you actually walk. Where the two disagree it tells you
+and believes the walk.
+
+It draws **one grid per area**, plus one more for each unconnected piece of an area — which is what
+makes `Unknown` (the label the MUD puts on every stretch of connective realm) readable as a handful
+of small maps rather than one tangle. Coordinates on screen are a layout recomputed from the links,
+never an identity.
+
+Walks go one confirmed step at a time: the next direction is sent only when the server says you
+reached the room the route expected, and anything unexpected stops the walk. Everything it ever
+sends is a single bare movement word.
+
+| Command | What it does |
+|---|---|
+| `mapg` (or `mapg status`) | Status — rooms known, new this session, where you are, walk progress, link disagreements, shifting exits. |
+| `mapg help` | The built‑in one‑line summary of everything below. |
+| `mapg on` / `mapg off` | Per‑room commentary as you walk. Default **on**. |
+| `mapg areas` | Every area, with a count of rooms known in it. |
+| `mapg rooms` | Every known room (capped at 40 rows). |
+| `mapg rooms <text>` | The same, filtered to areas whose name contains `<text>`. |
+| `mapg here` | Full detail for the room you're in — neighbours, how each is known, unexplored and shifting exits. |
+| `mapg room <number>` | The same detail for any room. |
+| `mapg path <number>` | Print the route there. Sends nothing. |
+| `mapg go <number>` | Actually walk it. |
+| `mapg stop` | Stop a walk in progress. |
+| `mapg explore` | Name the nearest room that still has an unexplored exit, and print the route. |
+| `mapg explore go` | Same, but walk there. |
+| `mapg frontier` | Every room with an unexplored exit, and which directions. |
+| `mapg map` | Describe the map you're standing on and which maps it borders. |
+| `mapg maps` | Every map, with room counts and borders. |
+| `mapg maps <text>` | Filtered by map name **or** by a bordering map's name. |
+| `mapg name` | The current map's name (and what its auto label would be). |
+| `mapg name <text>` | Rename the map you're on. `mapg name -` restores the auto label. |
+| `mapg fav` | Add/remove the current map from the **Favs** tab (max 20). |
+| `mapg level up` / `mapg level down` | Shift the view one level. `mapg level` follows your own level again. |
+| `mapg redraw` | Lay the current map out again from its links. |
+| `mapg draw on` / `mapg draw off` | Panel drawing. Default **on**. |
+| `mapg shift` | List every exit marked SHIFTING. |
+| `mapg shift <dir>` | Mark that exit here as shifting — an elevator or portal. Nothing is learned or routed through it and it draws as `~`. |
+| `mapg shift <room> <dir>` | The same for any room. Add `off` to either form to un‑mark it. |
+| `mapg forget <number>` | Drop one room from the store. |
+| `mapg save` | Write the store to disk now. |
+| `mapg wipe` → `mapg wipe yes` | Erase every room, map name and favourite. The confirmation only counts if it's the very next `mapg` command. |
+
+**Shifting exits mark themselves too.** If a walk through the same exit lands you somewhere new
+twice, the plugin marks it shifting on its own and stops routing through it — you ride the elevator
+yourself.
+
+**With the mouse.** Hovering a room fills the peek line. **Left‑click a room** prints the route to
+it; **right‑click** offers *Walk there* / *Show route* / *Room details*. On the **Maps** and **Favs**
+tabs, clicking a row walks there and right‑clicking gives the same three entries. The Maps tab also
+has a search box and a rename box for the map you're standing on.
+
+---
+
+### 3S Map (classic) — `map`
+
+The dead‑reckoning automapper, frozen at its long‑proven pre‑GMCP state. It learns rooms as you
+walk, tracks your position by counting moves, and needs the MUD's display markers switched on (the
+`aset` config). Use it on 3K, or on any character without GMCP. Old maps load exactly as they were.
+
+Because position is *inferred* here, it can drift — and it says so (`DRIFT?`), at which point
+`map set` puts you back where you actually are.
+
+| Command | What it does |
+|---|---|
+| `map` | Status plus the full command list. |
+| `map on` / `map off` | Auto‑mapping. Default **on**. `map on` also clears a hold another plugin placed. |
+| `map area <name>` | Switch to (or create) an area. Word characters and hyphens only. |
+| `map areas` | Every stored area, plus any `maps.json` seeds not yet stored. |
+| `map realm fantasy\|science\|chaos` | Tag the area's realm; the panel border takes its colour. `map realm -` clears it. |
+| `map set <x> <y> [z]` | Re‑seat your position by hand — the way out of a drift. |
+| `map undo` | Undo the last confirmed move (last 20 kept), deleting the destination room if that arrival created it. |
+| `map note <text>` / `map note -` | Attach or clear a note on this room. |
+| `map flag <A-Z>` / `map flag -` | Flag this room with one letter, drawn on its tile. |
+| `map find <text>` | Search room names and notes; the matches become the numbered Rooms list. |
+| `map go <n>` | Walk to numbered row `<n>` of that list. |
+| `map goto <x> <y> [z]` | Walk to a mapped cell, one confirmed step at a time. |
+| `map stop` | Abort the walk. |
+| `map link <cmd> = <x> <y> <z>` | Record a special link: sending `<cmd>` here lands you there. Prefix with an area name for a cross‑area link. |
+| `map link <cmd>` | Arm it instead — the next time you send `<cmd>`, wherever you land becomes the destination. `map link -` cancels. |
+| `map links` / `map unlink <cmd>` | List or remove this room's special links. |
+| `map enter <area> [x y z]` | Arm an area boundary: the next command you send is the crossing. `map enter -` cancels. |
+| `map back <cmd>` | After a crossing, bind `<cmd>` here as the way back — the no‑coordinates way to record a portal. |
+| `map export` / `map export <name>` | Print an area as JSON, for `maps.json` or as a backup. |
+| `map wipe <name> confirm` | Delete a stored area. Without `confirm` it refuses. |
+
+**Walks stop by themselves** on a refused move, a drift disagreement, a cross‑area crossing, ten
+seconds of silence, a disconnect, or the idle guard. **Combat is different** — it *pauses* the walk
+and it resumes on its own once the enemy is gone. Use `map stop` if you'd rather abandon it.
+
+**With the mouse.** Hovering peeks. **Clicking a mapped room starts a walk to it** (unlike the GMCP
+mapper, which prints the route). The Rooms tab has a find box; its rows aren't clickable — use
+`map go <n>`.
+
+---
+
+### 3S Pathfinder (Rust)
+
+No commands and no panel. It's a route‑search engine compiled to WebAssembly, and three plugins ask
+it for routes when it's loaded: **3S Map (classic)** and both **chaos‑sea** bots. Without it each
+falls back to its own Lua search — the same answers, just slower once a map gets big, which on a
+well‑explored sea is exactly when you notice.
+
+---
+
+### 3S Stepper — `-` · `..` · `record`
+
+The area bot. It walks a recorded route, kills the mobs it meets on the way, and records new routes
+as you walk them. It reads the room and its contents from GMCP where that's available, so the
+`=S=` / `=M=` / `=P=` display markers aren't needed; the old triggers stay as a fallback and stand
+down for any room GMCP already described.
+
+**Walking**
+
+| Command | What it does |
+|---|---|
+| `- <area>` or `walker <area>` | Start botting that area from step 1. |
+| `.areas` | List every area, bundled and recorded. |
+| `..` | Step, or resume — arms the bot and glances so the room's mob is spotted before you move. |
+| `.pause` / `.stop` | Pause where you are / stop and save the position. |
+| `.resume` | Continue from where you actually are (or restart from the saved spot if not running). |
+| `.dcr` | Disconnect recovery — always restart from the saved area and position. |
+| `.reset` | Back to step 1 of the current route. |
+| `.tostart` | Walk the route backwards to its start room, then pause. |
+| `killbot` | Stop completely. |
+| `.stack <n>` | For the next `n` kills, attack and immediately move on — so the mobs pile up on you. |
+| `.binfo` | The built‑in help card. |
+| `.dbg on` / `.dbg off` | Verbose tracing. Default **off**. |
+
+**Settings** — `.set <option> on|off`
+
+| Option | Meaning | Default |
+|---|---|---|
+| `autoresume` | After "There is no `<mob>` here", wait a second and carry on. | **on** |
+| `hardmode` | Also fight mobs the area marks as hard. | from the area |
+| `loop` | At the end of the route, go back to step 1 instead of stopping. | from the area |
+| `notify` | Buzz your phone on the "waiting on you" pauses. | **on** |
+
+`hardmode` and `loop` are taken from the area each time you start one, so setting them applies to
+the current run only.
+
+**Party** — `pa <name>` adds a name, `pr <name>` removes it. Someone on the list doesn't count as
+"a player is here", so the bot keeps fighting. The list is shared with the chaos‑sea bots.
+
+**Recording**
+
+| Command | What it does |
+|---|---|
+| `record <name>` | Start recording. Letters, digits and underscores, no spaces — and it can't start with a digit. |
+| `record` | Status — name, steps so far, kill word, and the route. |
+| `record kill <word>` | The kill word applied to every mob captured in this recording. |
+| `r: <command>` | Send a command **and** record it as a non‑movement step (`r: open door`). |
+| `record undo` | Drop the last step. |
+| `record save` (or `record stop`) | Store it. Without a kill word it stores `CHANGEME` and warns. |
+| `record cancel` | Throw it away. |
+| `stepexport <name>` | Print an area as a Lua block for `3s_areas.lua`. Works for bundled areas too. |
+
+While recording, the movement words (`n`, `north`, `ne`, `out`, `enter`, …) are passed through and
+appended to the route automatically — just walk the circuit you want.
+
+**With the mouse.** The **Bot** tab's controls are clickable words — Step, Pause/Resume, Reset,
+Return, Stop, and a loop toggle — and **every area name in the list starts it**. The **Record** tab
+has Save / Undo / Cancel.
+
+---
+
+### 3S Chaos Sea — `cs` (classic: `csc`)
+
+The chaos‑sea explorer. It maps rooms on a 3D grid, queues the exits it hasn't walked, and
+BFS‑walks to the nearest frontier room; in auto mode it fights what it meets on the way. The GMCP
+version reads the room, its contents and combat from the feed and takes its arrival signal from the
+MUD's own room header, so none of the `=S=` / `=M=` / `=P=` / `=A|W|I=` markers need switching on.
+It also asks the server which exits are still unexplored rather than deducing it — in the sea an
+exit's destination reads 0 until you have walked it, which survives the coordinate collisions a
+dead‑reckoned map cannot avoid.
+
+The classic (`csc`) is the same bot frozen at its pre‑GMCP state, for 3K and MIP‑only characters. It
+needs the display markers and MIP, and glances to map the room you start in. **Every command below
+works under either alias.**
+
+| Command | What it does |
+|---|---|
+| `cs` | The help list. |
+| `cs enable` / `cs disable` | Start/stop room parsing. Enabling also freezes the world automapper so the two don't fight. |
+| `cs step` | Walk one leg toward the nearest unexplored exit. |
+| `cs auto on` / `cs auto off` | Explore continuously, killing on the way. |
+| `cs pause` | Pause / continue (a toggle). |
+| `cs leave` | Cancel auto and walk back to the start. |
+| `cs reset` | Wipe the map and all counters, back to 0 0 0. |
+| `cs set <x> <y> <z>` | Override the believed position (a non‑numeric argument leaves that axis alone). |
+| `cs find <x> <y> <z>` | Print the route to a coordinate. Doesn't walk it. |
+| `cs kill <name>` | The mob keyword to attack. Default **mutant**. |
+| `cs goal <words>` | Stop‑words — pause when an item in the room matches. Default **cask portal**. |
+| `cs exclude <full mob name>` | Never attack this one. |
+| `cs delay <secs>` | Pause after a killing blow before re‑reading the room. Default **2.5**, range 0.5–10. |
+| `cs rest <seid> [secs]` | Rest when Seid drops below `<seid>`, for `secs` at a time. Default **off**, 60 s. |
+| `cs seanum <n>` | The sea number New Sea will use (1–120). Default **1**. |
+| `cs party` / `cs party <names>` / `cs party clear` | The whitelist of names that don't count as "a player is here". Comma‑separated. |
+| `cs notify on` / `cs notify off` | Phone notifications. Default **on**. |
+| `cs debug_all` | Dump the position and every known room. |
+
+**New Sea is a button, not a command.** The panel's **New Sea** button loots the cask, retreats,
+sets the sea number and dives again — and it only works while paused, and refuses if the sea is
+under an hour old and this session started it. There's no typed equivalent.
+
+**With the mouse.** The panel has no tabs: a status line, the map grid for your level (`@` you,
+`f` frontier, `v` a down exit, `S` start, `#` explored, `.` unknown) with a legend, and buttons for
+On/Off, Step, Auto, Pause, Leave, Reset, Sea# −/+ and New Sea.
+
+---
+
+### 3S Chat — `chat`
+
+Collects every chat channel and tell into the **Chats** capture pane — one line per message, tagged
+and coloured per channel, with a dim timestamp. The pane starts empty every time Scrye runs, so the
+plugin keeps the last 100 lines itself and replays them **when it loads**, between markers — you
+come back to the tail of last session rather than a blank pane. Everything is written to the
+plugin's log file too.
+
+Chat relayed from your *other* open worlds appears in the same pane tagged with the world's name —
+deliberately without notifications, logging or scrollback, so a busy second world can't drown the
+one you're playing.
+
+| Command | What it does |
+|---|---|
+| `chat watch <name>` | Watch a name. Any message containing it gets a `*`, a notification and a beep. |
+| `chat unwatch <name>` / `chat watched` | Remove one / list them. |
+| `chat notify` | Show every notification setting at once. |
+| `chat notify tells on\|off` | Whether a tell notifies you. Default **on**. (`chat notify tells` on its own reports rather than subscribing.) |
+| `chat notify <channel>` | Subscribe a channel to notifications. Default: **none subscribed**. |
+| `chat unnotify <channel>` | Unsubscribe it. |
+| `chat sound on\|off` | The PC beep half only — the phone push is unaffected. Default **on**. `chat sound` alone reports. |
+| `chat clear` | Clear the saved history that gets replayed at load (the pane itself is cleared from the pane). |
+
+At most one notification fires per line: a tell beats a subscribed channel, which beats a watched
+name. The old miniwindow commands (`chatwin`, `chatup`, `chatdown`, `chatend`, `chatsize`) are
+swallowed with a note — the pane is a HUD pane now, and scrolls and sizes itself.
+
+---
+
+### 3S Vitals — `vitals`
+
+A compact gauge stack: your vitals, plus the current enemy and its health. It works on both feeds
+and figures out which bars you should have on its own.
+
+A Viking gets HP / Seid / Vig / Rad by their own named keys. **Every other guild** gets HP / SP plus
+its two guild pools, labelled with the server's own names for them — so any guild's bars come out
+right without the plugin having to know that guild exists. On GMCP both sets carry a fifth gauge,
+**Coffin**.
+
+| Command | What it does |
+|---|---|
+| `vitals guild auto` | Detect the bar set from the feed. **The default.** |
+| `vitals guild viking` | Pin the Viking set regardless. |
+| `vitals guild generic` | Pin the generic set regardless. |
+
+The **Settings** tab has the same three as buttons, and says which set is active, which feed it's
+reading, and whether that was detected or pinned.
+
+---
+
+## The Viking suite (3Scapes)
+
+Four plugins where there used to be one. Status and World are the two halves of the old panel, cut
+along its natural seam; Kingdom and Effects are new — the dynasty pages and the effect timer bar
+were never in the classic at all. They're built to run together, and each carries its own commands.
+
+| Plugin | Owns | Alias |
+|---|---|---|
+| **Viking Status** | The settlement: city, builds, production, people, trade, skills | `build` `atrade` `mkref` `vsk` … |
+| **Viking World** | Everywhere you travel *to*: sea, voyage, maps, missions | `vgo` `vnav` `vmrun` `vikloc` |
+| **Viking Kingdom** | The dynasty: hird, recruiting, thralls, grudges, war | `vgrudge` |
+| **Viking Effects** | The status‑effect timer bar | `vfx` |
+
+**Viking World is self‑sufficient for travel** — it owns `vgo`, the route planner and the mission
+runner. What it needs **Viking Status** for is two tabs: **Mission** reads the mission list Status
+publishes, and **Plan** draws the grid Status computes. Without Status those two sit empty and
+everything else works.
+
+Two more Viking plugins are documented on their own below because they pair with a frozen classic:
+**Auto‑Raid** (`araid`), which dispatches your longships, and **3S Vitals**, which draws a Viking's
+HP / Seid / Vig / Rad bars — and every other guild's too.
+
+---
+
+### Viking Status — `atrade` · `build` · `vsk` · `mkref`
+
+The settlement half of the HUD, fed by the `Guild.*` GMCP packages. Twelve tabs: **Stats**,
+**Skills**, **City**, **Builds**, **Production**, **People**, **Settlers**, **Holds**, **Trade**,
+**Trade Auto**, **Trade Log** and **Feeds** (the last being the debugging window — every package
+with its burst count and age, and every feed key with its value).
+
+#### The auto‑trader — `atrade`
+
+Runs your caravans: reads the market feed, picks what to sell where, and dispatches carts. It knows
+the cartyard only releases about one caravan every three minutes, so it holds after each dispatch
+and reads the yard's own "Ready in" refusal to set the clock exactly rather than spamming doomed
+carts at it.
+
+It also treats a town's demand as an **answer**: zero demand gets no cart however good the price,
+and every dispatched cart provisionally debits that town locally, so a quiet stretch between feed
+pushes can't stack a second caravan into demand the first already claimed.
+
+**It always loads disarmed.** That is deliberate and not persisted — `atrade on` is a decision you
+make each session.
+
+| Command | What it does |
+|---|---|
+| `atrade` (or `atrade status`) | Armed state, modes, settings, warehouse fill and current mode. |
+| `atrade on` / `atrade off` | Arm / disarm. |
+| `atrade scalp on\|off` | Buy‑low/sell‑high arbitrage buying. Default **on**. |
+| `atrade restock on\|off` | Actively buy raw materials back up to the Raw> buffer. Default **off**. |
+| `atrade refined on\|off` | Also sell refined goods — bread, tools, cloth… Default **on**. |
+| `atrade notify on\|off` | A phone buzz per confirmed dispatch. Default **off**. |
+| `atrade exempt` | List the goods held back from trading. |
+| `atrade exempt <good>` | Hold/release one good. `atrade exempt clear` releases all. |
+| `atrade floor <good> <n>` | Never sell that good below `n` units in the warehouse. |
+| `atrade floor <good> 0` (or `off`) | Clear that floor. `atrade floor clear` clears every one; `atrade floor` lists them. |
+| `atrade floorset <good>` | Apply the Trade tab's **Floor** box to that good — the same command the right‑click menu runs. Setting the same value again clears it. |
+| `atrade stats` / `atrade stats reset` | Session totals — carts each way and rough daler in and out. |
+| `atrade log` | The last 15 trades. |
+
+A floor **raises** the category reserve, never lowers it, and a floored raw material restocks up to
+its floor rather than to the Raw> buffer.
+
+**Numbers** — `atrade <name> <n>`:
+
+| Setting | Default | What it means |
+|---|---|---|
+| `keep` | 20 | Units of *every* good held back from selling (your mission reserve). |
+| `stock` | 300 | The Raw> buffer — reserve kept on raw goods, and the restock target. |
+| `reserve` | 5000 | Daler never spent below this. |
+| `margin` | 1 | Minimum profit per unit before the scalper will buy. |
+| `carts` | 0 | Max carts at once. 0 = auto, from your Trading Post tier. |
+| `min` | 70 | Minimum % of cart capacity before a cart goes out. |
+| `rel` | 40 | Value floor — a cart must be worth this % of the best load available. |
+| `flush` | 500 | A pile this big jumps the queue and ignores the value floor. 0 = off. |
+| `soft` | 70 | Warehouse fill % that enters PRESSURE: rank by biggest pile, pause scalping, drop the value floor. |
+| `full` | 90 | Warehouse fill % that enters CLEARING: stop buying entirely. |
+| `clear` | 25 | Minimum cart fill % while clearing (replaces `min`). |
+| `escort` | 5 | Escort size per cart (1–20). |
+| `yard` | 180 | Seconds held after each dispatch. A real refusal overrides it with the exact number. |
+
+#### The build planner — `build`
+
+| Command | What it does |
+|---|---|
+| `build` | Print the planner rows into the output pane (the Builds tab is the better view). |
+| `build all` | Show or hide maxed (tier 5) buildings. |
+| `build refresh` | Redraw from current feed values — no MUD traffic. |
+| `build scan` | Read every building's tier costs and requirements from `vbuild list`, gagged, and remember them. |
+| `build start <name>` | Affordability‑checked build — refuses if maxed, already building, requirements unmet, or unaffordable. |
+
+`build scan` runs itself 20 seconds after each connect. There's no GMCP source for build costs, so
+this scan is the real mechanism, not a fallback.
+
+#### The market — `mkref` · `mkdispatch` · `mkunits`
+
+| Command | What it does |
+|---|---|
+| `mkref` | Refresh prices. **Now a fallback** — with the `Guild.TradeGoods` feed live it says so and sends nothing. |
+| `mkdispatch buy\|sell [qty] <good> <town>` | Send one cart by hand. `qty` defaults to the Units setting, clamped 20–1000. Good names match longest‑first (`fine furs`, `salted fish`); towns match exact, then prefix, then substring, so `lodbrok` finds Lodbrok's Hold. Logged as `MAN` and kept out of the trader's counters. |
+| `mkunits` / `mkunits <n>` | Show or set the manual cart size. Default **100**. |
+
+#### Skill Watch — `vsk`
+
+Scans `vskills` for every skill's level, point cost and daler cost, and prices each row against your
+live pools and daler. There is no GMCP package for the skill listing, so the text scan is the only
+way — but the affordability half comes straight off the feed, and each pool is paired to its GXP
+track by **matching values**, not by assuming the names line up.
+
+| Command | What it does |
+|---|---|
+| `vsk` | Help plus a one‑line status. |
+| `vsk refresh` (or `vsk scan`) | Rescan. (`vskills <tree>` typed in the game rescans just that tree.) |
+| `vsk peek` | The raw last capture, with what each line parsed as. |
+| `vsk feed` | Which state key each pool and daler is actually read from, and its value. |
+| `vsk auto on\|off` | Rescan at login. Default **on**. |
+| `vsk alert on\|off` | Notify when a skill becomes trainable. Default **off** — and it fires on the crossing only, never on the first render after login. |
+| `vsk src <pool\|daler> <path>` | Read that number from a different state key. `-` clears it. |
+| `vsk clear` | Forget the scanned catalogue. |
+
+#### The rest
+
+| Command | What it does |
+|---|---|
+| `vstock` | Refresh warehouse stock. **Now a fallback** — with `Guild.Warehouse` live it says so and sends nothing. |
+| `vtick on` / `vtick off` | Keepalive: send `l` every five minutes. |
+| `vikdump` | Print every feed key seen this session and its value. |
+| `vplan clear` | Forget the tracked building placements and redraw. Doesn't touch the game. |
+| `vikbar` · `viktab` · `markwin` | Swallowed with a note — panels are shown, hidden and switched in the HUD. |
+
+#### With the mouse
+
+**Trade tab.** Left‑click a good's **name** to hold/release it (held names go amber, floored ones
+blue). Right‑click it for a menu — hold or release, set the floor, clear it. Click a **town cell**
+to dispatch that good there for the configured Units; buy cells are blue, sell cells green. Click a
+line in the quick‑dispatch list to send that exact cart.
+
+**Skills tab.** Left‑click **INFO** or the skill name for `vhelp`. Right‑click either for
+**Info / Train** — `vtrain` is reachable only through that menu, on purpose, because it spends
+points and daler and shouldn't sit under a stray click.
+
+**Stats tab** has a *Commit patrol* button; **Builds** has *Scan costs*; **Production** has the
+stock refresh.
+
+---
+
+### Viking World — `vgo` · `vnav` · `vmrun` · `vikloc`
+
+Everywhere you travel to. Six tabs: **Sea** (live voyage, the chart, resolve options, saga),
+**Voyage** (boons, aids, goods, curios), **Map** (the territory grid with click‑to‑travel),
+**Mission**, **Plan** (computed by Viking Status, drawn here with the other maps) and **Travel**.
+
+Routes are **planned, not remembered**: the plugin reads the territory's edge grids from the feed
+and works out the route itself, so naming a spot with `vikloc` is all it takes to be able to walk
+there — the list isn't limited to places with a hand‑recorded route.
+
+| Command | What it does |
+|---|---|
+| `vgo <town>` | Walk to a settlement. Matches its travel code, its full name, or any part of the name. |
+| `vhere <town>` | Tell the plugin where you're standing, so routes plan from the right place. |
+| `vikloc <x> <y> <name>` | Name a map cell — which is also what makes it travelable. `vikloc <x> <y>` with no name clears it. |
+| `vmgo <n>` | Walk to mission `<n>`'s town and hand it in. |
+| `vmrun` | Run every mission that has a route, then travel home. Typing it again stops the run. |
+| `vmrun stop` | Break off. |
+| `vmrun pace <secs>` | Wait between missions. Default **2**, range 0.5–30. |
+| `vicons` (or `sicons`) | Toggle the drawn icons on every grid here. Default **on**. |
+
+**Auto sea‑navigation — `vnav`.** Turned on, it tours the charted islands, wrecks and objectives
+nearest‑first and resolves each node it stops at by your preference list.
+
+| Command | What it does |
+|---|---|
+| `vnav on` / `vnav off` | Auto‑navigation. Default **off**. |
+| `vnav resolve <list>` | The preference list. Default `hold,evade?hull<40,hunt,ration,salvage,resupply?supplies<50,plunder`. |
+| `vnav resolve off` | Hold at every node and resolve them yourself. |
+| `vnav resolve first` | Always take whatever the MUD offers first. |
+| `vnav reset` | Forget what's been toured, so every charted feature is a candidate again. |
+
+The list is comma‑separated keywords, each optionally carrying a condition — `evade?hull<40` means
+*evade, but only if hull is under 40*. Metrics are `hull`, `morale`, `supplies` and `stress`. The
+first entry that is both offered and true is the one it takes. There's no `vnav` status command; the
+Sea tab's top line always shows it.
+
+**With the mouse.** On the **Sea** tab, click a chart cell to queue a course to it and click a
+resolve option to take it; there's a *Clear voyage queue* button. On **Map** and **Travel**, clicking
+a town name walks there. Clicking a **terrain cell** travels to it if that cell is somewhere you can
+go — a town, or a spot you've named with `vikloc`; anything else just tells you what's there. Both
+the Sea and Map tabs carry an **Icons on/off** button (the same as `vicons`). On **Mission**,
+clicking a row walks and hands in that mission; buttons cover Run all, Stop, Fetch and Submit.
+
+---
+
+### Viking Kingdom — `vgrudge`
+
+The dynasty half — content the old panel never showed at all. Seven tabs: **Hird** (the roster with
+levels, atk/def, loyalty, status, champions, and the bond matrix), **Recruit** (what each post wants
+in a hire, the hiring hall, training, the spymaster, varangians), **Thralls**, **Grudges**,
+**Kingdom** (lineage standings, trade reputation, diplomacy), **Dynasty** (house, spouse, children,
+schooling, heir) and **War**.
+
+| Command | What it does |
+|---|---|
+| `vgrudge` | Print the grudge board — every town with a raid cooldown and how long until it cools, soonest first. Towns not listed are ready to raid. |
+
+That's the only command; everything else is read from the tabs. The **Grudges** tab is the other
+half of auto‑raid's targeting, so it's worth a look before arming the raider.
+
+---
+
+### Viking Effects — `vfx`
+
+Every active status effect as a countdown bar, scaled to the longest duration seen this session,
+ticked down locally between server refreshes and sorted soonest‑first. It warns on screen — and
+optionally on your phone — when something is about to drop.
+
+| Command | What it does |
+|---|---|
+| `vfx` | The settings line, then the whole effect list. |
+| `vfx warn <secs>` | The threshold at which an effect counts as expiring — also the red line on the bars. Default **30**. |
+| `vfx notify on\|off` | Buzz the phone when something crosses that line. Default **off**. |
+
+Bars run red at or under the warn threshold, amber up to four times it, green above. An effect that
+hits zero locally shows `gone?` for a few seconds rather than vanishing, in case the server just
+hasn't refreshed yet. The god's name and focus are shown without a countdown, because the server
+gives the expiry as a wall‑clock time the plugin sandbox can't anchor.
+
+---
+
+### Auto‑Raid — `araid` (classic: `araidc`)
+
+Dispatches your docked longships at a target town, solo or as a convoy. Auto‑targeting picks at
+random among the **calm pool** — the towns within 2 heat of the lowest — and rotates on a timer, so
+you don't grind one town's heat up. `keep` and `reserve` protect ships at the dock.
+
+**It always loads disarmed**, like the trader, and that isn't persisted.
+
+| Command | What it does |
+|---|---|
+| `araid` | Status — armed, target, ships, keep, reserve, convoy. |
+| `araid on` / `araid off` | Arm / disarm. |
+| `araid target <town>` | The manual target. |
+| `araid auto on\|off` | Let it pick the town itself. Default **off**. |
+| `araid pool home\|foreign` | Which group auto‑targeting raids: home (your lineage, with heat) or foreign (historical, spread at random). Default **home**. |
+| `araid ships <n>` | Ships per pass. Default **2**. `araid ships all` (or `araid all`) sends as many as the dock allows. |
+| `araid keep <n>` | Always leave this many docked. Default **0**. |
+| `araid reserve <ship>` | Never send this one — your voyage ship. `araid reserve none` clears it. |
+| `araid hold <secs>` | How long auto‑targeting sticks with a town before rotating. Default **60**. |
+| `araid convoy on\|off` | Send one convoy command and let the game crew it, instead of ship by ship. Default **off**. |
+| `araid targets` | The valid targets from the feed, as Home and Foreign. |
+| `araid heat` | Print the per‑town heat table — the names stay clickable there. |
+| `araid notify` | Show both notification settings. |
+| `araid notify fleet on\|off` | Buzz when ships come home. Default **off**. |
+| `araid notify send on\|off` | Buzz on every dispatch. Default **off**. |
+
+Convoy is only used when it's on, at least two ships are wanted, **and** your reserved ship isn't
+sitting in the dock — otherwise it falls back to ship‑by‑ship so the named ship can be protected.
+
+**With the mouse.** Clicking any town name — in the panel or in `araid heat` output — targets it.
+The Raid tab has toggles for arming, auto‑target, pool and convoy; the Settings tab has an input box
+for each of the five values.
+
+**The classic (`araidc`)** is the same bot on the MIP feed, with one difference: it has **no
+`pool`** setting, so auto‑targeting is always the calm home town. You can still target a foreign
+town by hand.
+
+---
+
+### 3S Viking Status (classic, MIP) — frozen
+
+The original single‑panel Viking HUD on the MIP feed, kept for a 3Scapes character still running
+MIP. Seventeen tabs in one panel — everything Status and World now hold separately, plus the build
+planner, the market scanner and auto‑trader, travel and the mission runner — under the **same
+commands** (`vgo`, `build`, `atrade`, `mkref`, `vmrun`, …).
+
+That shared vocabulary is exactly why you must **enable it or the GMCP line, never both**: the
+aliases collide, across Status *and* World.
+
+It is not a full substitute for the modern set, though. The classic has no **Skills** tab and no
+`vsk`, no `vstock`, and none of **Viking Kingdom**'s seven tabs — the hird, recruiting, thralls,
+grudges, dynasty and war pages are content the old panel never showed.
+
 ## Mobile companion
 
 Scrye can serve a small web app to your phone so you can read output, send commands, watch your HUD panels and get push notifications while you're away from the PC. The desktop stays in charge: it holds the connection, runs the triggers and plugins, and the phone is just another view of it. Close the phone, come back an hour later, and it resumes where it left off — or takes a fresh snapshot if it's been away too long.
