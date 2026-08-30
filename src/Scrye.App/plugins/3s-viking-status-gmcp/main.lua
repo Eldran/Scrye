@@ -391,6 +391,167 @@ local TOWN_COORD = {}
 for coord, code in pairs(TRAVEL_CODE)   do TOWN_COORD[code] = coord end
 for coord, code in pairs(SPECIAL_TRAVEL) do TOWN_COORD[code] = coord end
 
+-- ------------------------------------------------- the guild map as a GRAPH
+-- Guild.Map ships two EDGE grids the plugins used to throw away: `east[y]` is a
+-- row of w-1 flags ("1" = you may step from x to x+1 along row y) and `south[y]`
+-- a row of w ("1" = you may step from (x,y) down to (x,y+1)). Together they are
+-- the whole territory as a graph -- which is what the 28 hand-recorded ROUTES
+-- above always were: paths through it, written down once by hand.
+--
+-- Verified against the 29 Aug capture before any of this was written: replaying
+-- all 28 ROUTES as coordinate arithmetic lands EXACTLY on each destination
+-- town's coords, and of the 540 edge lookups the capture can answer, 540 say
+-- passable and none say blocked. So the grids are the routes' own map, and '1'
+-- is open. What BFS adds is every route nobody recorded: today any A->B is
+-- A->Midgard->B, which across the 182 town pairs wastes 41% of the walking, and
+-- sends Nidaros->Lodbrok's Hold 64 steps between towns that are 8 apart.
+local ST = scrye.shared or scrye.store   -- world truth: one map for every character
+
+local gmap = { east = nil, south = nil, w = 0, h = 0, pos = nil, trusted = nil }
+
+local function gmap_rows(s)
+  if s == "" then return nil end
+  local out = {}
+  for row in (s .. "\n"):gmatch("([^\n]*)\n") do out[#out + 1] = row end
+  return out[1] and out or nil
+end
+
+-- restore last session's grids so a route can be planned before the first burst
+gmap.east  = gmap_rows(ST.get("gmap_east") or "")
+gmap.south = gmap_rows(ST.get("gmap_south") or "")
+do
+  local wh = split(ST.get("gmap_wh") or "", "|")
+  gmap.w, gmap.h = num(wh[1]), num(wh[2])
+end
+
+-- Coordinates are 0-based, x east and y south (the ROUTES replay proves it); the
+-- Lua arrays are 1-based, hence every +1. An edge lookup off the end of the grid
+-- is "not passable" rather than an error: a half-arrived grid must refuse to
+-- route, never guess.
+local function passable(x, y, dir)
+  local e, s = gmap.east, gmap.south
+  if not (e and s) then return false end
+  local r
+  if dir == "e" then r = e[y + 1]; return r ~= nil and r:sub(x + 1, x + 1) == "1"
+  elseif dir == "w" then r = e[y + 1]; return r ~= nil and x >= 1 and r:sub(x, x) == "1"
+  elseif dir == "s" then r = s[y + 1]; return r ~= nil and r:sub(x + 1, x + 1) == "1"
+  elseif dir == "n" then r = s[y];     return r ~= nil and y >= 1 and r:sub(x + 1, x + 1) == "1"
+  end
+  return false
+end
+
+local STEP = { n = { 0, -1 }, s = { 0, 1 }, e = { 1, 0 }, w = { -1, 0 } }
+local STEP_ORDER = { "n", "s", "e", "w" }   -- fixed, so a route is reproducible
+local BFS_CELLS = 4000                      -- 70x35 = 2450; the cap is a guard, not a limit
+
+-- Shortest walk between two map cells as a list of directions, or nil when the
+-- grids cannot answer (absent, or genuinely no path).
+local function map_path(sx, sy, dx, dy)
+  if not (gmap.east and gmap.south) then return nil end
+  if sx == dx and sy == dy then return {} end
+  local function key(x, y) return y * 1000 + x end
+  local prev, seen = {}, { [key(sx, sy)] = true }
+  local q, head = { { sx, sy } }, 1
+  while head <= #q do
+    if head > BFS_CELLS then return nil end
+    local cur = q[head]; head = head + 1
+    local x, y = cur[1], cur[2]
+    for _, d in ipairs(STEP_ORDER) do
+      local st = STEP[d]
+      local nx, ny = x + st[1], y + st[2]
+      if nx >= 0 and ny >= 0 and (gmap.w == 0 or nx < gmap.w) and (gmap.h == 0 or ny < gmap.h)
+         and not seen[key(nx, ny)] and passable(x, y, d) then
+        seen[key(nx, ny)] = true
+        prev[key(nx, ny)] = { x = x, y = y, dir = d }
+        if nx == dx and ny == dy then
+          local steps, cx, cy = {}, nx, ny
+          while not (cx == sx and cy == sy) do
+            local p = prev[key(cx, cy)]
+            table.insert(steps, 1, p.dir)
+            cx, cy = p.x, p.y
+          end
+          return steps
+        end
+        q[#q + 1] = { nx, ny }
+      end
+    end
+  end
+  return nil
+end
+
+local function town_xy(code)
+  local coord = TOWN_COORD[code]
+  if not coord then return nil end
+  local x, y = coord:match("^(%-?%d+)|(%-?%d+)$")
+  return tonumber(x), tonumber(y)
+end
+
+-- THE ORACLE. The hand-recorded ROUTES are kept precisely so the feed's grids can
+-- be checked against something known-good: replay every one as coordinate
+-- arithmetic, and each must cross only passable edges and finish on its
+-- destination town. Grids that fail are grids we do not understand -- a server
+-- change, a paging bug, a flipped convention -- and travel falls back to the
+-- table, so the worst case is exactly the behaviour this plugin had before.
+local function grid_trustworthy()
+  if gmap.trusted ~= nil then return gmap.trusted end
+  if not (gmap.east and gmap.south) then return false end
+  local checked = 0
+  for name, cmds in pairs(ROUTES) do
+    local src, dst
+    if name:sub(1, 3) == "Mid" then src, dst = "Mid", name:sub(4)
+    else src, dst = name:sub(1, #name - 3), "Mid" end
+    local x, y = town_xy(src)
+    local tx, ty = town_xy(dst)
+    if x and tx then
+      for _, d in ipairs(cmds) do
+        if STEP[d] then
+          if not passable(x, y, d) then gmap.trusted = false; return false end
+          x, y = x + STEP[d][1], y + STEP[d][2]
+          checked = checked + 1
+        end
+      end
+      if x ~= tx or y ~= ty then gmap.trusted = false; return false end
+    end
+  end
+  gmap.trusted = checked > 0
+  return gmap.trusted
+end
+
+-- A walk between two settlements, straight across the map. leave/enter wrap the
+-- grid path exactly as the recorded routes do: you step out of a town onto its
+-- own cell and into the destination on its cell. Blot is the exception the table
+-- already knew about -- MidBlot ends without `enter`, BlotMid starts without
+-- `leave` -- so the wrapper asks the table rather than assuming.
+local ROUTE_LEAVES, ROUTE_ENTERS = {}, {}
+for name, cmds in pairs(ROUTES) do
+  local src, dst
+  if name:sub(1, 3) == "Mid" then src, dst = "Mid", name:sub(4)
+  else src, dst = name:sub(1, #name - 3), "Mid" end
+  ROUTE_LEAVES[src] = (cmds[1] == "leave")
+  ROUTE_ENTERS[dst] = (cmds[#cmds] == "enter")
+end
+-- a site the table never mentions defaults to wrapped: towns you step out of and
+-- into are the rule, and Blot -- the one open-air site -- is why this is a lookup
+local function wraps(tbl, code)
+  local v = tbl[code]
+  if v == nil then return true end
+  return v
+end
+
+local function map_route(origin, dest)
+  if not grid_trustworthy() then return nil end
+  local sx, sy = town_xy(origin)
+  local dx, dy = town_xy(dest)
+  if not (sx and dx) then return nil end
+  local steps = map_path(sx, sy, dx, dy)
+  if not steps then return nil end
+  local out = {}
+  if wraps(ROUTE_LEAVES, origin) then out[#out + 1] = "leave" end
+  for _, d in ipairs(steps) do out[#out + 1] = d end
+  if wraps(ROUTE_ENTERS, dest) then out[#out + 1] = "enter" end
+  return out
+end
+
 local function town_label(code)
   local coord = TOWN_COORD[code]
   if coord then
@@ -398,6 +559,62 @@ local function town_label(code)
     return locname(tonumber(x), tonumber(y)) or code
   end
   return code
+end
+
+-- ------------------------------------------------------ pos, and earning trust
+-- Guild.Map also carries `pos`, which reads like "the cell you are standing on"
+-- and would make `vhere` unnecessary. It is NOT believed on sight: pos read
+-- (49,17) in all three captures, taken on three different days from different
+-- places, so it may well be a view centre or a territory anchor rather than the
+-- player. The known towns are the examiners. Every time pos arrives while we
+-- believe we are in a town whose coords we already know, it either agrees (a
+-- point towards "pos is live") or it does not (a point against). Only a pos that
+-- has earned agreement is allowed to correct a coordinate, and a pos that has
+-- disagreed is written off for the session. Nothing about travel changes until
+-- the evidence arrives, which is the point: the mechanism switches itself on the
+-- day the data proves out, and stays inert if it never does.
+local POS_TRUST_AT = 3          -- agreements before pos may correct anything
+local pos_agree, pos_disagree = 0, 0
+local pos_verdict = ""          -- "", "live" or "not the player" once decided
+
+local function gmap_pos_state()
+  if pos_verdict ~= "" then return pos_verdict end
+  return string.format("watching (%d agree / %d disagree)", pos_agree, pos_disagree)
+end
+
+local function gmap_note_pos(x, y)
+  if not (x and y) then return end
+  gmap.pos = { x = x, y = y }
+  local code = scrye.store.get("curtown")
+  if code == "" then return end
+  local tx, ty = town_xy(code)
+  if not tx then return end                  -- a site we have no coords for: nothing to check
+  if x == tx and y == ty then
+    pos_agree = pos_agree + 1
+    if pos_verdict == "" and pos_agree >= POS_TRUST_AT then
+      pos_verdict = "live"
+      scrye.print("[viking] map position confirmed live - town coordinates will self-correct from now on")
+    end
+  else
+    pos_disagree = pos_disagree + 1
+    if pos_verdict == "" and pos_disagree >= POS_TRUST_AT then
+      pos_verdict = "not the player"
+      scrye.print(string.format("[viking] Guild.Map pos does not track you (reads %d,%d at %s) - "
+        .. "coordinates stay as recorded", x, y, town_label(code)))
+    elseif pos_verdict == "live" then
+      -- trusted pos against a coord we thought we knew: the map moved, not the feed
+      TOWN_COORD[code] = x .. "|" .. y
+      ST.set("gmap_coords", (ST.get("gmap_coords") or "") .. code .. "=" .. x .. "|" .. y .. ";")
+      gmap.trusted = nil       -- the oracle must re-examine a map that changed
+      scrye.print(string.format("[viking] %s has moved to %d,%d - routes recomputed", town_label(code), x, y))
+    end
+  end
+end
+
+-- coords corrected in an earlier session, replayed over the recorded table
+for pair in (ST.get("gmap_coords") or ""):gmatch("([^;]+)") do
+  local code, xy = pair:match("^(%w+)=(%-?%d+|%-?%d+)$")
+  if code and xy then TOWN_COORD[code] = xy end
 end
 
 -- current live town: the map feed lives in 3s-viking-sea now, so gv(vmaph) is
@@ -415,15 +632,27 @@ local function live_town()
   return near(TRAVEL_CODE) or near(SPECIAL_TRAVEL)
 end
 
+-- How we got there, for the travel line: the grid route when the feed's map is
+-- present and passes the oracle, otherwise the recorded table. Set by send_route.
+local last_route_by = "table"
+
 local function send_route(origin, dest)
-  local cmds = {}
-  if origin ~= "Mid" then
-    local leg = ROUTES[origin .. "Mid"]; if not leg then return false end
-    for _, c in ipairs(leg) do cmds[#cmds + 1] = c end
-  end
-  if dest ~= "Mid" then
-    local leg = ROUTES["Mid" .. dest]; if not leg then return false end
-    for _, c in ipairs(leg) do cmds[#cmds + 1] = c end
+  local cmds = map_route(origin, dest)
+  if cmds then
+    last_route_by = "map"
+  else
+    -- the recorded table: every pair chained through Midgard, which is why the
+    -- grid route is usually much shorter
+    last_route_by = "table"
+    cmds = {}
+    if origin ~= "Mid" then
+      local leg = ROUTES[origin .. "Mid"]; if not leg then return false end
+      for _, c in ipairs(leg) do cmds[#cmds + 1] = c end
+    end
+    if dest ~= "Mid" then
+      local leg = ROUTES["Mid" .. dest]; if not leg then return false end
+      for _, c in ipairs(leg) do cmds[#cmds + 1] = c end
+    end
   end
   for _, c in ipairs(cmds) do scrye.send(c) end
   return #cmds          -- how long the walk is, so a caller can pace itself around it
@@ -452,16 +681,39 @@ local function travel_to(dest)
     scrye.print("[viking] no route known for " .. town_label(origin) .. " -> " .. town_label(dest))
     return nil
   end
-  scrye.print("[viking] travelling " .. town_label(origin) .. " -> " .. town_label(dest))
+  scrye.print(string.format("[viking] travelling %s -> %s (%d steps, %s)",
+    town_label(origin), town_label(dest), n,
+    last_route_by == "map" and "map" or "recorded route"))
   scrye.store.set("curtown", dest)
   return n
 end
 
 -- travelable towns, sorted by display name (for the Travel tab buttons + vhere matching)
+-- Every coordinate we have a NAME for is a destination, because BFS needs no
+-- recorded route to reach one. That is the whole reason Jarl and Berserker were
+-- missing before: their coordinates sat in DEFAULT_LOCNAMES all along, and the
+-- only thing they lacked was the pair of hand-walked routes the old engine
+-- demanded. Sites without a three-letter abbreviation use their coordinate as
+-- their code; the label comes from locname() either way, so `vgo Jarl` works on
+-- the name you see. Rebuilt rather than fixed at load, so a location you name
+-- with `vikloc` becomes travelable the moment you name it.
 local TRAVEL_TOWNS = {}
-for _, code in pairs(TRAVEL_CODE)   do TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code end
-for _, code in pairs(SPECIAL_TRAVEL) do TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code end
-table.sort(TRAVEL_TOWNS, function(a, b) return town_label(a) < town_label(b) end)
+local function rebuild_travel_towns()
+  local seen = {}
+  TRAVEL_TOWNS = {}
+  local function add(code, coord)
+    if seen[code] then return end
+    seen[code] = true
+    TOWN_COORD[code] = TOWN_COORD[code] or coord
+    TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code
+  end
+  for coord, code in pairs(TRAVEL_CODE)    do add(code, coord) end
+  for coord, code in pairs(SPECIAL_TRAVEL) do add(code, coord) end
+  for coord in pairs(DEFAULT_LOCNAMES)     do add(travel_code(coord) or coord, coord) end
+  for coord in pairs(locnames)             do add(travel_code(coord) or coord, coord) end
+  table.sort(TRAVEL_TOWNS, function(a, b) return town_label(a) < town_label(b) end)
+end
+rebuild_travel_towns()
 
 local function resolve_town(s)
   s = (s or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
@@ -475,6 +727,23 @@ end
 
 -- (the Travel tab's clickable town list and the Map tab moved to 3s-viking-sea;
 -- its clicks run `vgo <town>`, the alias THIS plugin owns)
+
+-- ...and `vikloc` moved with it, into a store scoped to THAT plugin - both
+-- scrye.store and scrye.shared are per-plugin - so the names you give locations
+-- cannot be read from here. The sea plugin hands them over the same event bus
+-- its Map tab already uses to ask for walks; every name that arrives is a place
+-- BFS can now reach, so the destination list grows with it.
+scrye.on("viking.locnames", function(data)
+  local changed = false
+  for line in tostring(data or ""):gmatch("[^\n]+") do
+    local x, y, n = line:match("^(%-?%d+)|(%-?%d+)|(.*)$")
+    if x and n ~= "" then
+      local key = x .. "|" .. y
+      if locnames[key] ~= n then locnames[key] = n; changed = true end
+    end
+  end
+  if changed then rebuild_travel_towns() end
+end)
 
 -- Icons on the Plan grid are a persisted preference: the toggle rebuilds the panel
 -- in place (same title keeps position/size/tab; no input fields are lost - the
@@ -4546,6 +4815,35 @@ gasm("Guild.Kingdom", function(t)
     local nin  = type(t.varang_in)  == "table" and #t.varang_in  or 0
     local nout = type(t.varang_out) == "table" and #t.varang_out or 0
     vset("varang", (nin + nout) == 0 and "" or ("in " .. nin .. ", out " .. nout))
+  end
+end)
+
+-- Guild.Map: the territory's passability, which nothing used to keep. The two
+-- edge grids arrive in SEPARATE full=1 bursts (east in one, south in the next),
+-- and a full burst clears the paged keys of the one before it -- so the snapshot
+-- never holds both at once and each is latched here as it lands. Terrain is the
+-- one field still missing server-side; the sea plugin's Map tab waits for it.
+gasm("Guild.Map", function(t)
+  local changed = false
+  local function rows(v)
+    if type(v) ~= "table" or not v[1] then return nil end
+    local out = {}
+    for i, r in ipairs(v) do out[i] = S(r) end
+    return out
+  end
+  local e, s2 = rows(t.east), rows(t.south)
+  if e then gmap.east = e; ST.set("gmap_east", table.concat(e, "\n")); changed = true end
+  if s2 then gmap.south = s2; ST.set("gmap_south", table.concat(s2, "\n")); changed = true end
+  local w, h = tonumber(t.w), tonumber(t.h)
+  if w and w > 0 then gmap.w = w; changed = true end
+  if h and h > 0 then gmap.h = h; changed = true end
+  if changed then
+    gmap.trusted = nil                                  -- a new map re-faces the oracle
+    ST.set("gmap_wh", S(gmap.w) .. "|" .. S(gmap.h))
+  end
+  local pos = T(t, "pos")
+  if pos.x ~= nil and pos.y ~= nil then
+    gmap_note_pos(tonumber(pos.x), tonumber(pos.y))
   end
 end)
 
