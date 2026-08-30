@@ -201,14 +201,32 @@ local function town_label(code)
 end
 
 -- travelable towns, sorted by display name
+-- Every coordinate with a name is a destination: the travel engine plans by BFS
+-- over the Guild.Map grids now, so a site needs coordinates and a name, not a
+-- pair of hand-recorded routes. Same rule as the engine's own list, so the two
+-- agree without either owning the other.
 local TRAVEL_TOWNS = {}
-for _, code in pairs(TRAVEL_CODE)    do TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code end
-for _, code in pairs(SPECIAL_TRAVEL) do TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code end
-table.sort(TRAVEL_TOWNS, function(a, b) return town_label(a) < town_label(b) end)
+local function rebuild_travel_towns()
+  local seen = {}
+  TRAVEL_TOWNS = {}
+  local function add(code, coord)
+    if seen[code] then return end
+    seen[code] = true
+    TOWN_COORD[code] = TOWN_COORD[code] or coord
+    TRAVEL_TOWNS[#TRAVEL_TOWNS + 1] = code
+  end
+  for coord, code in pairs(TRAVEL_CODE)    do add(code, coord) end
+  for coord, code in pairs(SPECIAL_TRAVEL) do add(code, coord) end
+  for coord in pairs(DEFAULT_LOCNAMES)     do add(travel_code(coord) or coord, coord) end
+  for coord in pairs(locnames)             do add(travel_code(coord) or coord, coord) end
+  table.sort(TRAVEL_TOWNS, function(a, b) return town_label(a) < town_label(b) end)
+end
+rebuild_travel_towns()
 
 -- The settlement list is clickable TEXT: the click runs "vgo <town>" through the
 -- command pipeline, which is 3s-viking-status-gmcp's alias (it owns the travel
--- engine). Published once - the list is fixed at load.
+-- engine). Republished whenever `vikloc` names a place, since naming one is now
+-- all it takes to make it travelable.
 local function publish_town_list()
   local lines, row = {}, {}
   for _, code in ipairs(TRAVEL_TOWNS) do
@@ -220,7 +238,19 @@ local function publish_town_list()
   if #row > 0 then lines[#lines + 1] = table.concat(row) end
   scrye.setState(P .. "towns", table.concat(lines, "\n"))
 end
+
+-- The travel engine lives in the other plugin and cannot read this one's store
+-- (both scrye.store and scrye.shared are scoped per plugin), so the names you
+-- give places are handed over the same event bus the Map tab already uses to
+-- ask for walks. Every name that crosses is a destination BFS can reach.
+local function publish_locnames()
+  local out = {}
+  for k, n in pairs(locnames) do out[#out + 1] = k .. "|" .. n end
+  scrye.emit("viking.locnames", table.concat(out, "\n"))
+end
+
 publish_town_list()
+publish_locnames()
 
 -- the Map tab's colorgrid click cannot ride the command pipeline (it is a Lua
 -- callback), so it asks the travel engine over the event bus instead
@@ -867,6 +897,9 @@ scrye.addAlias{
     for k, n in pairs(locnames) do out[#out + 1] = k .. "|" .. n end
     scrye.store.set("locnames", table.concat(out, "\n"))
     scrye.print("[sea] location (" .. x .. "," .. y .. "): " .. (name == "" and "(cleared)" or name))
+    rebuild_travel_towns()
+    publish_town_list()
+    publish_locnames()
     dirty.map = true
     schedule_flush()
   end,
