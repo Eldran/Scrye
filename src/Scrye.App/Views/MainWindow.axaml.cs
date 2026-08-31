@@ -38,6 +38,42 @@ public partial class MainWindow : Window
         // drag-selection in the output while it was still being made.
         AddHandler(InputElement.PointerReleasedEvent, OnWindowPointerReleased,
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
+
+        Services.UiScale.Changed += ApplyZoom;
+        ApplyZoom();      // the view-model restores the saved factor before the window is built
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        Services.UiScale.Changed -= ApplyZoom;
+        base.OnClosed(e);
+    }
+
+    /// <summary>Put the current zoom factor on the host that wraps the window's content.</summary>
+    private void ApplyZoom() =>
+        ZoomHost.LayoutTransform = new Avalonia.Media.ScaleTransform(
+            Services.UiScale.Current, Services.UiScale.Current);
+
+    /// <summary>The modifier the zoom keys ride on: Command on macOS, Ctrl everywhere else —
+    /// the same split every browser and editor uses for these three.</summary>
+    private static readonly KeyModifiers ZoomModifier =
+        OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+
+    /// <summary>Cmd/Ctrl with +, - or 0: zoom the whole window in, out, or back to 100%.</summary>
+    private static bool TryZoom(KeyEventArgs e)
+    {
+        // Shift is ignored rather than required: "+" is Shift+= on most layouts, so someone
+        // pressing what they read as Cmd++ arrives here with Shift held, and someone using the
+        // numpad arrives without it. Both mean the same thing.
+        if ((e.KeyModifiers & ~KeyModifiers.Shift) != ZoomModifier) return false;
+
+        switch (e.Key)
+        {
+            case Key.OemPlus or Key.Add:      Services.UiScale.Increase(); return true;
+            case Key.OemMinus or Key.Subtract: Services.UiScale.Decrease(); return true;
+            case Key.D0 or Key.NumPad0:       Services.UiScale.Reset();    return true;
+            default: return false;
+        }
     }
 
     /// <summary>
@@ -118,8 +154,8 @@ public partial class MainWindow : Window
         return true;
     }
 
-    /// <summary>Window-level keys: F11 toggles fullscreen; otherwise fire a keyboard macro
-    /// for the active world if the pressed key is bound.</summary>
+    /// <summary>Window-level keys: F11 toggles fullscreen, Cmd/Ctrl +/-/0 zoom the window;
+    /// otherwise fire a keyboard macro for the active world if the pressed key is bound.</summary>
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Handled) return;
@@ -140,6 +176,14 @@ public partial class MainWindow : Window
         if (e.Key == Key.F11)
         {
             WindowState = WindowState == WindowState.FullScreen ? WindowState.Normal : WindowState.FullScreen;
+            e.Handled = true;
+            return;
+        }
+
+        // Before macros, like F11 above: these three are the client's own, and a world that
+        // bound Cmd+0 to something would otherwise take away the only way back to 100%.
+        if (TryZoom(e))
+        {
             e.Handled = true;
             return;
         }

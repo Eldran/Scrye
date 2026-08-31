@@ -9,6 +9,12 @@
         Title="Scrye" Width="1040" Height="680"
         FontFamily="Segoe UI, sans-serif">
 
+    <!-- Zoom host: one ScaleTransform over the entire window content, so the zoom keys
+         (see MainWindow.axaml.cs) size every control, glyph and line of output together
+         instead of chasing the FontSize on each one. A LAYOUT transform, not a render
+         one: the content is re-measured at the new size, so text stays crisp and the
+         panes still fill the window. -->
+    <LayoutTransformControl x:Name="ZoomHost">
     <Grid>
         <DockPanel>
             <!-- The collapse strip. Docked before the sidebar so it sits on the outer edge and
@@ -1966,4 +1972,5 @@
             </ItemsControl.ItemTemplate>
         </ItemsControl>
     </Grid>
+    </LayoutTransformControl>
 </Window>

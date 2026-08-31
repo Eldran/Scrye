@@ -171,6 +171,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         Services.ThemeService.ApplyAnsiPalette(startupGlobal.AnsiPalette);
         Services.InputPreferences.KeepAfterSend = startupGlobal.KeepInputAfterSend ?? false;
         Services.PluginPreferences.ExtraRoot = startupGlobal.ExtraPluginRoot;
+        // Restore the zoom BEFORE subscribing, so replaying the saved factor doesn't write it
+        // straight back out again. From here on every change is the user pressing a zoom key.
+        Services.UiScale.Apply(startupGlobal.UiScale);
+        Services.UiScale.Changed += PersistUiScale;
 
         ConnectCommand = new RelayCommand(() => { QuickConnectOpen = false; QuickConnect(); });
         OpenQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = true);
@@ -327,6 +331,25 @@ public sealed class MainWindowViewModel : ViewModelBase
         else RaiseToast("Saved", $"{name} saved. The form is still open — Done closes it.");
         RefreshTree();
         ReapplyToConnected();   // any layer in a connected tab's chain may have changed
+    }
+
+    /// <summary>Remember the zoom the moment it changes, so it survives a restart without
+    /// anyone having to open Settings and press Save.
+    ///
+    /// <para>Load-modify-save rather than writing a layer this view-model holds: the settings
+    /// form may be open with edits in it, and a zoom key must not publish those or drop them.
+    /// It rewrites one small file on a keypress, which is what the other write-on-change
+    /// settings (pane layout, plugin opt-in) already do.</para></summary>
+    private void PersistUiScale()
+    {
+        if (!Services.CrashLog.Guard("PersistUiScale", () =>
+            {
+                ProfileLayer g = _store.LoadGlobal();
+                g.UiScale = Services.UiScale.Current == Services.UiScale.Default
+                    ? null : (double?)Services.UiScale.Current;   // null = unzoomed, and not written
+                _store.SaveGlobal(g);
+            }))
+            RaiseToast("Zoom", "Couldn't save the zoom level (see logs). It still applies to this session.");
     }
 
     /// <summary>Write the global settings. <paramref name="close"/> false leaves the form up —

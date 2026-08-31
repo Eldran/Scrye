@@ -44,6 +44,14 @@ public sealed class ProfileLayer
     /// <summary>ANSI 16-colour palette: "modern" (xterm/VGA, default) or "classic" (MUSHclient).</summary>
     public string? AnsiPalette { get; set; }
 
+    /// <summary>Whole-window zoom, as a factor: 1.0 is unzoomed, 1.25 is a quarter larger.
+    /// Driven by the zoom keys rather than a settings field, and snapped to the app's zoom
+    /// ladder on load, so a hand-edited value cannot leave the client at a size it can't be
+    /// zoomed back from. Null = unzoomed, and not written.
+    /// Distinct from <see cref="FontSize"/>, which sizes the MUD's text inside the output
+    /// pane; this one sizes the whole client.</summary>
+    public double? UiScale { get; set; }
+
     /// <summary>Leave the command in the input box after Enter instead of clearing it, with the
     /// text selected — so Enter alone repeats it and the next keystroke replaces it. What
     /// MUSHclient and Mudlet both offer. Null/false clears, which is what someone who has not

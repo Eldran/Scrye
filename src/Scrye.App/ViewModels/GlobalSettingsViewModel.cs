@@ -259,6 +259,10 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
             ? sz : null;
         _layer.Theme = Theme.Key;
         _layer.AnsiPalette = (AnsiPalette == PaletteClassic) ? "classic" : "modern";
+        // The zoom has no field on this form — it is driven by the zoom keys, which stay live
+        // while the form is open. Take the current factor rather than the one this layer was
+        // loaded with, or saving here would quietly undo a zoom made since it opened.
+        _layer.UiScale = UiScale.Current == UiScale.Default ? null : (double?)UiScale.Current;
         _layer.KeepInputAfterSend = KeepInputAfterSend ? true : null;   // null = the default, not written
         _layer.ExtraPluginRoot = string.IsNullOrWhiteSpace(ExtraPluginRoot) ? null : ExtraPluginRoot.Trim();
 

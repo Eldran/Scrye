@@ -52,6 +52,14 @@ Each connected world gets its own tab with an output pane and a command line.
   **▼ back to bottom** chip is the exception among buttons — it hands the keyboard back,
   because "take me back to live" is the moment you want to be typing.
 - **F11** — fullscreen on and off.
+- **Zoom the whole window** — **Cmd +** and **Cmd −** on macOS (**Ctrl** on Windows and Linux)
+  step the entire client up and down through fixed sizes from 70% to 200%, and **Cmd 0** puts
+  it back to 100%. It scales everything together — panels, buttons, the world tree, the MUD's
+  output — the way a browser's zoom does, so nothing goes out of proportion with anything else.
+  The keys work from anywhere in the window, including the command line, and the level is
+  remembered for next time. This is *not* the same as the output font size in Appearance:
+  that one sizes the MUD's text inside the output pane, this one sizes the whole client
+  against your screen. The two compose.
 
 ## Several commands at once
 
@@ -289,6 +297,10 @@ In **Settings → Appearance**:
   - **MUSHclient (classic)** — MUSHclient's default palette (pure‑primary bright colors, olive yellow), if you want it to look exactly like MUSHclient. Applies to new output.
 - **Font** — a dropdown of the **monospaced** fonts installed on your machine, with a live preview. MUD output needs a fixed‑width font so columns line up; the picker only lists monospaced fonts so you can't break alignment by accident. There's also an "Advanced" box for a custom comma‑separated fallback chain.
 - **Font size**.
+
+There is no zoom setting on this form: the whole window zooms from the keyboard instead —
+**Cmd/Ctrl +**, **−** and **0** — and the level is remembered on its own. Font size here sizes
+the MUD's text within the output pane; zoom sizes the client as a whole.
 
 Scrye also lifts any near‑black text the MUD sends so it stays legible on the dark background — bright colors are left untouched.
 
