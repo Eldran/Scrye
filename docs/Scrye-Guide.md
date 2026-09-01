@@ -1004,6 +1004,17 @@ make each session.
 | `atrade stats` / `atrade stats reset` | Session totals — carts each way and rough daler in and out. |
 | `atrade log` | The last 15 trades. |
 
+**When a trade is logged.** Each row is written at the moment the daler actually moves, which is
+not the same moment for both sides. A **buy** pays at the yard, so it logs when the cart leaves. A
+**sell** is paid when the cart reaches the town and comes home, so it's held until the feed shows
+that cart back and logged then — the Trade Log lists what's still rolling and what it's worth in the
+meantime, so nothing looks forgotten in between. Carts in flight survive a restart: one still out is
+picked up again, and one that docked while Scrye was closed is logged and marked as such.
+
+The daler figure is the trader's own estimate — price × units — because the feed carries no per‑cart
+takings. What changed is *when* it is counted, not how exactly it is known. Manual `mkdispatch`
+carts are different again: they log immediately, as `MAN`, and stay out of these totals.
+
 A floor **raises** the category reserve, never lowers it, and a floored raw material restocks up to
 its floor rather than to the Raw> buffer.
 
@@ -1120,12 +1131,18 @@ nearest‑first and resolves each node it stops at by your preference list.
 | `vnav resolve <list>` | The preference list. Default `hold,evade?hull<40,hunt,ration,salvage,resupply?supplies<50,plunder`. |
 | `vnav resolve off` | Hold at every node and resolve them yourself. |
 | `vnav resolve first` | Always take whatever the MUD offers first. |
+| `…,*` at the end of a list | Last resort: answer an option set you don't recognise with its first offer. |
 | `vnav reset` | Forget what's been toured, so every charted feature is a candidate again. |
 
 The list is comma‑separated keywords, each optionally carrying a condition — `evade?hull<40` means
 *evade, but only if hull is under 40*. Metrics are `hull`, `morale`, `supplies` and `stress`. The
 first entry that is both offered and true is the one it takes. There's no `vnav` status command; the
 Sea tab's top line always shows it.
+
+**The options depend on the encounter**, and your list will meet sets it doesn't know. When that
+happens the bot does not guess: it prints what the node actually offered, tells you none of it is in
+your list, and holds there — once per node, not once per burst. Add the word and carry on, or end
+your list with `*` to let it take the first offer at any node it doesn't recognise.
 
 **With the mouse.** On the **Sea** tab, click a chart cell to queue a course to it and click a
 resolve option to take it; there's a *Clear voyage queue* button. On **Map** and **Travel**, clicking

@@ -34,6 +34,23 @@
 --     Guild.City raid{faction,strength,secs} + bdmg[] appeared 28 Aug pm (wired:
 --     Stats' War section and the Builds tab).
 --
+-- 2.21.0: the trade log records a SALE WHEN IT IS PAID. A sell cart is paid when
+-- it reaches the town and comes home, so logging it at dispatch put the daler in
+-- the ledger up to twenty minutes early and counted a cart that could still be
+-- lost on the road. Sells are now held (at_road) until the feed shows that cart
+-- gone from the yard, then logged and counted. Buys are unchanged: the reserve
+-- check that guards one runs at dispatch, so dispatch is when that money leaves -
+-- both sides log at the moment the daler moves, which is the rule now.
+-- Carts in flight are persisted, so a restart does not quietly drop a sale: one
+-- still out is picked up again, one that docked while Scrye was closed is logged
+-- and marked as such. cart_id was appended to the CARTS feed string as field 12
+-- (appended, not inserted - every positional reader keeps its index) so one cart
+-- can be followed from the yard to the dock. The Trade Log shows what is still
+-- rolling, and how much daler it is worth, so nothing looks forgotten between
+-- dispatch and payday. Confirmed live 30 Aug: a cart cannot come home PART sold,
+-- so there is one payment per cart - the figure is still our own estimate
+-- (price x units), because the feed carries no per-cart takings.
+--
 -- 2.20.0: the Skills tab grew an INFO column. Every row now LEADS with a
 -- clickable INFO cell (the skill name carries the same actions, since on a wide
 -- row that is what the pointer is over): left click sends `vhelp <skill>`, right
@@ -47,9 +64,8 @@
 --
 -- 2.19.0: SKILL WATCH merged in as the Skills tab (was the standalone
 -- lab-skillwatch). Two halves, and only one of them could be made GMCP: the
--- skill LISTING has no package - no skill field in any of the three captures,
--- and the server's own Core.Supported answers "Merc.Skills": 0 - so the framed
--- `vskills` scan stays, which costs nothing since a catalogue of training costs
+-- skill LISTING has no package: no skill field appears in any of the four
+-- captures (23 Aug - 31 Aug), so the framed `vskills` scan stays, which costs nothing since a catalogue of training costs
 -- barely moves. The half that COULD move is the half that was broken: the pools
 -- and daler it priced rows against came from the MIP-era vik.vis/kap/soe/aud and
 -- vik.daler keys, which this plugin never publishes, so under GMCP every row was
@@ -2666,14 +2682,49 @@ local function at_warehouse(v)
 end
 
 -- ---------- trade log + stats ----------
-local function at_record(side, qty, cmd, town, amount)
+-- WHEN a trade is logged, and why it differs by side.
+--
+-- The log is meant to answer "what did the trader do to my daler", so each row is
+-- written at the moment the daler MOVES, not at the moment a command was typed:
+--
+--   * a BUY pays at the yard - the reserve check that guards it runs at dispatch,
+--     so dispatch is when the money leaves. Logged when the cart goes out.
+--     (VERIFY LIVE: that the game debits at dispatch and not on the cart's return
+--     is inference from the reserve check, not something the feed states.)
+--   * a SELL is only paid when the cart reaches the town and comes home. Logging
+--     it at dispatch put the daler in the ledger up to twenty minutes before it
+--     was in the purse, and counted a cart that could still be lost on the road.
+--     Held in at_road until the feed says that cart has docked.
+--
+-- Confirmed live 30 Aug: a cart cannot come home PART sold, so there is one
+-- payment per sell cart and the estimate below stays a single figure. The figure
+-- itself is still an estimate - it is our price times units, because the feed
+-- carries no per-cart takings, and diffing `daler` across the docking tick would
+-- pick up tax and every other cart landing in the same tick. What moved here is
+-- WHEN it is counted, not how exactly it is known.
+local at_road = {}          -- sell carts dispatched and still out; logged when they dock
+local at_carts_seen = false -- a CARTS burst has arrived, so absence now MEANS absence
+local at_ids_ok = false     -- the feed has shown at least one cart_id, so following one
+                            -- home is possible at all (set by at_settle, read below -
+                            -- a flag rather than a call, because at_cart_ids is declared
+                            -- further down and a local is not visible above its own line)
+
+local function at_road_save()
+  local out = {}
+  for _, r in ipairs(at_road) do
+    out[#out + 1] = table.concat({ r.id or "", r.qty, r.cmd, r.town, r.amount, r.sent }, "\30")
+  end
+  scrye.store.set("at_road", table.concat(out, "\31"))
+end
+
+local function at_commit(side, qty, cmd, town, amount, stamp, tail)
   amount = amount or 0
   local s = at.stats
   if side == "sell" then s.sells = s.sells + 1; s.earned = s.earned + amount
   else s.buys = s.buys + 1; s.spent = s.spent + amount end
-  local line = string.format("[%s] %-4s %4d %-11s %-4s %-14s ~%dd",
-    os.date("%Y-%m-%d %H:%M:%S"), side:upper(), qty, cmd,
-    (side == "buy") and "from" or "to", town, amount)
+  local line = string.format("[%s] %-4s %4d %-11s %-4s %-14s ~%dd%s",
+    stamp or os.date("%Y-%m-%d %H:%M:%S"), side:upper(), qty, cmd,
+    (side == "buy") and "from" or "to", town, amount, tail or "")
   s.recent[#s.recent + 1] = line
   while #s.recent > 40 do table.remove(s.recent, 1) end
   scrye.log(line)
@@ -2683,6 +2734,37 @@ local function at_record(side, qty, cmd, town, amount)
     scrye.notify(string.format("auto-trade: %s %d %s %s %s (~%dd)",
       side, qty, cmd, (side == "buy") and "from" or "to", town, amount))
   end
+  if at_draw then at_draw() end
+end
+
+-- The dispatch side of the split: a buy is money out now, a sell is parked until
+-- its cart docks. A sell we could not bind to a cart id (a server whose feed
+-- carries no cart_id, so nothing can be followed) is committed at dispatch as it
+-- always was - late is better than never, and it says so once rather than
+-- dropping the row.
+local at_road_warned = false
+local function at_record(side, qty, cmd, town, amount, cart_id)
+  if side ~= "sell" then
+    at_commit(side, qty, cmd, town, amount)
+    return
+  end
+  if not cart_id then
+    -- Nothing to follow. Either the feed carries no cart_id at all, or this cart
+    -- was not visible as NEW in the burst that confirmed the dispatch (two carts
+    -- landing in one tick). Log at dispatch, as it always was, and mark the row:
+    -- an early figure that says so beats a dropped one.
+    if not at_road_warned then
+      at_road_warned = true
+      note(at_ids_ok
+        and "a sell could not be matched to its cart - logged at dispatch, marked in the log"
+        or  "no cart ids in this feed - sells are logged when they LEAVE, not when they are paid")
+    end
+    at_commit(side, qty, cmd, town, amount, nil, "  (on dispatch)")
+    return
+  end
+  at_road[#at_road + 1] = { id = cart_id, qty = qty, cmd = cmd, town = town,
+                            amount = amount or 0, sent = os.date("%H:%M") }
+  at_road_save()
   if at_draw then at_draw() end
 end
 
@@ -2712,6 +2794,8 @@ end
 local CONFIRM_SECS = 12
 local at_pend = {}        -- dispatches sent, not yet proved by the feed; oldest first
 local at_seen = nil       -- the carts that were out when the oldest of them went
+local at_seen_ids = nil   -- ...the same moment by cart id, so a credited sell can be
+                          -- bound to the cart carrying it and followed home
 
 -- THE CARTYARD CLOCK (2.9.0, live soak 28 Aug): the game allows one caravan
 -- roughly every 3 minutes, and answers a dispatch inside that window with a
@@ -2736,6 +2820,59 @@ local function at_cart_sigs(v)
   return t
 end
 
+-- The carts on the road by ID (field 12) -> kind. Field 12 is absent on a server
+-- whose feed carries no cart_id; the table is then empty and every id-keyed path
+-- below stands down rather than guessing.
+local function at_cart_ids(v)
+  local t = {}
+  for e in ((v or at_getvars()).CARTS or ""):gmatch("[^;]+") do
+    local f = {}
+    for part in (e .. "|"):gmatch("([^|]*)|") do f[#f + 1] = part end
+    local id = trim(f[12] or "")
+    if id ~= "" then t[id] = trim(f[1] or ""):lower() end
+  end
+  return t
+end
+
+-- Sell carts that have DOCKED since the last look are paid now, so they are logged
+-- now. Runs on every feed tick, independent of the dispatch-confirmation machinery
+-- above: a cart's departure and its return are two different questions and the
+-- second one has to keep working long after the first has been answered.
+local function at_arrivals(v)
+  local out = at_cart_ids(v)
+  if not at_carts_seen then
+    -- First burst of the session. Anything restored from the store that is NOT on
+    -- the road came home while Scrye was closed - log it rather than let it fall
+    -- silently out of the ledger, and mark it, because we cannot know when.
+    at_carts_seen = true
+    local i, changed = 1, false
+    while at_road[i] do
+      local r = at_road[i]
+      if not out[r.id] then
+        table.remove(at_road, i); changed = true
+        at_commit("sell", r.qty, r.cmd, r.town, r.amount, nil,
+          string.format("  (sent %s, docked while away)", r.sent or "?"))
+      else
+        i = i + 1
+      end
+    end
+    if changed then at_road_save() end
+    return
+  end
+  local i, changed = 1, false
+  while at_road[i] do
+    local r = at_road[i]
+    if not out[r.id] then
+      table.remove(at_road, i); changed = true
+      at_commit("sell", r.qty, r.cmd, r.town, r.amount, nil,
+        string.format("  (sent %s)", r.sent or "?"))
+    else
+      i = i + 1
+    end
+  end
+  if changed then at_road_save() end
+end
+
 -- How many carts are out now that were not out before, split by kind.
 local function at_appeared(before, after)
   local by = {}
@@ -2755,6 +2892,25 @@ local function at_settle(v)
   if #at_pend == 0 then at_seen = nil; return end
 
   local cur = at_cart_sigs(v)
+  local curids = at_cart_ids(v)
+  if next(curids) ~= nil then at_ids_ok = true end
+  -- the ids that are new since the last look, bucketed by kind: one of these is the
+  -- cart each credited dispatch just put on the road
+  local fresh = {}
+  if at_seen_ids then
+    for id, side in pairs(curids) do
+      if not at_seen_ids[id] then
+        fresh[side] = fresh[side] or {}
+        table.insert(fresh[side], id)
+      end
+    end
+    for _, list in pairs(fresh) do table.sort(list) end
+  end
+  local function take_id(side)
+    local list = fresh[side]
+    if not list or #list == 0 then return nil end
+    return table.remove(list, 1)
+  end
   if at_seen then
     local appeared = at_appeared(at_seen, cur)
 
@@ -2773,7 +2929,7 @@ local function at_settle(v)
       if n > 0 then
         appeared[p.side] = n - 1
         table.remove(at_pend, i)
-        at_record(p.side, p.qty, p.cmd, p.town, p.amount)
+        at_record(p.side, p.qty, p.cmd, p.town, p.amount, take_id(p.side))
       else
         i = i + 1
       end
@@ -2787,10 +2943,11 @@ local function at_settle(v)
     while spare > 0 and at_pend[1] do
       spare = spare - 1
       local p = table.remove(at_pend, 1)
-      at_record(p.side, p.qty, p.cmd, p.town, p.amount)
+      at_record(p.side, p.qty, p.cmd, p.town, p.amount, take_id(p.side))
     end
   end
   at_seen = cur
+  at_seen_ids = curids
 
   local dropped = false
   while at_pend[1] and now_s - at_pend[1].at >= CONFIRM_SECS do
@@ -3149,7 +3306,8 @@ local function at_driver() if at.on then at_schedule() end end
 local at_last_free, at_last_stock = -1, -1
 local function at_on_feed()
   local v0 = at_getvars()
-  at_settle(v0)   -- a cart appearing is what confirms a dispatch
+  at_settle(v0)     -- a cart appearing is what confirms a dispatch...
+  at_arrivals(v0)   -- ...and a sell cart DISAPPEARING is when that sale was paid
   if not at.on then return end
   local v = v0
   local maxc = at_capacity(v)
@@ -3321,6 +3479,19 @@ at_draw = function()
   local lg = {}
   lg[#lg+1] = string.format("this session (%dm):  sold %d (~+%s d)   bought %d (-%s d)",
     mins, s.sells, comma(s.earned), s.buys, comma(s.spent))
+  -- Sells count when the cart DOCKS, so anything still rolling is money not yet
+  -- in the totals above. Showing it stops the log reading as though those carts
+  -- had been forgotten between dispatch and payday.
+  if #at_road > 0 then
+    local pending_d = 0
+    for _, r in ipairs(at_road) do pending_d = pending_d + (r.amount or 0) end
+    lg[#lg+1] = string.format("@{#DEB218}on the road: %d sell cart(s), ~%s d not yet counted@{}",
+      #at_road, comma(pending_d))
+    for _, r in ipairs(at_road) do
+      lg[#lg+1] = string.format("@{dim}   sent %-5s %4d %-11s to %-14s ~%dd@{}",
+        r.sent or "?", r.qty, r.cmd, r.town, r.amount or 0)
+    end
+  end
   lg[#lg+1] = ""
   if #s.recent == 0 then lg[#lg+1] = "(no auto-trades yet)"
   else for i = #s.recent, math.max(1, #s.recent - 25), -1 do lg[#lg+1] = s.recent[i] end end
@@ -3630,6 +3801,22 @@ publish_notify_state()
 -- sitting in the store looking like it still means something.
 scrye.store.delete("at_on")
 
+-- Sell carts that were still on the road when this plugin last stopped. They are
+-- restored rather than forgotten: their daler has not been counted yet, and the
+-- first CARTS burst decides each one - still out, keep waiting; gone, it docked
+-- while we were away and is logged then (marked, since we cannot know when).
+for rec in (sget("at_road") or ""):gmatch("[^\31]+") do
+  local f = {}
+  for part in (rec .. "\30"):gmatch("([^\30]*)\30") do f[#f + 1] = part end
+  if f[1] and f[1] ~= "" then
+    at_road[#at_road + 1] = { id = f[1], qty = tonumber(f[2]) or 0, cmd = f[3] or "?",
+                              town = f[4] or "?", amount = tonumber(f[5]) or 0, sent = f[6] }
+  end
+end
+if #at_road > 0 then
+  note(#at_road .. " sell cart(s) were still out last time - logged as each one docks")
+end
+
 -- The panel lives in the outer chunk, so hand it the handful of entry points its widgets
 -- need. Everything else stays private to this block.
 return {
@@ -3660,9 +3847,19 @@ mk_set_towns = MK.set_towns
 -- SKILL WATCH -- the vskills listing, priced against the live feed
 -- ============================================================================
 -- Merged in from lab-skillwatch. The LISTING has no GMCP source: no skill field
--- appears in any capture and the server's own Core.Supported reports
--- "Merc.Skills": 0, so the text scan of `vskills` stays -- which is no loss, a
--- catalogue of costs barely moves. What DID move is the half that matters: the
+-- appears in any of the four captures, so the text scan of `vskills` stays --
+-- which is no loss, a catalogue of costs barely moves.
+--
+-- CORRECTION (31 Aug): this used to cite Core.Supported answering
+-- "Merc.Skills": 0 as proof the server has no such package. That was a
+-- misreading. 0 there means "not on for you", not "not implemented" - the
+-- SAME message reads "Guild.State": 1 only because Scrye subscribes "Guild 1",
+-- and the first Core.Supported of every connect reads 0 for absolutely
+-- everything, Char.Vitals included. Scrye has never asked for "Merc 1", so a
+-- 0 is the only answer it could have given. And Merc.* is not a rival source
+-- either way: mercenaries are hireable NPCs, so Merc.Skills is a MERCENARY's
+-- skills, not the player's. The evidence that stands is the captures: four of
+-- them, no skill field. What DID move is the half that matters: the
 -- four pools and daler now come from Guild.State (gxp + daler) read straight
 -- out of this plugin's own feed, where before they came from MIP-era vik.*
 -- paths that the GMCP plugin never set -- so under GMCP the "can I afford it"
@@ -4665,9 +4862,12 @@ end)
 
 gasm("Guild.Trade", function(t)
   -- field 1 = mode (kind) and field 11 = cap: both the City tab and the
-  -- auto-trader's at_capacity/at_cart_sigs read exactly those positions
+  -- auto-trader's at_capacity/at_cart_sigs read exactly those positions. cart_id
+  -- was APPENDED as field 12 rather than inserted, so every one of those readers
+  -- keeps its index; the trader needs it to follow one cart from the yard to the
+  -- dock, which is what lets a sale be logged when the daler actually lands.
   vset("carts", join(T(t, "carts"), { "mode", "good", "village", "secs", "amount",
-    "escort", "horses", "durability", "quality_pct", "tier", "cap" }))
+    "escort", "horses", "durability", "quality_pct", "tier", "cap", "cart_id" }))
   -- a cart LEAVING or COMING HOME is the moment the warehouse changes, so it is
   -- the moment to refresh the stock scan. Keyed on the sorted cart-ID SET - the
   -- raw carts string changes every burst (secs ticks), the id set only changes

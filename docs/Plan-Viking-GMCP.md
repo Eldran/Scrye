@@ -166,14 +166,50 @@ Verified against the capture. Scrye already files each package into state under
 
 **Gaps — feed keys with no GMCP counterpart in the capture:** `production`, `errand`,
 `sevents`, and the per-good warehouse stock behind WSTOCK (only `wstock_cap` came through).
-Also **the skill listing**: no skill field appears in any of the three captures and the
-server's own `Core.Supported` answers `"Merc.Skills": 0`, so the Skills tab's `vskills`
-text scan is not a stopgap — there is nothing to wire it to. What the feed *does* carry is
+Also **the skill listing**: no skill field appears in any of the four captures, so the
+Skills tab's `vskills` text scan is not a stopgap — there is nothing to wire it to.
+(An earlier draft also cited `Core.Supported` answering `"Merc.Skills": 0`. That was a
+misreading and is retracted — see §2b.) What the feed *does* carry is
 the affordability half (`Guild.State.gxp` + `daler`), which is what the tab prices against.
 One for the dev report.
 Also `Guild.Trade.market[]` exists but was empty the whole session — worth one `mkref`
 while capturing to see if the market scan can eventually drop its text triggers. Same
 category as the missing chat channels: report to the 3S devs, don't build around guesses.
+
+### 2b. What `Core.Supported` actually means (corrected 31 Aug)
+
+A 0 in `Core.Supported` means **"not on for you"**, not "the server has no such
+package". Three things prove it:
+
+* every connect sends **two** `Core.Supported` messages, and the first reads 0 for
+  *everything* — `Char.Vitals` and `Room.Info` included, which plainly work;
+* the second reads 1 for exactly the modules Scrye subscribed to;
+* `Guild.State` only became 1 when we started sending `"Guild 1"`.
+
+Scrye subscribes `["Char 1", "Room 1", "Comm 1", "Guild 1"]`. So the packages
+sitting at 0 in every capture are the ones we have **never asked for**:
+
+| Package | Status |
+|---|---|
+| `Merc.Talents` `Merc.Vitals` `Merc.Info` `Merc.Skills` `Merc.Stats` | never requested — no `"Merc 1"` in the subscription |
+| `Craft.State` `Craft.Info` `Craft.Extra` | never requested — and the system is not live in game yet |
+| `Mud.Status` | never requested |
+
+A server does not usually enumerate five package names for a system it has not
+built.
+
+**Mercs are not a guild.** They are NPCs any player can hire, the same for
+everyone whatever guild you belong to, and separate from the Viking **hird**,
+which is guild-only and already comes through `Guild.Roster` (Joakim, 31 Aug).
+So there is no membership to be gated on, the "maybe only a Mercenary sees it"
+reading is dead, and whatever `Merc.*` carries is new rather than a second view
+of the roster — if it carries anything at all, Goran sees it the moment we ask.
+That also settles what `Merc.Skills` is: a *mercenary's* skills, never a source
+for the player's own `vskills` listing, whoever subscribed.
+
+`Craft.*` is a different case and stays out: the crafting system is **not enabled
+in the game yet** — the GMCP field names exist ahead of it (Joakim, 31 Aug). Its
+zeros are honest, and asking would only prove that.
 
 ## 3. The one real technical problem: page assembly
 
