@@ -34,6 +34,14 @@ local P = "plugin." .. scrye.id .. "."
 -- ---------------------------------------------------------------- the sets
 -- Each entry: { label, value path, max path (or number) }.
 
+-- A note for whoever debugs blinking gauges next: Seid/Vig/Rad used to drop to
+-- zero at random while HP sat still, and the cause was NOT here. Guild.State
+-- arrives paged - bars on page 1, points on page 3 - and StateStore.SetJson
+-- pruned every key a payload did not carry, so each page deleted the one before
+-- it and guild.state.points.* existed only between page 3 and the next page 1.
+-- HP was steady because char.vitals.* is never paged. Fixed in the host (31 Aug):
+-- a package seen to arrive paged is never pruned again. Nothing in this file
+-- needed to change, and nothing here should be changed to work around it.
 local function viking_set(gmcp)
   if gmcp then
     return {

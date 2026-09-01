@@ -24,6 +24,10 @@ public sealed class StateStore
     private readonly Dictionary<string, StateValue> _values = new(StringComparer.Ordinal);
     private readonly List<Watcher> _watchers = new();
 
+    /// <summary>Packages that have been seen to arrive PAGED, and so are never pruned again.
+    /// See <see cref="SetJson"/> for why. Keyed by normalised prefix.</summary>
+    private readonly HashSet<string> _paged = new(StringComparer.Ordinal);
+
     /// <summary>Every change, in order — for the inspector and change-logging.</summary>
     public event Action<StateChange>? Changed;
 
@@ -60,7 +64,8 @@ public sealed class StateStore
     }
 
     /// <summary>Remove <paramref name="prefix"/> and everything beneath it (<c>prefix.*</c>).
-    /// Used before re-applying a GMCP package, which always sends the full object.</summary>
+    /// Used to drop a character's state on relogin, and as the way to force a fresh start for a
+    /// paged package, whose tree <see cref="SetJson"/> deliberately never prunes.</summary>
     public void ClearPrefix(string prefix)
     {
         string p = Normalize(prefix);
@@ -82,6 +87,28 @@ public sealed class StateStore
     /// in the new payload are removed — but this diffs rather than clear-then-set, so
     /// unchanged leaves fire nothing and there is no null flicker. Objects nest by key,
     /// arrays by index. Non-JSON payloads set the prefix to the raw text.
+    ///
+    /// <para><b>Paged packages are never pruned.</b> "A resend replaces the whole object" is
+    /// true of Char.Vitals, Char.Combat and Room.Info — and false of every Guild.* package on
+    /// 3Scapes, which split one logical report across several messages carrying
+    /// <c>{"page": 2, "pages": 3}</c>. Pruning on those made each page delete the one before
+    /// it: Guild.State carries <c>bars</c> on page 1 and <c>points</c> on page 3, so
+    /// <c>guild.state.points.viga</c> existed only in the gap between page 3 landing and the
+    /// next page 1 — which is precisely why a Viking's Seid/Vig/Rad gauges blinked to zero
+    /// while HP, which comes from unpaged Char.Vitals, sat still.</para>
+    ///
+    /// <para>So the first payload carrying a <c>pages</c> field latches its package as paged,
+    /// and from then on that package only ever merges. Pruning survives untouched where it is
+    /// actually needed: no never-paged package is affected, including the empty Char.Combat
+    /// snapshot that clearing exists for. The latch is per package and deliberately sticky —
+    /// Guild.State also sends UNPAGED partial payloads, and pruning on one of those would wipe
+    /// the paged keys just as surely.</para>
+    ///
+    /// <para>The cost is that a paged package's tree never forgets: a leaf the server stops
+    /// sending keeps its last value, and a list that shrinks leaves its tail behind (three
+    /// carts becoming one leaves <c>…carts.2.*</c> in place). A consumer that must know the
+    /// current extent of a list should assemble the burst itself from the raw JSON — the
+    /// Viking plugins do exactly that — or call <see cref="ClearPrefix"/> first.</para>
     /// </summary>
     public void SetJson(string prefix, string json)
     {
@@ -96,15 +123,22 @@ public sealed class StateStore
             if (node is not null) Collect(p, node, incoming);
         }
 
-        // remove leaves under the prefix that the new payload no longer contains
-        var doomed = new List<string>();
-        foreach (string key in _values.Keys)
-            if ((key == p || key.StartsWith(p + ".", StringComparison.Ordinal)) && !incoming.ContainsKey(key))
-                doomed.Add(key);
-        foreach (string key in doomed)
+        // a "pages" field means this package speaks in bursts, not whole objects
+        if (incoming.ContainsKey(p + ".pages")) _paged.Add(p);
+
+        // remove leaves under the prefix that the new payload no longer contains — unless the
+        // package is paged, in which case "not in this payload" means "on another page"
+        if (!_paged.Contains(p))
         {
-            _values.Remove(key);
-            Notify(key, StateValue.Null, removed: true);
+            var doomed = new List<string>();
+            foreach (string key in _values.Keys)
+                if ((key == p || key.StartsWith(p + ".", StringComparison.Ordinal)) && !incoming.ContainsKey(key))
+                    doomed.Add(key);
+            foreach (string key in doomed)
+            {
+                _values.Remove(key);
+                Notify(key, StateValue.Null, removed: true);
+            }
         }
 
         // set the incoming leaves (Set de-dupes: unchanged values fire nothing)

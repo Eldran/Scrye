@@ -277,6 +277,69 @@ public class GmcpTests
     }
 
     [Fact]
+    public void A_paged_package_does_not_let_one_page_delete_the_last()
+    {
+        // The real Guild.State burst, split the way the server splits it: bars on page 1,
+        // hp on page 2, points on page 3. Pruning treated every message as a whole object, so
+        // page 3 deleted page 1's bars and page 1 deleted page 3's points -- which is why a
+        // Viking's Seid/Vig/Rad gauges (bound to guild.state.points.*) blinked to zero while
+        // HP, which comes from unpaged Char.Vitals, never moved.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Guild.State {\"page\":1,\"pages\":3,\"full\":1,\"guild\":\"viking\","
+                      + "\"daler\":943976,\"bars\":{\"gp1\":5852,\"gp1_max\":7152}}"));
+        t.Process(Sub("Guild.State {\"page\":2,\"pages\":3,\"full\":1,\"guild\":\"viking\","
+                      + "\"hp\":{\"cur\":6312,\"max\":6333}}"));
+        t.Process(Sub("Guild.State {\"page\":3,\"pages\":3,\"full\":1,\"guild\":\"viking\","
+                      + "\"points\":{\"viga\":8082,\"mviga\":8082}}"));
+
+        // every page's data is still there after the whole burst
+        Assert.Equal(943976, st.Get("guild.state.daler").AsNumber());
+        Assert.Equal(5852, st.Get("guild.state.bars.gp1").AsNumber());
+        Assert.Equal(6312, st.Get("guild.state.hp.cur").AsNumber());
+        Assert.Equal(8082, st.Get("guild.state.points.viga").AsNumber());
+
+        // ...and the next burst's page 1 does not wipe the points it does not carry
+        t.Process(Sub("Guild.State {\"page\":1,\"pages\":3,\"full\":1,\"guild\":\"viking\","
+                      + "\"daler\":944000,\"bars\":{\"gp1\":5900,\"gp1_max\":7152}}"));
+        Assert.Equal(8082, st.Get("guild.state.points.viga").AsNumber());
+        Assert.Equal(5900, st.Get("guild.state.bars.gp1").AsNumber());   // and it still updates
+    }
+
+    [Fact]
+    public void An_unpaged_partial_from_a_paged_package_also_leaves_the_rest_alone()
+    {
+        // Guild.State sends unpaged partial payloads too. Pruning on one of those would wipe
+        // the paged keys just as surely, so the "this package is paged" latch is sticky.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Guild.State {\"page\":3,\"pages\":3,\"guild\":\"viking\","
+                      + "\"points\":{\"viga\":8082}}"));
+        t.Process(Sub("Guild.State {\"guild\":\"viking\",\"gxp\":{\"vitka\":68498}}"));
+
+        Assert.Equal(8082, st.Get("guild.state.points.viga").AsNumber());
+        Assert.Equal(68498, st.Get("guild.state.gxp.vitka").AsNumber());
+    }
+
+    [Fact]
+    public void An_unpaged_package_still_prunes_what_it_stops_sending()
+    {
+        // The behaviour the pruning exists for must survive the fix. Char.Vitals is never
+        // paged, so a payload that drops a field still drops it from the tree.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Char.Vitals {\"hp\":100,\"maxhp\":200,\"coffin\":5}"));
+        Assert.Equal(5, st.Get("char.vitals.coffin").AsNumber());
+
+        t.Process(Sub("Char.Vitals {\"hp\":110,\"maxhp\":200}"));
+        Assert.False(st.Has("char.vitals.coffin"));
+        Assert.Equal(110, st.Get("char.vitals.hp").AsNumber());
+    }
+
+    [Fact]
     public void Combat_mirrors_onto_the_enemy_paths()
     {
         MudSession s = Connected(out TelnetLayer t, out _);
