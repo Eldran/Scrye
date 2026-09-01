@@ -33,6 +33,13 @@
 --   * Guild.Map terrain: CONFIRMED GAP - two sessions sent only the east/south
 --     edge grids, pos and w, though enc={terrain:"glyph"} promises terrain. On
 --     the dev-report list; the Map tab waits honestly until it ships.
+--   * vresolve CONFIRMED live (31 Aug): a flat array of option WORDS, e.g.
+--     ["scout","plunder","resupply"] - exactly the shape the adapter guessed.
+--     The words themselves DEPEND ON THE ENCOUNTER and only one encounter has
+--     ever been captured, so the vocabulary is open-ended: `vnav resolve` must
+--     be assumed not to know every option it will meet. A node offering nothing
+--     the list mentions now says so and holds, rather than stalling in silence,
+--     and a trailing "*" in the list is the opt-in "take the first offer".
 --   * vqpath CONFIRMED live (23:09 capture, active voyage): an array of "x,y"
 --     strings - ["10,1"] - exactly what the adapter guessed, so vqpath_dest and
 --     the sea-nav read it unchanged. voyage_chart {width,height,chart_mode}
@@ -755,6 +762,7 @@ local function sea_nav_tick()
   if not ship then return end
 
   local has_node = gv("VRESOLVE") ~= ""
+  if not has_node then sea_nav.said_opts = nil end
 
   local function try_resolve()
     if not has_node then return end
@@ -784,13 +792,32 @@ local function sea_nav_tick()
     else
       for entry in sea_nav.resolve:gmatch("[^,]+") do
         local kw, cond = entry:match("^%s*([^?%s]+)%s*%??%s*(.-)%s*$")
+        -- "*" is the documented last resort: put it at the END of the list and
+        -- an encounter whose options you have never seen still gets answered
+        -- with its first offer instead of stalling. Left out of the default on
+        -- purpose - taking an unknown action on a voyage is not obviously safe.
+        if kw == "*" and cond_ok(cond) then
+          pick = opts[1] and opts[1]:gsub("%s", ""); break
+        end
         if kw and offered[kw] and cond_ok(cond) then pick = kw; break end
       end
     end
     if pick and pick ~= "" then
       sea_nav.last_cmd_at = now_s
+      sea_nav.said_opts = nil
       scrye.send("vvoyage resolve " .. pick)
       scrye.print("[sea-nav] auto-resolving node with '" .. pick .. "'")
+    elseif optsrc ~= "" and sea_nav.said_opts ~= optsrc then
+      -- Nothing in the preference list is on offer. The options a node gives
+      -- DEPEND ON THE ENCOUNTER and we have seen one encounter's worth, so this
+      -- is expected to happen and must not be silent: without this the voyage
+      -- just sits at the node for good with no line explaining why. Said once
+      -- per node (latched on the option set), not once per tick.
+      sea_nav.said_opts = optsrc
+      scrye.print("[sea-nav] node offers " .. esc((optsrc:gsub(",", ", ")))
+        .. " - none are in your resolve list, so it is holding here")
+      scrye.print("[sea-nav] add one with  vnav resolve "
+        .. esc(sea_nav.resolve) .. ",<option>   (or end the list with * for any)")
     end
   end
 
