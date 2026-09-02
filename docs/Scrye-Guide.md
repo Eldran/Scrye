@@ -1029,7 +1029,7 @@ its floor rather than to the Raw> buffer.
 | Setting | Default | What it means |
 |---|---|---|
 | `keep` | 20 | Units of *every* good held back from selling (your mission reserve). |
-| `stock` | 300 | The Raw> buffer — reserve kept on raw goods, and the restock target. |
+| `stock` | 300 | The Raw> buffer — reserve kept on raw goods, and the restock target. Raw goods are timber, iron, ore, furs, grain, mead, fish, sunstone, spoils and honey. |
 | `reserve` | 5000 | Daler never spent below this. |
 | `margin` | 1 | Minimum profit per unit before the scalper will buy. |
 | `carts` | 0 | Max carts at once. 0 = auto, from your Trading Post tier. |

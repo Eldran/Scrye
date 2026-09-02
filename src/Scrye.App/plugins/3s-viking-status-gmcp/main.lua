@@ -2092,8 +2092,13 @@ local REFINED = { ["salted fish"] = true, salted = true, ["fine furs"] = true, f
 -- special commodities (not raw materials): sellable, but keep a small reserve
 local SPECIAL = { runestones = true, gemstones = true, gems = true }
 -- raw materials the auto-buyer will restock up to the Raw> buffer when they run low
+-- Ore was in the same limbo wool and eggs are in, but by omission rather than by
+-- decision: absent from REFINED and SPECIAL it already kept the raw reserve when
+-- SELLING, so it looked handled, while being absent from here meant the restocker
+-- never bought it back. Added 2 Sep on Joakim's word that it is a raw material.
 local RAWBUILD = { timber = true, iron = true, furs = true, grain = true, mead = true,
-                   fish = true, sunstone = true, spoils = true, honey = true }
+                   fish = true, sunstone = true, spoils = true, honey = true,
+                   ore = true }
 
 local function trim(s) return (s or ""):gsub("^%s+", ""):gsub("%s+$", "") end
 -- escape MUD-sourced text before embedding it in colour markup
