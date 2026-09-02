@@ -31,3 +31,8 @@ dist/
 
 # Rust SDK build output
 sdk/rust/target/
+
+# dev reports written for the 3Scapes staff - handed over directly, not shipped
+# with the client, and each one is a point-in-time snapshot rather than a doc
+# that gets maintained
+docs/Dev-Report-*.md
