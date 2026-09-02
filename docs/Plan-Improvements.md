@@ -42,17 +42,18 @@ If it earns promotion: move to src plugins, version 1.0.0, plugin.json
 description pass, keep the harness in _lab. If not: what failed becomes its
 own line here.
 
-**B4. Dev report to the 3Scapes devs.** Short, concrete, from the captures:
-Guild.Map terrain promised (`enc={terrain:"glyph"}`) but never delivered — the
-big one, it blocks the sea Map tab; CRAID raid-end signal (V4) if none exists;
-anything V5 turns up. Guild.Map terrain is now a **four-session** gap (27, 28, 29,
-31 Aug): every one of them sent only the east/south edge grids, `pos` and `w`,
-while `enc` has promised `{terrain: "glyph"}` the whole time — worth saying
-plainly that the declaration has outlived four captures. Also **no GMCP source for the skill listing** — no skill
-field in any of the four captures, so the Skills tab has to scan `vskills`; a `Guild.Skills` package (name, level, point cost,
-daler cost, tree) would retire it, and unlike terrain nothing was promised, so
-this is an ask rather than a chase. Also the thank-yous: per-village TradeGoods
-and Guild.Warehouse made the text scans retirable, chat channels work.
+**B4. Dev report to the 3Scapes devs.** ~~To write~~ — **written 1 Sep**,
+`docs/Dev-Report-3Scapes-2026-09-01.md`, for Joakim to send. Leads with the
+thank-yous (TradeGoods and Warehouse each retired a text-scan burst; MIP+GMCP
+chat coexists), then the one blocking gap — Guild.Map declaring
+`enc={terrain:"glyph"}` and never sending terrain, across 96 Guild.Map messages
+in four sessions. Two confirmations asked: whether `Guild.City.heat[]` is
+index-aligned with `Guild.Fleet.rtargets_lineage[]` (both 13 entries, and the
+auto-raid targeting assumes it), and whether anything signals an incoming raid
+ENDING (the alarm currently ages out on a ten-minute guess). Two asks: a package
+for the skill listing, and whether `"Merc 1"` is a real subscription with data
+behind it. Closes by flagging Guild.Market waking up on 31 Aug in case that is
+news to them. Craft left out — not live yet.
 
 **B5. Subscribe to `Merc` (31 Aug).** Scrye asks for
 `["Char 1", "Room 1", "Comm 1", "Guild 1"]` and nothing else, so the packages
@@ -75,6 +76,99 @@ be its own plugin, the way 3s-vitals serves any guild.
 
 `Craft.*` stays unrequested on purpose: the crafting system is not enabled in
 game yet and only the field names exist, so its zeros are honest.
+
+**~~V10~~. Cyborg — the four unclear figures, ANSWERED 1 Sep (3s-cyborg 1.1.0).**
+Shipped as raw labelled numbers in 1.0.0 rather than as guessed bars; Joakim
+answered all four and the panel now shows each as what it is:
+
+| Field | What it means | How it shows now |
+|---|---|---|
+| `stored_power` | a **reserve** pool an implant grants, separate from power/power_max | both shown — "Reserve 7,600 stored" beside the power bar |
+| `si_pct` | hundredths of a percent toward the **next** SI level | `107 -> 108   54.78%` (5478/100; the two decimals are the precision the feed sends) |
+| `control_used` / `control_avail` | what active implants draw, and what is left to activate more with | `10,630/10,754  99%` with "124 free" — the sum is the capacity, since the feed sends no total |
+| `ammo` / `ammo_rounds` | the **magazine** and the **case** that refills it at 0 | two stores side by side, never a ratio |
+
+That the last one was worth getting right: dividing magazine by case would have
+read "41% of your ammo left" when the true figure is the two added together.
+
+Still unconfirmed: whether `stored_power` has a ceiling of its own, and whether
+`power_change` is a delta or a target (it read 4,912, equal to `power_max`, in
+the one full burst).
+
+**V11. Gentech — the unnamed fields (3s-gentech 1.0.0 → 1.1.0).** The capture
+came from another player's character, so unlike the Cyborg's unknowns these
+could not be settled by asking Joakim. Seven were shipped on the Status tab
+under the server's own field names, raw, in a "Not yet understood" block — the
+point being that a Gentech player could read them straight off the panel and say
+what they were. **On 1 Sep that is what happened, and five came back answered:**
+
+| Field | Value seen | Answer, now acted on (1.1.0) |
+|---|---|---|
+| `g2n` / `g2n_pct` | 853,877 and 14% | gexp still owed before the next glevel, and the same as a percent. Guild levels cap at 50 and become **echelons** after. Now a `Guild exp` bar on Status |
+| `reset_pct` | 16–64% across the session | the **timeslide** refill clock: at 100% you get a fresh set. Now a `refill` line under Timeslides |
+| `phase_rank` | 865 | how far the experiments have been trained/phased. Now a labelled row on Progress |
+| `rush` | 1 | a **healing power**. Now a Systems row (its switch is the one system flag the server keeps on `Guild.State`, hence the on-source field on `SYSROWS`) |
+
+The `g2n` reading brought a bonus the answer did not have to give: `gexp` 146,123
+plus `g2n` 853,877 is a round **1,000,000**, and 146,123 of that floors to
+exactly the **14%** the feed sent as `g2n_pct`. Two independent numbers agreeing
+on a threshold the server never sends, so the panel derives it and prints the
+feed's percent beside the bar as a live check, with a test pinning the identity.
+
+Still unnamed, still in the block:
+
+| Field | Value seen | Guess, deliberately not acted on |
+|---|---|---|
+| `dgexp` | 0 | a daily gexp figure? |
+| `illuminated` | 0 | a flag, meaning unknown |
+| `*_cs` on Stats | all 0 in the capture | the feed's own suffix on exp/gexp/rc rates — "current session"? |
+
+**A label 1.0.0 got wrong, corrected in 1.1.0.** `echelon_gexp` 1,962 against
+`echelon_required` 3,000 was shipped as "progress" *within* the current echelon,
+on the strength of it matching the feed's own `echelon_pct` exactly. The
+arithmetic was right and the label was not: it is echelons **held** against
+echelons **needed for the next Order**. The lesson is one this file keeps
+relearning — a cross-check that two numbers agree says nothing about what either
+of them counts.
+
+**The split, settled.** Earned gxp divides between two destinations, and the
+player sets the ratio in game and can change it at any time (`gexp_split`, 100 in
+the capture):
+
+| `gexp_split` | Destination | Fields | What it does |
+|---|---|---|---|
+| 100 | research credits | `res_creds` | spent to phase experiments, raising `phase_rank` |
+| 0 | echelons | `echelon_gexp` / `echelon_required` / `echelon_pct` | accumulates toward the next Order |
+
+The first draft of 1.1.0 had this as "a gexp pool vs echelons", reading the
+`gexp` field as the spendable side. It is not — research credits are. `gexp` /
+`g2n` is its own counter and keeps a neutral label. The panel now spells out both
+halves of the split (`100% to research credits · 0% to echelons`) with the
+remainder computed rather than echoed, so the line cannot be read as pointing at
+whichever number happens to sit nearest it, and it sits directly under
+`Res credits` — one of the two destinations it routes between. It also moved out
+of the Progress tab's bonus factors, which are passive multipliers; this is a
+live control.
+
+**Three wrong labels on this cluster across two versions** — "echelon progress",
+"gexp pool", "pool vs echelons" — every one of them from a number that verified
+cleanly. The pattern is worth naming: arithmetic that cross-checks confirms a
+*relationship*, never a *meaning*. On a guild nobody at hand plays, a field's
+meaning has exactly one source, and it is a player.
+
+**Still open (VERIFY LIVE).** How `echelon` 25, with its title and insignia,
+relates to the 1,962 echelons held — 25 is plainly not a count of the same thing.
+Whether `gexp` / `g2n` is itself fed by the split or counts total earned gxp
+regardless of routing is also untested; if the split is moved off 100 and the
+`gexp` bar stops advancing, that answers it.
+
+**Char.Vitals differs by guild — now two guilds to one.** A cyborg's and a
+gentech's both carry `guild`, `qp` and `qp_required`; a viking's carries none of
+the three, across four captures spanning 28 Aug to 31 Aug and two non-viking
+captures on 1 Sep. Two guilds having them and one not makes guild-conditional the
+likelier reading over "recently added", though a viking capture taken after 1 Sep
+would settle it outright. Either way, do NOT rely on them: 3s-vitals reads
+`guild.state.guild` for identity, which every guild sends on every page.
 
 ## Later — wants a decision or the server first
 

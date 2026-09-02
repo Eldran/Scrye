@@ -61,6 +61,46 @@ local function viking_set(gmcp)
   }
 end
 
+-- Cyborg (capture: Lobo, 1 Sep 2026). Nothing here is shared with the Viking
+-- set: a Cyborg's Guild.State carries power and heat where a Viking's carries
+-- bars and points, so the two only look alike because the package has the same
+-- name. Power is the resource, heat is what stops you using it, and both are on
+-- Guild.State. Coffin comes from Char.Vitals like everyone else's.
+--
+-- Heat is a percent, so its max is the literal 100 rather than a path - the
+-- gauge widget takes either.
+local function cyborg_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",         "char.vitals.maxhp"      },
+      { "Power",  "guild.state.power",      "guild.state.power_max"  },
+      { "Heat",   "guild.state.heat_pct",   100                      },
+      { "Coffin", "char.vitals.coffin",     "char.vitals.coffin_max" },
+    }
+  end
+  -- No MIP shape for this guild has been seen. Rather than guess at key names,
+  -- a MIP cyborg falls back to the generic set, which is at least correct.
+  return nil
+end
+
+-- Gentech (capture: another player's character, 1 Sep 2026). PU is the working
+-- pool and CPC the second one; both carry their own max on Guild.State. SP is
+-- real for this guild (202/202, unlike the junk a Viking or Cyborg gets in it)
+-- but the two guild pools are the ones that move in a fight, so they take the
+-- slots. Nobody at hand plays Gentech, so this set is the conservative reading
+-- of the capture rather than a player's preference - easy to change.
+local function gentech_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",      "char.vitals.maxhp"      },
+      { "PU",     "guild.state.pu",      "guild.state.pu_max"     },
+      { "CPC",    "guild.state.cpc",     "guild.state.cpc_max"    },
+      { "Coffin", "char.vitals.coffin",  "char.vitals.coffin_max" },
+    }
+  end
+  return nil   -- no MIP shape seen for this guild either
+end
+
 local function generic_set(gmcp, gp1, gp2)
   if gmcp then
     return {
@@ -118,10 +158,12 @@ local function build(set, gmcp, why)
           { type = "buttonrow", buttons = {
               { text = "Auto",    action = function() set_pref("auto") end },
               { text = "Viking",  action = function() set_pref("viking") end },
+              { text = "Cyborg",  action = function() set_pref("cyborg") end },
+              { text = "Gentech", action = function() set_pref("gentech") end },
               { text = "Generic", action = function() set_pref("generic") end },
           } },
           { type = "label", color = "dim",
-            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|generic' works too.)" },
+            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|generic' works too.)" },
       } },
     },
   }
@@ -133,17 +175,39 @@ end
 -- only when the answer changes - in practice once per character, then nothing.
 local function apply()
   local gmcp = (scrye.getState("char.vitals.hp") or "") ~= ""
-  local is_viking
+  -- guild.state.guild is the one field every guild's Guild.State carries, and it
+  -- is on every page of a paged burst, so it is the identity to read. (Char.Vitals
+  -- also carries `guild` for a cyborg but NOT for a viking, so it is not a
+  -- dependable source - noted rather than used.)
+  local gname = gmcp and (scrye.getState("guild.state.guild") or ""):lower() or ""
+  local is_viking, is_cyborg, is_gentech
   if gmcp then
-    is_viking = (scrye.getState("guild.state.guild") or "") == "viking"
+    is_viking = gname == "viking"
+    is_cyborg = gname == "cyborg"
+    is_gentech = gname == "gentech"
   else
     is_viking = (scrye.getState("vik.mseid") or "") ~= ""
   end
   local choice = pref
-  if choice == "auto" then choice = is_viking and "viking" or "generic" end
+  if choice == "auto" then
+    choice = (is_viking and "viking") or (is_cyborg and "cyborg")
+          or (is_gentech and "gentech") or "generic"
+  end
+
+  -- A guild with no GMCP has no known shape, so it falls through to generic
+  -- rather than to an empty set: decided BEFORE the chain below, because that
+  -- chain is an if/elseif and a late reassignment of `choice` would not be seen.
+  if choice == "cyborg"  and not cyborg_set(gmcp)  then choice = "generic" end
+  if choice == "gentech" and not gentech_set(gmcp) then choice = "generic" end
 
   local set, why
-  if choice == "viking" then
+  if choice == "gentech" then
+    set = gentech_set(gmcp)
+    why = "Gentech"
+  elseif choice == "cyborg" then
+    set = cyborg_set(gmcp)
+    why = "Cyborg"
+  elseif choice == "viking" then
     set = viking_set(gmcp)
     why = "Viking"
   else
@@ -176,7 +240,7 @@ set_pref = function(v)
 end
 
 scrye.addAlias{
-  pattern = "^vitals guild (auto|viking|generic)$", regex = true,
+  pattern = "^vitals guild (auto|viking|cyborg|gentech|generic)$", regex = true,
   run = function(v) set_pref(v) end,
 }
 

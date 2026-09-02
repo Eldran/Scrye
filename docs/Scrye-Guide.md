@@ -672,6 +672,8 @@ other, never both.**
 | `build` `atrade` `mkref` `mkdispatch` `mkunits` `vsk` `vstock` `vtick` `vikdump` `vplan clear` | Viking Status |
 | `vgo` `vhere` `vikloc` `vnav` `vmgo` `vmrun` `vicons` | Viking World |
 | `vgrudge` | Viking Kingdom |
+| `cyb` | 3S Cyborg |
+| `gt` · `gtsys` | 3S Gentech |
 | `vfx` | Viking Effects |
 | `araid` · `araidc` | Auto‑Raid (GMCP / classic) |
 
@@ -927,15 +929,19 @@ swallowed with a note — the pane is a HUD pane now, and scrolls and sizes itse
 A compact gauge stack: your vitals, plus the current enemy and its health. It works on both feeds
 and figures out which bars you should have on its own.
 
-A Viking gets HP / Seid / Vig / Rad by their own named keys. **Every other guild** gets HP / SP plus
-its two guild pools, labelled with the server's own names for them — so any guild's bars come out
-right without the plugin having to know that guild exists. On GMCP both sets carry a fifth gauge,
-**Coffin**.
+A Viking gets HP / Seid / Vig / Rad by their own named keys. A **Cyborg** gets HP / Power / Heat —
+power is the resource and heat is what stops you spending it. A **Gentech** gets HP / PU / CPC, its
+two guild pools. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
+pools, labelled with the server's own names for them — so any guild's bars come out right without
+the plugin having to know that guild exists. On GMCP the Viking and generic sets carry a fifth
+gauge, **Coffin**; the Cyborg set carries it as its fourth.
 
 | Command | What it does |
 |---|---|
 | `vitals guild auto` | Detect the bar set from the feed. **The default.** |
 | `vitals guild viking` | Pin the Viking set regardless. |
+| `vitals guild cyborg` | Pin the Cyborg set regardless. |
+| `vitals guild gentech` | Pin the Gentech set regardless. |
 | `vitals guild generic` | Pin the generic set regardless. |
 
 The **Settings** tab has the same three as buttons, and says which set is active, which feed it's
@@ -1186,6 +1192,96 @@ Bars run red at or under the warn threshold, amber up to four times it, green ab
 hits zero locally shows `gone?` for a few seconds rather than vanishing, in case the server just
 hasn't refreshed yet. The god's name and focus are shown without a countdown, because the server
 gives the expiry as a wall‑clock time the plugin sandbox can't anchor.
+
+---
+
+### 3S Cyborg — `cyb`
+
+The Cyborg guild HUD. Four tabs:
+
+- **Status** — power against its max, stored power and regen, heat with an overheating flag,
+  adrenaline, pain editor, stims, ammo and its loaded type, SI level, guild xp against the cost
+  of the next step, credits, rank and time in the guild.
+- **Implants** — the activated systems, two columns, sorted.
+- **Chassis** — hardpoints, power grid, weapon array, machine percent, then every body slot used
+  and free.
+- **Combat** — kills total and this login, combat rounds, online time, the strategy order and the
+  firing patterns.
+
+| Command | What it does |
+|---|---|
+| `cyb` | Print the Status page into the output window — a glance without opening the panel. |
+
+That's the only command; everything else is read from the tabs.
+
+Two pairs are worth knowing about because they look like one number and aren't. **Power** is your
+working pool (`power`/`power_max`); **Reserve** is a separate store an implant grants, shown beside
+it. **Ammo** is what's in the gun and the second figure is what's in the case — when the gun empties,
+the case tops it up, so the two are shown side by side and never divided. **SI** reads as
+`107 -> 108   54.78%`: the percentage is progress toward the next level, and at 100% the level
+ticks over. **Control** on the Chassis tab is what your active implants draw against everything you
+could draw, with the remaining headroom spelled out — that's the number that tells you whether you
+can switch another implant on.
+
+---
+
+### 3S Gentech — `gt` · `gtsys`
+
+The Gentech guild HUD. Five tabs:
+
+- **Status** — PU, PU store and CPC against their maxima, medkits, timeslides and their refill
+  clock, capsules, guild level, the guild‑exp and echelon/Order tracks, res credits and the split that feeds them,
+  attack/defence bias, efficiency.
+- **Systems** — a row per implanted system: on or off, what it's set to, and its live countdown.
+  Then the energy field level and the DDB / shield / synthorg loadout.
+- **Progress** — division, class and rank, time in the guild and in combat, kills and deaths,
+  phase rank, quest points, power slots, the passive bonus factors, and the quartermaster figures.
+- **Stats** — this fight's rounds and enemy, the exp and gexp rates, lifetime totals, best and
+  worst enemy by class.
+- **Config** — the autoguild order, panic heal, HMS, DNA and the gen timer.
+
+| Command | What it does |
+|---|---|
+| `gt` | Print the Status page into the output window. |
+| `gtsys` | Print the Systems page — the one with the countdowns. |
+
+The countdowns arrive from the server about every four seconds, so nothing is ticked locally: a
+number on the Systems tab is one the server sent. A countdown at zero reads `--` rather than `0s`,
+because a lapsed timer and a stopped clock look identical otherwise.
+
+**Where your gxp goes.** Guild levels stop at **50**; past that you climb *echelons*, and echelons
+in turn buy *Orders*. Earned gxp is **split** between two destinations, and you set the split in
+game and can change it whenever you like:
+
+| `Gexp split` | Where the gxp goes |
+|---|---|
+| **100** | all of it to **research credits** — which is what phases experiments, raising your phase rank |
+| **0** | all of it to **echelons** — which accumulate toward the next Order |
+
+The Status tab shows the setting with both halves spelled out (`100% to research credits · 0% to
+echelons`), sitting directly under Res credits — one of the two destinations it routes between.
+
+Three rows on Status track the results, and they are three different things despite looking like
+the same arithmetic:
+
+- **Guild exp** — `gexp` against `gexp + g2n`. The server never sends the threshold itself, so the
+  panel adds the two numbers together to get it — in the capture that came to a round 1,000,000 —
+  and shows the feed's own `g2n_pct` beside the bar as a live check that the sum is right.
+  `to next` spells out what is still owed, and reads **ready** rather than `0 gexp`.
+- **Echelons** — `echelon_gexp` against `echelon_required`: echelons **held** against echelons
+  **needed for the next Order**. `to Order` spells out the shortfall.
+- **Res credits** — the research-credit balance, fed by the split.
+
+**Timeslides** carry a `refill` line under them: at 100% the server hands out a fresh set.
+
+This one was built from a capture taken on **another player's character**. A field whose meaning
+the capture didn't establish was shipped under the **server's own field name** with its raw value,
+in a *"Not yet understood"* block on the Status tab, rather than under a label that might be a lie.
+Seven started there; five have since been named by a Gentech player — `g2n` and `g2n_pct` (the gexp
+still owed before the next level, and the same as a percent), `reset_pct` (the timeslide refill
+clock), `phase_rank` (how far your experiments are phased — raised with research credits), and
+`rush` (a healing power, so it now sits with the systems that toggle). Two are still unnamed and still in the block: **`dgexp`** and
+**`illuminated`**. If you play Gentech and recognise either, that block is where to look.
 
 ---
 
