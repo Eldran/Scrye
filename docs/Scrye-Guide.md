@@ -16,7 +16,7 @@ This guide has two parts:
 A "world" is a MUD connection. You can connect two ways:
 
 - **Quick connect** — type a host and port and go. This is session‑only: nothing is saved.
-- **Saved profiles** — a world defined by a MUD, and optionally an Account and a Character under it. Saved worlds remember their settings and reconnect the same way each time.
+- **Saved profiles** — a world defined by a MUD, and optionally an Account and a Character under it. Saved worlds remember their settings and reconnect the same way each time. Select a node in the sidebar and press **Connect**, or just **double-click a character**.
 
 Each connected world gets its own tab with an output pane and a command line.
 

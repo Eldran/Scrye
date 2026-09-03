@@ -179,6 +179,23 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    /// <summary>Double-click a character in the sidebar: connect it, exactly as selecting it
+    /// and pressing Connect would. Only characters - a double-click on a MUD or account header
+    /// is far more often an attempt to fold it than a wish to connect to it, and a MUD-level
+    /// connect logs nobody in. The single click that precedes a double-click has already made
+    /// the node the selection, which is what ConnectNode reads.</summary>
+    private void OnProfileTreeDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+    {
+        if (e.Source is not Avalonia.Visual v) return;
+        TreeViewItem? item = v.FindAncestorOfType<TreeViewItem>(includeSelf: true);
+        if (item?.DataContext is not ProfileNodeViewModel node) return;
+        if (node.Kind != Scrye.Core.Profiles.LayerKind.Character) return;
+        if (DataContext is not MainWindowViewModel vm) return;
+        vm.SelectedNode = node;
+        vm.ConnectNodeCommand.Execute(null);
+        e.Handled = true;
+    }
+
     /// <summary>Dismiss a toast on click.</summary>
     private void OnToastPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
     {

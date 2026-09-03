@@ -50,8 +50,10 @@
                                     ToolTip.Tip="Add a character under the selected MUD or account" />
                         </StackPanel>
                     </StackPanel>
+                    <!-- double-click a character to connect it (handled on the TreeView, not in
+                         the template: the XAML compiler cannot take events in nested templates) -->
                     <TreeView ItemsSource="{Binding Muds}" SelectedItem="{Binding SelectedNode}"
-                              Background="Transparent">
+                              Background="Transparent" DoubleTapped="OnProfileTreeDoubleTapped">
                         <TreeView.Styles>
                             <Style Selector="TreeViewItem">
                                 <Setter Property="IsExpanded" Value="True" />
