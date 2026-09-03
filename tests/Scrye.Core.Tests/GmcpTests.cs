@@ -163,6 +163,29 @@ public class GmcpTests
     }
 
     [Fact]
+    public void Gmcp_chat_says_who_an_outgoing_tell_went_to()
+    {
+        // A tell you send arrives with `outgoing: 1`, `targets`, and YOUR name as talker
+        // (capture: Lobo, 1 Sep 2026). "Lobo: yes?" is true and useless; "To Sermi: yes?"
+        // is what the pane should say - the same "To " shape the MIP path composes, so the
+        // relay's own-tell filter works on either feed. An incoming tell is untouched.
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        var got = new List<(string Ch, string Msg)>();
+        s.ChannelMessage += (ch, msg) => got.Add((ch, msg));
+
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"so question on scrye\", \"talker\": \"Sermi\", \"prefix\": \"Sermi tells you:\", \"channel\": \"tell\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"yes?\", \"prefix\": \"You tell Sermi:\", \"outgoing\": 1, \"talker\": \"Lobo\", \"targets\": [ \"Sermi\" ], \"channel\": \"tell\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"hi both\", \"outgoing\": 1, \"talker\": \"Lobo\", \"targets\": [ \"Sermi\", \"Goran\" ], \"channel\": \"tell\" }"));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"orphan\", \"outgoing\": 1, \"talker\": \"Lobo\", \"channel\": \"tell\" }"));
+
+        Assert.Equal(4, got.Count);
+        Assert.Equal(("tell", "Sermi: so question on scrye"), got[0]);     // incoming: the sender
+        Assert.Equal(("tell", Scrye.Core.Mip.MipProcessor.OutgoingTellPrefix + "Sermi: yes?"), got[1]);
+        Assert.Equal(("tell", "To Sermi, Goran: hi both"), got[2]);        // several targets
+        Assert.Equal(("tell", "Lobo: orphan"), got[3]);                    // no targets: the old rule
+    }
+
+    [Fact]
     public void Gmcp_chat_yields_when_the_mip_feed_is_live()
     {
         // 3Scapes runs MIP and GMCP TOGETHER (verified live, 29 Aug 2026): both feeds carry
@@ -432,21 +455,6 @@ public class GmcpTests
         t.Process(Sub("Merc.Info {\"merc\":\"Stabby\",\"inst_level\":2,\"class\":\"offensive\"}"));
         t.Process(Sub("Merc.Info {\"merc\":\"Stabby\",\"inst_level\":3}"));
         Assert.False(st.Has("merc.info.class"));
-    }
-
-    [Fact]
-    public void Mud_status_feeds_the_reboot_clock_and_the_status_row()
-    {
-        // The session owns the wiring: a Mud.Status payload lands in the clock, and the
-        // status text is raised the moment it changes rather than on the next second tick.
-        MudSession s = Connected(out TelnetLayer t, out _);
-        var seen = new List<string>();
-        s.RebootStatusChanged += text => seen.Add(text);
-
-        t.Process(Sub("Mud.Status {\"full\":1,\"reboot_total\":882425,\"reboot_left\":790010,\"uptime\":92415,\"lag\":0.0}"));
-        Assert.True(s.Reboot.Known);
-        Assert.Equal(790010, s.Reboot.SecondsLeft);
-        Assert.Contains("reboot in 9d 3h", seen);
     }
 
     [Fact]

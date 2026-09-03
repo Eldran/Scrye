@@ -863,7 +863,27 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             // the failure mode is a missing name, never a mangled line.
             string talker = root.TryGetProperty("talker", out System.Text.Json.JsonElement tk)
                 ? tk.GetString() ?? "" : "";
-            if (talker.Length > 0
+            // A tell YOU sent: the payload says so (`outgoing: 1`, `targets: [...]`, talker =
+            // you). Naming yourself as the speaker is technically right and useless - what a
+            // reader wants is who it went TO. Composed as "To <name>: text", the exact shape the
+            // MIP path gives an outgoing tell (OutgoingTellPrefix), so the cross-world relay's
+            // "do not echo my own tells" filter sees one shape from either feed.
+            bool outgoing = root.TryGetProperty("outgoing", out System.Text.Json.JsonElement og)
+                && (og.ValueKind == System.Text.Json.JsonValueKind.True
+                    || (og.ValueKind == System.Text.Json.JsonValueKind.Number && og.GetDouble() != 0));
+            string targets = "";
+            if (outgoing && root.TryGetProperty("targets", out System.Text.Json.JsonElement tg)
+                && tg.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var names = new List<string>();
+                foreach (System.Text.Json.JsonElement e in tg.EnumerateArray())
+                    if (e.ValueKind == System.Text.Json.JsonValueKind.String && (e.GetString() ?? "").Length > 0)
+                        names.Add(e.GetString()!);
+                targets = string.Join(", ", names);
+            }
+            if (targets.Length > 0)
+                text = MipProcessor.OutgoingTellPrefix + targets + ": " + text;
+            else if (talker.Length > 0
                 && text.IndexOf(talker, StringComparison.OrdinalIgnoreCase) < 0)
                 text = talker + ": " + text;
             ChannelMessage?.Invoke(channel, text);
