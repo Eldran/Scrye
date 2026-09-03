@@ -22,6 +22,18 @@ is the memory.
 
 ## Build next — code ready to write, no blockers
 
+**Trader churn, fixed 2 Sep (2.23.1).** Live: ore 187, Raw> 300 - the restocker bought a
+FULL cart (313 -> 500) and the next pass sold the 200 overshoot to Hafrfjord. Restock now
+buys the deficit (never the cart, no fill-minimum - a top-up is not a trade), and a raw
+with a buy cart inbound is not sold while it is on the road. Six harness checks; three
+mutants killed, one equivalent (the deficit guard is redundant with the dispatch minimum).
+The 40-ore cart itself was a second bug, found in the 23:27 capture (ore sells at 5-6
+daler, finery at 301 with 196 wanted): ore at 500 counted as a FLUSH pile and jumped the
+queue past the value floor, though only 200 of it sat above Raw>. Flush now reads the
+sellable surplus, not the pile; and under warehouse pressure (the session was at 84%)
+the biggest cart wins, which the status line had claimed all along while the sort went
+on ranking by value. Three checks, two mutants killed.
+
 **B1. Trader polish (viking-status).** Whatever V1 turns up, plus small
 sharp edges already known: show a town's *claimed* (debited) demand on the
 Trade tab so the UI matches what the trader believes; a `atrade log` profit
@@ -169,6 +181,94 @@ captures on 1 Sep. Two guilds having them and one not makes guild-conditional th
 likelier reading over "recently added", though a viking capture taken after 1 Sep
 would settle it outright. Either way, do NOT rely on them: 3s-vitals reads
 `guild.state.guild` for identity, which every guild sends on every page.
+
+**~~B5~~ answered 2 Sep — the first capture with all seven roots
+(`gmcp-fields-Goran-20260902-1526`, 8,079 messages, 28 packages).** Everything
+asked for answered `1`. What actually arrived, against every earlier capture:
+
+| Package | Status | What it carries |
+|---|---|---|
+| `Merc.Info` | **new, 5 msgs** | one full: `merc`, `class` (offensive), `dtype` (Edged), `theme`, `perm_level`/`perm_cap` (75/150), `inst_level`/`inst_cap` (1→5 during the session /30), `eff_level`, `cost`, `follow`, `status`, `gender`; then deltas of `inst_level` alone |
+| `Merc.Vitals` | **new, 647 msgs** — the live one | full: `hp`/`hp_max` (19000), `stam`/`stam_max`/`stam_regen`, `ap`/`ap_max`/`ap_regen`, `dormant`, `abils`, `target`, `target_hp`; deltas per round: `stam`, `target_hp`, sometimes `target` |
+| `Merc.Stats` | **new, 130 msgs** | full: `perm_xp`/`perm_xp_next`, `inst_xp`/`inst_xp_next`, `skill_points`, `fund`, `spent_total`/`spent_boot`/`spent_skills`/`spent_spec`, session `rounds`/`dmg_out`/`dmg_in`/`healing`/`abilities` and `life_*` lifetime twins; deltas every ~5 rounds |
+| `Merc.Talents` | **new, 1 msg** | five talents (`bandage` min 1, `critical` 30, `combo` 60, `rend` 90, `frenzy` 120) each `points`/`eff`/`min_level`, plus `points` free (5), `allocs`, `next_cost` |
+| `Merc.Skills` | **new, 1 msg** | twelve skills (`attacks`, `cost_reduction`, `stamina_regen`, `ap_regen`, `max_stamina`, `max_ap`, `hp_bonus`, `hp_regen`, `ability_boost`, `weapon_use`, `armor_use`, `damage_types`, `bury`) each `raw`/`eff`, plus `points` (42), `allocs`, `next_cost` |
+| `Mud.Status` | **new, 11 msgs, one every ~122 s** | full: `uptime`, `reboot_left`, `reboot_total`, `lag`; deltas: `uptime`, `reboot_left` |
+| `Craft.*` | answered `1`, **sent nothing** | as expected — not live |
+| `Guild.Map` | unchanged | `enc.terrain` still declared, still never sent (24 msgs) — the dev report's point stands |
+| `Guild.City` | **`cityplan_terrain[]` is new** | a 20-wide glyph grid on pages 7–8 (`c . f ^ w M W G B`) — the settlement plan's terrain layer, the thing the Plan grid's tiles were drawn without |
+| `Guild.Livestock` | `bqueue[]` now populated | breeding queue rows: `species`, `meat`, `trait`, `qty`, `slot`, `secs` (nothing consumes Guild.Livestock at all yet) |
+| `Guild.Voyage` | `vaids.chart_fragment`, `vgoods.beef` | both fall through viking-world's generic `counts()` — nothing to do |
+| `Char.Vitals` | viking, post-1 Sep: **no `guild`/`qp`** | settles the question above — the three fields are guild-conditional |
+
+Not in this capture but seen before (other guilds, other sessions): `Guild.Chassis`,
+`Guild.Combat`, `Guild.Config`, `Guild.Powers`, `Guild.Progress`, `Guild.Stats`,
+`Guild.Systems` — all cyborg/gentech, absent because this is a viking.
+
+**~~B6~~ built 2 Sep — `3s-merc` 1.0.0** (`src/Scrye.App/plugins/3s-merc`, harness
+`_lab/merc_test.lua`: 58 checks, four mutants killed, one equivalent mutant noted in its
+header). Status/Stats/Talents/Skills as planned; the gauges bind to the plugin's own
+merged state so they hold on a host without B7. **VERIFY LIVE:** the five raw fields on
+the Status page (`status`, `cost`, `theme`, `gender`, `abils`), whether `spent_boot`/
+`spent_spec` are boost and talents (the three parts sum to `spent_total` exactly, which
+says they are the parts, not what they buy), and which level a talent's `min_level` is
+gated on — the plugin uses `eff_level`. Wants a Guide screenshot once seen live.
+*The original note:* A `3s-merc` plugin — new, any guild. Five packages, one hireable NPC, no
+guild gating: its own plugin beside 3s-vitals, exactly as the 31 Aug note guessed.
+Panel: gauges for HP/stamina/AP off `Merc.Vitals` (with `target`/`target_hp` as the
+merc's own enemy line), a Stats tab (session vs lifetime damage, xp to next
+permanent and instance level, spend), and a Talents/Skills tab listing each
+allocation with its `min_level` gate and `next_cost` — the "can I afford the next
+point" question the Skills tab answers for viking skills. `dormant` and `status` want
+a live verdict before they are labelled. The farmer gets a free bonus: `Merc.Vitals`
+`target`/`target_hp` is a second fight feed for a character farming with a merc.
+
+**~~B7~~ done 2 Sep** — `StateStore` latches a package as snapshot/delta on its first
+`full`; `MergeModeOf` reports whole / paged / snapshot-delta and `.gmcp` tags each
+package with it. Four tests in `GmcpTests` (Merc.Vitals delta keeps hp; Room.Contents
+empty still clears; paged beats full; no-`full`-ever stays whole). Mutation: the latch
+line reverted fails two of them. Needs Joakim's VS build + `dotnet test`.
+*The original note:* StateStore: `full`/delta semantics, a client fix that B6 needs first. Every
+new package is snapshot-then-delta: the first payload carries `full: 1` and every
+field, later ones carry only what changed and no `full`. `Room.Contents` and
+`Guild.Market` use the same flag. `StateStore.SetJson` prunes every key a payload does
+not carry unless the package has latched as paged — so after the first
+`Merc.Vitals` delta `{merc, stam, target_hp}` the tree has lost `merc.vitals.hp`,
+`hp_max`, `ap` and the rest, and a gauge bound to them blinks out exactly the way the
+Seid bars did before the paged latch. The rule that fits every capture: a package
+that has ever sent `full` is snapshot/delta keyed — `full` present means replace the
+tree (so an empty `Room.Contents` still clears the previous room), absent means
+merge. Same latch shape as `_paged`, one test per case, and `.gmcp` should say which
+packages are latched which way.
+
+**~~B8~~ done 2 Sep** — `Scrye.Core.Gmcp.RebootClock`, fed by the session from
+`Mud.Status`, ticked on the 1 s clock; `reboot in 9d 3h` on the input row (hidden until
+known), warnings at 30 and 5 minutes as a system line + notify, re-armed when the
+countdown jumps up. `RebootClockTests` (11 cases) + one session-wiring test; three
+mutants killed (once-only latch, re-arm, local countdown). Thresholds are constants for
+now — make them a profile setting if 30/5 turns out wrong in play.
+*The original note:* `Mud.Status` — reboot countdown. Too small for a plugin: a `reboot in 9d 3h`
+item on the status bar from `mud.status.reboot_left` (decremented locally between
+the 122 s ticks), and one notify at a configurable threshold so a long farm run is
+not caught by a reboot. `lag` alongside it if it ever reads non-zero.
+
+**B9. City Plan terrain (viking-status).** `cityplan_terrain` rows are the background
+the Plan grid has been drawing on plain tiles. Read it on Guild.City pages 7–8, keep
+it in the `cp_*` cache, and draw it under the placed buildings with the 1.17 image
+tiles (`f` tree, `^` hill, `w` water) — the glyph meanings (`M`/`W` moat and wall?
+`G` gate, `B` bridge?, `c` coast) are guesses until Joakim reads the grid against
+`vcity`: VERIFY LIVE before any legend is printed.
+
+**~~B10~~ built 2 Sep — viking-status 2.23.0, the Livestock tab** (herds, queue, feed,
+per-lineage markets scored against your best herd; 27 harness checks, five mutants
+killed plus one sharpened — "equal is not better" needed a lot with every stat equal).
+VERIFY LIVE: `hv` read as harvest-ready, `lfeed` grain/water as per-tick, quality as %.
+*The original note:* Livestock is unconsumed. `Guild.Livestock` (herds, breeding queue, feed,
+market per lineage) has arrived in every viking capture since 27 Aug and no plugin
+reads it. With `bqueue` now carrying real rows it is a tab's worth of data for
+viking-status: herds with quality/fertility/yield, the breeding queue with its
+timers, and `lfeed` grain/water against `sconsume`. Lower than B6–B9; noted so it
+stops being invisible.
 
 ## Later — wants a decision or the server first
 

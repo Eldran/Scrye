@@ -392,6 +392,27 @@ Two things worth knowing, both from 3Scapes' own help: packages flow **only whil
 and **only when their values change**, and the Room packages are sent when you *enter* a room —
 `look` does not resend them. A quiet feed is often just a quiet moment.
 
+**How a payload lands in the tree depends on the package's shape**, and `.gmcp` tags each
+package with the rule it is under:
+
+- *whole* (untagged) — every payload is the whole object, so a field it does not carry is removed.
+  `Char.Vitals`, `Char.Combat`, `Room.Info`.
+- *paged* — the package has sent `pages`; nothing is ever removed, because "not in this
+  payload" means "on another page". Every `Guild.*` list.
+- *snapshot/delta* — the package has sent `full`; a payload **with** `full` replaces the tree,
+  one without it merges. `Merc.*`, `Mud.Status`, `Guild.Market` — and `Room.Contents`, which
+  sends `full` every time, so an empty room still clears the last one's items.
+
+The rule is learned from what the package has sent, never assumed, so a package that has only
+ever sent deltas is treated as whole.
+
+**The reboot countdown.** `Mud.Status` (subscribed as `"Mud 1"`) carries the server's uptime
+and seconds to the next reboot, refreshed about every two minutes. Scrye shows it on the world's
+tab — `● Goran · 9d 3h`, hover for what it is — counting down between refreshes, and at thirty minutes and again at
+five it says so in the output *and* notifies (so it reaches the phone): a reboot cuts off
+exactly the unattended runs a notification exists for. Logging in already inside a mark shows
+the countdown without a toast.
+
 ### The feed as it actually is
 
 Captured from a live session rather than read off the help text, because two of these are not
@@ -674,6 +695,7 @@ other, never both.**
 | `vgrudge` | Viking Kingdom |
 | `cyb` | 3S Cyborg |
 | `gt` · `gtsys` | 3S Gentech |
+| `merc` | 3S Mercenary |
 | `vfx` | Viking Effects |
 | `araid` · `araidc` | Auto‑Raid (GMCP / classic) |
 
@@ -917,6 +939,16 @@ one you're playing.
 | `chat unnotify <channel>` | Unsubscribe it. |
 | `chat sound on\|off` | The PC beep half only — the phone push is unaffected. Default **on**. `chat sound` alone reports. |
 | `chat clear` | Clear the saved history that gets replayed at load (the pane itself is cleared from the pane). |
+| `chat channels` | Every channel that has ever spoken, with whether it is shown and what colour it wears. |
+| `chat hide <channel>` / `chat show <channel>` | Take a channel out of the pane (and the replayed history), or put it back. A hidden channel is still written to the log, and a notify subscription on it still fires — hiding is about the pane's noise, not the message. |
+| `chat color <channel> <name\|#RRGGBB\|token\|->` | Give a channel its own colour: one of sixteen names (`chat colors` shows them), a theme token (`dim`, `accent`, `info`, `success`, `warning`, `error`), or a hex; `-` puts the built-in default back. `colour` works too. |
+
+The **Chat** panel does the same by mouse, the Trade tab's way: the left column lists every
+channel in its colour — click one to *pick* it (it turns bold with a `>`), then click a colour
+in the right column to paint it. Each channel line carries its own `hide`/`show` link, and a
+box underneath takes the verbs without `chat ` (`hide gamers`, `color party lime`). Both settings
+persist per character. In the command form the colour is the last word, so a channel with a
+space in its name works too: `chat color Viking Trade teal`.
 
 At most one notification fires per line: a tell beats a subscribed channel, which beats a watched
 name. The old miniwindow commands (`chatwin`, `chatup`, `chatdown`, `chatend`, `chatsize`) are
@@ -975,10 +1007,20 @@ HP / Seid / Vig / Rad bars — and every other guild's too.
 
 ### Viking Status — `atrade` · `build` · `vsk` · `mkref`
 
-The settlement half of the HUD, fed by the `Guild.*` GMCP packages. Twelve tabs: **Stats**,
-**Skills**, **City**, **Builds**, **Production**, **People**, **Settlers**, **Holds**, **Trade**,
-**Trade Auto**, **Trade Log** and **Feeds** (the last being the debugging window — every package
-with its burst count and age, and every feed key with its value).
+The settlement half of the HUD, fed by the `Guild.*` GMCP packages. Thirteen tabs: **Stats**,
+**Skills**, **City**, **Builds**, **Production**, **People**, **Settlers**, **Holds**, **Livestock**,
+**Trade**, **Trade Auto**, **Trade Log** and **Feeds** (the last being the debugging window — every
+package with its burst count and age, and every feed key with its value).
+
+**Livestock** reads `Guild.Livestock`: every herd by building — breed, head, generation, trait,
+age, and its constitution / hardiness / vigour / fertility / yield with quality as a percent,
+plus *harvest* when there is something to collect and *STERILE* when there is not going to be —
+the breeding queue with each slot's animal, trait, meat and countdown, feed per tick, and one
+market block per lineage whose livestock market you have looked at (`Lodbrok's Hold`,
+`Ericsgard`, …). In a market block each lot's five stats are coloured against your own best herd
+of that species: green beats it, dim does not — so a better animal jumps out of a list of
+thirty without reading the numbers. A lineage's block stays until the next full burst, which is
+the server's own idea of what is current.
 
 #### The auto‑trader — `atrade`
 
@@ -1222,6 +1264,36 @@ the case tops it up, so the two are shown side by side and never divided. **SI**
 ticks over. **Control** on the Chassis tab is what your active implants draw against everything you
 could draw, with the remaining headroom spelled out — that's the number that tells you whether you
 can switch another implant on.
+
+---
+
+### 3S Mercenary — `merc`
+
+Your hired mercenary, any guild — a merc is an NPC anyone can hire, so this is its own plugin
+beside Vitals rather than a tab in a guild HUD. It reads the five `Merc.*` packages (3Scapes
+sends them once the client asks for `"Merc 1"`, which Scrye does) and nothing else. Four tabs:
+
+- **Status** — HP, stamina and action points as gauges, the merc's own target and how much of
+  it is left, then the page: class and weapon type, permanent level against its cap and the
+  level of *this hire* against its own, regen per round, whether it is following, whether it is
+  dormant. Anything the feed sends that nobody has named yet (`status`, `cost`, `theme`,
+  `gender`, `abils`) is printed raw under its own key in a "not yet understood" line — read it
+  off the panel, say what it is, and it gets a label.
+- **Stats** — xp toward the next permanent and instance level, unspent skill points, the fund;
+  this session's rounds, damage out and in, healing and abilities beside their lifetime twins;
+  and what has been spent, with its three parts.
+- **Talents** — every talent with its points, effective value and level gate, sorted by the
+  gate, and marked *trained*, *open* or *locked (lvl N)* against the merc's level. The header
+  says how many points are free and what the next one costs.
+- **Skills** — the same for skills (raw and effective), trained ones first.
+
+| Command | What it does |
+|---|---|
+| `merc` | Print the Status page into the output window. |
+
+The packages arrive as one snapshot and then deltas — a round sends only `stam` and
+`target_hp` — and the plugin merges them itself, so it shows the same bars on a client that
+predates the state tree's own snapshot/delta rule (below). Nothing here sends a command.
 
 ---
 
