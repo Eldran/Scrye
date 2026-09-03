@@ -217,6 +217,29 @@ public class GmcpTests
         Assert.NotNull(s.GmcpAudit.SubscriptionSent);
     }
 
+    /// <summary>
+    /// The roots themselves, pinned by name. The test above walks GmcpPackages, so it passes
+    /// whatever that array happens to hold and cannot notice a root going missing - which is
+    /// exactly how Merc, Craft and Mud stayed unsubscribed while every capture showed their
+    /// packages at 0 and the doc comment claimed the client subscribed to everything.
+    ///
+    /// A root dropped here is silent in a way nothing else catches: the server simply stops
+    /// sending, the inspector shows no package, and there is no error anywhere. So the list
+    /// is written out longhand. Adding a root is meant to require editing this line.
+    /// </summary>
+    [Fact]
+    public void Subscribes_to_every_root_the_server_advertises()
+    {
+        Assert.Equal(
+            new[] { "Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" },
+            MudSession.GmcpPackages);
+
+        MudSession s = Connected(out _, out List<byte> wire);
+        string sent = Text(wire);
+        foreach (string root in new[] { "Merc 1", "Craft 1", "Mud 1" })
+            Assert.Contains(root, sent);
+    }
+
     [Fact]
     public void The_bare_supports_spelling_is_tried_after_a_few_silent_seconds()
     {
@@ -337,6 +360,93 @@ public class GmcpTests
         t.Process(Sub("Char.Vitals {\"hp\":110,\"maxhp\":200}"));
         Assert.False(st.Has("char.vitals.coffin"));
         Assert.Equal(110, st.Get("char.vitals.hp").AsNumber());
+    }
+
+    [Fact]
+    public void A_snapshot_delta_package_keeps_what_a_delta_does_not_carry()
+    {
+        // The third shape (first seen 2 Sep 2026, the day Merc and Mud were subscribed): one
+        // payload with "full":1 and every field, then deltas carrying only what changed and
+        // no "full". Merc.Vitals is the live case - {hp, hp_max, stam, ap, ...} once, then
+        // {stam, target_hp} every round. Whole-object pruning on the first delta deleted the
+        // merc's hp from the tree, the Seid blink again on an unpaged package.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Merc.Vitals {\"stam_max\":264,\"hp_max\":19000,\"stam\":264,\"full\":1,"
+                      + "\"target_hp\":0,\"hp\":19000,\"merc\":\"Stabby\",\"ap_max\":125,\"ap\":125}"));
+        t.Process(Sub("Merc.Vitals {\"merc\":\"Stabby\",\"stam\":230,\"target_hp\":91,\"target\":\"Wiremouth\"}"));
+
+        Assert.Equal(19000, st.Get("merc.vitals.hp").AsNumber());      // untouched by the delta
+        Assert.Equal(230, st.Get("merc.vitals.stam").AsNumber());      // updated by it
+        Assert.Equal("Wiremouth", st.Get("merc.vitals.target").Text);  // added by it
+        Assert.Equal("snapshot/delta", st.MergeModeOf("Merc.Vitals"));
+
+        // a later SNAPSHOT still replaces the tree: a field it no longer carries is gone
+        t.Process(Sub("Merc.Vitals {\"full\":1,\"hp\":100,\"hp_max\":19000,\"merc\":\"Stabby\"}"));
+        Assert.False(st.Has("merc.vitals.stam"));
+        Assert.Equal(100, st.Get("merc.vitals.hp").AsNumber());
+    }
+
+    [Fact]
+    public void Room_contents_sends_full_every_time_so_an_empty_room_still_clears()
+    {
+        // Room.Contents carries "full":1 on every payload, so the snapshot/delta latch must
+        // not cost it the one thing pruning is FOR: the previous room's items disappearing.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Room.Contents {\"full\":1,\"items\":[{\"type\":\"monster\",\"count\":1,\"name\":\"Wiremouth guard\"}]}"));
+        Assert.Equal("Wiremouth guard", st.Get("room.contents.items.0.name").Text);
+
+        t.Process(Sub("Room.Contents {\"full\":1,\"items\":[]}"));
+        Assert.False(st.Has("room.contents.items.0.name"));
+    }
+
+    [Fact]
+    public void A_paged_package_stays_unpruned_whatever_its_full_flag_says()
+    {
+        // Guild.State pages carry "full":1 too. The page latch is the stronger claim: a page
+        // is not a snapshot of the package, and pruning on it is the original blink.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Guild.State {\"page\":1,\"pages\":3,\"full\":1,\"bars\":{\"gp1\":5852}}"));
+        t.Process(Sub("Guild.State {\"page\":3,\"pages\":3,\"full\":1,\"points\":{\"viga\":8082}}"));
+        t.Process(Sub("Guild.State {\"page\":1,\"pages\":3,\"full\":1,\"bars\":{\"gp1\":5900}}"));
+
+        Assert.Equal(8082, st.Get("guild.state.points.viga").AsNumber());
+        Assert.Equal("paged", st.MergeModeOf("Guild.State"));
+        Assert.Equal("whole", st.MergeModeOf("Char.Vitals"));
+    }
+
+    [Fact]
+    public void A_package_that_never_sent_full_is_still_whole_object()
+    {
+        // The latch is earned by a "full", never assumed: a package whose deltas arrive
+        // without one ever having been seen (a reconnect mid-stream) prunes as before, so a
+        // stale field cannot outlive the payload that dropped it.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        StateStore st = s.GameState;
+
+        t.Process(Sub("Merc.Info {\"merc\":\"Stabby\",\"inst_level\":2,\"class\":\"offensive\"}"));
+        t.Process(Sub("Merc.Info {\"merc\":\"Stabby\",\"inst_level\":3}"));
+        Assert.False(st.Has("merc.info.class"));
+    }
+
+    [Fact]
+    public void Mud_status_feeds_the_reboot_clock_and_the_status_row()
+    {
+        // The session owns the wiring: a Mud.Status payload lands in the clock, and the
+        // status text is raised the moment it changes rather than on the next second tick.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        var seen = new List<string>();
+        s.RebootStatusChanged += text => seen.Add(text);
+
+        t.Process(Sub("Mud.Status {\"full\":1,\"reboot_total\":882425,\"reboot_left\":790010,\"uptime\":92415,\"lag\":0.0}"));
+        Assert.True(s.Reboot.Known);
+        Assert.Equal(790010, s.Reboot.SecondsLeft);
+        Assert.Contains("reboot in 9d 3h", seen);
     }
 
     [Fact]

@@ -76,6 +76,12 @@
                         <StackPanel Orientation="Horizontal" Spacing="6" ToolTip.Tip="{Binding StatusTip}">
                             <Ellipse Width="8" Height="8" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
                             <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+                            <!-- server reboot countdown (GMCP Mud.Status): "· 9d 3h", hidden until the server has said -->
+                            <TextBlock Text="{Binding RebootTabText}" IsVisible="{Binding HasRebootText}"
+                                       VerticalAlignment="Center" FontSize="11"
+                                       Foreground="{DynamicResource ScryeTextDim}"
+                                       AutomationProperties.Name="Reboot countdown"
+                                       ToolTip.Tip="{Binding RebootTip}" />
                             <Border Background="{DynamicResource ScryeBadgeBg}" CornerRadius="8" Padding="6,0"
                                     IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
                                 <TextBlock Text="{Binding UnreadText}" FontSize="11" Foreground="White" />

@@ -92,6 +92,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public EventLog Log => _log;
     /// <summary>Structured game state (GMCP/MIP → watchable tree). The HUD and inspector read this.</summary>
     public StateStore GameState => _state;
+    /// <summary>The server's reboot countdown from <c>Mud.Status</c>, ticked on the 1s clock.
+    /// <see cref="RebootStatusChanged"/> says when its status text moves.</summary>
+    public Scrye.Core.Gmcp.RebootClock Reboot { get; } = new();
     /// <summary>The active recorder, or null when not recording.</summary>
     public SessionRecorder? Recorder => _recorder;
     public bool IsRecording => _recorder is not null;
@@ -158,6 +161,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// plugins should be told.</summary>
     public event Action<IdleGuardSignal>? IdleSignal;
 
+    /// <summary>The reboot countdown's status text changed (<c>"reboot in 9d 3h"</c>, or empty
+    /// once nothing is known). Raised on the loop thread, at most once a minute in steady
+    /// state; the shell shows it on the world's status row.</summary>
+    public event Action<string>? RebootStatusChanged;
+    private string _rebootStatusShown = "";
+
     /// <summary>The dead-man's switch. Settings come from the profile; the session drives it from
     /// the same one-second tick that runs timers.</summary>
     public IdleGuard IdleGuard { get; } = new();
@@ -192,6 +201,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             if (GmcpAudit.Raw) RaiseLine(Line.FromText($"[GMCP] {pkg} {json}", SysColour));
             if (pkg.Equals("Comm.Channel.Text", StringComparison.OrdinalIgnoreCase))
                 RaiseGmcpChannel(json);
+            if (pkg.Equals("Mud.Status", StringComparison.OrdinalIgnoreCase))
+            {
+                Reboot.Observe(json);
+                RebootTick(advance: false);
+            }
             GmcpReceived?.Invoke(pkg, json);
         };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
@@ -707,6 +721,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                             _sequences.Tick(1.0);
                             GmcpTick();
                             MipTick();
+                            RebootTick(advance: true);
                         }
                         Ticked?.Invoke(TickIntervalSeconds);
                         break;
@@ -1075,13 +1090,30 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <c>Char.Something</c> later starts sending it without a client release — GMCP's own
     /// reason for allowing "Char 1" to stand for the family.
     ///
-    /// <para>These four are what 3Scapes documents: Char (vitals, combat), Room (info,
-    /// contents, map), Comm (chat) and Guild (identity, state, guild-specific extras).
-    /// Subscribing to everything is the right default for a client with an inspector: a
-    /// package you did not ask for is invisible, and invisible is the hardest kind of missing
-    /// data to diagnose.</para>
+    /// <para>These seven are every root <c>Core.Supported</c> names: Char (vitals, combat),
+    /// Room (info, contents, map), Comm (chat), Guild (identity, state, guild-specific
+    /// extras), Merc (hireable NPCs), Craft and Mud. Subscribing to everything is the right
+    /// default for a client with an inspector: a package you did not ask for is invisible,
+    /// and invisible is the hardest kind of missing data to diagnose.</para>
+    ///
+    /// <para>Merc, Craft and Mud were absent until 2 Sep, which is why every capture before
+    /// then shows their nine packages sitting at 0 in <c>Core.Supported</c>. A 0 there means
+    /// "not on for you", not "no such package" — see docs/Plan-Viking-GMCP.md §2b, and note
+    /// that reading it the other way once produced a confident and wrong claim that the
+    /// server had no merc data.</para>
+    ///
+    /// <para>Craft is subscribed even though the system is not live in game: the fields exist,
+    /// the cost of asking is one word in the handshake, and a server that sends nothing costs
+    /// nothing. Mud.Status is the one to watch — nobody has seen its shape or its cadence, so
+    /// if it turns out to tick every second the inspector will say so.</para>
+    ///
+    /// <para>Roots are not the whole story. <c>Core.Supported</c> names three Guild packages
+    /// and a Viking actually receives sixteen, so the advertisement is a summary rather than
+    /// an inventory. Merc and Craft may likewise deliver more than the five and three names
+    /// they advertise.</para>
     /// </summary>
-    public static readonly string[] GmcpPackages = { "Char 1", "Room 1", "Comm 1", "Guild 1" };
+    public static readonly string[] GmcpPackages =
+        { "Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" };
 
     private bool _gmcpHandshakeSent;
     private int _gmcpSecondsSinceSubscribe = -1;
@@ -1140,8 +1172,30 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         SendGmcpSubscription("Core.Supports");
     }
 
+    /// <summary>One second of the reboot countdown: advance it, raise the status text when it
+    /// changed, and say so — in the output and as a notify, so it reaches the phone — at each
+    /// warning threshold. A reboot interrupts exactly the long unattended runs a notify exists
+    /// for, and the server's own broadcast is a scrollback line nobody on a phone sees.</summary>
+    private void RebootTick(bool advance)
+    {
+        if (advance) Reboot.Tick(1.0);
+        string? warn = Reboot.TakeWarning();
+        if (warn is not null)
+        {
+            Line line = Line.FromText("[server] " + warn + " - anything running unattended will be cut off", SysColour);
+            RaiseLine(line);
+            NotifyRequested?.Invoke(line);
+        }
+        string text = Reboot.StatusText;
+        if (text == _rebootStatusShown) return;
+        _rebootStatusShown = text;
+        RebootStatusChanged?.Invoke(text);
+    }
+
     private void ResetGmcpForConnect()
     {
+        Reboot.Reset();
+        RebootTick(advance: false);
         GmcpAudit.Reset();
         _gmcpHandshakeSent = false;
         _gmcpRetriedVerb = false;

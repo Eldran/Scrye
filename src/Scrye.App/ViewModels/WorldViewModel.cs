@@ -779,6 +779,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             else if (s == ConnectionState.Disconnected) _plugins.DispatchDisconnect();
         };
 
+        // The reboot countdown: the session says when the text moves (about once a minute).
+        _session.RebootStatusChanged += text => Dispatcher.UIThread.Post(() => RebootText = text);
+
         // The idle guard. The session has already suspended its own timers and sequence by the
         // time this runs; all that is left is to say so where the user will see it and to hand
         // the news to plugins, which stop whatever they are driving.
@@ -883,6 +886,30 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 : "idle guard off");
         }
     }
+
+    // ---- reboot countdown (Mud.Status) -----------------------------------------
+
+    private string _rebootText = "";
+    /// <summary>"reboot in 9d 3h" from the session's <see cref="Scrye.Core.Gmcp.RebootClock"/>,
+    /// or empty on a world that has not said. Shown on the world tab; the session raises it
+    /// only when the text changes, so this is a minute-rate property, not a tick.</summary>
+    public string RebootText
+    {
+        get => _rebootText;
+        private set
+        {
+            if (!SetField(ref _rebootText, value)) return;
+            OnPropertyChanged(nameof(HasRebootText));
+            OnPropertyChanged(nameof(RebootTabText));
+        }
+    }
+    public bool HasRebootText => _rebootText.Length > 0;
+    /// <summary>The same countdown trimmed for the world tab — "· 9d 3h" rather than "reboot in
+    /// 9d 3h": the tooltip says what it is, the tab only has room for the number.</summary>
+    public string RebootTabText => HasRebootText ? "· " + _rebootText.Replace("reboot in ", "") : "";
+    public string RebootTip =>
+        "Server reboot countdown (GMCP Mud.Status). A warning is shown - and notifies, so it"
+      + " reaches the phone - at 30 and at 5 minutes: anything running unattended is cut off.";
 
     /// <summary>Tooltip for that toggle: the limit is the part a checkbox cannot show.</summary>
     public string IdleGuardTip =>
@@ -1346,7 +1373,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         {
             _session.Post(() =>
             {
-                IReadOnlyList<string> lines = _session.GmcpAudit.Report();
+                IReadOnlyList<string> lines = _session.GmcpAudit.Report(_session.GameState.MergeModeOf);
                 Dispatcher.UIThread.Post(() => { foreach (string l in lines) AppendSystem(l); });
             });
             return;

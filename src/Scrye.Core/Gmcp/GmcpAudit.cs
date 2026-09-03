@@ -183,7 +183,11 @@ public sealed class GmcpAudit
     }
 
     /// <summary>The <c>.gmcp</c> report: negotiation, subscription, and the packages seen.</summary>
-    public IReadOnlyList<string> Report()
+    /// <param name="mergeModeOf">Optional: how the state tree merges each package
+    /// (<see cref="Scrye.Core.State.StateStore.MergeModeOf"/>). Shown per package so a plugin
+    /// author can tell a whole-object package from a paged or snapshot/delta one — the
+    /// difference between a bound gauge that holds and one that blinks.</param>
+    public IReadOnlyList<string> Report(Func<string, string>? mergeModeOf = null)
     {
         var lines = new List<string> { "-- GMCP --" };
 
@@ -221,8 +225,12 @@ public sealed class GmcpAudit
 
         lines.Add($"  {MessagesSeen} message(s) across {PackagesSeen} package(s), newest first:");
         foreach (GmcpPackageSeen p in Snapshot())
+        {
+            string mode = mergeModeOf?.Invoke(p.Package) ?? "";
+            mode = mode == "" || mode == "whole" ? "" : $" [{mode}]";
             lines.Add($"    {p.Package,-22} x{p.Count,-5} ({DistinctCount(p.Package)} distinct) "
-                      + $"{p.LastAt:HH:mm:ss}  {Truncate(p.Last, 70)}");
+                      + $"{p.LastAt:HH:mm:ss}  {Truncate(p.Last, 70)}{mode}");
+        }
 
         IReadOnlyList<RoomSeen> rooms = Rooms();
         if (rooms.Count > 0)

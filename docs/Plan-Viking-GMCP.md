@@ -186,10 +186,11 @@ package". Three things prove it:
 * the second reads 1 for exactly the modules Scrye subscribed to;
 * `Guild.State` only became 1 when we started sending `"Guild 1"`.
 
-Scrye subscribes `["Char 1", "Room 1", "Comm 1", "Guild 1"]`. So the packages
-sitting at 0 in every capture are the ones we have **never asked for**:
+Scrye subscribed `["Char 1", "Room 1", "Comm 1", "Guild 1"]` — four of the seven
+roots the server names. So the nine packages sitting at 0 in every capture up to
+1 Sep are simply the ones we had **never asked for**:
 
-| Package | Status |
+| Package | Was |
 |---|---|
 | `Merc.Talents` `Merc.Vitals` `Merc.Info` `Merc.Skills` `Merc.Stats` | never requested — no `"Merc 1"` in the subscription |
 | `Craft.State` `Craft.Info` `Craft.Extra` | never requested — and the system is not live in game yet |
@@ -197,6 +198,36 @@ sitting at 0 in every capture are the ones we have **never asked for**:
 
 A server does not usually enumerate five package names for a system it has not
 built.
+
+**Fixed 2 Sep**: the subscription is now all seven roots —
+`["Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1"]`. Craft
+is included despite not being live: the fields exist, asking costs one word, and
+a server that sends nothing costs nothing. What arrives is unknown until someone
+connects with it — VERIFY LIVE, and the first capture afterwards is the answer.
+`Mud.Status` is the one to watch for cadence.
+
+The doc comment on `GmcpPackages` had claimed since it was written that
+subscribing to everything was the right default *while subscribing to four of
+seven*, and the test walked the array rather than naming the roots, so it passed
+whatever the array held. Both are corrected; the roots are now pinned longhand in
+`Subscribes_to_every_root_the_server_advertises`.
+
+### 2c. `Core.Supported` is a summary, not an inventory
+
+Worth knowing before anyone treats that list as the catalogue. It names **three**
+Guild packages — `Guild.State`, `Guild.Info`, `Guild.Extra`. A Viking actually
+receives **sixteen**:
+
+| Guild packages actually received | Count |
+|---|---|
+| Viking (Goran, 31 Aug) — City, Fleet, Info, Kingdom, Livestock, Map, Market, Roster, Settlement, State, Trade, TradeGoods, Voyage, War, Warehouse | 15 |
+| Cyborg (Lobo, 1 Sep) — Chassis, Combat, Info, Progress, State, Systems | 6 |
+| Gentech (Sermi, 1 Sep) — Config, Info, Powers, Progress, State, Stats, Systems | 7 |
+
+So `Guild.Extra` is an umbrella covering everything guild-specific, and the real
+package set is discovered by connecting and watching, not by reading the
+advertisement. The same is likely true of Merc and Craft: five and three names
+each is what they advertise, not necessarily what they send.
 
 **Mercs are not a guild.** They are NPCs any player can hire, the same for
 everyone whatever guild you belong to, and separate from the Viking **hird**,
