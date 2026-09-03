@@ -38,6 +38,41 @@ public class AutomationEngineTests
     }
 
     [Fact]
+    public void AnEmptyPatternNeverMatches()
+    {
+        // The editor seeds a new alias with a name and a blank pattern. Saved that way with
+        // Regex ticked, "" as a regex matched EVERY command - the alias fired on anything you
+        // typed, including its own name, which is how the bug was reported. As a wildcard the
+        // blank pattern matched an empty command instead. Neither is a match anyone asked for.
+        var (engine, rec, _) = NewEngine();
+        engine.AddAlias(new AliasDef { Name = "heal", Pattern = "", IsRegex = true, Send = "cast heal" });
+        Assert.False(engine.ProcessInput("heal", rec));
+        Assert.False(engine.ProcessInput("look", rec));
+        engine.ClearAliases();
+        engine.AddAlias(new AliasDef { Name = "heal", Pattern = "", IsRegex = false, Send = "cast heal" });
+        Assert.False(engine.ProcessInput("", rec));
+        Assert.False(engine.ProcessInput("heal", rec));
+        Assert.Empty(rec.Sends);
+
+        // and the same for a trigger: a blank regex trigger would otherwise fire on every line
+        engine.AddTrigger(new TriggerDef { Name = "blank", Pattern = "", IsRegex = true, Send = "x" });
+        engine.ProcessLine("anything at all", rec);
+        Assert.Empty(rec.Sends);
+    }
+
+    [Fact]
+    public void TheAliasNameIsNotAPattern()
+    {
+        // Only the pattern is ever matched; the name is a label. Typing the name of an alias
+        // whose pattern is something else sends the name to the MUD like any other command.
+        var (engine, rec, _) = NewEngine();
+        engine.AddAlias(new AliasDef { Name = "heal", Pattern = "hh", Send = "cast heal" });
+        Assert.False(engine.ProcessInput("heal", rec));
+        Assert.True(engine.ProcessInput("hh", rec));
+        Assert.Equal(new[] { "cast heal" }, rec.Sends);
+    }
+
+    [Fact]
     public void UnmatchedInputPassesThrough()
     {
         var (engine, rec, _) = NewEngine();

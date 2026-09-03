@@ -47,16 +47,25 @@ public sealed class MatchResult
 public sealed class CompiledPattern
 {
     private readonly Regex _regex;
+    private readonly bool _never;
 
     public CompiledPattern(string pattern, bool isRegex, bool ignoreCase)
     {
         RegexOptions opts = RegexOptions.CultureInvariant;
         if (ignoreCase) opts |= RegexOptions.IgnoreCase;
+        // An EMPTY pattern matches nothing, ever. Left to the regex engine it would do the
+        // opposite: "" as a regex matches every line and every command, and "" as a wildcard
+        // matches an empty command - so an alias saved with its pattern box still blank (the
+        // editor seeds a new row with a name and no pattern) fired on everything you typed,
+        // which reads from the outside as "the alias name triggers it". A rule with no
+        // pattern has nothing to say yet; it stays quiet until it has one.
+        _never = pattern.Length == 0;
         _regex = new Regex(isRegex ? pattern : WildcardToRegex(pattern), opts);
     }
 
     public MatchResult? Match(string input)
     {
+        if (_never) return null;
         Match m = _regex.Match(input);
         return m.Success ? new MatchResult(m) : null;
     }
