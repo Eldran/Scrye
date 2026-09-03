@@ -1,9 +1,9 @@
 {
   "id": "3s-chat",
   "name": "3S Chat",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "author": "Joakim",
-  "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep).",
+  "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep). 1.1.0: the pane is yours to shape - a Chat panel lists every channel that has spoken; click a channel to pick it, then a colour in the column beside it to paint it (sixteen named colours, the theme tokens, or default); each channel line carries its own hide/show link (hidden = out of the pane, still logged, a notify subscription still fires); 'chat channels', 'chat show|hide <channel>', 'chat color <channel> <name|#hex|->' do the same by command. Both persist.",
   "mudIds": [
     "*"
   ],
@@ -21,7 +21,8 @@
     "log.write",
     "storage.private",
     "timers.manage",
-    "aliases.manage"
+    "aliases.manage",
+    "ui.panels"
   ],
   "panes": [
     "Chats"

@@ -161,7 +161,7 @@ local in_sea  = false     -- last arrival was a Sea of Chaos layer; kept so ente
 local refresh_maplist                      -- defined with the panel, called by the drawing
 local refresh_favlist                      -- likewise, for the Favs tab
 local fav_toggle                           -- defined with the panel, used by the alias too
-local now     = 0         -- seconds, advanced by the flush tick
+local now     = 0         -- seconds, advanced by the 1 s tick (the flush rides every 15th)
 
 local function note(s) scrye.print("[mapg] " .. s) end
 
@@ -1857,7 +1857,15 @@ talking = scrye.store.get("talking") ~= "0"
 drawing = scrye.store.get("drawing") ~= "0"
 load()
 
-flush_timer = scrye.every(FLUSH_SECS, function() now = now + FLUSH_SECS; save() end)
+-- One clock, one second. The move queue's TTL (MOVE_TTL) reads this clock, and when it
+-- advanced only on the flush tick it was 15 s coarse: a move typed just before a flush
+-- was pruned almost at once, its Room.Info paired with nothing, and the walked link went
+-- unlearned - rare, invisible, and exactly the kind of hole a laggy night opens. The
+-- flush still runs every FLUSH_SECS; it just rides the finer clock.
+flush_timer = scrye.every(1, function()
+  now = now + 1
+  if now % FLUSH_SECS == 0 then save() end
+end)
 
 draw()
 note(string.format("phase 1 loaded - %d room(s) known. 'mapg' for status, 'mapg help' for the rest.", known))

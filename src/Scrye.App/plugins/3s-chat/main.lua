@@ -32,6 +32,12 @@
 --   * channels     — opt-in per channel via "chat notify <channel>"
 --   * watch names  — as before, "chat watch <name>"
 -- Both lists persist via scrye.store.
+--
+-- 1.1.0 (3 Sep 2026): the pane is YOURS to shape. Every channel that has ever spoken is
+-- listed on the Chat panel; a channel can be hidden from the pane ('chat hide <chan>' -
+-- it is still logged, and a notify subscription on it still fires) and given its own
+-- colour ('chat color <chan> <name|#hex>', or on the panel: click the channel, click a
+-- colour). Both persist. The built-in map below stays as the default a channel starts with.
 
 local PANE = "Chats"
 
@@ -60,13 +66,89 @@ local CHANCOL = {
   poll    = "#A0A7BB",   -- grey
 }
 
--- the original's fallback: anything Viking-ish takes the Viking colour, else grey
+-- The colours a channel may be given by name: the validated identity set from
+-- docs/Plugin-Color-System.md (the CHANCOL hues plus the plugin accents), and the theme
+-- tokens, which follow the app scheme. "#RRGGBB" is accepted as well, unvalidated - the
+-- eye that picked it is the validator.
+local NAMED = {
+  cyan = "#4BE4FF", magenta = "#FD2083", lime = "#93F64E", aqua = "#2EB88F", white = "#FFFFFF",
+  violet = "#CA90FB", gold = "#DEB218", orange = "#DF6E1B", indigo = "#7263FD", pink = "#F2A3C1",
+  grey = "#A0A7BB", gray = "#A0A7BB", red = "#E7574E", blue = "#6288E1", green = "#5AAC47",
+  teal = "#0B9DB3", rose = "#D855B8",
+}
+local NAMED_ORDER = { "cyan", "magenta", "lime", "aqua", "white", "violet", "gold", "orange",
+  "indigo", "pink", "grey", "red", "blue", "green", "teal", "rose" }
+local TOKENS = { dim = true, accent = true, info = true, success = true, warning = true, error = true, text = true }
+
+-- "cyan" -> "#4BE4FF", "#abc123" -> "#ABC123", "dim" -> "dim", anything else -> nil
+local function parse_color(v)
+  v = tostring(v or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  if NAMED[v] then return NAMED[v] end
+  if TOKENS[v] then return v end
+  local hex = v:match("^#(%x%x%x%x%x%x)$")
+  if hex then return "#" .. hex:upper() end
+  return nil
+end
+
+-- Per-channel settings, keyed by the channel's lowercased name: { show = bool, color =
+-- string|nil, seen = n }. A channel is listed from the first line it ever sends; the
+-- list and the settings both persist (scrye.store "channels", JSON).
+local chans = {}
+local chan_order = {}   -- names in first-seen order, for a stable panel
+
+local function chan_key(chan) return (tostring(chan or ""):lower()) end
+
+local function chan_of(chan, create)
+  local k = chan_key(chan)
+  local c = chans[k]
+  if not c and create then
+    c = { name = tostring(chan), show = true, color = nil, seen = 0 }
+    chans[k] = c
+    chan_order[#chan_order + 1] = k
+  end
+  return c
+end
+
+local function save_chans()
+  local out = {}
+  for _, k in ipairs(chan_order) do
+    local c = chans[k]
+    out[#out + 1] = { name = c.name, show = c.show, color = c.color, seen = c.seen }
+  end
+  local ok, json = pcall(scrye.json.encode, out)
+  if ok and json then scrye.store.set("channels", json) end
+end
+
+do
+  local raw = scrye.store.get("channels")
+  local ok, list = pcall(scrye.json.decode, raw or "")
+  if ok and type(list) == "table" then
+    for _, e in ipairs(list) do
+      if type(e) == "table" and type(e.name) == "string" and e.name ~= "" then
+        local c = chan_of(e.name, true)
+        c.show = (e.show ~= false)
+        c.color = parse_color(e.color)          -- a bad value in the store is no colour
+        c.seen = tonumber(e.seen) or 0
+      end
+    end
+  end
+end
+
+-- the original's fallback: anything Viking-ish takes the Viking colour, else grey - unless
+-- the channel has been given a colour of its own, which wins
 local function chancol(chan)
   local c = (chan or ""):lower()
+  local own = chans[c] and chans[c].color
+  if own then return own end
   local hit = CHANCOL[c]
   if hit then return hit end
   if c:find("viking", 1, true) then return CHANCOL.viking end
   return "dim"           -- a theme token: unknown channels follow the scheme
+end
+
+local function default_col(chan)
+  local c = (chan or ""):lower()
+  return CHANCOL[c] or (c:find("viking", 1, true) and CHANCOL.viking) or "dim"
 end
 
 -- Escape text that came from the MUD before embedding it in markup. Without this a
@@ -222,8 +304,9 @@ local function mark_buffer_dirty()
   scrye.after(5, function() if buffer_dirty then save_buffer() end end)
 end
 
--- and always flush when the world goes away, so the tail is never lost
-scrye.onDisconnect(function() if buffer_dirty then save_buffer() end end)
+-- and always flush when the world goes away, so the tail is never lost (the channel
+-- line counts ride along - they are not worth a disk write per line)
+scrye.onDisconnect(function() if buffer_dirty then save_buffer() end ; save_chans() end)
 
 do
   local b = scrye.store.get("buffer")
@@ -242,6 +325,8 @@ do
     end
   end
 end
+
+local publish_panel   -- defined with the panel below; the feed redraws it on a new channel
 
 -- ---------------- chat feed -------------------------------------------------
 
@@ -272,14 +357,22 @@ scrye.onChannel(function(chan, text)
     if ok_t and type(s) == "string" then stamp = s end
   end
 
+  -- every channel that speaks is listed; the first line from a new one redraws the panel
+  local cfg = chan_of(chan, true)
+  cfg.seen = cfg.seen + 1
+  if cfg.seen == 1 then save_chans() ; if publish_panel then publish_panel() end end
+
   -- watched lines carry a leading "*": the original tinted them blue, which a
   -- plain-text capture pane cannot do, but they still need to stand out in scrollback
   local entry = { stamp = stamp, mark = (why == "watch") and "*" or "", chan = chan, text = text }
-  scrye.capture(PANE, pane_line(entry))
-
-  buffer[#buffer + 1] = entry
-  while #buffer > BUFFER_MAX do table.remove(buffer, 1) end
-  mark_buffer_dirty()
+  -- a hidden channel skips the pane and the replay buffer - the log and any notification
+  -- it earned still happen, since hiding is about the pane's noise, not the message
+  if cfg.show then
+    scrye.capture(PANE, pane_line(entry))
+    buffer[#buffer + 1] = entry
+    while #buffer > BUFFER_MAX do table.remove(buffer, 1) end
+    mark_buffer_dirty()
+  end
 
   -- durable log, one file per plugin, with the full date+time the original wrote
   local full = ""
@@ -410,6 +503,158 @@ scrye.addAlias{
   end,
 }
 
+-- ---------------- channels: show / hide / colour ------------------------------
+
+local function note_channels()
+  if #chan_order == 0 then scrye.print("no channel has spoken yet") ; return end
+  scrye.print("channels seen (chat show|hide <channel>, chat color <channel> <name|#hex|->):")
+  for _, k in ipairs(chan_order) do
+    local c = chans[k]
+    scrye.print(string.format("  @{%s}[%s]@{}  %s  %s%s  (%d line%s)",
+      chancol(c.name), esc(c.name),
+      c.show and "shown" or "@{warning}hidden@{}",
+      esc(chancol(c.name)), c.color and "" or " (default)",
+      c.seen, c.seen == 1 and "" or "s"))
+  end
+end
+
+local function chat_show(chan, on)
+  local c = chan_of(chan, true)
+  c.show = on
+  save_chans()
+  scrye.print(string.format("[%s] is now %s in the Chats pane%s", c.name,
+    on and "shown" or "hidden", on and "" or " (still logged; a notify on it still fires)"))
+  if publish_panel then publish_panel() end
+end
+
+local function chat_color(chan, value)
+  local c = chan_of(chan, true)
+  if value == "-" or value == "default" or value == "" then
+    c.color = nil
+    save_chans()
+    scrye.print(string.format("@{%s}[%s]@{} back to its default colour (%s)", chancol(c.name), esc(c.name), chancol(c.name)))
+  else
+    local col = parse_color(value)
+    if not col then
+      scrye.print("not a colour: '" .. value .. "' - a name (" .. table.concat(NAMED_ORDER, ", ")
+        .. "), a theme token (dim, accent, info, success, warning, error) or #RRGGBB")
+      return
+    end
+    c.color = col
+    save_chans()
+    scrye.print(string.format("@{%s}[%s]@{} is now %s", col, esc(c.name), col))
+  end
+  if publish_panel then publish_panel() end
+end
+
+scrye.addAlias{ pattern = "^chat channels$", regex = true, run = note_channels }
+scrye.addAlias{ pattern = "^chat show (.+)$", regex = true, run = function(chan) chat_show(chan, true) end }
+scrye.addAlias{ pattern = "^chat hide (.+)$", regex = true, run = function(chan) chat_show(chan, false) end }
+scrye.addAlias{ pattern = "^chat colou?r (.+?)\\s+(\\S+)$", regex = true,
+  run = function(chan, value) chat_color(chan, value) end }
+scrye.addAlias{ pattern = "^chat colou?rs$", regex = true, run = function()
+  local parts = {}
+  for _, n in ipairs(NAMED_ORDER) do parts[#parts + 1] = string.format("@{%s}%s@{}", NAMED[n], n) end
+  scrye.print("colours by name: " .. table.concat(parts, " "))
+  scrye.print("theme tokens: @{dim}dim@{} @{accent}accent@{} @{info}info@{} @{success}success@{} @{warning}warning@{} @{error}error@{}   or any #RRGGBB")
+end }
+
+-- ---------------- the panel ---------------------------------------------------
+-- Two columns, the Trade tab's way: click a channel on the left to PICK it, then click a
+-- colour on the right to paint it. Each channel line also carries its own hide/show
+-- link. Every click is a plain click= (no menus): a menu listing sixteen colours ran
+-- past the markup's 512-character spec cap and rendered as raw text (3 Sep, live), and
+-- click= is what the companion can tap anyway.
+local picked = nil    -- lowercased name of the channel the next colour applies to (session-only)
+
+local function panel_channel_line(c)
+  local k = chan_key(c.name)
+  local is_picked = (picked == k)
+  local toggle = c.show and ("@{dim,click=chat hide " .. c.name .. "}hide@{}")
+                        or ("@{warning,click=chat show " .. c.name .. "}show@{}")
+  return string.format("%s@{%s%s,click=chat pick %s}[%s]@{} %s%s",
+    is_picked and "@{accent,bold}>@{}" or " ",
+    chancol(c.name), is_picked and ",bold" or "", c.name, esc(c.name),
+    toggle,
+    notify_chans[k] and " @{accent}notify@{}" or "")
+end
+
+local function panel_colour_lines()
+  local L = {}
+  for _, n in ipairs(NAMED_ORDER) do
+    L[#L + 1] = string.format("@{%s,click=chat paint %s}%s@{}", NAMED[n], n, n)
+  end
+  L[#L + 1] = ""
+  for _, t in ipairs({ "dim", "accent", "info", "success", "warning", "error" }) do
+    L[#L + 1] = string.format("@{%s,click=chat paint %s}%s@{}", t, t, t)
+  end
+  L[#L + 1] = ""
+  L[#L + 1] = "@{dim,click=chat paint -}default@{}"
+  return L
+end
+
+publish_panel = function()
+  local L = {}
+  if #chan_order == 0 then
+    L[1] = "@{dim}no channel has@{}"
+    L[2] = "@{dim}spoken yet@{}"
+  else
+    for _, k in ipairs(chan_order) do L[#L + 1] = panel_channel_line(chans[k]) end
+  end
+  scrye.setState("plugin.3s-chat.channels", table.concat(L, "\n"))
+  scrye.setState("plugin.3s-chat.colours", table.concat(panel_colour_lines(), "\n"))
+  local pc = picked and chans[picked]
+  scrye.setState("plugin.3s-chat.picked",
+    pc and string.format("picked: @{%s}[%s]@{} - click a colour", chancol(pc.name), esc(pc.name))
+       or "click a channel, then a colour")
+end
+
+local function chat_pick(chan)
+  local c = chan_of(chan, false)
+  if not c then scrye.print("no channel called '" .. tostring(chan) .. "' has spoken yet") ; return end
+  picked = chan_key(c.name)
+  publish_panel()
+end
+
+local function chat_paint(value)
+  local c = picked and chans[picked]
+  if not c then scrye.print("pick a channel first (click one on the Chat panel, or 'chat pick <channel>')") ; return end
+  chat_color(c.name, value)
+end
+
+scrye.addAlias{ pattern = "^chat pick (.+)$", regex = true, run = chat_pick }
+scrye.addAlias{ pattern = "^chat paint (\\S+)$", regex = true, run = chat_paint }
+
+scrye.addPanel{
+  title = "Chat",
+  width = 320,
+  accent = "#4BE4FF",
+  widgets = {
+    { type = "label", bind = "plugin.3s-chat.picked", color = "dim" },
+    { type = "row", widgets = {
+        { type = "text", bind = "plugin.3s-chat.channels" },
+        { type = "text", bind = "plugin.3s-chat.colours" },
+    } },
+    { type = "input", text = "chat", bind = "plugin.3s-chat.cmd",
+      onSubmit = function(text)
+        -- "hide gamers", "color party lime", "color party #1a2b3c": the same verbs,
+        -- without typing 'chat ' - and the one way to reach a channel with a space in
+        -- its name, since 'color' here takes the LAST word as the colour
+        text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if text == "" then return end
+        local verb, rest = text:match("^(%S+)%s*(.*)$")
+        verb = (verb or ""):lower()
+        if verb == "hide" and rest ~= "" then chat_show(rest, false)
+        elseif verb == "show" and rest ~= "" then chat_show(rest, true)
+        elseif (verb == "color" or verb == "colour") then
+          local ch, v = rest:match("^(.-)%s+(%S+)$")
+          if ch then chat_color(ch, v) else scrye.print("color <channel> <name|#hex|->") end
+        else scrye.print("hide <channel> | show <channel> | color <channel> <name|#hex|->") end
+        scrye.setState("plugin.3s-chat.cmd", "")
+      end },
+  },
+}
+
 -- ---------------- chat relayed from another open world -----------------------
 -- API 1.10. A tell to a character on a different MUD is drawn inline in whichever tab
 -- is in front, which means it scrolls away; putting it in the pane too is the whole
@@ -461,3 +706,4 @@ end
 
 -- seed the Companion panel's report with whatever the store restored
 publish_notify_state()
+publish_panel()

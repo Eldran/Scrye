@@ -370,7 +370,7 @@ local function schedule_flush()
 end
 local function mark_all()
   for _, s in ipairs({ "stats", "city", "builds", "production", "people", "settlers",
-                       "holds", "plan", "mission", "feeds" }) do
+                       "holds", "livestock", "plan", "mission", "feeds" }) do
     dirty[s] = true
   end
 end
@@ -1420,6 +1420,144 @@ local function build_holds()
   return table.concat(L, "\n")
 end
 
+-- ------------------------------------------------------------ Livestock tab
+-- Guild.Livestock, read straight off the merged snapshot (a herd is a record with
+-- fourteen fields; flattening it into a pipe string and parsing it back would be
+-- the vik-key convention at its least useful). Built from the 27 Aug - 2 Sep
+-- captures: herds arrive over two pages and CONCATENATE, the market arrives as
+-- lmarket_<lin> - one key per lineage whose market you have looked at, added by
+-- later unpaged bursts and kept until the next full burst - and the breeding
+-- queue rides page 1 with its slot count. lfind_* has only ever been empty, so
+-- it is counted, not drawn. VERIFY LIVE: hv (read as "harvest ready" - a herd
+-- with something to shear/collect), lfeed grain/water as per-tick consumption
+-- (Settlement's sconsume.livestock_grain read the same 8 in the same session),
+-- and quality as a percent.
+local LS = {}                -- the merged Guild.Livestock snapshot
+local build_livestock
+do
+  local SPECIES_OF = { stable = "horse", sheepfold = "sheep", piggery = "pig", henhouse = "chicken" }
+  local function S(x) return x == nil and "" or tostring(x) end   -- the adapters' S lives further down
+  local function nice(s) return (tostring(s or ""):gsub("_", " ")) end
+  local function trait(s)
+    s = tostring(s or "")
+    return (s == "" or s == "0") and "-" or s
+  end
+  local function eta(secs)
+    secs = tonumber(secs) or 0
+    if secs >= 3600 then return string.format("%dh %02dm", math.floor(secs / 3600), math.floor(secs % 3600 / 60)) end
+    if secs >= 60 then return string.format("%dm %02ds", math.floor(secs / 60), secs % 60) end
+    return secs .. "s"
+  end
+  -- a stat next to the best of your own herds of that species: green when the lot
+  -- beats it, dim when it does not, plain when you have no herd to compare with
+  local function versus(v, best)
+    v = tonumber(v) or 0
+    if best == nil then return esc(string.format("%3d", v)) end
+    return col(v > best and "success" or "dim", string.format("%3d", v))
+  end
+
+  build_livestock = function()
+    local L = {}
+    local function add(x)
+      x = tostring(x or "")
+      if x:find("^%-%- ") and x:find(" %-%-$") then x = "@{accent,bold}" .. x .. "@{}" end
+      L[#L + 1] = x
+    end
+    local herds = type(LS.herds) == "table" and LS.herds or nil
+    if not herds and type(LS.bqueue) ~= "table" and type(LS.lfeed) ~= "table" then
+      add("waiting for Guild.Livestock...")
+      return table.concat(L, "\n")
+    end
+
+    -- herds
+    local best = {}          -- species -> { fert=, yield=, vigor=, con=, hard= } of your best
+    local head = 0
+    for _, h in ipairs(herds or {}) do
+      head = head + (tonumber(h.head) or 0)
+      local sp = SPECIES_OF[tostring(h.bldg)] or tostring(h.bldg)
+      local b = best[sp] or {}
+      for _, k in ipairs({ "fert", "yield", "vigor", "con", "hard" }) do
+        b[k] = math.max(b[k] or 0, tonumber(h[k]) or 0)
+      end
+      best[sp] = b
+    end
+    local lfeed = type(LS.lfeed) == "table" and LS.lfeed or {}
+    add(string.format("-- Herds: %d head in %d building(s) --", head, herds and #herds or 0))
+    if lfeed.grain or lfeed.water then
+      add("Feed " .. esc(S(lfeed.grain)) .. col("dim", " grain") .. esc("  " .. S(lfeed.water)) .. col("dim", " water")
+        .. col("dim", "  per tick" .. (lfeed.head and ("  (" .. S(lfeed.head) .. " head)") or "")))
+    end
+    if herds and #herds > 0 then
+      add(col("dim", string.format("%-10s %-16s %4s %3s  %-10s %4s  %3s %3s %3s %3s %3s %4s",
+        "Building", "Breed", "Head", "Gen", "Trait", "Age", "Con", "Hrd", "Vig", "Fer", "Yld", "Qual")))
+      table.sort(herds, function(a, b) return tostring(a.bldg) < tostring(b.bldg) end)
+      for _, h in ipairs(herds) do
+        local q = tonumber(h.quality) or 0
+        local line = padesc(nice(h.bldg):sub(1, 10), 10) .. " " .. padesc(nice(h.breed):sub(1, 16), 16)
+          .. esc(string.format(" %4s %3s  ", S(h.head), S(h.gen)))
+          .. padesc(trait(h.trait):sub(1, 10), 10)
+          .. esc(string.format(" %3st  %3s %3s %3s %3s %3s ", S(h.age_ticks), S(h.con), S(h.hard), S(h.vigor), S(h.fert), S(h.yield)))
+          .. col(pctcol(q, 60, 35), string.format("%3d%%", q))
+        if tonumber(h.hv) == 1 then line = line .. "  " .. col("success", "harvest") end
+        if tonumber(h.sterile) == 1 then line = line .. "  " .. col("error", "STERILE") end
+        add(line)
+      end
+    end
+
+    -- the breeding queue
+    add("")
+    local bq = type(LS.bqueue) == "table" and LS.bqueue or {}
+    local used, max = LS.bqueue_used, LS.bqueue_max
+    add(string.format("-- Breeding: %s of %s slot(s) --",
+      used ~= nil and S(used) or S(#bq), max ~= nil and S(max) or "?"))
+    if #bq == 0 then
+      add(col("dim", "nothing breeding"))
+    else
+      table.sort(bq, function(a, b) return (tonumber(a.slot) or 0) < (tonumber(b.slot) or 0) end)
+      for _, b in ipairs(bq) do
+        add(esc(string.format("slot %s  %s x%s  %-10s  ", S(b.slot), nice(b.species), S(b.qty), trait(b.trait)))
+          .. col("info", eta(b.secs)) .. col("dim", "  (" .. nice(b.meat) .. ")"))
+      end
+    end
+
+    -- the market, per lineage seen
+    local lins = {}
+    for k, v in pairs(LS) do
+      local lin = k:match("^lmarket_(%d+)$")
+      if lin and type(v) == "table" and #v > 0 then lins[#lins + 1] = tonumber(lin) end
+    end
+    table.sort(lins)
+    for _, lin in ipairs(lins) do
+      local lots = LS["lmarket_" .. lin]
+      add("")
+      add(string.format("-- Market: %s (%d lot%s) --", HOLDCITY[lin] or ("lineage " .. lin), #lots, #lots == 1 and "" or "s"))
+      add(col("dim", string.format("%-8s %-16s %3s  %-9s %5s  %3s %3s %3s %3s %3s",
+        "Species", "Breed", "Qty", "Trait", "Price", "Con", "Hrd", "Vig", "Fer", "Yld")))
+      table.sort(lots, function(a, b) return (tonumber(a.idx) or 0) < (tonumber(b.idx) or 0) end)
+      for _, l in ipairs(lots) do
+        local b = best[tostring(l.species)]
+        add(padesc(nice(l.species):sub(1, 8), 8) .. " " .. padesc(nice(l.breed):sub(1, 16), 16)
+          .. esc(string.format(" %3s  ", S(l.count))) .. padesc(trait(l.trait):sub(1, 9), 9)
+          .. esc(string.format(" %5s  ", S(l.price)))
+          .. versus(l.con, b and b.con) .. " " .. versus(l.hard, b and b.hard) .. " "
+          .. versus(l.vigor, b and b.vigor) .. " " .. versus(l.fert, b and b.fert) .. " "
+          .. versus(l.yield, b and b.yield))
+      end
+      if next(best) then add(col("dim", "green: better than your best herd of that species")) end
+    end
+
+    local finds = 0
+    for _, k in ipairs({ "lfind_posts", "lfind_offers", "lfind_auctions" }) do
+      if type(LS[k]) == "table" then finds = finds + #LS[k] end
+    end
+    if finds > 0 then
+      add("")
+      add(col("warning", finds .. " livestock find(s) - shape unknown, see .gmcp guild.livestock"))
+    end
+    return table.concat(L, "\n")
+  end
+end
+
 -- (build_voyage moved to 3s-viking-world)
 
 
@@ -1538,6 +1676,7 @@ local BUILDERS = {
   people     = function() scrye.setState(P .. "people", build_people()) end,
   settlers   = function() scrye.setState(P .. "settlers", build_settlers()) end,
   holds      = function() scrye.setState(P .. "holds", build_holds()) end,
+  livestock  = function() scrye.setState(P .. "livestock", build_livestock()) end,
   plan       = build_plan,
   feeds      = function() scrye.setState(P .. "feeds", build_feeds()) end,
 }
@@ -1623,8 +1762,14 @@ local function vset(key, value)
 end
 
 -- ------------------------------------------------- vtrade stock scan
--- STOPGAP until per-good warehouse stock reaches GMCP (plan §2 feed gap): the
--- framed `vtrade stock` report is parsed into the same WSTOCK records the MIP
+-- FALLBACK, not a stopgap - Guild.Warehouse closed that gap on 28 Aug pm and the
+-- feed has owned stock ever since (see ws_feed_live below, which gates every scan
+-- path off once the feed has spoken). This parser still earns its place for a
+-- session where the package is not subscribed or has not arrived yet, and typing
+-- `vtrade stock` by hand still refreshes the panel through it. It was written as
+-- a stopgap and the wording below said so for a while after it stopped being one.
+--
+-- The framed `vtrade stock` report is parsed into the same WSTOCK records the MIP
 -- feed used to carry - "cap;good|amt|100|grade;..." with one record per quality
 -- grade, amounts summed by every consumer (warehouse display, build planner,
 -- auto-trader). Quality PERCENTS are not in the text, so every record says 100
@@ -1632,9 +1777,9 @@ end
 --
 -- The parser runs on every framed block it recognises, so typing `vtrade stock`
 -- yourself refreshes the panel too; the Production tab's Refresh button (and the
--- `vstock` alias) send the command with the output gagged. The day Guild.Trade
--- ships real per-good rows, wiring them into compose_wstock() below retires this
--- scan - the GMCP data should win.
+-- `vstock` alias) send the command with the output gagged. Guild.Warehouse does
+-- ship real per-good rows and is wired into compose_wstock() below, so the GMCP
+-- data wins wherever both exist.
 local ws_goods = ""            -- the scanned "good|amt|100|grade;..." tail
 local ws_cap_scan = nil        -- capacity from the report header
 local ws_cap_feed = nil        -- capacity from Guild.Trade wstock_cap (fresher)
@@ -3092,7 +3237,11 @@ auto_trade_tick = function()
   local cand = {}
   for _, r in ipairs(results) do
     local dc = disp_cmd(r.cmd)
-    if not at.exempt[dc] and r.sells and r.sells[1] then
+    -- A raw with a BUY cart inbound is being restocked: selling it now is the churn
+    -- seen live on 2 Sep (buy 313 ore, sell 40 ore the next pass). Refined goods
+    -- with a scalp inbound still sell - the scalp's whole point is the resale.
+    local restocking = inbound[dc] and RAWBUILD[r.cmd]
+    if not at.exempt[dc] and not restocking and r.sells and r.sells[1] then
       local have  = have_of(r)
       local isref = REFINED[r.cmd] and true or false
       local reserve = at.keep or 20
@@ -3124,7 +3273,12 @@ auto_trade_tick = function()
             end
           end
         end
-        local isflush = (at.flush and at.flush > 0 and have >= at.flush) or false
+        -- A flush pile is measured on what can be SOLD, not on what sits in the
+        -- warehouse: a raw kept at Raw> 300 reads as a 500-pile with 200 to sell,
+        -- and on the pile it jumped the queue and shipped 40 ore at 6 daler ahead of
+        -- everything (2 Sep live) - the value floor exists to refuse exactly that
+        -- cart, and flush had waved it through.
+        local isflush = (at.flush and at.flush > 0 and avail >= at.flush) or false
         local pick = isflush and bestq or best
         if pick then
           cand[#cand + 1] = { kind = "sell", cmd = r.cmd, town = pick.town, qty = pick.qty,
@@ -3168,11 +3322,18 @@ auto_trade_tick = function()
         local have = have_of(r)
         -- a floored raw restocks up to its floor, not just to Raw>
         local goal = math.max(at.stock or 300, at.floors[disp_cmd(r.cmd)] or 0)
-        if have < goal and (buy.price or 0) > 0 then
+        -- A restock is a TOP-UP, not a trade: it buys the deficit, never the cart. Buying
+        -- a full cart into a 113-unit gap (2 Sep live: ore 187 -> 500) overshoots the
+        -- buffer by two hundred, and the sell pass then ships the overshoot back out -
+        -- bought at one town's price, sold at another's, the yard tied up twice for a
+        -- net of nothing. The fill-minimum does not apply either: a 40-unit gap wants a
+        -- 40-unit cart, and the game's own dispatch minimum is the only floor.
+        local deficit = goal - have
+        if deficit > 0 and (buy.price or 0) > 0 then
           local supply = tonumber(buy.qty) or cap
           local afford = math.floor(budget / buy.price)
-          local qty = math.min(cap, supply, afford, space)
-          if qty >= need then
+          local qty = math.min(cap, supply, afford, space, deficit)
+          if qty >= MK_UNITS_MIN then
             restock[#restock + 1] = { cmd = r.cmd, town = buy.town, qty = qty,
                                       cost = qty * buy.price, unit = buy.price, have = have }
           end
@@ -3182,9 +3343,13 @@ auto_trade_tick = function()
     table.sort(restock, function(a, b) return a.have < b.have end)
   end
 
-  -- rank sell/scalp candidates by cart value; flush piles jump the queue
+  -- rank sell/scalp candidates by cart value; flush piles jump the queue. Under
+  -- PRESSURE the point is space, so the biggest cart wins there - which is what the
+  -- status line has promised ("biggest piles") since the mode existed; the sort
+  -- had gone on ranking by value regardless.
   table.sort(cand, function(a, b)
     if (a.flush or false) ~= (b.flush or false) then return a.flush or false end
+    if pressure and a.qty ~= b.qty then return a.qty > b.qty end
     return a.value > b.value
   end)
   local bestnf = 0
@@ -3198,10 +3363,11 @@ auto_trade_tick = function()
     if not seen[c.cmd] then
       local q = math.min(c.qty, space)
       local cost = q * (c.unit or 0)
-      if q >= need and cost <= budget then
+      if q >= MK_UNITS_MIN and cost <= budget then
         scrye.send(string.format("vtrade dispatch buy %d %s %s escort %d",
           q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
-        note(string.format("restock buy %d %s from %s (-%dd, had %d)", q, c.cmd, c.town, cost, c.have))
+        note(string.format("restock buy %d %s from %s (-%dd, had %d, topping up to %d)",
+          q, c.cmd, c.town, cost, c.have, c.have + q))
         at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
         mk_debit(c.cmd, c.town, "buy", q)
         budget = budget - cost; space = space - q; seen[c.cmd] = true
@@ -4594,6 +4760,9 @@ scrye.addPanel{
     { title = "Holds", widgets = {
         { type = "text", bind = P .. "holds" },
     } },
+    { title = "Livestock", widgets = {
+        { type = "text", bind = P .. "livestock" },
+    } },
     -- (Sea / Voyage / Map / Travel tabs live in 3s-viking-world now)
     { title = "Trade", widgets = {
         { type = "button", text = "Refresh", action = function() MK.refresh(false) end },
@@ -4992,6 +5161,15 @@ gasm("Guild.Roster", function(t)
   local f = T(t, "thrall_follower")
   vset("thrall_follower",
     f.state == nil and "" or (S(f.name) == "" and "none" or (S(f.name) .. " (" .. S(f.state) .. ")")))
+end)
+
+gasm("Guild.Livestock", function(t)
+  -- the tab reads the snapshot itself; one summary key so the Feeds tab lists it
+  LS = t
+  dirty.livestock = true
+  local lf = T(t, "lfeed")
+  vset("lhead", lf.head ~= nil and S(lf.head) or "")
+  schedule_flush()
 end)
 
 gasm("Guild.Kingdom", function(t)
