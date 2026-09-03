@@ -238,9 +238,24 @@ flush rides it). Shipped as farmer 0.7.0 (176 checks, 10 mutants killed), mapx 0
 Blocked marks are deliberately session-only until the fold-in (E7) decides where a
 persisted count belongs.
 
-**Phase B — smarter, next.** F4 (Room.Map targeting, with the capture grids as fixtures), E2
-(area fence + `explore area`), F5 (drop the race timer), E5/E6 and F6 (panels and budgets),
-F7 (`farm after`). Farmer 0.8.0, mapx 0.6.0.
+**~~Phase B~~ — built 3 Sep.** F4 (Room.Map: the LOS grid is walked from `@` along link
+glyphs, each hop paired with the farmer's own `exits[dir]`, so `m`/`p` cells become room
+numbers; the nearest fenced room with mobs is the next target, a room with a player is
+skipped, the picture is dropped on arrival; nothing the graph cannot name is ever walked
+to), E2 (`mapx explore area [N]`: probe, step back on an area change by the opposite compass
+direction, `edge[dir] = <area>` persisted on the source room and shown by `mapx room`, a
+non-compass door re-routes inside through known links, 'Unknown' warns), F5 (the mapper's
+`map.room` feed goes through the farmer's Room.Info handler, so `map.walk.arrived` starts
+at once — the one-beat timer is gone), E5 (`explore all|area [N]` budget; every end of a
+sweep prints and puts on the panel the same summary: learned / blocked / edges / why),
+E6 (Explore button beside Stop, live `EXPLORING <area> - n unexplored - +rooms` line, the
+frontier count cached with the map caches), F6 (target + `char.combat.attacker_hp` gauge,
+roster table with a verdict per mob, kills/h, "next room: mobs in sight | stalest", the
+panel rebuilt on state change with the status line coloured by mood and Pause reading
+Resume — buttons take no colour in PanelSpec, so the line above them carries it), F7
+(`farm after <cmd>`, persisted, sent once after each killing blow's breath). Shipped as
+farmer 0.8.0 (205 checks, 15 mutants killed), mapx 0.6.0 (347, 22 killed, one documented
+equivalent — the edge filter, redundant while walked links are learned). mapg untouched.
 
 **Phase C — consolidate.** E7 (fold the sweep into mapg 1.8.0, retire mapx and the derive
 script), F10 (promote the farmer to `src` at 1.0.0 with its C# test), C1 and C6 (Guide),
