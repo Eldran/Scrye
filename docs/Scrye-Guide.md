@@ -578,12 +578,23 @@ reach further into the client. Scrye turns it on only when the MUD negotiates it
 91), so nothing changes on a MUD that doesn't use it. When it does, the output says
 `[MXP] enabled` as you connect.
 
+**3Scapes and 3Kingdoms are Pueblo worlds.** They complete the telnet negotiation and then send
+plain text anyway; what actually switches their markup on is the older Pueblo handshake — the
+server prints `This world is Pueblo 1.10 enhanced.` at connect and emits links only to a client
+that answers `PUEBLOCLIENT 1.10`. Scrye answers it (the output says
+`[MXP] Pueblo world - answered PUEBLOCLIENT 1.10, markup on`) and from then on honours every
+tag: Pueblo predates MXP's secure/open line modes, so there is no such thing as an untrusted line
+in it — the server is responsible for escaping what players say. Pueblo's own vocabulary is
+handled alongside MXP's: `<A xch_cmd="north">` is a command link, `<IMG xch_mode=html>` a mode
+switch, `<P>` a paragraph break, `<xch_mudtext>` a wrapper with nothing to draw.
+
 ### Seeing what the server actually sends — `.mxp`
 
 | Command | What it does |
 |---|---|
 | `.mxp` | Whether MXP is on for this world, whether the server negotiated it, and every tag it has sent — with a count, whether it arrived on a secure line, and whether Scrye acted on it or stripped it. |
 | `.mxp raw on` / `off` | Echo every tag into the output as it arrives. |
+| `.mxp bytes on` / `off` | Echo the wire itself: every inbound chunk as `[bytes <]` and every telnet reply Scrye sends as `[bytes >]`, telnet commands by name, `ESC` as `\e`. The witness that settles "negotiated but nothing arrives" — it is how the Pueblo handshake above was found. |
 
 Three kinds of silence look identical in the output pane and mean completely different things,
 so the report names which one you have: MXP **turned off** for this world (the option was
@@ -696,6 +707,7 @@ other, never both.**
 | `cyb` | 3S Cyborg |
 | `gt` · `gtsys` | 3S Gentech |
 | `merc` | 3S Mercenary |
+| `mage` | 3S Mage |
 | `vfx` | Viking Effects |
 | `araid` · `araidc` | Auto‑Raid (GMCP / classic) |
 
@@ -963,7 +975,8 @@ and figures out which bars you should have on its own.
 
 A Viking gets HP / Seid / Vig / Rad by their own named keys. A **Cyborg** gets HP / Power / Heat —
 power is the resource and heat is what stops you spending it. A **Gentech** gets HP / PU / CPC, its
-two guild pools. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
+two guild pools. A **Mage** gets HP / SP / Umbra / Conc — SP is real for a mage, spells cost it, so it
+keeps its bar and the two guild pools follow. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
 pools, labelled with the server's own names for them — so any guild's bars come out right without
 the plugin having to know that guild exists. On GMCP the Viking and generic sets carry a fifth
 gauge, **Coffin**; the Cyborg set carries it as its fourth.
@@ -974,9 +987,10 @@ gauge, **Coffin**; the Cyborg set carries it as its fourth.
 | `vitals guild viking` | Pin the Viking set regardless. |
 | `vitals guild cyborg` | Pin the Cyborg set regardless. |
 | `vitals guild gentech` | Pin the Gentech set regardless. |
+| `vitals guild mage` | Pin the Mage set regardless. |
 | `vitals guild generic` | Pin the generic set regardless. |
 
-The **Settings** tab has the same three as buttons, and says which set is active, which feed it's
+The **Settings** tab has the same choices as buttons, and says which set is active, which feed it's
 reading, and whether that was detected or pinned.
 
 ---
@@ -1041,7 +1055,7 @@ make each session.
 | `atrade` (or `atrade status`) | Armed state, modes, settings, warehouse fill and current mode. |
 | `atrade on` / `atrade off` | Arm / disarm. |
 | `atrade scalp on\|off` | Buy‑low/sell‑high arbitrage buying. Default **on**. |
-| `atrade restock on\|off` | Actively buy raw materials back up to the Raw> buffer. Default **off**. |
+| `atrade restock on\|off` | Buy a whole cart of any raw material that drops under the Raw> buffer (or its floor). Default **off**. |
 | `atrade refined on\|off` | Also sell refined goods — bread, tools, cloth… Default **on**. |
 | `atrade notify on\|off` | A phone buzz per confirmed dispatch. Default **off**. |
 | `atrade exempt` | List the goods held back from trading. |
@@ -1063,15 +1077,24 @@ The daler figure is the trader's own estimate — price × units — because the
 takings. What changed is *when* it is counted, not how exactly it is known. Manual `mkdispatch`
 carts are different again: they log immediately, as `MAN`, and stay out of these totals.
 
-A floor **raises** the category reserve, never lowers it, and a floored raw material restocks up to
-its floor rather than to the Raw> buffer.
+A floor **raises** the category reserve, never lowers it, and a floored raw material restocks when
+it drops under its floor rather than under the Raw> buffer.
+
+**Raw materials move in whole carts, both ways.** A cart costs the same yard time whether it carries
+20 units or 313, so the Raw> buffer (or a floor) is a *minimum that triggers a restock*, never a
+target: one unit under the line and the restocker buys a **full cart**, capped only by what the town
+has, your budget and warehouse space — a partial cart still goes when those bind. The other half is
+on the sell side: a raw is sold only once a **whole cart of surplus** sits above the minimum, so the
+pile lives between `min` and `min + cart` and the cart you just bought is never shipped back out.
+Under warehouse pressure (the `soft` fill) that relaxes to the ordinary dispatch minimum — space
+matters more than yard time then. Refined and special goods are unaffected; they are never restocked.
 
 **Numbers** — `atrade <name> <n>`:
 
 | Setting | Default | What it means |
 |---|---|---|
 | `keep` | 20 | Units of *every* good held back from selling (your mission reserve). |
-| `stock` | 300 | The Raw> buffer — reserve kept on raw goods, and the restock target. Raw goods are timber, iron, ore, furs, grain, mead, fish, sunstone, spoils and honey. |
+| `stock` | 300 | The Raw> buffer — the minimum kept on raw goods, and the line a restock triggers under. Raw goods are timber, iron, ore, furs, grain, mead, fish, sunstone, spoils and honey. |
 | `reserve` | 5000 | Daler never spent below this. |
 | `margin` | 1 | Minimum profit per unit before the scalper will buy. |
 | `carts` | 0 | Max carts at once. 0 = auto, from your Trading Post tier. |
@@ -1354,6 +1377,47 @@ still owed before the next level, and the same as a percent), `reset_pct` (the t
 clock), `phase_rank` (how far your experiments are phased — raised with research credits), and
 `rush` (a healing power, so it now sits with the systems that toggle). Two are still unnamed and still in the block: **`dgexp`** and
 **`illuminated`**. If you play Gentech and recognise either, that block is where to look.
+
+---
+
+### 3S Mage — `mage`
+
+The Mage guild HUD, built from a capture of Joakim's own mage. Six tabs:
+
+- **Status** — Umbra and Concentration as gauges and against their maxima; imbues, bridges and
+  rifts, with the clocks toward the next batch of imbues and bridges and toward the school spells
+  resetting; the gem (what is left before it breaks — it turns red under 25%); guild level with
+  progress toward the next, gxp to the next level and gxp to spend; school and title; the
+  familiar (name, kind, level, health) and the staff; and the effects currently up, in the
+  server's own names.
+- **Spells** — the whole spellbook, merged from the seven `Guild.Spells*` packages the directory
+  names, shown **one category at a time**: level, current cost with the base cost in brackets
+  where a focus has lowered it, the focus standing, and *offline* or *not learned* where that
+  applies. A button per category; the choice is remembered.
+- **Focus** — every focused spell with its standing, points and cost reduction, most points
+  first, against the allowance.
+- **Skills** — the skill tree with children drawn under their parent, have/max, the next cost,
+  and rows you can afford right now called out. Gxp available at the top.
+- **Config** — the perform setting (mode, action, SP threshold) and the contingencies in
+  priority order: what gets cast when something drops.
+- **Progress** — gxp and gxp/hour, SP burnt since joining, clarity (climbs to 100 and stops),
+  whether the guild quest is solved, time in the guild, in combat and channelling, when you joined
+  the guild and the school, coins and items donated, and the bonus lines the server writes in
+  prose.
+
+| Command | What it does |
+|---|---|
+| `mage` | Print the Status page into the output window. |
+| `mage spells [category]` | Print the spell shelf; a category name or its first letters picks it (`mage spells off`, `mage spells sum`). |
+| `mage focus` · `mage skills` · `mage config` · `mage progress` | Print that page. |
+
+One quirk worth knowing: the login snapshot of `Guild.State` sends the character's **total** gxp
+in `gxp_last_round`; the panel treats a value in the millions as that quirk and shows only the
+real per-round figures that follow.
+
+Built from a capture of Joakim's own mage, so the fields were named by a player rather than
+guessed at. One is still unexplained and sits under the server's own name, raw, in a *"Not yet
+understood"* block on the Status tab: `school_casts`.
 
 ---
 

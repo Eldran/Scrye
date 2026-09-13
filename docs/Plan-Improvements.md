@@ -252,6 +252,25 @@ item on the status bar from `mud.status.reboot_left` (decremented locally betwee
 the 122 s ticks), and one notify at a configurable threshold so a long farm run is
 not caught by a reboot. `lag` alongside it if it ever reads non-zero.
 
+**V12. Mage — the fields, named (3s-mage 1.0.0, 3 Sep).** Built from Joakim's own
+mage (Eldran), and he named the unknowns the same day, so every one of these has a
+row now:
+
+| Field | Meaning (Joakim, 3 Sep) | Where it shows |
+|---|---|---|
+| `gem_pct` | what is LEFT of the gem before it breaks; goes up when a new one is bought | Status, red under 25% |
+| `imbue_reset_pct` / `bridge_reset_pct` | the clock toward the next imbues / bridges being handed out | Status, "Next batch" |
+| `magical_reset_pct` | the clock toward the school spells resetting | Status, "School reset" |
+| `level_pct` | progress toward the next guild level | Status, beside the level |
+| `clarity_pct` | climbs to 100% and stops there | Progress |
+| `channel_minutes` | time spent channelling in the guild | Progress |
+| `sp_burnt` | SP used since joining the guild | Progress |
+| `guild_quest_complete` | whether the guild quest is solved | Progress |
+
+Still raw, in the block: `school_casts` (2 in the capture). A server quirk pinned
+by a test: the login `Guild.State` carries the character's total gxp in
+`gxp_last_round`.
+
 **B9. City Plan terrain (viking-status).** `cityplan_terrain` rows are the background
 the Plan grid has been drawing on plain tiles. Read it on Guild.City pages 7–8, keep
 it in the `cp_*` cache, and draw it under the placed buildings with the 1.17 image
