@@ -81,6 +81,24 @@ public sealed class Connection : IAsyncDisposable
         catch (IOException) { }
         finally
         {
+            // Close OUR half of the socket, not just the loop.
+            //
+            // When the peer closes first, ReadAsync returns 0 and this loop exits - but a TCP
+            // close is two independent halves, and until the local handle is disposed the
+            // socket sits in CLOSE_WAIT holding an OS file descriptor. Nothing else disposed
+            // it: ConnectAsync's CloseSocket() only runs on the NEXT connect, so a session
+            // that stays disconnected (a tab you don't reconnect, an idle world) leaked one
+            // socket per drop for the lifetime of the process (seen live against 3k.org:3200
+            // during an upstream fault, 7 Sep 2026: two CLOSE_WAIT entries beside the live one).
+            //
+            // The CancellationTokenSource is deliberately left alone: it belongs to
+            // ConnectAsync/DisposeAsync, and this loop is still running under its token.
+            // The fields are nulled so CloseSocket()/DisposeAsync's `?.` become no-ops and
+            // SendAsync says "Not connected." rather than throwing ObjectDisposedException.
+            _stream?.Dispose();
+            _stream = null;
+            _tcp?.Dispose();
+            _tcp = null;
             SetState(ConnectionState.Disconnected);
         }
     }
