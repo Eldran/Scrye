@@ -3256,7 +3256,19 @@ auto_trade_tick = function()
       -- to pile up past 70% of a cart before it could even enter the race, while
       -- cheap bulk qualified every pass. Junk carts still stay off the road: the
       -- value floor below refuses anything under min_rel% of the best load.
-      if avail >= MK_UNITS_MIN then
+      --
+      -- RAWS MOVE IN WHOLE CARTS, both ways (2.24.0, Joakim 3 Sep). Raw> (or the
+      -- floor) is a MINIMUM the restocker keeps the pile above, never a target: a
+      -- restock buys a full cart, so the pile lands near min + cart, and a sell
+      -- that treated everything above the minimum as surplus would ship that cart
+      -- straight back out (the 2 Sep churn). So a raw is sold only when a whole
+      -- cart of surplus sits above the minimum - the pile lives in [min, min+cart),
+      -- and nothing a restock brought in is ever sold back. Under warehouse
+      -- PRESSURE space matters more than yard time and the rule relaxes to the
+      -- dispatch minimum, as for every other good.
+      local enough = MK_UNITS_MIN
+      if RAWBUILD[r.cmd] and not pressure then enough = math.max(enough, cap) end
+      if avail >= enough then
         local best, bestq = nil, nil
         for _, s in ipairs(r.sells) do
           local dem = tonumber(s.qty)
@@ -3320,19 +3332,21 @@ auto_trade_tick = function()
          and not inbound[disp_cmd(r.cmd)] and r.buys and r.buys[1] then
         local buy = r.buys[1]
         local have = have_of(r)
-        -- a floored raw restocks up to its floor, not just to Raw>
+        -- a floored raw restocks when under its floor, not just under Raw>
         local goal = math.max(at.stock or 300, at.floors[disp_cmd(r.cmd)] or 0)
-        -- A restock is a TOP-UP, not a trade: it buys the deficit, never the cart. Buying
-        -- a full cart into a 113-unit gap (2 Sep live: ore 187 -> 500) overshoots the
-        -- buffer by two hundred, and the sell pass then ships the overshoot back out -
-        -- bought at one town's price, sold at another's, the yard tied up twice for a
-        -- net of nothing. The fill-minimum does not apply either: a 40-unit gap wants a
-        -- 40-unit cart, and the game's own dispatch minimum is the only floor.
-        local deficit = goal - have
-        if deficit > 0 and (buy.price or 0) > 0 then
+        -- The minimum is the TRIGGER, not the target (2.24.0). A cart costs the same
+        -- yard time whether it carries 20 units or 313, so a pile one unit under the
+        -- line gets a whole cart, capped only by what the town has, the budget, and
+        -- warehouse space - a partial cart when those bind still beats an empty
+        -- warehouse (Joakim, 3 Sep). The overshoot is safe: the sell pass leaves a
+        -- raw alone until a whole cart of surplus sits above the minimum (see the
+        -- sell candidacy), so the cart just bought is never shipped back out. (2.23.1
+        -- bought the deficit instead, which stopped the 2 Sep churn at the cost of
+        -- one-unit carts; the churn is now stopped where it belonged, on the sell side.)
+        if have < goal and (buy.price or 0) > 0 then
           local supply = tonumber(buy.qty) or cap
           local afford = math.floor(budget / buy.price)
-          local qty = math.min(cap, supply, afford, space, deficit)
+          local qty = math.min(cap, supply, afford, space)
           if qty >= MK_UNITS_MIN then
             restock[#restock + 1] = { cmd = r.cmd, town = buy.town, qty = qty,
                                       cost = qty * buy.price, unit = buy.price, have = have }
@@ -3366,7 +3380,7 @@ auto_trade_tick = function()
       if q >= MK_UNITS_MIN and cost <= budget then
         scrye.send(string.format("vtrade dispatch buy %d %s %s escort %d",
           q, disp_cmd(c.cmd), town_cmd(c.town), at.escort))
-        note(string.format("restock buy %d %s from %s (-%dd, had %d, topping up to %d)",
+        note(string.format("restock buy %d %s from %s (-%dd, had %d, a whole cart: lands at %d)",
           q, c.cmd, c.town, cost, c.have, c.have + q))
         at_queue("buy", q, disp_cmd(c.cmd), c.town, cost)
         mk_debit(c.cmd, c.town, "buy", q)
