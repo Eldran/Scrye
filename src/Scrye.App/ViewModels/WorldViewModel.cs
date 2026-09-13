@@ -1307,9 +1307,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                             : "MXP raw echo off");
             return;
         }
+        if (a is "bytes on" or "bytes off")
+        {
+            // the wire itself: every inbound chunk and every telnet reply, escaped, so a
+            // protocol the server negotiates and then goes quiet on can be read byte by byte
+            bool on = a.EndsWith("on");
+            _session.Post(() => _session.ByteTrace = on);
+            AppendSystem(on ? "byte trace ON - inbound chunks as [bytes <], Scrye's telnet replies as [bytes >]; '.mxp bytes off' stops it"
+                            : "byte trace off");
+            return;
+        }
         if (a.Length > 0)
         {
-            AppendSystem("usage: .mxp | .mxp raw on|off");
+            AppendSystem("usage: .mxp | .mxp raw on|off | .mxp bytes on|off");
             return;
         }
         _session.Post(() =>

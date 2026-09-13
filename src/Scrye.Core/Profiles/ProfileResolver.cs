@@ -48,6 +48,7 @@ public static class ProfileResolver
             if (layer.MipClientId is not null) world.MipClientId = layer.MipClientId;
             if (layer.EnableMxp is not null) world.EnableMxp = layer.EnableMxp.Value;
             if (layer.EnableMsp is not null) world.EnableMsp = layer.EnableMsp.Value;
+            if (layer.TerminalType is not null) world.TerminalType = layer.TerminalType;
 
             if (layer.IdleGuard is not null) idleGuard = layer.IdleGuard.Value;
             if (layer.IdleGuardSeconds is not null) idleSeconds = layer.IdleGuardSeconds.Value;

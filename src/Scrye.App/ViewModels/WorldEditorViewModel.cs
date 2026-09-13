@@ -90,6 +90,10 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public bool EnableMxp { get => _enableMxp; set => SetField(ref _enableMxp, value); }
     private bool _enableMsp;
     public bool EnableMsp { get => _enableMsp; set => SetField(ref _enableMsp, value); }
+    // What every telnet TTYPE ask is answered with. Blank = the MTTS cycle (Scrye / XTERM /
+    // MTTS). Some MUDs choose what to send by the client name they recognise.
+    private string _terminalType = "";
+    public string TerminalType { get => _terminalType; set => SetField(ref _terminalType, value); }
 
     /// <summary>Write a transcript automatically whenever this world connects.</summary>
     private bool _autoLog;
@@ -158,6 +162,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _enableGmcp = _layer.EnableGmcp ?? true;
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
         _enableMsp = _layer.EnableMsp ?? true;   // on by default; !!SOUND lines are unambiguous
+        _terminalType = _layer.TerminalType ?? "";
         _relayChannels = _layer.RelayChannels ?? "";   // blank = inherit (resolves to "Tell")
         _autoLog = _layer.AutoLog ?? false;
         _autoLogHtml = (_layer.AutoLogFormat ?? "").StartsWith("htm", StringComparison.OrdinalIgnoreCase);
@@ -236,6 +241,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.EnableGmcp = EnableGmcp ? null : false;   // on is the default; only "off" is a choice
         _layer.EnableMxp = EnableMxp ? null : false;   // default-on: only an explicit OFF is stored
         _layer.EnableMsp = EnableMsp ? null : false;   // same default-on rule
+        _layer.TerminalType = string.IsNullOrWhiteSpace(TerminalType) ? null : TerminalType.Trim();
         // Blank means inherit, so it stores null. "none" is how you say an explicit OFF that a
         // shallower layer cannot un-say — an empty string would read as "inherit" on reload.
         // Off is the inherited default, so only an explicit ON is stored; the format only

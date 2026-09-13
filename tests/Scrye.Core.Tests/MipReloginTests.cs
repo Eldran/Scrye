@@ -47,6 +47,26 @@ public class MipReloginTests
     private static int Handshakes(List<string> output) =>
         output.FindAll(l => l.Contains("handshake sent")).Count;
 
+    [Fact]
+    public void The_pueblo_greeting_is_answered_once_per_connection()
+    {
+        // "This world is Pueblo 1.10 enhanced." is what 3Scapes prints at connect, and
+        // PUEBLOCLIENT 1.10 is the only thing that makes it emit markup - option 91 is
+        // negotiated too and decides nothing (wire trace, 5 Sep 2026). The answer goes
+        // out as a command line, the parser flips to Pueblo mode, and the audit says so.
+        MudSession session = Connected(out AnsiParser ansi, out List<string> output);
+        Assert.False(ansi.PuebloMode);
+        ansi.Feed("This world is Pueblo 1.10 enhanced.\n");
+        Assert.True(ansi.PuebloMode);
+        Assert.True(session.MxpAudit.Pueblo);
+        Assert.Contains(output, l => l.Contains("PUEBLOCLIENT 1.10"));
+        int said = output.FindAll(l => l.Contains("Pueblo world")).Count;
+        ansi.Feed("This world is Pueblo 1.10 enhanced.\n");   // a second copy is not answered twice
+        Assert.Equal(said, output.FindAll(l => l.Contains("Pueblo world")).Count);
+        Assert.True(MudSession.IsPuebloGreeting("this world is pueblo 1.0 Enhanced"));
+        Assert.False(MudSession.IsPuebloGreeting("Pueblo is a town in Colorado"));
+    }
+
     [Theory]
     [InlineData("Password: ", true)]
     [InlineData("Please enter your password:", true)]

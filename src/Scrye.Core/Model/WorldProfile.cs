@@ -37,6 +37,11 @@ public sealed class WorldProfile
     /// server offers it. Harmless when the server doesn't — negotiation-gated.</summary>
     public bool EnableMxp { get; set; } = true;
 
+    /// <summary>What to answer every telnet TTYPE request with, instead of the normal
+    /// client-name / terminal / MTTS cycle. Empty = the cycle. Some MUDs choose what to send
+    /// (MXP, colour depth) by the client name they recognise; "MUSHclient" is the usual key.</summary>
+    public string TerminalType { get; set; } = "";
+
     /// <summary>Consume in-band MSP lines (<c>!!SOUND(…)</c>/<c>!!MUSIC(…)</c>) and play them.
     /// Harmless when the server never sends them.</summary>
     public bool EnableMsp { get; set; } = true;

@@ -38,6 +38,10 @@ public sealed class MxpAudit
     /// <summary>Whether the telnet option was negotiated at all.</summary>
     public bool Negotiated { get; set; }
 
+    /// <summary>Whether the Pueblo greeting was seen and answered (PUEBLOCLIENT 1.10). On the
+    /// 3K family this, not option 91, is what makes the server emit markup.</summary>
+    public bool Pueblo { get; set; }
+
     /// <summary>Whether MXP is switched on for this world. False means the option was refused,
     /// so silence says nothing about the server.</summary>
     public bool Enabled { get; set; } = true;
@@ -81,6 +85,7 @@ public sealed class MxpAudit
         _tags.Clear();
         TotalTags = 0;
         Negotiated = false;
+        Pueblo = false;
     }
 
     /// <summary>Everything seen, busiest first.</summary>
@@ -112,7 +117,7 @@ public sealed class MxpAudit
             return lines;
         }
 
-        lines.Add("  negotiated: yes");
+        lines.Add("  negotiated: yes" + (Pueblo ? "  (Pueblo world - PUEBLOCLIENT 1.10 answered, every line trusted)" : ""));
         if (TotalTags == 0)
         {
             lines.Add("  ...but no tag has arrived yet. MXP markup travels in the ordinary text,");

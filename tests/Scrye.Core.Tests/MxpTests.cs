@@ -32,6 +32,101 @@ public class MxpTests
         return (lines, replies);
     }
 
+    private static (List<Line> Lines, List<string> Ignored) ParsePueblo(string s)
+    {
+        var parser = new AnsiParser(() => DateTimeOffset.UnixEpoch);
+        parser.EnablePueblo();
+        var lines = new List<Line>();
+        var ignored = new List<string>();
+        parser.LineCompleted += lines.Add;
+        parser.MxpTagIgnored += ignored.Add;
+        parser.Feed(s);
+        return (lines, ignored);
+    }
+
+    // ---- Pueblo (the 3K family) ---------------------------------------------
+    // Found on the wire 5 Sep 2026: 3Scapes completes option 91 and then sends plain text
+    // to any client that does not answer "This world is Pueblo 1.10 enhanced" with
+    // PUEBLOCLIENT 1.10. Pueblo has no line security, so every tag is honoured, and its
+    // links are HTML anchors carrying the command in xch_cmd.
+
+    [Fact]
+    public void PuebloAnchorWithXchCmdIsACommandLink()
+    {
+        (List<Line> lines, _) = ParsePueblo("Exits: <A xch_cmd=\"north\" xch_hint=\"Go north\" href=\"#\">north</A>\n");
+        Assert.Equal("Exits: north", lines[0].PlainText);
+        LinkInfo link = Assert.Single(lines[0].Links).Link;
+        Assert.Equal("north", link.Action);
+        Assert.False(link.IsUrl);
+        Assert.Equal("Go north", link.Hint);
+    }
+
+    [Fact]
+    public void PuebloHonoursTagsWithoutASecureLineMarker()
+    {
+        // no ESC[1z anywhere - Pueblo never sends one, and the tags must still work
+        (List<Line> lines, _) = ParsePueblo("<SEND href=\"look sword\">a sword</SEND> <B>lies here</B>\n");
+        Assert.Equal("a sword lies here", lines[0].PlainText);
+        Assert.Equal("look sword", Assert.Single(lines[0].Links).Link.Action);
+        Assert.Contains(lines[0].Runs, r => r.Text == "lies here" && (r.Flags & RunFlags.Bold) != 0);
+    }
+
+    [Fact]
+    public void PuebloModeSwitchesAndWrappersAreSilentNotIgnored()
+    {
+        // <IMG xch_mode=html> is the mode switch the server sends after the handshake, and
+        // <xch_mudtext> wraps ordinary text: neither is markup Scrye is missing, so neither
+        // lands in the "stripped" list that .mxp reports as a feature waiting to be built.
+        (List<Line> lines, List<string> ignored) = ParsePueblo("</xch_mudtext><img xch_mode=html>hello<P>world\n");
+        Assert.Empty(ignored);
+        Assert.Equal("hello", lines[0].PlainText);
+        Assert.Equal("world", lines[1].PlainText);   // <P> is a paragraph break
+        (_, ignored) = ParsePueblo("<IMG src=\"x.png\">\n");
+        Assert.Contains("IMG", ignored);             // a real picture is still reported
+    }
+
+    [Fact]
+    public void PuebloIgnoresMxpLineModes()
+    {
+        // a server that speaks both may send ESC[7z (lock locked) around its MXP handshake;
+        // in Pueblo mode that would silence every tag after it, so the codes are text-free no-ops
+        (List<Line> lines, _) = ParsePueblo("\x1b[7z\n<A xch_cmd=\"north\">north</A>\n");
+        Assert.Equal("north", lines[1].PlainText);
+        Assert.Single(lines[1].Links);
+    }
+
+    [Fact]
+    public void ABareAngleBracketIsTextNotATag()
+    {
+        // "<" before whitespace, a digit, "=" or another "<" is the HTML rule for literal text
+        (List<Line> lines, _) = ParsePueblo("-=< ARCHONS >=-\nx < 5 and <3\n");
+        Assert.Equal("-=< ARCHONS >=-", lines[0].PlainText);
+        Assert.Equal("x < 5 and <3", lines[1].PlainText);
+        (lines, _) = Parse(Secure + "a << b\n");
+        Assert.Equal("a << b", lines[0].PlainText);
+    }
+
+    [Fact]
+    public void PuebloShowsAnUnknownTagAsText()
+    {
+        // 3Scapes prints "<ENTERING>" as its press-Enter prompt at login: not markup, and a
+        // Pueblo world escapes nothing, so an unknown tag is shown rather than swallowed
+        (List<Line> lines, List<string> ignored) = ParsePueblo("<ENTERING>\n");
+        Assert.Equal("<ENTERING>", lines[0].PlainText);
+        Assert.Contains("ENTERING", ignored);          // and still audited as unimplemented
+        (lines, _) = Parse(Secure + "<ENTERING>\n");
+        Assert.Equal("", lines[0].PlainText);           // plain MXP keeps stripping
+    }
+
+    [Fact]
+    public void PuebloIsOffUntilTheHandshake()
+    {
+        // an ordinary MXP session does not treat <A xch_cmd> on an open line as a link
+        (List<Line> lines, _) = Parse("<A xch_cmd=\"north\">north</A>\n");
+        Assert.Equal("north", lines[0].PlainText);
+        Assert.Empty(lines[0].Links);
+    }
+
     // ---- line security -------------------------------------------------------
 
     [Fact]

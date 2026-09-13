@@ -94,6 +94,12 @@ public sealed class TelnetLayer
 
     public string ClientName { get; set; } = "Scrye";
     public string TerminalType { get; set; } = "XTERM-256COLOR";
+    /// <summary>When set, the ONE name answered to every TTYPE request, in place of the
+    /// MTTS cycle (client name, terminal, MTTS bitmask). Some MUDs decide what to send by
+    /// the terminal name they last heard - the 3K-family mudlibs gate MXP on recognising a
+    /// client - and a cycle ends on "MTTS 269", which nobody recognises. Naming yourself
+    /// as a client the MUD knows is the experiment this exists for.</summary>
+    public string? TerminalTypeOverride { get; set; }
     /// <summary>MTTS bitmask: ANSI(1) | UTF-8(4) | 256-colour(8) | truecolour(256) = 269.</summary>
     public int MttsBitmask { get; set; } = 269;
 
@@ -242,7 +248,8 @@ public sealed class TelnetLayer
 
     private void SendTerminalType()
     {
-        string name = _ttypeIndex switch
+        string name = !string.IsNullOrWhiteSpace(TerminalTypeOverride) ? TerminalTypeOverride.Trim()
+            : _ttypeIndex switch
         {
             0 => ClientName,
             1 => TerminalType,

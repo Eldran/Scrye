@@ -990,6 +990,9 @@
                                          PlaceholderText="{Binding Editor.PasswordHint}" />
                                 <TextBlock Text="Encoding" />
                                 <TextBox Text="{Binding Editor.Encoding}" />
+                                <TextBlock Text="Terminal type (blank = Scrye / XTERM / MTTS)" />
+                                <TextBox Text="{Binding Editor.TerminalType}" PlaceholderText="e.g. MUSHclient"
+                                         ToolTip.Tip="What every telnet TTYPE request is answered with. Some MUDs decide what to send - MXP, colour depth - by the client name they recognise; naming a client they know is the experiment." />
                                 <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
                                     <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
                                     <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />

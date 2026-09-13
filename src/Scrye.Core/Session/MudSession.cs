@@ -188,7 +188,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // Route state changes through the mailbox so notification + emission happen on the loop thread.
         _connection.StateChanged += s => _mailbox.Writer.TryWrite(new SessionMessage.ConnectionStateChanged(s));
 
-        _telnet.SendData += bytes => _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
+        _telnet.SendData += bytes =>
+        {
+            if (ByteTrace) RaiseLine(Line.FromText("[bytes >] " + EscapeBytes(bytes), SysColour));
+            _mailbox.Writer.TryWrite(new SessionMessage.SendBytes(bytes));
+        };
         _telnet.GmcpSupported = profile.EnableGmcp;
         _telnet.GmcpEnabled += () =>
             _mailbox.Writer.TryWrite(new SessionMessage.Invoke(OnGmcpNegotiated));
@@ -211,6 +215,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
         _telnet.ServerEchoChanged += on => EchoModeChanged?.Invoke(on);
         _telnet.WindowSize = () => (Profile.TerminalColumns, Profile.TerminalRows);
+        // A per-world terminal-type override: the one name answered to every TTYPE ask.
+        // Blank keeps the MTTS cycle (Scrye / XTERM-256COLOR / MTTS bitmask).
+        _telnet.TerminalTypeOverride = string.IsNullOrWhiteSpace(profile.TerminalType) ? null : profile.TerminalType;
         _telnet.GoAhead += () => _ansi.FlushAsPrompt();
 
         // MXP: negotiated via telnet option 91 → the ANSI parser starts interpreting tags.
@@ -808,6 +815,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// MIP → ANSI. The single downstream path for both plain and MCCP2 data.</summary>
     private void ProcessTelnetChunk(byte[] bytes)
     {
+        if (ByteTrace) RaiseLine(Line.FromText("[bytes <] " + EscapeBytes(bytes), SysColour));
         byte[] data = _telnet.Process(bytes);
         if (data.Length == 0) return;
         string text = Decode(data);
@@ -815,6 +823,54 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             text = _mip.Process(text);   // strip MIP frames; raises MessageReceived
         if (text.Length > 0)
             _ansi.Feed(text);
+    }
+
+    private bool _puebloAnswered;
+
+    /// <summary>The Pueblo greeting, as MUSHclient recognises it: "This world is Pueblo 1.0
+    /// Enhanced" or "This world is Pueblo 1.10 enhanced", any case, anywhere on the line.</summary>
+    public static bool IsPuebloGreeting(string text) =>
+        text.Contains("This world is Pueblo 1.10 enhanced", StringComparison.OrdinalIgnoreCase)
+        || text.Contains("This world is Pueblo 1.0 Enhanced", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Echo every inbound chunk (after MCCP inflation) and every telnet reply Scrye
+    /// sends, as escaped text, into the output. <c>.mxp bytes on|off</c>. The wire is the one
+    /// witness that cannot be argued with when a server negotiates a protocol and then sends
+    /// nothing recognisable: it shows the negotiation bytes in both directions and whatever
+    /// escape sequences or tags follow, before any layer of Scrye has had an opinion.</summary>
+    public bool ByteTrace { get; set; }
+
+    /// <summary>Bytes as a reader can check against a spec: telnet commands by name
+    /// (IAC WILL 91), ESC as \e, other controls as \xNN, printable text as itself.</summary>
+    public static string EscapeBytes(ReadOnlySpan<byte> bytes, int max = 600)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < bytes.Length && sb.Length < max; i++)
+        {
+            byte b = bytes[i];
+            if (b == 255 && i + 1 < bytes.Length)
+            {
+                byte cmd = bytes[i + 1];
+                string name = cmd switch
+                {
+                    251 => "WILL", 252 => "WONT", 253 => "DO", 254 => "DONT",
+                    250 => "SB", 240 => "SE", 249 => "GA", 239 => "EOR", 255 => "IAC(literal)",
+                    _ => cmd.ToString(),
+                };
+                sb.Append(" IAC ").Append(name);
+                i++;
+                if (cmd is 251 or 252 or 253 or 254 && i + 1 < bytes.Length) { sb.Append(' ').Append(bytes[++i]); }
+                else if (cmd == 250 && i + 1 < bytes.Length) { sb.Append(' ').Append(bytes[++i]); }
+                sb.Append(' ');
+            }
+            else if (b == 27) sb.Append("\\e");
+            else if (b == 13) sb.Append("\\r");
+            else if (b == 10) sb.Append("\\n");
+            else if (b < 32 || b == 127) sb.Append("\\x").Append(b.ToString("x2"));
+            else sb.Append((char)b);
+        }
+        if (sb.Length >= max) sb.Append(" ...(").Append(bytes.Length).Append(" bytes)");
+        return sb.ToString();
     }
 
     /// <summary>The server ended the zlib stream (or it broke): drop back to plain bytes.
@@ -897,6 +953,21 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         {
             _mipPending = false;
             SendMipHandshake();
+        }
+        // The Pueblo handshake (3K family, LDMud). The server announces "This world is
+        // Pueblo 1.10 enhanced." at connect and emits its markup ONLY to a client that
+        // answers PUEBLOCLIENT 1.10 - the telnet option 91 negotiation, which this server
+        // also completes, decides nothing. Found on the wire 5 Sep 2026: option 91 accepted,
+        // every room plain text, MUSHclient (which answers the string) getting links.
+        if (Profile.EnableMxp && !_puebloAnswered && IsPuebloGreeting(line.PlainText))
+        {
+            _puebloAnswered = true;
+            _mailbox.Writer.TryWrite(new SessionMessage.SendText("PUEBLOCLIENT 1.10"));
+            _ansi.EnablePueblo();
+            MxpAudit.Negotiated = true;
+            MxpAudit.Pueblo = true;
+            _events.Emit(SessionEventKind.Notice, "Pueblo handshake answered");
+            RaiseLine(Line.FromText("[MXP] Pueblo world - answered PUEBLOCLIENT 1.10, markup on", SysColour));
         }
         else if (AutoLogin.IsPasswordPrompt(line.PlainText))
         {
@@ -1075,6 +1146,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 ResetGmcpForConnect();                        // GMCP re-negotiates per connection
                 MxpAudit.Reset();                             // ...and so does MXP
                 MxpAudit.Enabled = Profile.EnableMxp;
+                _puebloAnswered = false;                      // the greeting comes again per connection
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 // arm auto-login for this (re)connect when the profile carries a username
                 _autoLogin = Profile.Username.Length > 0

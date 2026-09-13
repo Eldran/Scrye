@@ -30,6 +30,8 @@ public sealed class ProfileLayer
     public string? MipClientId { get; set; }
     public bool? EnableMxp { get; set; }
     public bool? EnableMsp { get; set; }
+    /// <summary>Telnet TTYPE answer override; null = inherit / the MTTS cycle.</summary>
+    public string? TerminalType { get; set; }
 
     // ---- account / character scalars ----
     public string? Username { get; set; }

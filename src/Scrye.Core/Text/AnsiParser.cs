@@ -76,6 +76,22 @@ public sealed class AnsiParser
     /// <summary>Raised for every completed line.</summary>
     public event Action<Line>? LineCompleted;
 
+    /// <summary>Pueblo mode (the 3K-family handshake): "This world is Pueblo 1.10 enhanced"
+    /// answered with <c>PUEBLOCLIENT 1.10</c>. Pueblo predates MXP and has no line-security
+    /// concept - every tag is honoured, as MUSHclient does - and adds its own vocabulary:
+    /// <c>&lt;A xch_cmd="north"&gt;</c> command links, <c>&lt;IMG xch_mode=html&gt;</c> mode
+    /// switches, <c>&lt;XCH_MUDTEXT&gt;</c>/<c>&lt;XCH_PAGE&gt;</c> wrappers, HTML paragraphs
+    /// and lists. The server is responsible for escaping player text in this mode.</summary>
+    public bool PuebloMode { get; private set; }
+
+    public void EnablePueblo()
+    {
+        MxpEnabled = true;
+        PuebloMode = true;
+        _mxpDefaultMode = 1;
+        _mxpMode = 1;
+    }
+
     /// <summary>Turn MXP tag interpretation on (set when telnet option 91 negotiates).
     /// Off (default) = byte-for-byte identical behaviour to the plain ANSI parser.</summary>
     public bool MxpEnabled { get; set; }
@@ -143,13 +159,26 @@ public sealed class AnsiParser
                 else
                 {
                     if (c == 'm') ApplySgr(_params.ToString());
-                    else if (c == 'z' && MxpEnabled) ApplyMxpMode(_params.ToString());
+                    // Pueblo has no line modes: its contract is the tags themselves, and a
+                    // lock code from a server that also speaks MXP would silence every
+                    // Pueblo tag after it. Honoured only outside Pueblo mode.
+                    else if (c == 'z' && MxpEnabled && !PuebloMode) ApplyMxpMode(_params.ToString());
                     // any other final byte (H, J, K, ...) is consumed and ignored for now
                     _state = State.Normal;
                 }
                 break;
 
             case State.MxpTag:
+                // "<" followed by whitespace or a digit is text, not a tag (the HTML rule):
+                // "-=< ARCHONS >=-" and "x < 5" must survive a Pueblo world, where every
+                // line is trusted and a swallowed banner would be the price of a link.
+                if (_tag.Length == 0 && (c == ' ' || c == '\t' || char.IsDigit(c) || c == '<' || c == '='))
+                {
+                    AppendText('<');
+                    _state = State.Normal;
+                    FeedChar(c);
+                    break;
+                }
                 if (_tagQuote != '\0')
                 {
                     _tag.Append(c);
@@ -302,6 +331,16 @@ public sealed class AnsiParser
             case "SBR": AppendText(' '); break;
             case "HR": break;                                   // strip
 
+            // ---- Pueblo / HTML vocabulary (3K family) --------------------------
+            case "P": if (_text.Length > 0 || _runs.Count > 0) EmitLine(isPrompt: false); break;
+            case "LI": if (_text.Length > 0 || _runs.Count > 0) EmitLine(isPrompt: false); AppendText(' '); AppendText('*'); AppendText(' '); break;
+            case "IMG":                                          // xch_mode=html|text: a mode switch, not a picture
+                if (!attrs.Exists(a => a.key.Equals("XCH_MODE", StringComparison.OrdinalIgnoreCase))) MxpTagIgnored?.Invoke(name);
+                break;
+            case "XCH_MUDTEXT": case "XCH_PAGE": case "XCH_PANE": case "XCH_ALERT":
+            case "HTML": case "BODY": case "PRE": case "OL": case "UL": case "TT": case "H1": case "H2": case "H3":
+                break;                                           // structure with nothing to draw
+
             // ---- secure-only tags --------------------------------------------
             case "SEND": if (secure) OpenLink(attrs, isUrl: false); break;
             case "A": if (secure) OpenLink(attrs, isUrl: true); break;
@@ -335,7 +374,18 @@ public sealed class AnsiParser
             // IMAGE / SOUND / FRAME and anything unrecognised: stripped on purpose -- but
             // SAID, because stripped-in-silence and never-sent look the same from the output
             // pane and only one of them is a feature waiting to be supported.
-            default: MxpTagIgnored?.Invoke(name); break;
+            // In Pueblo mode an unknown tag is shown as TEXT instead: 3Scapes prints a bare
+            // "<ENTERING>" as its press-Enter prompt at login (Joakim, 5 Sep), and a world
+            // that never escapes its own text would lose that line to a strip. Still audited.
+            default:
+                MxpTagIgnored?.Invoke(name);
+                if (PuebloMode)
+                {
+                    AppendText('<');
+                    foreach (char t in content) AppendText(t);
+                    AppendText('>');
+                }
+                break;
         }
     }
 
@@ -349,6 +399,9 @@ public sealed class AnsiParser
             case "S": case "STRIKEOUT": case "STRIKE": SetFlag(RunFlags.Strikeout, false); break;
             case "C": case "COLOR": case "COLOUR": case "FONT": PopColor(); break;
             case "SEND": case "A": if (_mxpLink is not null) CloseLink(); break;
+            case "P": case "LI": case "PRE": case "OL": case "UL": case "TT": case "H1": case "H2": case "H3":
+            case "XCH_MUDTEXT": case "XCH_PAGE": case "XCH_PANE": case "XCH_ALERT": case "HTML": case "BODY":
+                break;
             case "VAR":
                 if (_mxpVarName is not null)
                 {
@@ -652,8 +705,14 @@ public sealed class AnsiParser
             if (key.Length == 0 && val.Equals("EXPIRE", StringComparison.OrdinalIgnoreCase))
             { _mxpLinkExpire = ""; continue; }                       // bare EXPIRE = the unnamed group
 
+            // Pueblo's <A xch_cmd="north" xch_hint="Go north">: a COMMAND link on the HTML
+            // anchor tag. xch_cmd wins over href when both are present, since href is then
+            // the "#" a browser needs and the command is the point.
+            if (k == "XCH_CMD") { _mxpLinkRawAction = Unquote(val); _mxpLinkIsUrl = false; continue; }
+            if (k == "XCH_HINT") { _mxpLinkHint = Unquote(val); continue; }
+
             if (k == "HREF" || (key.Length == 0 && positional == 0 && val.Length > 0))
-            { _mxpLinkRawAction = Unquote(val); if (key.Length == 0) positional++; }
+            { if (!(k == "HREF" && !_mxpLinkIsUrl && _mxpLinkRawAction is not null)) _mxpLinkRawAction = Unquote(val); if (key.Length == 0) positional++; }
             else if (k == "HINT" || (key.Length == 0 && positional == 1))
             { _mxpLinkHint = Unquote(val); if (key.Length == 0) positional++; }
             else if (k == "PROMPT") _mxpLinkPrompt = true;

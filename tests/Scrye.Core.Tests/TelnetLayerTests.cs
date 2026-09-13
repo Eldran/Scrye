@@ -70,6 +70,27 @@ public class TelnetLayerTests
     }
 
     [Fact]
+    public void TerminalTypeOverrideAnswersTheSameNameEveryTime()
+    {
+        // Some MUDs pick what to send by the client name they last heard (the 3K family gates
+        // MXP that way), and the MTTS cycle ends on "MTTS 269", which nobody recognises. With
+        // an override every ask gets the one name, MUSHclient-style, and the cycle is skipped.
+        var (t, sent) = NewLayer();
+        t.TerminalTypeOverride = "MUSHclient";
+        t.Process(new byte[] { 255, 253, 24 });
+        sent.Clear();
+        byte[] send = { 255, 250, 24, 1, 255, 240 };
+        t.Process(send); string first = Ascii(sent); sent.Clear();
+        t.Process(send); string second = Ascii(sent); sent.Clear();
+        t.Process(send); string third = Ascii(sent);
+        Assert.Contains("MUSHclient", first);
+        Assert.Contains("MUSHclient", second);
+        Assert.Contains("MUSHclient", third);
+        Assert.DoesNotContain("MTTS", third);
+        Assert.DoesNotContain("Scrye", first);
+    }
+
+    [Fact]
     public void GmcpMessageIsParsed()
     {
         var (t, _) = NewLayer();
