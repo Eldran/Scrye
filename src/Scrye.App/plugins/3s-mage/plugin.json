@@ -1,0 +1,25 @@
+{
+  "id": "3s-mage",
+  "name": "3S Mage",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "The Mage guild HUD, fed by the Guild.State / Progress / Info / Assets / Actives / Config / Focus / Skills / Spells GMCP packages (3Scapes only). Tabs: Status (umbra and concentration against their maxima as gauges and text, imbues / bridges / rifts, guild level and gxp to the next, gxp to spend, school and title, the familiar and the staff, and the effects currently up), Spells (the whole spellbook merged from the seven Guild.Spells* packages, one category at a time - level, current and base cost, focus standing, offline marked - with a button per category), Focus (every focused spell with its standing, points and cost reduction, against the allowance), Skills (the tree with children under their parent, have/max, the next cost, affordable rows highlighted, gxp available), Config (the perform setting and the contingencies in priority order) and Progress (gxp, gxp/hour, time in the guild and in combat, join dates, coins and items donated, and the server's own bonus prose). 'mage' prints the Status page into the output window; 'mage spells offensive' (or any category) picks the shelf and prints it; 'mage focus|skills|config|progress' print the others. Also on Status: the gem (what is left before it breaks), the clocks toward the next imbues and bridges and toward the school spells resetting, and progress toward the next guild level; on Progress: SP burnt since joining, clarity, whether the guild quest is solved, and time spent channelling. Built from Joakim's own mage's capture (Eldran, 3 Sep 2026) and named by him; the one field still unexplained, school_casts, is shown under the server's own name, raw, in a 'Not yet understood' block on the Status tab.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.3 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels",
+    "storage.private"
+  ],
+  "enabled": true
+}

@@ -101,6 +101,24 @@ local function gentech_set(gmcp)
   return nil   -- no MIP shape seen for this guild either
 end
 
+-- Mage (capture: Eldran, Joakim's own, 3 Sep 2026). Umbra and concentration
+-- are the guild pools and both carry their max on Guild.State. SP is real for a
+-- mage - spells cost it, and the perform setting has an SP threshold - so it
+-- keeps its bar, and the two guild pools follow it. HP can sit ABOVE its max
+-- (14,520/2,662 in the capture, a warded mage); the gauge draws what it is told.
+local function mage_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",              "char.vitals.maxhp"             },
+      { "SP",     "char.vitals.sp",              "char.vitals.maxsp"             },
+      { "Umbra",  "guild.state.umbra",           "guild.state.umbra_max"         },
+      { "Conc",   "guild.state.concentration",   "guild.state.concentration_max" },
+      { "Coffin", "char.vitals.coffin",          "char.vitals.coffin_max"        },
+    }
+  end
+  return nil   -- no MIP shape seen for this guild
+end
+
 local function generic_set(gmcp, gp1, gp2)
   if gmcp then
     return {
@@ -160,10 +178,11 @@ local function build(set, gmcp, why)
               { text = "Viking",  action = function() set_pref("viking") end },
               { text = "Cyborg",  action = function() set_pref("cyborg") end },
               { text = "Gentech", action = function() set_pref("gentech") end },
+              { text = "Mage",    action = function() set_pref("mage") end },
               { text = "Generic", action = function() set_pref("generic") end },
           } },
           { type = "label", color = "dim",
-            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|generic' works too.)" },
+            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, Mage gets HP/SP/Umbra/Conc, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|mage|generic' works too.)" },
       } },
     },
   }
@@ -180,18 +199,19 @@ local function apply()
   -- also carries `guild` for a cyborg but NOT for a viking, so it is not a
   -- dependable source - noted rather than used.)
   local gname = gmcp and (scrye.getState("guild.state.guild") or ""):lower() or ""
-  local is_viking, is_cyborg, is_gentech
+  local is_viking, is_cyborg, is_gentech, is_mage
   if gmcp then
     is_viking = gname == "viking"
     is_cyborg = gname == "cyborg"
     is_gentech = gname == "gentech"
+    is_mage = gname == "mage"
   else
     is_viking = (scrye.getState("vik.mseid") or "") ~= ""
   end
   local choice = pref
   if choice == "auto" then
     choice = (is_viking and "viking") or (is_cyborg and "cyborg")
-          or (is_gentech and "gentech") or "generic"
+          or (is_gentech and "gentech") or (is_mage and "mage") or "generic"
   end
 
   -- A guild with no GMCP has no known shape, so it falls through to generic
@@ -199,9 +219,13 @@ local function apply()
   -- chain is an if/elseif and a late reassignment of `choice` would not be seen.
   if choice == "cyborg"  and not cyborg_set(gmcp)  then choice = "generic" end
   if choice == "gentech" and not gentech_set(gmcp) then choice = "generic" end
+  if choice == "mage"    and not mage_set(gmcp)    then choice = "generic" end
 
   local set, why
-  if choice == "gentech" then
+  if choice == "mage" then
+    set = mage_set(gmcp)
+    why = "Mage"
+  elseif choice == "gentech" then
     set = gentech_set(gmcp)
     why = "Gentech"
   elseif choice == "cyborg" then
@@ -240,7 +264,7 @@ set_pref = function(v)
 end
 
 scrye.addAlias{
-  pattern = "^vitals guild (auto|viking|cyborg|gentech|generic)$", regex = true,
+  pattern = "^vitals guild (auto|viking|cyborg|gentech|mage|generic)$", regex = true,
   run = function(v) set_pref(v) end,
 }
 

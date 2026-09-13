@@ -1,9 +1,9 @@
 {
   "id": "3s-vitals",
   "name": "3S Vitals",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "Joakim",
-  "description": "Compact vitals HUD: stat gauges plus the current enemy and its health, now with a Settings tab. Works on both feeds: GMCP (3Scapes - Char.Vitals + Guild.State, enemy from Char.Combat, plus a Coffin gauge) and MIP (3K, or 3S with MIP on - the classic character./vik./enemy. paths). A Viking gets HP / Seid / Vig / Rad by their drift-proof named keys; every other guild gets HP / SP plus its two guild pools labelled with the server's own names for them (guild.info gp1_name/gp2_name), so any guild's bars come out right without the plugin knowing the guild. Settings pins Auto / Viking / Generic ('vitals guild ...' works too).",
+  "description": "Compact vitals HUD: stat gauges plus the current enemy and its health, now with a Settings tab. Works on both feeds: GMCP (3Scapes - Char.Vitals + Guild.State, enemy from Char.Combat, plus a Coffin gauge) and MIP (3K, or 3S with MIP on - the classic character./vik./enemy. paths). A Viking gets HP / Seid / Vig / Rad by their drift-proof named keys; every other guild gets HP / SP plus its two guild pools labelled with the server's own names for them (guild.info gp1_name/gp2_name), so any guild's bars come out right without the plugin knowing the guild. A Cyborg gets HP / Power / Heat, a Gentech HP / PU / CPC, and a Mage HP / SP / Umbra / Conc (2.1.0). Settings pins Auto / Viking / Cyborg / Gentech / Mage / Generic ('vitals guild ...' works too).",
   "mudIds": [
     "*"
   ],
