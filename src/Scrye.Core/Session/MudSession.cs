@@ -942,7 +942,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             else if (talker.Length > 0
                 && text.IndexOf(talker, StringComparison.OrdinalIgnoreCase) < 0)
                 text = talker + ": " + text;
-            ChannelMessage?.Invoke(channel, text);
+            // LDMud escapes each UTF-8 byte of a player's text as its own character; undo it
+            ChannelMessage?.Invoke(channel, Mojibake.Repair(text));
         }
         catch (System.Text.Json.JsonException) { }                 // hostile payload: not chat
     }

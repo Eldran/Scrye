@@ -332,7 +332,11 @@ local publish_panel   -- defined with the panel below; the feed redraws it on a 
 
 scrye.onChannel(function(chan, text)
   chan = tostring(chan or ""):gsub("[%z\1-\31]", " ")
-  text = tostring(text or ""):gsub("[%z\1-\31]", " ")
+  -- The server word-wraps long tells itself: a newline and a run of indent spaces land
+  -- INSIDE the text. Turning the newline into a space left the indent behind, so the
+  -- pane showed "the andra          bitarna" (15 Sep). One break is one space; the pane
+  -- wraps to its own width.
+  text = tostring(text or ""):gsub("%s*[\r\n]+%s*", " "):gsub("[%z\1-\31]", " ")
   local ok, stripped = pcall(strip_banner, chan, text)
   if ok and stripped then text = stripped end
 

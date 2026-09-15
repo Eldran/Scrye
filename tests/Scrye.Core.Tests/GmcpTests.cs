@@ -7,6 +7,7 @@ using Scrye.Core.Gmcp;
 using Scrye.Core.Model;
 using Scrye.Core.Net;
 using Scrye.Core.Session;
+using Scrye.Core.Text;
 using Scrye.Core.State;
 using Xunit;
 
@@ -183,6 +184,24 @@ public class GmcpTests
         Assert.Equal(("tell", Scrye.Core.Mip.MipProcessor.OutgoingTellPrefix + "Sermi: yes?"), got[1]);
         Assert.Equal(("tell", "To Sermi, Goran: hi both"), got[2]);        // several targets
         Assert.Equal(("tell", "Lobo: orphan"), got[3]);                    // no targets: the old rule
+    }
+
+    [Fact]
+    public void Gmcp_chat_repairs_byte_escaped_utf8()
+    {
+        // LDMud's JSON serializer escapes each byte of a UTF-8 string on its own, so the
+        // "låda" a player typed arrives as \u00c3\u00a5 - "lÃ¥da" (15 Sep 2026, Swedish
+        // tells). The bridge re-decodes such text; real single-byte text and real Unicode
+        // are left alone.
+        MudSession s = Connected(out TelnetLayer telnet, out _);
+        var got = new List<(string Ch, string Msg)>();
+        s.ChannelMessage += (ch, msg) => got.Add((ch, msg));
+        telnet.Process(Sub("Comm.Channel.Text { \"text\": \"giant gloves i skugs l\\u00c3\\u00a5da\", \"talker\": \"Rocky\", \"channel\": \"tell\" }"));
+        Assert.Equal(("tell", "Rocky: giant gloves i skugs låda"), got[0]);
+        Assert.Equal("låda", Mojibake.Repair("lÃ¥da"));
+        Assert.Equal("Ã", Mojibake.Repair("Ã"));              // a lone high byte is not UTF-8
+        Assert.Equal("låda", Mojibake.Repair("låda"));         // already right: untouched
+        Assert.Equal("plain", Mojibake.Repair("plain"));
     }
 
     [Fact]
