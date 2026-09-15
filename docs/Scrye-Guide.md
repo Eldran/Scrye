@@ -758,17 +758,43 @@ sends is a single bare movement word.
 | `mapg shift <dir>` | Mark that exit here as shifting — an elevator or portal. Nothing is learned or routed through it and it draws as `~`. |
 | `mapg shift <room> <dir>` | The same for any room. Add `off` to either form to un‑mark it. |
 | `mapg forget <number>` | Drop one room from the store. |
+| `mapg forget map [seed]` → `… yes` | Drop a whole map — the one you're standing on, or the one whose seed room you name (the Maps tab's right‑click *Forget this map* arms this for you). It asks first and prints the exact `yes` command; the confirmation only counts for that same map, and any other `mapg` command cancels it. Links into the dropped rooms from elsewhere show as unexplored until re‑walked, and a name you gave the map is kept, so mapping it again brings the name back. |
+| `mapg forget area <name>` → `… yes` | The same for every piece of an area at once, by area name. |
 | `mapg save` | Write the store to disk now. |
 | `mapg wipe` → `mapg wipe yes` | Erase every room, map name and favourite. The confirmation only counts if it's the very next `mapg` command. |
 
 **Shifting exits mark themselves too.** If a walk through the same exit lands you somewhere new
 twice, the plugin marks it shifting on its own and stops routing through it — you ride the elevator
-yourself.
+yourself. **A shifting exit also cuts the map on both sides.** Every floor's lobby says its `n`
+leads to the elevator car, and if those links counted, the car would pull every floor into one map
+and each lobby would fight for the one square south of it — floor 0 drawn displaced over floor 30.
+So a link *into* a room whose way back is marked shifting doesn't join maps: each floor is its own
+map, the car is a one‑room map of its own, and the lobby's `n` draws as `>` — a way to another
+map, which is what an elevator door is. Standing on floor 30, you see floor 30. Routes are unaffected:
+you can still walk to the car from any lobby, just never *through* it.
+
+**The legend.** Under the map, each square's colour and mark is spelled out: you, a room, a way
+to another map (`>` — on a room that has one, and also drawn out in the direction the door lies,
+so from inside the elevator lobby the way north into the car shows as a `|` and a `>` where the
+car is; hover that `>` to see the room behind it, click for the route, right‑click to walk),
+up / down / both (`^` `v` `%`), an unexplored exit (a warning‑coloured square with no mark — any
+exit with nothing known behind it, whether the server withheld the destination or named a room
+nobody has visited; a shifting exit looks the same), and `!` for a room the layout had to draw off
+its links. The swatches take their colours from the
+same palette the grid uses, so they always match whatever theme you're on.
 
 **With the mouse.** Hovering a room fills the peek line. **Left‑click a room** prints the route to
-it; **right‑click** offers *Walk there* / *Show route* / *Room details*. On the **Maps** and **Favs**
-tabs, clicking a row walks there and right‑clicking gives the same three entries. The Maps tab also
-has a search box and a rename box for the map you're standing on.
+it; **right‑click** offers *Walk there* / *Show route* / *Room details* / *Forget room* (the last is
+`mapg forget` for that square — it sits in the menu, never on a plain click, so a slip of the mouse
+can't erase a room; a whole map goes through the Maps tab's *Forget this map* or `mapg forget map`,
+which ask first). **Right‑click the square you're standing on** and the menu lists that room's
+exits instead — *Mark shifting: s* and so on (or *Unmark shifting* for one already marked). That's
+the elevator case: ride the Megacity lift once, right‑click where you stand, mark the way out, and
+the map stops believing whichever floor it named — no need to wait for the second ride that marks it
+automatically, and no room number to look up for `mapg shift`. On the **Maps** and **Favs** tabs,
+clicking a row walks there and right‑clicking gives the first three entries — plus, on the Maps
+tab, *Forget this map*. The Maps tab also has a search box and a rename box for the map you're
+standing on.
 
 ---
 

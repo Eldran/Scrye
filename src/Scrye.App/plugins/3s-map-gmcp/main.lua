@@ -113,6 +113,8 @@ local DELTA = {
   ne = { 1,  1, 0 }, nw = { -1, 1, 0 }, se = { 1, -1, 0 }, sw = { -1, -1, 0 },
   u  = { 0, 0, 1 },  d  = { 0, 0, -1 },
 }
+local OPPOSITE = { n = "s", s = "n", e = "w", w = "e", ne = "sw", sw = "ne", nw = "se", se = "nw",
+                   u = "d", d = "u" }
 
 -- The same tile vocabulary as the shipped map, on purpose: '@' you, '#' a
 -- room, '?' an exit into nothing mapped, '.' an empty grid position, '^v%'
@@ -122,6 +124,32 @@ local PALETTE = { ["@"] = "accent", ["#"] = "dim", ["?"] = "warning", ["!"] = "w
   ["^"] = "dim", ["v"] = "dim", ["%"] = "dim", [">"] = "info", ["."] = "inset",
   ["-"] = "line", ["|"] = "line", ["/"] = "line", ["\\"] = "line", ["x"] = "line" }
 local TILE_MARKS = "^v%>!"
+
+-- The legend under the map: the same tiles, in the same theme colours the palette above
+-- gives them, each a swatch (background = the cell's colour) followed by what it means.
+-- Built from one table so the palette and the legend cannot drift apart: each entry names
+-- the tile, and the swatch takes its colour from PALETTE at the moment it is composed.
+-- '@@' is the markup escape for a literal '@' - here it is only the you-tile's colour that
+-- matters, so the swatch is blank, exactly as the grid draws it (no mark on '@' or '#').
+-- Short rows, because the panel is 280px wide and a text widget wraps mid-entry.
+local LEGEND_ROWS = {
+  { { "@", "you" }, { "#", "room" }, { ">", "way to another map" } },
+  { { "^", "up" }, { "v", "down" }, { "%", "both" } },
+  { { "?", "unexplored exit" }, { "!", "drawn off its links" } },
+}
+local function legend_text()
+  local lines = {}
+  for _, row in ipairs(LEGEND_ROWS) do
+    local bits = {}
+    for _, e in ipairs(row) do
+      local tile, meaning = e[1], e[2]
+      local mark = TILE_MARKS:find(tile, 1, true) and tile or " "
+      bits[#bits + 1] = string.format("@{inset/%s,bold} %s @{} %s", PALETTE[tile], mark, meaning)
+    end
+    lines[#lines + 1] = table.concat(bits, "  ")
+  end
+  return table.concat(lines, "\n")
+end
 
 -- ---------- state ----------
 local talking = true
@@ -618,12 +646,26 @@ local adj_cache = nil
 -- its clearer would leave the clearer assigning to a global of the same name,
 -- and the cache would silently never invalidate.
 local maps_cache, label_cache = nil, nil
+-- A link INTO a room whose way back is marked shifting is not a layout link either. The
+-- elevator again: every floor's lobby says 'n' leads to the car, and the car's 's' is
+-- shifting - so the car belongs to no floor, and no floor belongs to the car. Without
+-- this, the lobbies' own n-links pull every floor into one map through the car, and
+-- each lobby then wants the one cell south of it: Joakim's Megacity, 15 Sep 2026, floor
+-- 0's rooms drawn displaced over floor 30's. Severed here, each floor is its own map,
+-- the car a one-room map of its own, and the lobby's 'n' draws as '>' - a way to another
+-- map, which is exactly what an elevator door is. Routes are untouched: bfs walks
+-- neighbours(), not this, so 'walk to the car' still works from any lobby.
+local function severed(e)
+  local back = rooms[e.to]
+  return back and back.shift and OPPOSITE[e.dir] and back.shift[OPPOSITE[e.dir]] or false
+end
+
 local function adjacency()
   if adj_cache then return adj_cache end
   local fwd, back = {}, {}
   for num, r in pairs(rooms) do
     for _, e in ipairs(neighbours(r)) do
-      if DELTA[e.dir] and rooms[e.to] then
+      if DELTA[e.dir] and rooms[e.to] and not severed(e) then
         fwd[num] = fwd[num] or {} ; fwd[num][#fwd[num] + 1] = { dir = e.dir, to = e.to }
         back[e.to] = back[e.to] or {} ; back[e.to][#back[e.to] + 1] = { dir = e.dir, from = num }
       end
@@ -835,6 +877,7 @@ draw = function()
   end
   local me = L.at[here]
   local z = view_z or me.z
+  L.marks = {}          -- '>' markers drawn this time: cell -> the off-map room they point at
   draw_x0 = me.x - HALF_C
   draw_y0 = me.y + HALF_R
   draw_z  = z
@@ -895,9 +938,21 @@ draw = function()
           -- a displaced room would otherwise be a line to the wrong place.
           if dp and dp.z == z and dp.x == p.x + dv[1] and dp.y == p.y + dv[2] then
             put_edge(p.x, p.y, dv)
-          elseif not dest then
+          elseif not dest or not rooms[dest] then
+            -- Unexplored, by the same rule as 'mapg frontier': nothing known behind it,
+            -- whether the destination was withheld or named-but-never-visited.
             put_edge(p.x, p.y, dv)
-            put(p.x + dv[1], p.y + dv[2], "?", true)   -- a way out, destination withheld
+            put(p.x + dv[1], p.y + dv[2], "?", true)
+          elseif not L.set[dest] then
+            -- A known room that is NOT on this map: the way to another map, drawn in the
+            -- direction it lies. The room itself is already tinted '>' for it, but the
+            -- room you are standing in is drawn '@' on top - so the elevator lobby showed
+            -- nothing at all for the door north into the car (Joakim, 15 Sep 2026). The
+            -- marker sits in the neighbour cell like a '?', and like a '?' never covers a
+            -- room of this map that happens to be drawn there.
+            put_edge(p.x, p.y, dv)
+            put(p.x + dv[1], p.y + dv[2], ">", true)
+            L.marks[cell_key(p.x + dv[1], p.y + dv[2], z)] = dest   -- so hovering it names the room
           end
         end
       end
@@ -1358,6 +1413,65 @@ local function forget(num)
   note("forgot room " .. num .. ". Links from other rooms still point at it until they are re-walked.")
 end
 
+-- Forgetting a whole MAP (one connected piece, the thing the Maps tab lists) or a whole
+-- AREA (every piece whose rooms carry that area name) - because the elevator floors of
+-- Megacity are one map each, and dropping them a room at a time is thirty clicks for what
+-- is one decision. Asks first, the way 'wipe' does: the same command with 'yes' on the
+-- end confirms, only while armed, and only for the SAME target - moving to another map
+-- between arming and confirming, or naming a different area, is not a confirmation.
+-- What goes: the rooms (favourites that resolved to them lapse on the next refresh, as
+-- after any forget). What stays: links INTO them from rooms outside, exactly as after
+-- 'mapg forget <n>' - those show as unexplored until re-walked, which is the truth - and
+-- any name you gave the map, keyed by its seed room: map that floor again and it comes
+-- back wearing its name, which is what a name is for.
+local forget_armed = nil     -- { key = seed (a number) | area name lowercased (a string) }
+local function forget_many(kind, key, confirmed)
+  local set, label = {}, nil
+  if kind == "map" then
+    local seed = key
+    if not seed then
+      if not here or not rooms[here] then note("we are not anywhere yet - 'mapg forget map <seed>' names one"); return end
+      seed = here
+      for num in pairs(component_of(here)) do if num < seed then seed = num end end
+    end
+    if not rooms[seed] then note("room " .. seed .. " is not in the store"); return end
+    set = component_of(seed)
+    for num in pairs(set) do if num < seed then seed = num end end   -- the map's true seed
+    key = seed
+    label = label_of()[seed] or area_of(rooms[seed])
+  else
+    key = tostring(key or ""):lower()
+    if key == "" then note("mapg forget area <name> - 'mapg areas' lists them"); return end
+    for num, r in pairs(rooms) do if area_of(r):lower() == key then set[num] = true end end
+    label = key
+  end
+  local n = count(set)
+  if n == 0 then note("no rooms carry the area '" .. label .. "' - 'mapg areas' lists them"); return end
+  local again = "mapg forget " .. kind .. " " .. (kind == "map" and key or label) .. " yes"
+  if not confirmed then
+    forget_armed = { key = key }
+    note(string.format("this will drop all %d room(s) of '%s' and everything walked about them.", n, label))
+    note("  '" .. again .. "' to go ahead. Anything else cancels it.")
+    return
+  end
+  -- One comparison covers the kind too: a map's key is a number and an area's a string,
+  -- and Lua never calls 300 and "300" equal - so an armed area cannot confirm a map.
+  if not forget_armed or forget_armed.key ~= key then
+    note("nothing to confirm for that - arm it first without 'yes', so this cannot happen by mistyping")
+    return
+  end
+  forget_armed = nil
+  for num in pairs(set) do
+    rooms[num] = nil
+    known = known - 1
+    if here == num then here = nil end
+  end
+  if walk then walk_stop("walk stopped - its route ran through rooms just forgotten") end
+  dirty = true ; forget_adjacency() ; draw()
+  note(string.format("forgot %d room(s) of '%s'.%s Links into them from elsewhere show as unexplored until re-walked.",
+       n, label, here and "" or " Walk into a room and the map picks you up again."))
+end
+
 -- ---------- alias ----------
 -- One dispatcher rather than several aliases: a pattern like '^mapg (%w+)$'
 -- registered beside '^mapg$' swallows whichever was added first, which is a
@@ -1373,6 +1487,7 @@ scrye.addAlias{
     -- Any command that is not the confirmation disarms a pending wipe, so an
     -- armed one cannot sit around waiting to be triggered by a later 'yes'.
     if not (verb == "wipe" and rest:lower() == "yes") then wipe_armed = false end
+    if not (verb == "forget" and rest:lower():match("%s+yes$")) then forget_armed = nil end
 
     if verb == "" or verb == "status" then status()
     elseif verb == "on"    then talking = true;  scrye.store.set("talking", "1"); note("commentary ON")
@@ -1433,8 +1548,20 @@ scrye.addAlias{
       else drawing = true; scrye.store.set("drawing", "1"); draw(); note("panel on") end
     elseif verb == "shift"    then shift_cmd(rest)
     elseif verb == "forget"   then
-      local n = tonumber(rest)
-      if n then forget(n) else note("mapg forget <room number>") end
+      local words = {}
+      for w in rest:gmatch("%S+") do words[#words + 1] = w end
+      local yes = #words > 1 and words[#words]:lower() == "yes"
+      if yes then words[#words] = nil end
+      local what = (words[1] or ""):lower()
+      if what == "map" then
+        if words[2] and not tonumber(words[2]) then note("mapg forget map [seed] [yes]")
+        else forget_many("map", tonumber(words[2]), yes) end
+      elseif what == "area" then
+        forget_many("area", table.concat(words, " ", 2), yes)
+      else
+        local n = tonumber(rest)
+        if n then forget(n) else note("mapg forget <room number> | map [seed] | area <name>") end
+      end
     elseif verb == "wipe" then wipe(rest:lower() == "yes")
     elseif verb == "save" then note("saved " .. (save(true) or 0) .. " room(s)")
     elseif verb == "help" then
@@ -1458,6 +1585,7 @@ scrye.addAlias{
       note("mapg draw on|off  the HUD panel")
       note("mapg shift [n] <dir> [off]  mark an exit shifting (elevator, portal): drawn ~, never routed")
       note("mapg forget <n>   drop one room")
+      note("mapg forget map [seed] | area <name>   drop a whole map or area (asks first)")
       note("mapg wipe         erase the whole store and start again (asks first)")
       note("mapg save         write the store to disk now")
       note("mapg on|off       the running commentary")
@@ -1481,10 +1609,14 @@ local function peek(col, row)
     return nil
   end
   local x, y = draw_x0 + col // 2, draw_y0 - row // 2
-  local num = L.cells[cell_key(x, y, draw_z)]
-  if not num then scrye.setState(P .. "peek", ""); return nil end
+  local key = cell_key(x, y, draw_z)
+  -- A '>' marker is not a room of this map, but it points at one: hovering it names the
+  -- room behind the door (the elevator car), and a click routes there like any room.
+  local num = L.cells[key] or (L.marks and L.marks[key])
+  if not num or not rooms[num] then scrye.setState(P .. "peek", ""); return nil end
   local r = rooms[num]
   local bits = { tostring(num), name_of(num) }
+  if not L.cells[key] then bits[#bits + 1] = "[" .. area_of(r) .. " - another map]" end
   local ex = {}
   for _, e in ipairs(neighbours(r)) do ex[#ex + 1] = e.dir end
   if #ex > 0 then bits[#bits + 1] = "exits " .. table.concat(ex, ",") end
@@ -1522,6 +1654,33 @@ local function walk_to_map(num, whence)
   end
   local d = steps[#steps].to
   walk_begin(steps, string.format("%d %s [%s] (from %s)", d, name_of(d), area_of(rooms[d]), whence))
+end
+
+-- Right-click on the square you are STANDING ON: no walking to offer, so the menu is
+-- about this room's exits instead - one entry per exit, marking it shifting (or unmarking
+-- one already marked). That is the elevator case as you live it: ride the Megacity lift
+-- once, notice the map believed the floor it named, right-click where you stand and mark
+-- the way out - no need to wait for the second ride that would mark it by itself, and no
+-- room number to look up for 'mapg shift'. Every entry is the typed command, so the
+-- narration and the rules are shift_cmd's own. Exits told AND exits only ever walked both
+-- count, because a door the server never names is exactly the sort that shifts.
+local function shift_menu(num)
+  local r = rooms[num]
+  if not r then return end
+  local seen = {}
+  for d in pairs(r.exits or {}) do seen[d] = true end
+  for d in pairs(r.walked or {}) do seen[d] = true end
+  for d in pairs(r.shift or {}) do seen[d] = true end
+  local menu = {}
+  for _, dir in ipairs(sorted_dirs(seen)) do
+    if r.shift and r.shift[dir] then
+      menu[#menu + 1] = { "Unmark shifting: " .. dir, "mapg shift " .. num .. " " .. dir .. " off" }
+    else
+      menu[#menu + 1] = { "Mark shifting: " .. dir, "mapg shift " .. num .. " " .. dir }
+    end
+  end
+  if #menu == 0 then return end
+  return menu
 end
 
 local function row_go(index) walk_to_map(maplist_seeds[index], "the Maps tab") end
@@ -1568,12 +1727,17 @@ scrye.addPanel{
         -- The right-click menu (API 1.18): every entry is a command AS YOU WOULD TYPE IT,
         -- so it goes through mapg's own aliases - same caution, same narration, and a
         -- pre-1.18 host that ignores the return simply has no menu, nothing breaks.
+        -- 'Forget room' lives here and not on a left-click: dropping a room takes a
+        -- deliberate two-step (open the menu, pick the entry), so a slip of the mouse
+        -- over the map can never erase what took walking to learn.
         onRightClick = function(col, row)
           local num = peek(col, row)
-          if not num or num == here then return end
-          return { { "Walk there",   "mapg go "   .. num },
-                   { "Show route",   "mapg path " .. num },
-                   { "Room details", "mapg room " .. num } }
+          if not num then return end
+          if num == here then return shift_menu(num) end
+          return { { "Walk there",   "mapg go "     .. num },
+                   { "Show route",   "mapg path "   .. num },
+                   { "Room details", "mapg room "   .. num },
+                   { "Forget room",  "mapg forget " .. num } }
         end },
       { type = "buttonrow", buttons = {
         { text = "Up",     action = function()
@@ -1589,6 +1753,7 @@ scrye.addPanel{
       } },
       { type = "value", text = "", bind = P .. "where" },
       { type = "value", text = "", bind = P .. "peek" },
+      { type = "text", bind = P .. "legend" },     -- what the colours mean, set once below
     } },
     { title = "Maps", widgets = {
       { type = "label", text = "click a map to walk there", bind = P .. "mapshint", color = "dim" },
@@ -1614,9 +1779,11 @@ scrye.addPanel{
         onRowMenu = function(_, index)
           local seed = maplist_seeds[index]
           if not seed then return end
-          return { { "Walk there",   "mapg go "   .. seed },
-                   { "Show route",   "mapg path " .. seed },
-                   { "Room details", "mapg room " .. seed } }
+          return { { "Walk there",      "mapg go "         .. seed },
+                   { "Show route",      "mapg path "       .. seed },
+                   { "Room details",    "mapg room "       .. seed },
+                   -- arms the drop and prints the exact 'yes' command to confirm it
+                   { "Forget this map", "mapg forget map " .. seed } }
         end },
       -- Naming from the panel, for the maps the feed cannot name itself: the realms are
       -- "Unknown" connective space (Chaos, Science... - each hangs off ONE special town
@@ -1649,6 +1816,7 @@ scrye.addPanel{
     } },
   },
 }
+scrye.setState(P .. "legend", legend_text())   -- static: the palette does not change at runtime
 
 -- The Maps tab, refreshed with the drawing. Alphabetical, and filtered by the search box
 -- (a map shows when the text matches its label OR a bordering map's label - so searching
