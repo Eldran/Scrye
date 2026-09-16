@@ -678,12 +678,13 @@ collision:
 
 | Job | GMCP line (3Scapes) | Classic line |
 |---|---|---|
-| Automapper | **3S Map (GMCP)** — `mapg` | **3S Map (classic)** — `map` |
 | Chaos‑sea bot | **3S Chaos Sea** — `cs` | **Chaos Sea (classic)** — `csc` |
 | Auto‑raid | **3S Auto‑Raid (GMCP)** — `araid` | **3S Auto‑Raid (classic)** — `araidc` |
 | Viking HUD | **Viking Status / World / Kingdom** | **3S Viking Status (classic)** |
 
-The classic mapper and chaos‑sea bot are for **3K**, or any character without GMCP. The two Viking
+The classic chaos‑sea bot is for **3K**, or any character without GMCP. (There is no classic
+mapper any more: the dead‑reckoning 3S Map was retired in favour of the GMCP one, which since 1.8.0
+also carries the auto‑explore sweep.) The two Viking
 classics are **not** — the Viking guild doesn't exist on 3K at all; they're for a 3Scapes character
 still running MIP.
 
@@ -696,7 +697,7 @@ other, never both.**
 | Alias | Plugin |
 |---|---|
 | `mapg` | 3S Map (GMCP) |
-| `map` | 3S Map (classic) |
+| `farm` | 3S Farmer |
 | `cs` · `csc` | Chaos Sea (GMCP / classic) |
 | `-` `..` `.stop` `record` `pa` … | 3S Stepper |
 | `chat` | 3S Chat |
@@ -744,6 +745,10 @@ sends is a single bare movement word.
 | `mapg stop` | Stop a walk in progress. |
 | `mapg explore` | Name the nearest room that still has an unexplored exit, and print the route. |
 | `mapg explore go` | Same, but walk there. |
+| `mapg explore area [N]` | **The sweep**, fenced to the area you're standing in: a route to the nearest room with an unexplored exit, one step through it, and again — one move per confirmed arrival, until nothing unexplored is reachable. A probe that lands in another area steps straight back and the door is remembered as an edge. With `N`, stops after N new rooms. The Map tab's **Explore** button is this. |
+| `mapg explore all [N]` | The same sweep across every area. |
+| `mapg explore hp <pct>` | Stop a sweep under this HP (default 50; 0 turns it off). A sweep that stops for any reason — combat, HP, a move you typed, `mapg stop`, a walk that failed — never resumes on its own; every end prints the same summary: rooms learned, exits blocked, edges found, why. |
+| `mapg blocked` | Exits a probe found shut this session (the watchdog, or "You cannot go"); the sweep skips them. `mapg blocked clear` forgets them, and so does a restart. |
 | `mapg frontier` | Every room with an unexplored exit, and which directions. |
 | `mapg map` | Describe the map you're standing on and which maps it borders. |
 | `mapg maps` | Every map, with room counts and borders. |
@@ -798,52 +803,55 @@ standing on.
 
 ---
 
-### 3S Map (classic) — `map`
+### 3S Farmer — `farm`
 
-The dead‑reckoning automapper, frozen at its long‑proven pre‑GMCP state. It learns rooms as you
-walk, tracks your position by counting moves, and needs the MUD's display markers switched on (the
-`aset` config). Use it on 3K, or on any character without GMCP. Old maps load exactly as they were.
+An area farming bot (3Scapes, GMCP). It locks to the area you're standing in and patrols the rooms
+it has **stood in** — its own graph, built from `Room.Info`, is the fence — fighting whatever the
+server lists in each room. Explore first, by walking or with `mapg explore area`: on `farm start`
+it also takes the mapper's rooms for the area (over `map.query.area`), so a mapped area is a
+farmable one.
 
-Because position is *inferred* here, it can drift — and it says so (`DRIFT?`), at which point
-`map set` puts you back where you actually are.
+**The chassis.** One step per confirmed arrival, verified by room number. A step that lands
+somewhere else, an arrival nothing ordered (a wimpy, a summon), a move you typed, or a step that
+never lands stops the patrol — and it never resumes on its own. Combat only pauses it. Between
+rooms it heads for the stalest room, unless the server's line‑of‑sight grid (`Room.Map`) shows
+monsters nearby, in which case it goes there first; rooms with a player in sight are skipped.
+
+**The fists.** There are no mob files: the target list *is* `Room.Contents`. Every monster not
+excluded here, not the party's and not on the never‑list is attacked as `kill <word>`, the plain
+words of its name from the end (`Small cur` → `cur`), rotated on "There is no X here". A player in
+the room means hands off everything. After a killing blow it breathes for a moment so your own
+looting triggers go first, then reads the refreshed roster.
+
+**Excludes, from the panel.** Click a mob's row in the roster to exclude it in this area (click again
+to allow it); right‑click for the never‑list — mobs never attacked anywhere, which is where guild
+followers go. A patrol that stands still says why: the panel's **Waiting** row, `farm`, and once in
+the output.
 
 | Command | What it does |
 |---|---|
-| `map` | Status plus the full command list. |
-| `map on` / `map off` | Auto‑mapping. Default **on**. `map on` also clears a hold another plugin placed. |
-| `map area <name>` | Switch to (or create) an area. Word characters and hyphens only. |
-| `map areas` | Every stored area, plus any `maps.json` seeds not yet stored. |
-| `map realm fantasy\|science\|chaos` | Tag the area's realm; the panel border takes its colour. `map realm -` clears it. |
-| `map set <x> <y> [z]` | Re‑seat your position by hand — the way out of a drift. |
-| `map undo` | Undo the last confirmed move (last 20 kept), deleting the destination room if that arrival created it. |
-| `map note <text>` / `map note -` | Attach or clear a note on this room. |
-| `map flag <A-Z>` / `map flag -` | Flag this room with one letter, drawn on its tile. |
-| `map find <text>` | Search room names and notes; the matches become the numbered Rooms list. |
-| `map go <n>` | Walk to numbered row `<n>` of that list. |
-| `map goto <x> <y> [z]` | Walk to a mapped cell, one confirmed step at a time. |
-| `map stop` | Abort the walk. |
-| `map link <cmd> = <x> <y> <z>` | Record a special link: sending `<cmd>` here lands you there. Prefix with an area name for a cross‑area link. |
-| `map link <cmd>` | Arm it instead — the next time you send `<cmd>`, wherever you land becomes the destination. `map link -` cancels. |
-| `map links` / `map unlink <cmd>` | List or remove this room's special links. |
-| `map enter <area> [x y z]` | Arm an area boundary: the next command you send is the crossing. `map enter -` cancels. |
-| `map back <cmd>` | After a crossing, bind `<cmd>` here as the way back — the no‑coordinates way to record a portal. |
-| `map export` / `map export <name>` | Print an area as JSON, for `maps.json` or as a backup. |
-| `map wipe <name> confirm` | Delete a stored area. Without `confirm` it refuses. |
+| `farm start` / `farm stop` / `farm pause` | Lock to this area and patrol; stop (so does moving yourself); hand brake, toggles. The panel's buttons are these. |
+| `farm go <area>` | Ask the mapper to walk you there, then lock and start on arrival. |
+| `farm pace <s>` | Seconds between an arrival and the next step. |
+| `farm exclude <name>` / `farm include <name>` / `farm excludes` | This area's excludes (substring, case‑blind). |
+| `farm never [<name>\|-<name>]` | Mobs never attacked anywhere. |
+| `farm party [<name>\|-<name>]` | Real player party members, whose presence is not a stranger's. |
+| `farm hp <start%> [<panic%>]` | No new fight or step under start% (it rests); under panic% the fight is abandoned and `farm panic <cmd>` sent once. Refuses to start with a floor set and no HP feed. |
+| `farm rest <seid> <secs>` | Sit out low Seid between fights. |
+| `farm after <cmd>` | One command of yours after each killing blow's breath (`get all from corpse`); `-` clears. |
+| `farm rooms` | Coverage: this area's rooms — reachable, visited this run, or cut off. |
+| `farm wipe yes` | Forget the graph. |
 
-**Walks stop by themselves** on a refused move, a drift disagreement, a cross‑area crossing, ten
-seconds of silence, a disconnect, or the idle guard. **Combat is different** — it *pauses* the walk
-and it resumes on its own once the enemy is gone. Use `map stop` if you'd rather abandon it.
-
-**With the mouse.** Hovering peeks. **Clicking a mapped room starts a walk to it** (unlike the GMCP
-mapper, which prints the route). The Rooms tab has a find box; its rows aren't clickable — use
-`map go <n>`.
+**Contracts with the mapper.** The farmer never walks a trip itself: `farm go` is a `map.goto`
+event, answered by `map.walk.started` and exactly one of `map.walk.arrived` / `map.walk.stopped`.
+The mapper's `map.room` feed keeps the farmer's idea of "here" in step with the mapper's own.
 
 ---
 
 ### 3S Pathfinder (Rust)
 
-No commands and no panel. It's a route‑search engine compiled to WebAssembly, and three plugins ask
-it for routes when it's loaded: **3S Map (classic)** and both **chaos‑sea** bots. Without it each
+No commands and no panel. It's a route‑search engine compiled to WebAssembly, and both **chaos‑sea**
+bots ask it for routes when it's loaded. Without it each
 falls back to its own Lua search — the same answers, just slower once a map gets big, which on a
 well‑explored sea is exactly when you notice.
 
@@ -1955,9 +1963,9 @@ Three things are different about wasm plugins:
 
 The supported authoring path is Rust, via the `scrye-plugin` SDK in `sdk/rust/`
 (closure-based API that feels like the Lua one — see `sdk/rust/examples/hp-watch`, and
-`sdk/rust/plugins/3s-pathfinder` for the real thing: BFS path search that 3s-map
-delegates its `map goto` to over inter-plugin events, with automatic fallback to the
-Lua search when the pathfinder isn't loaded):
+`sdk/rust/plugins/3s-pathfinder` for the real thing: BFS path search that the chaos‑sea
+bots delegate their route finding to over inter-plugin events, with automatic fallback to
+the Lua search when the pathfinder isn't loaded):
 
 ```
 rustup target add wasm32-unknown-unknown

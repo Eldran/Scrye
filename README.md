@@ -162,7 +162,7 @@ The **plugin API is versioned independently of the client** (currently 1.11, and
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
-Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. Seven 3Scapes plugins ship bundled: `3s-chaossea`, `3s-chat`, `3s-map`, `3s-raid`, `3s-stepper`, `3s-viking-status` and `3s-vitals`. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader its **Trade** tabs.
+Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. The bundled 3Scapes plugins include `3s-chaossea`, `3s-chat`, `3s-map-gmcp` (the automapper, with the auto‑explore sweep), `3s-farmer`, `3s-raid`, `3s-stepper`, `3s-viking-status` and `3s-vitals`; the old dead‑reckoning `3s-map` was retired in favour of the GMCP mapper. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader its **Trade** tabs.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:
 

@@ -1,12 +1,14 @@
 -- ============================================================
 -- 3S Map (GMCP) — the automapper rebuilt on what the server tells us.
--- Lives in _lab, out of the repo, and runs BESIDE the shipped 3s-map
--- rather than replacing it.
+-- Since 1.8.0 the only mapper Scrye ships: the dead-reckoning 3s-map it
+-- grew up beside is retired, and the lab's 3s-map-explorer (the sweep,
+-- 'mapg explore') is folded in - "the shipped 3s-map" below names the
+-- retired one, whose tile vocabulary and panel this one kept.
 --
 -- PHASE 1 — the store. Rooms are keyed by the number the server gives
 -- them, links are number -> number, and the whole thing persists.
 -- PHASE 2a — the picture. A HUD panel, drawn in the same visual language
--- as the shipped 3s-map so the two can be read side by side.
+-- as the old 3s-map so the two could be read side by side.
 --
 -- COORDINATES ARE A LAYOUT, NOT AN IDENTITY
 --   The shipped map stores x,y,z and looks a room up by them, so a wrong
@@ -182,6 +184,22 @@ local view_z  = nil       -- level being looked at, nil = follow the player
 local draw_x0, draw_y0, draw_z = 0, 0, 0   -- viewport origin at the last draw
 local forget_adjacency, draw               -- defined with the drawing, used by the feed
 local walk_stop, walk_arrived              -- defined with the walking, used by the feed
+local exploring = false   -- the auto-explore loop is running (never persisted: a reload
+                          -- means a human is at the keyboard changing things)
+local fighting  = false   -- Char.Combat says something is hitting us
+local cc_at     = 0       -- last moment (on the mapper's 1 s clock) something was hitting us
+local explore_base = 0    -- rooms known when the explore started, for the summary
+local explore_hp = 50     -- HP% under which a sweep stops (persisted; 0 = off)
+local explore_area = nil  -- the area this sweep is fenced to (nil = the whole world)
+local explore_budget = 0  -- stop after this many NEW rooms (0 = no cap)
+local explore_edges = 0   -- exits found leading out of the fenced area, this sweep
+local explore_blocked = 0 -- exits found shut, this sweep
+local explore_last = ""   -- the last sweep's summary, for the panel
+local last_probe = nil    -- { from, dir } of the probe in flight, for the fence check
+local sweep_cache = nil   -- the sweep's frontier count, dropped with the other caches
+local explore_continue                     -- defined with exploring, used by the walking
+local probe_blocked                        -- likewise: a probe that did not land
+local explore_end                          -- likewise: every way a sweep stops goes through it
 local held_by = nil       -- transient hold via the "map.hold" event (never persisted):
                           -- another plugin owns movement in unmappable space right now
 local in_sea  = false     -- last arrival was a Sea of Chaos layer; kept so entering and
@@ -284,7 +302,7 @@ local function frontier_dirs(r)
     -- A shifting exit is never unexplored: there is nothing behind it to LEARN,
     -- only somewhere to be taken. Without this guard link()'s nil would make it
     -- eternal frontier and the explorer would ride the elevator forever.
-    if not (r.shift and r.shift[dir]) then
+    if not (r.shift and r.shift[dir]) and not (r.blocked and r.blocked[dir]) then
       local dest = link(r, dir)
       if not dest or not rooms[dest] then out[#out + 1] = dir end
     end
@@ -330,7 +348,7 @@ local function save(force)
   for num, r in pairs(rooms) do
     list[#list + 1] = { num = num, name = r.name, area = r.area,
                         exits = r.exits, walked = r.walked, visits = r.visits,
-                        shift = r.shift, vary = r.vary }
+                        shift = r.shift, vary = r.vary, edge = r.edge }
   end
   local names = {}
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
@@ -369,6 +387,7 @@ local function load()
       -- only kept when non-empty, so an old save (no such fields) loads unchanged
       if type(r.shift) == "table" and next(r.shift) ~= nil then rooms[num].shift = r.shift end
       if type(r.vary) == "table" and next(r.vary) ~= nil then rooms[num].vary = r.vary end
+      if type(r.edge) == "table" and next(r.edge) ~= nil then rooms[num].edge = r.edge end
       known = known + 1
     end
   end
@@ -674,7 +693,7 @@ local function adjacency()
   adj_cache = { fwd = fwd, back = back }
   return adj_cache
 end
-forget_adjacency = function() adj_cache = nil ; layout = nil ; maps_cache = nil ; label_cache = nil end
+forget_adjacency = function() adj_cache = nil ; layout = nil ; maps_cache = nil ; label_cache = nil ; sweep_cache = nil end
 
 -- Everything reachable from `start` without leaving its area, over compass
 -- links either way. This is one map.
@@ -998,6 +1017,12 @@ walk_stop = function(why)
     -- two, never both.
     scrye.emit("map.walk.stopped", scrye.json.encode({ reason = why }))
   end
+  -- A walk that stopped for a REASON takes the explore down with it. The walk contract is
+  -- "anything unexpected stops it, and it never resumes on its own"; an explore that
+  -- restarted the walking after the walker had just refused to would make that a lie.
+  if why and exploring then
+    explore_end(why, "explore stopped with it - 'mapg explore area' (or all) starts it again")
+  end
   draw()
 end
 
@@ -1006,6 +1031,7 @@ local function walk_arm_watchdog()
   walk_timer = scrye.after(WALK_WAIT, function()
     walk_timer = nil
     if not walk then return end
+    if walk.probe then probe_blocked("nothing arrived in " .. WALK_WAIT .. "s") ; return end
     walk_stop(string.format(
       "step %d ('%s') never landed - nothing arrived in %ds. Walk stopped where you stand.",
       walk.idx, walk.steps[walk.idx] and walk.steps[walk.idx].dir or "?", WALK_WAIT))
@@ -1017,10 +1043,17 @@ local function walk_step()
   if not walk then return end
   local st = walk.steps[walk.idx]
   if not st then
+    local probe = walk.probe
     local n = #walk.steps
     walk_stop(nil)
-    note(string.format("arrived - %d step(s), %d %s", n, here, name_of(here)))
-    scrye.emit("map.walk.arrived", scrye.json.encode({ num = here }))
+    -- A probe is one step through one unexplored exit, taken by the sweep for itself;
+    -- announcing and emitting an arrival for every one of those would narrate the whole
+    -- sweep to every listener. Requested walks still say and emit where they got to.
+    if not probe then
+      note(string.format("arrived - %d step(s), %d %s", n, here, name_of(here)))
+      scrye.emit("map.walk.arrived", scrye.json.encode({ num = here }))
+    end
+    if exploring then explore_continue() end
     return
   end
   walk.sent = st.dir              -- so on_command knows this one was ours
@@ -1050,7 +1083,7 @@ walk_arrived = function()
   if not walk then return end
   local st = walk.steps[walk.idx]
   if not st then return end
-  if here ~= st.to then
+  if not st.any and here ~= st.to then
     -- The step went somewhere else. No other walker can see this happen.
     walk_stop(string.format(
       "step %d ('%s') should have reached %d %s, but we are in %d %s. Walk stopped.",
@@ -1145,6 +1178,12 @@ local function room_detail(num)
     note("  shifting: " .. table.concat(sh, " ")
       .. "  (ends somewhere different each ride - drawn ~, never routed through)")
   end
+  local ed = sorted_dirs(r.edge)
+  if #ed > 0 then
+    local parts = {}
+    for _, d in ipairs(ed) do parts[#parts + 1] = d .. " -> " .. tostring(r.edge[d]) end
+    note("  edge: " .. table.concat(parts, "  ") .. "  (leads out of this area - a fenced sweep skips it)")
+  end
 end
 
 local function frontier()
@@ -1205,6 +1244,240 @@ local function route_to_frontier()
     return nil
   end
   return steps
+end
+
+-- ---------- auto-explore ----------
+-- 'mapg explore all': keep going until nothing unexplored is reachable. One move per
+-- confirmed arrival, exactly like a requested walk, because it IS the walker doing it:
+-- a route to the nearest frontier room is an ordinary walk, and stepping THROUGH the
+-- unexplored exit is a one-step walk with the verification relaxed (st.any) -- the room
+-- behind the door is the answer, whatever it turns out to be. Everything that stops a walk
+-- stops the explore: a fight starting, a move you typed, the watchdog, 'mapg stop'.
+-- HP as a percent from the best feed available - Char.Vitals (GMCP) or MIP - or nil
+-- when neither has spoken. nil is not "fine": the floor simply cannot be checked, and
+-- the sweep says so once at the start rather than pretending.
+local function get_hp()
+  local cur, max = tonumber(scrye.getState("char.vitals.hp")), tonumber(scrye.getState("char.vitals.maxhp"))
+  if not cur or not max then
+    cur, max = tonumber(scrye.getState("character.health.current")), tonumber(scrye.getState("character.health.max"))
+  end
+  if not cur or not max or max <= 0 then return nil end
+  return math.floor(cur * 100 / max)
+end
+
+local function under_hp_floor()
+  if explore_hp <= 0 then return nil end
+  local hp = get_hp()
+  if hp and hp < explore_hp then return string.format("HP %d%% is under the explore floor of %d%%", hp, explore_hp) end
+  return nil
+end
+
+-- The fence (Plan-Map-Farmer-Round2 E2). 'mapg explore area' sweeps only the area you
+-- start in. A frontier exit's destination is by definition not in the store, so its area
+-- cannot be checked BEFORE probing: the rule is probe, and if the room behind the door
+-- belongs to another area, step straight back (compass exits reverse) and mark the exit
+-- on the source room edge[dir] = <area seen>, persisted - the boundary room is still
+-- mapped, a free gift to the world map, but that exit is never frontier for this area
+-- again. A non-compass door (in, enter) has no known way back: the exit is marked and the
+-- sweep routes itself back into the fence through known links. 'mapg explore all' is the
+-- unfenced form, and 'Unknown' - every stretch of connective realm on the MUD - gets a
+-- warning, not a refusal: sometimes a corridor is exactly what you want filled in.
+-- OPPOSITE comes from mapg itself (hoisted beside DELTA in 1.7.6)
+local function in_fence(r) return explore_area == nil or area_of(r) == explore_area end
+
+-- The exits the SWEEP may probe from a room: the mapper's frontier, minus - inside a fence
+-- - the exits already known to lead out of it. Rooms outside the fence offer nothing.
+local function sweep_dirs(r)
+  if not r or not in_fence(r) then return {} end
+  local out = {}
+  for _, dir in ipairs(frontier_dirs(r)) do
+    if not (explore_area and r.edge and r.edge[dir]) then out[#out + 1] = dir end
+  end
+  return out
+end
+
+-- How many rooms still offer the sweep an exit (fence applied). Counted once per map
+-- change - forget_adjacency() drops it with the other caches - not on every draw.
+local function sweep_frontier_count()
+  if sweep_cache then return sweep_cache end
+  local n = 0
+  for _, r in pairs(rooms) do if #sweep_dirs(r) > 0 then n = n + 1 end end
+  sweep_cache = n
+  return n
+end
+
+local function route_to_sweep()
+  return bfs(here, function(_, r) return #sweep_dirs(r) > 0 end)
+end
+
+-- One line for the panel: what the sweep is doing, or what the last one came to.
+local function explore_line()
+  if exploring then
+    return string.format("EXPLORING %s  -  %d unexplored  -  +%d room(s)",
+                         explore_area or "everywhere", sweep_frontier_count(), known - explore_base)
+  end
+  return explore_last
+end
+
+-- Every way a sweep ends comes through here, so the chat and the panel tell the same
+-- story: what it learned, what it found shut, where the fence turned out to be, and why
+-- it stopped. `reason` is the stop's cause; `hint` an optional second line for the chat.
+explore_end = function(reason, hint)
+  if not exploring then return end
+  exploring = false
+  last_probe = nil
+  local learned = known - explore_base
+  explore_last = string.format("%s%s  -  +%d room(s), %d blocked, %d edge(s)",
+                               reason == "finished" and "explore finished" or "explore stopped",
+                               reason == "finished" and "" or (" (" .. reason .. ")"),
+                               learned, explore_blocked, explore_edges)
+  note(string.format("%s - %d room(s) learned this sweep, %d exit(s) blocked, %d edge(s) found, %d known",
+                     reason == "finished" and "explore finished" or ("explore stopped: " .. reason),
+                     learned, explore_blocked, explore_edges, known))
+  if hint then note("  " .. hint) end
+  draw()
+end
+
+explore_continue = function()
+  if not exploring or walk then return end
+  if fighting then
+    explore_end("combat", "'mapg explore area' (or all) starts it again when you are done")
+    return
+  end
+  do
+    local low = under_hp_floor()
+    if low then
+      explore_end(low, "'mapg explore hp <pct>' sets the floor; it never resumes on its own")
+      return
+    end
+  end
+  local r = here and rooms[here]
+  -- The fence check, on the arrival a probe just made: the room behind that door belongs
+  -- to another area. Mark the exit, count the edge, and go back the way we came.
+  if explore_area and last_probe and r and not in_fence(r) then
+    local p = last_probe ; last_probe = nil
+    local src = rooms[p.from]
+    if src then
+      src.edge = src.edge or {}
+      src.edge[p.dir] = area_of(r)
+      dirty = true
+      explore_edges = explore_edges + 1
+      forget_adjacency()
+    end
+    local back = OPPOSITE[p.dir]
+    if back then
+      note(string.format("%s from %d leads into '%s' - the fence is here; stepping back %s",
+                         p.dir, p.from, area_of(r), back))
+      walk = { steps = { { dir = back, to = p.from, any = true } }, idx = 1,
+               target = p.from, probe = true }
+      walk_arm_watchdog()
+      walk.sent = back
+      scrye.send(back)
+      return
+    end
+    note(string.format("%s from %d leads into '%s' - the fence is here, and there is no compass way back; routing",
+                       p.dir, p.from, area_of(r)))
+  end
+  last_probe = nil
+  if explore_budget > 0 and known - explore_base >= explore_budget then
+    explore_end(string.format("budget of %d new room(s) reached", explore_budget))
+    return
+  end
+  local fr = sweep_dirs(r)
+  if #fr > 0 then
+    local d = fr[1]
+    local dest = link(r, d)                 -- a number the server told us, or nil (withheld)
+    walk = { steps = { { dir = d, to = dest, any = true } }, idx = 1,
+             target = dest or 0, probe = true }
+    last_probe = { from = here, dir = d }
+    walk_arm_watchdog()
+    walk.sent = d
+    scrye.send(d)
+    return
+  end
+  local steps = route_to_sweep()
+  if not steps then
+    explore_end("finished", explore_area and nil
+      or "which is not 'everything is found': hidden exits are omitted from the feed entirely")
+    return
+  end
+  local d = steps[#steps].to
+  walk_begin(steps, string.format("%d %s (unexplored: %s)", d, name_of(d),
+             table.concat(sweep_dirs(rooms[d]), " ")))
+end
+
+-- A probe that did not land: no Room.Info followed the step, so we are exactly where we
+-- were, and the exit is a door that does not open for us - closed, locked, guarded. It
+-- is marked blocked for the session (never saved: a door can open tomorrow), dropped
+-- from the frontier so the sweep never walks back to it, and the sweep goes on. Only a
+-- PROBE gets this: a requested walk through a blocked exit is a walk that failed, and
+-- it stops exactly as before.
+probe_blocked = function(why)
+  local w = walk
+  if not w or not w.probe then return end
+  walk = nil
+  if walk_timer then scrye.cancel(walk_timer) ; walk_timer = nil end
+  local st = w.steps[1]
+  local r = here and rooms[here]
+  if r and st then
+    r.blocked = r.blocked or {}
+    r.blocked[st.dir] = true
+    if exploring then explore_blocked = explore_blocked + 1 end
+    note(string.format("%s from %d is blocked (%s) - skipped for this session, 'mapg blocked' lists them",
+                       st.dir, here, why))
+    forget_adjacency()
+  end
+  last_probe = nil
+  draw()
+  if exploring then explore_continue() end
+end
+
+local function blocked_list()
+  local out = {}
+  for num, r in pairs(rooms) do
+    for _, dir in ipairs(sorted_dirs(r.blocked)) do out[#out + 1] = { num = num, dir = dir } end
+  end
+  if #out == 0 then note("no exits are marked blocked this session") ; return end
+  table.sort(out, function(a, b) if a.num ~= b.num then return a.num < b.num end return a.dir < b.dir end)
+  note(#out .. " blocked exit(s) this session - a probe went through and nothing arrived:")
+  for _, e in ipairs(out) do note(string.format("  %-6d %-34s %s", e.num, name_of(e.num), e.dir)) end
+  note("  'mapg blocked clear' forgets them; a restart does too")
+end
+
+local function explore_start(fenced, budget)
+  if exploring then note("already exploring - 'mapg stop' stops it") ; return end
+  if not here then note("we are not anywhere yet - walk one room first") ; return end
+  if fighting then note("something is fighting you - not starting an explore into that") ; return end
+  if explore_hp > 0 and get_hp() == nil then
+    note("no HP feed has spoken yet - the explore floor (" .. explore_hp .. "%) cannot be checked until it does")
+  end
+  explore_area = fenced and area_of(rooms[here]) or nil
+  if explore_area == "Unknown" then
+    note("this area is 'Unknown' - the label every connective realm on the MUD carries, so the")
+    note("  fence may hold hundreds of corridor rooms. Sweeping it anyway; 'mapg stop' when you have enough")
+  end
+  explore_budget = budget or 0
+  explore_edges, explore_blocked = 0, 0
+  sweep_cache = nil
+  exploring = true
+  explore_base = known
+  note(string.format("exploring %s until nothing unexplored is reachable%s - 'mapg stop' stops it, so does",
+                     explore_area and ("'" .. explore_area .. "'") or "everywhere",
+                     explore_budget > 0 and (" or " .. explore_budget .. " new room(s) are learned") or ""))
+  note("  moving yourself, a fight starting, or anything else a walk would stop for")
+  draw()
+  explore_continue()
+end
+
+-- draw() is the mapper's; the explorer adds its line after it. `draw` is a forward-declared
+-- local every caller reaches through, so rebinding it here - before the load-time draw()
+-- at the end of the file - reaches them all.
+do
+  local base_draw = draw
+  draw = function()
+    base_draw()
+    if drawing then scrye.setState(P .. "explore", explore_line()) end
+  end
 end
 
 local function explore()
@@ -1502,7 +1775,21 @@ scrye.addAlias{
       local n = tonumber(rest)
       if n then path_to(n) else note("mapg path <room number> - 'mapg rooms' lists them") end
     elseif verb == "explore"  then
-      if rest:lower() == "go" then
+      if rest:lower():match("^all") or rest:lower():match("^area") then
+        local mode, n = rest:lower():match("^(%a+)%s*(%d*)$")
+        if not mode then note("mapg explore all [N]  -  mapg explore area [N]")
+        else explore_start(mode == "area", tonumber(n)) end
+      elseif rest:lower():match("^hp") then
+        local n = tonumber(rest:match("^hp%s+(%d+)$"))
+        if not n then
+          note("mapg explore hp <pct> - the sweep stops under this HP (now "
+               .. (explore_hp > 0 and (explore_hp .. "%") or "off") .. "; 0 turns it off)")
+        else
+          explore_hp = math.min(100, n)
+          scrye.store.set("explore_hp", tostring(explore_hp))
+          note("explore floor: " .. (explore_hp > 0 and ("stop under " .. explore_hp .. "% HP") or "off"))
+        end
+      elseif rest:lower() == "go" then
         local steps = route_to_frontier()
         if steps then
           local d = steps[#steps].to
@@ -1517,8 +1804,17 @@ scrye.addAlias{
         local steps = route_to(n)
         if steps then walk_begin(steps, string.format("%d %s", n, name_of(n))) end
       end
+    elseif verb == "blocked" then
+      if rest:lower() == "clear" then
+        local n = 0
+        for _, r in pairs(rooms) do if r.blocked then n = n + count(r.blocked) ; r.blocked = nil end end
+        forget_adjacency() ; draw()
+        note("forgot " .. n .. " blocked exit(s)")
+      else blocked_list() end
     elseif verb == "stop" then
-      if walk then walk_stop("walk stopped") else note("not walking") end
+      if walk then walk_stop("walk stopped")   -- takes the explore down with it
+      elseif exploring then explore_end("'mapg stop'")
+      else note("not walking") end
     elseif verb == "frontier" then frontier()
     elseif verb == "maps"     then maps_list(rest)
     elseif verb == "fav"      then fav_toggle()
@@ -1573,6 +1869,10 @@ scrye.addAlias{
       note("mapg path <n>     shortest known route to a room - printed, not walked")
       note("mapg go <n>       walk that route, one confirmed step at a time")
       note("mapg explore go   walk to the nearest room with an unwalked exit")
+      note("mapg explore area [N]  sweep THIS area only, stepping back out of any other; stop after N new rooms")
+      note("mapg explore all [N]   sweep everything reachable, across areas")
+      note("mapg explore hp <pct>  stop a sweep under this HP (default 50, 0 = off)")
+      note("mapg blocked      exits a probe found shut this session ('mapg blocked clear' forgets)")
       note("mapg stop         stop walking")
       note("mapg explore      the nearest room with an exit nobody has been through")
       note("mapg frontier     every unexplored exit")
@@ -1747,12 +2047,17 @@ scrye.addPanel{
             local L = current_layout() ; if not L then return end
             view_z = (view_z or L.at[here].z) - 1 ; draw() end },
         { text = "Center", action = function() view_z = nil ; draw() end },
+        { text = "Explore", action = function() explore_start(true) end },
         { text = "Stop",   action = function()
-            if walk then walk_stop("walk stopped") end end },
+            -- a sweep is always mid-walk (probe or route), so walk_stop is the whole
+            -- stop; the second branch is the same belt-and-braces 'mapg stop' carries
+            if walk then walk_stop("walk stopped")            -- takes the explore down with it
+            elseif exploring then explore_end("Stop") end end },
         { text = "Redraw", action = function() forget_adjacency() ; draw() end },
       } },
       { type = "value", text = "", bind = P .. "where" },
       { type = "value", text = "", bind = P .. "peek" },
+      { type = "label", bind = P .. "explore", color = "accent" },
       { type = "text", bind = P .. "legend" },     -- what the colours mean, set once below
     } },
     { title = "Maps", widgets = {
@@ -2013,6 +2318,39 @@ scrye.on("map.query.area", function(data)
 end)
 
 scrye.onGmcp(ROOM_PKG, on_room_info)
+
+-- The one extra package this variant reads, and only to STOP. The mapper never fights;
+-- an explore that kept walking while something beat on you is how you die in an aggro
+-- area, so a combat round starting ends the sweep. Combat ending does not restart it -
+-- nothing here ever resumes on its own.
+scrye.onGmcp("Char.Combat", function(json)
+  local ok, c = pcall(scrye.json.decode, json)
+  if not ok or type(c) ~= "table" then return end
+  -- Attacker AND live rounds: on GMCP alone (MIP coexists on 3Scapes - verified 29 Aug -
+  -- but a no-MIP character has only this feed) the fight END is unreliable - a terminal
+  -- may keep the attacker's name with the rounds zeroed, or never come at all. A zombie
+  -- report must not stop a sweep,
+  -- and a missing terminal must not leave `fighting` blocking every future
+  -- 'mapg explore all'; the shelf-life tick below clears the silence case.
+  local active = tostring(c.attacker or "") ~= "" and (tonumber(c.rounds) or 0) > 0
+  fighting = active
+  if active then cc_at = now end
+  if active and (walk or exploring) then
+    if walk then
+      walk_stop("combat - stopped")   -- takes the explore down with it (see walk_stop)
+    else
+      explore_end("combat")
+    end
+  end
+end)
+
+-- "You cannot go <dir>." - the server's own word that a step did nothing. During a probe
+-- that is a blocked exit, found in a second instead of the watchdog's ten; during a
+-- requested walk it is the walk failing, and it stops now rather than in ten seconds.
+scrye.addTrigger{ pattern = "^You cannot go ", regex = true, run = function()
+  if walk and walk.probe then probe_blocked("'You cannot go'")
+  elseif walk then walk_stop("'You cannot go' - the route is out of date. Walk stopped where you stand.") end
+end }
 scrye.onCommand(on_command)
 scrye.onConnect(arm_quiet_check)
 scrye.onDisconnect(function() walk_stop(nil) ; save(true) end)
@@ -2022,6 +2360,7 @@ scrye.onDisconnect(function() walk_stop(nil) ; save(true) end)
 scrye.onIdle(function() walk_stop("idle guard - walk stopped (it will NOT resume on its own)") end)
 
 talking = scrye.store.get("talking") ~= "0"
+explore_hp = tonumber(scrye.store.get("explore_hp")) or explore_hp
 drawing = scrye.store.get("drawing") ~= "0"
 load()
 
@@ -2033,6 +2372,14 @@ load()
 flush_timer = scrye.every(1, function()
   now = now + 1
   if now % FLUSH_SECS == 0 then save() end
+  if fighting and (now - cc_at) >= 8 then fighting = false end
+  if exploring then
+    local low = under_hp_floor()
+    if low then
+      if walk then walk_stop(low .. " - stopped")   -- takes the explore down with it
+      else explore_end(low) end
+    end
+  end
 end)
 
 draw()

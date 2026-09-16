@@ -257,9 +257,15 @@ Resume — buttons take no colour in PanelSpec, so the line above them carries i
 farmer 0.8.0 (205 checks, 15 mutants killed), mapx 0.6.0 (347, 22 killed, one documented
 equivalent — the edge filter, redundant while walked links are learned). mapg untouched.
 
-**Phase C — consolidate.** E7 (fold the sweep into mapg 1.8.0, retire mapx and the derive
-script), F10 (promote the farmer to `src` at 1.0.0 with its C# test), C1 and C6 (Guide),
-C5 (runner).
+**~~Phase C~~ — E7 and F10 built 16 Sep.** The sweep folded into mapg 1.8.0 (`mapg explore
+area|all`, the Explore button, blocked exits, edges, the HP floor - the derive script's edits
+reversed onto the shipped file and the explorer harness block appended to `mapgmcp_test.lua`,
+484 checks); mapx, the derive script and the lab copy retired. The farmer promoted to
+`src/Scrye.App/plugins/3s-farmer` at 1.0.0 with `FarmerPluginTests.cs` (the chaos-sea
+delegation pattern: the chassis, the fists, an exclude, the `map.goto` trip both ways, a
+silent mapper) and its harness moved to `_lab/farmer_test.lua` (222 checks). The old
+dead-reckoning `3s-map` and its `MapPluginTests.cs` retired with them; the Guide's classic
+section removed, a Farmer section added. Still open from C: C1 and C6 (Guide), C5 (runner).
 
 **Phase D — API, when B and C are done and the seams still itch.** C2 (`scrye.request`),
 C4 (store coalescing), C3 (one paragraph, can go with C1).

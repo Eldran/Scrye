@@ -1,0 +1,27 @@
+{
+  "id": "3s-farmer",
+  "name": "3S Farmer",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.7 <2.0"
+  },
+  "permissions": [
+    "commands.send",
+    "state.read",
+    "state.write",
+    "ui.panels",
+    "aliases.manage",
+    "triggers.manage",
+    "timers.manage",
+    "storage.private",
+    "storage.shared"
+  ],
+  "enabled": true
+}
