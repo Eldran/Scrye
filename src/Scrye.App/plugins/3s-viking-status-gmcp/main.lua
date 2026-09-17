@@ -1487,6 +1487,16 @@ do
       add("Feed " .. esc(S(lfeed.grain)) .. col("dim", " grain") .. esc("  " .. S(lfeed.water)) .. col("dim", " water")
         .. col("dim", "  per tick" .. (lfeed.head and ("  (" .. S(lfeed.head) .. " head)") or "")))
     end
+    -- lneeds (17 Sep): head against capacity, per species, as the server counts it
+    if type(LS.lneeds) == "table" and #LS.lneeds > 0 then
+      local parts = {}
+      for _, n in ipairs(LS.lneeds) do
+        local cur, cap = tonumber(n.current) or 0, tonumber(n.cap) or 0
+        parts[#parts + 1] = nice(n.species) .. " " .. col(cap > 0 and cur >= cap and "warning" or "text",
+          S(n.current) .. "/" .. S(n.cap))
+      end
+      add(col("dim", "Room ") .. table.concat(parts, col("dim", "  ")))
+    end
     if herds and #herds > 0 then
       add(col("dim", string.format("%-10s %-16s %4s %3s  %-10s %4s  %3s %3s %3s %3s %3s %4s",
         "Building", "Breed", "Head", "Gen", "Trait", "Age", "Con", "Hrd", "Vig", "Fer", "Yld", "Qual")))
@@ -1530,7 +1540,8 @@ do
     for _, lin in ipairs(lins) do
       local lots = LS["lmarket_" .. lin]
       add("")
-      add(string.format("-- Market: %s (%d lot%s) --", HOLDCITY[lin] or ("lineage " .. lin), #lots, #lots == 1 and "" or "s"))
+      add(string.format("-- Market: %s (%d lot%s%s) --", HOLDCITY[lin] or ("lineage " .. lin), #lots,
+        #lots == 1 and "" or "s", tonumber(LS.lmarket_partial) == 1 and ", partial" or ""))
       add(col("dim", string.format("%-8s %-16s %3s  %-9s %5s  %3s %3s %3s %3s %3s",
         "Species", "Breed", "Qty", "Trait", "Price", "Con", "Hrd", "Vig", "Fer", "Yld")))
       table.sort(lots, function(a, b) return (tonumber(a.idx) or 0) < (tonumber(b.idx) or 0) end)
@@ -4850,8 +4861,13 @@ build_panel()
 --     everything else is last-write;
 --   * page/pages/full/guild are bookkeeping, never data;
 --   * a page that doesn't continue the current burst (different pages count, or page
---     not past the last one seen) abandons the stale burst and starts fresh.
-local function gasm(pkg, on_snap)
+--     not past the last one seen) abandons the stale burst and starts fresh;
+--   * section_of(key) -> name, optional: a full burst then replaces only the paged keys
+--     of the SECTIONS it carries. Livestock (17 Sep 2026) sends its herds and its market
+--     as two back-to-back full bursts - bqueue/herds/lneeds/lfeed in one, lfind_*/
+--     lmarket_* in the next - and without sections the second wiped the first: the tab
+--     said "waiting for Guild.Livestock" while 240 of them had arrived.
+local function gasm(pkg, on_snap, section_of)
   local snap, burst, bfull, expect, last_page = {}, nil, false, nil, 0
   local paged_keys = {}     -- keys that have ever arrived in a paged burst
   local function is_list(v) return type(v) == "table" and v[1] ~= nil end
@@ -4883,9 +4899,16 @@ local function gasm(pkg, on_snap)
     if page == pages then
       if bfull then
         -- full replaces the PAGED keys; keys that only ever arrive on the unpaged
-        -- stream (City's dcycle/patrol/nexttick ride outside the bursts) survive
+        -- stream (City's dcycle/patrol/nexttick ride outside the bursts) survive -
+        -- and so do paged keys of a section this burst does not carry
+        local sec = section_of or function() return "*" end
+        local touched = { ["*"] = section_of == nil }   -- unsectioned: a full burst, even an
+                                                       -- empty one, replaces everything paged
+        for k in pairs(burst) do touched[sec(k)] = true end
         local keep = {}
-        for k, v in pairs(snap) do if not paged_keys[k] then keep[k] = v end end
+        for k, v in pairs(snap) do
+          if not paged_keys[k] or not touched[sec(k)] then keep[k] = v end
+        end
         snap = keep
       end
       for k, v in pairs(burst) do snap[k] = v; paged_keys[k] = true end
@@ -5184,6 +5207,10 @@ gasm("Guild.Livestock", function(t)
   local lf = T(t, "lfeed")
   vset("lhead", lf.head ~= nil and S(lf.head) or "")
   schedule_flush()
+end, function(k)
+  -- two sections, two bursts: the market (lmarket_<lin>, lmarket_partial, lfind_*) and
+  -- everything about your own animals
+  return (k:match("^lmarket") or k:match("^lfind")) and "market" or "herds"
 end)
 
 gasm("Guild.Kingdom", function(t)
