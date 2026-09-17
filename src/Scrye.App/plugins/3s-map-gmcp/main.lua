@@ -124,8 +124,23 @@ local OPPOSITE = { n = "s", s = "n", e = "w", w = "e", ne = "sw", sw = "ne", nw 
 -- place where its links say it belongs. Edge cells carry '-|/\x'.
 local PALETTE = { ["@"] = "accent", ["#"] = "dim", ["?"] = "warning", ["!"] = "warning",
   ["^"] = "dim", ["v"] = "dim", ["%"] = "dim", [">"] = "info", ["."] = "inset",
-  ["-"] = "line", ["|"] = "line", ["/"] = "line", ["\\"] = "line", ["x"] = "line" }
-local TILE_MARKS = "^v%>!"
+  ["-"] = "line", ["|"] = "line", ["/"] = "line", ["\\"] = "line", ["x"] = "line",
+  -- the farmer's room rules, read off the state it publishes (17 Sep): 'A' a room it
+  -- never enters, 'P' one it passes through without fighting
+  ["A"] = "error", ["P"] = "success" }
+local TILE_MARKS = "^v%>!AP"
+
+-- The farmer's room rules, as it publishes them: "num:avoid,num:pass". Read at draw
+-- time, so the map colours a rule the moment the farmer sets one (it redraws on the
+-- state changing, below); with no farmer loaded the state is empty and nothing changes.
+local FARMER_RULES = "plugin.3s-farmer.roomrules"
+local function farmer_rules()
+  local out = {}
+  for num, rule in tostring(scrye.getState(FARMER_RULES) or ""):gmatch("(%d+):(%a+)") do
+    out[tonumber(num)] = rule
+  end
+  return out
+end
 
 -- The legend under the map: the same tiles, in the same theme colours the palette above
 -- gives them, each a swatch (background = the cell's colour) followed by what it means.
@@ -138,6 +153,7 @@ local LEGEND_ROWS = {
   { { "@", "you" }, { "#", "room" }, { ">", "way to another map" } },
   { { "^", "up" }, { "v", "down" }, { "%", "both" } },
   { { "?", "unexplored exit" }, { "!", "drawn off its links" } },
+  { { "A", "farmer: never enters" }, { "P", "farmer: passes through" } },
 }
 local function legend_text()
   local lines = {}
@@ -582,8 +598,19 @@ local function on_room_info(json)
   -- and sea arrivals never reach this line, so the feed goes quiet exactly when the map
   -- does. Emitted before walk_arrived so a listener hears the room before any step the
   -- walker takes because of it.
+  -- Exits go out RESOLVED, as the handover's do: walked beats told, and an exit the
+  -- server withholds (0) carries the destination this store learned by walking it, so a
+  -- listener's graph keeps the links the server never names. The listing is the
+  -- server's: every direction it names is here, unresolved ones still 0.
+  local rs = rooms[num].shift
+  local resolved = {}
+  for d, v in pairs(exits) do resolved[d] = v end
+  for _, e in ipairs(neighbours(rooms[num])) do
+    if resolved[e.dir] ~= nil and (tonumber(resolved[e.dir]) or 0) == 0 then resolved[e.dir] = e.to end
+  end
   scrye.emit("map.room", scrye.json.encode({
-    num = num, name = name, area = area, exits = exits,
+    num = num, name = name, area = area, exits = resolved,
+    shift = (rs and next(rs) ~= nil) and rs or nil,   -- so a listener's fence sees the mark
   }))
   walk_arrived()        -- last, so 'here' and the store are already correct
 end
@@ -930,6 +957,7 @@ draw = function()
     if cur ~= "x" then grid[row][col] = ch end
   end
 
+  local rules = farmer_rules()
   for num, p in pairs(L.at) do
     if p.z == z then
       local r = rooms[num]
@@ -945,6 +973,7 @@ draw = function()
       if up and down then ch = "%" elseif up then ch = "^" elseif down then ch = "v" end
       if door then ch = ">" end
       if p.off then ch = "!" end        -- the layout could not honour its links
+      if rules[num] == "avoid" then ch = "A" elseif rules[num] == "pass" then ch = "P" end
       put(p.x, p.y, ch, false)
 
       for _, dir in ipairs(sorted_dirs(r.exits)) do
@@ -2034,10 +2063,20 @@ scrye.addPanel{
           local num = peek(col, row)
           if not num then return end
           if num == here then return shift_menu(num) end
-          return { { "Walk there",   "mapg go "     .. num },
-                   { "Show route",   "mapg path "   .. num },
-                   { "Room details", "mapg room "   .. num },
-                   { "Forget room",  "mapg forget " .. num } }
+          local menu = { { "Walk there",   "mapg go "     .. num },
+                         { "Show route",   "mapg path "   .. num },
+                         { "Room details", "mapg room "   .. num },
+                         { "Forget room",  "mapg forget " .. num } }
+          -- The farmer's room rules, when the farmer is loaded (its panel publishes a
+          -- status key): typed 'farm room' commands, so a farmer that is not there gets
+          -- nothing offered rather than a 'What?' from the MUD.
+          if (scrye.getState("plugin.3s-farmer.status") or "") ~= "" then
+            menu[#menu + 1] = { "-" }
+            menu[#menu + 1] = { "Farmer: pass through only", "farm room " .. num .. " pass" }
+            menu[#menu + 1] = { "Farmer: never enter",       "farm room " .. num .. " avoid" }
+            menu[#menu + 1] = { "Farmer: clear rule",        "farm room " .. num .. " -" }
+          end
+          return menu
         end },
       { type = "buttonrow", buttons = {
         { text = "Up",     action = function()
@@ -2122,6 +2161,7 @@ scrye.addPanel{
   },
 }
 scrye.setState(P .. "legend", legend_text())   -- static: the palette does not change at runtime
+if scrye.watch then scrye.watch(FARMER_RULES, function() draw() end) end   -- a rule set is a redraw
 
 -- The Maps tab, refreshed with the drawing. Alphabetical, and filtered by the search box
 -- (a map shows when the text matches its label OR a bordering map's label - so searching
@@ -2311,7 +2351,12 @@ scrye.on("map.query.area", function(data)
     if area_of(r):lower():find(lw, 1, true) then
       local ex = {}
       for _, e in ipairs(neighbours(r)) do ex[e.dir] = e.to end
-      out[#out + 1] = { num = num, name = r.name, area = r.area, exits = ex }
+      -- The shifting marks ride along (only when there are any): the farmer fences the
+      -- same way the layout does - a link INTO a room whose way back is shifting is no
+      -- patrol link - and it cannot know that from exits alone. The car's own 's' is
+      -- already absent above; this is what keeps the LOBBY's 'n' from leading into it.
+      out[#out + 1] = { num = num, name = r.name, area = r.area, exits = ex,
+                        shift = (r.shift and next(r.shift) ~= nil) and r.shift or nil }
     end
   end
   scrye.emit("map.area.rooms", scrye.json.encode({ area = want, rooms = out }))

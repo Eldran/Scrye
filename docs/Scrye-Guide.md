@@ -109,6 +109,23 @@ If a rule ends up feeding itself — an alias whose command matches its own patt
 after five hops and says so in the output rather than looping. Five is well past anything you
 would compose on purpose.
 
+**Pausing inside a rule.** A `wait N` (or `pause N`, seconds, decimals allowed) as one of the
+commands holds everything after it:
+
+```
+Send to:  Client
+Send:     open cask;wait 2;get all from cask;close cask
+```
+
+`open cask` goes at once, the rest two seconds later, in order. It's the same word a sequence
+uses, and it works in a **World** send too, one command per line. Waits add up along the way,
+wildcards are filled in when the rule fires (not when the wait ends), and only a wait *you*
+wrote counts — a `wait 2` that arrives inside `%1` is text. The delay runs on the rule
+engine's own one‑second clock, so it never touches a walk or sequence in progress, and several
+rules can be waiting at once. A trigger that pauses is still a trigger: it isn't stopped by
+`.stop`, and it keeps going while the idle guard has the timers suspended, since it's the tail
+of something that already fired rather than a thing that fires on its own.
+
 ### From a sequence
 
 Sequence steps go straight to the wire, so every speedwalk you have written still behaves
@@ -785,7 +802,8 @@ car is; hover that `>` to see the room behind it, click for the route, right‑c
 up / down / both (`^` `v` `%`), an unexplored exit (a warning‑coloured square with no mark — any
 exit with nothing known behind it, whether the server withheld the destination or named a room
 nobody has visited; a shifting exit looks the same), and `!` for a room the layout had to draw off
-its links. The swatches take their colours from the
+its links. With the farmer loaded, its room rules show too: `A` (red) for a room it never enters,
+`P` (green) for one it passes through without fighting. The swatches take their colours from the
 same palette the grid uses, so they always match whatever theme you're on.
 
 **With the mouse.** Hovering a room fills the peek line. **Left‑click a room** prints the route to
@@ -816,6 +834,9 @@ somewhere else, an arrival nothing ordered (a wimpy, a summon), a move you typed
 never lands stops the patrol — and it never resumes on its own. Combat only pauses it. Between
 rooms it heads for the stalest room, unless the server's line‑of‑sight grid (`Room.Map`) shows
 monsters nearby, in which case it goes there first; rooms with a player in sight are skipped.
+An elevator car is never a room to patrol, even though it sits in the area: the mapper's
+**shifting** mark comes along with the room, and a door whose way back is marked shifting is not a
+patrol link — the same rule the map uses to keep the floors apart.
 
 **The fists.** There are no mob files: the target list *is* `Room.Contents`. Every monster not
 excluded here, not the party's and not on the never‑list is attacked as `kill <word>`, the plain
@@ -823,9 +844,12 @@ words of its name from the end (`Small cur` → `cur`), rotated on "There is no 
 the room means hands off everything. After a killing blow it breathes for a moment so your own
 looting triggers go first, then reads the refreshed roster.
 
-**Excludes, from the panel.** Click a mob's row in the roster to exclude it in this area (click again
-to allow it); right‑click for the never‑list — mobs never attacked anywhere, which is where guild
-followers go. A patrol that stands still says why: the panel's **Waiting** row, `farm`, and once in
+**Excludes and the party, from the panel.** Click a mob's row in the roster to exclude it in this
+area (click again to allow it); right‑click for the never‑list — mobs never attacked anywhere, which
+is where guild followers go. Players in the room are on the roster too, by name, as *party* or
+*stranger — hands off*; click a player's row to put them in your party (or take them out), so the
+mobs beside them are fair game. The lists sit at the bottom of the panel — never‑list, party,
+excludes, room rules — click a name to drop it, and the boxes add a name by hand. A patrol that stands still says why: the panel's **Waiting** row, `farm`, and once in
 the output.
 
 | Command | What it does |
@@ -834,6 +858,7 @@ the output.
 | `farm go <area>` | Ask the mapper to walk you there, then lock and start on arrival. |
 | `farm pace <s>` | Seconds between an arrival and the next step. |
 | `farm exclude <name>` / `farm include <name>` / `farm excludes` | This area's excludes (substring, case‑blind). |
+| `farm room <n> avoid` / `farm room <n> pass` / `farm room <n> -` | Room rules: **avoid** — the patrol never enters that room (routes go round it); **pass** — it may walk through but never fights there and never heads there on purpose; `-` clears. Easiest from the map: right‑click a room and the menu offers *Farmer: pass through only* / *never enter* / *clear rule* whenever the farmer is loaded. `farm room` lists them; they're also a table on the panel, where a click clears one, and the map draws them in their own colours — `A` for a room never entered, `P` for pass‑through (see the map's legend). |
 | `farm never [<name>\|-<name>]` | Mobs never attacked anywhere. |
 | `farm party [<name>\|-<name>]` | Real player party members, whose presence is not a stranger's. |
 | `farm hp <start%> [<panic%>]` | No new fight or step under start% (it rests); under panic% the fight is abandoned and `farm panic <cmd>` sent once. Refuses to start with a floor set and no HP feed. |

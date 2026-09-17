@@ -72,6 +72,9 @@ local X = {}              -- excludes: area -> { "name fragment", ... } (persist
 local PT = {}             -- party: real player names (lowercase fragments) who are not
                           -- strangers - their presence does not park the fists (persisted)
 local NV = {}             -- the never-list: mob names never attacked ANYWHERE (persisted).
+local RR = {}             -- room rules: num -> "avoid" (never enter) | "pass" (walk through,
+                          -- never fight there). Set from the map's right-click menu or
+                          -- 'farm room <n> avoid|pass|-'. Persisted with the graph (shared).
                           -- This is where guild followers go - a warband and its cousins
                           -- are mob-typed, follow you across every area, and drift into
                           -- the room a round behind you, changing Room.Contents when they
@@ -119,12 +122,18 @@ local function save()
   dirty = false
   local rooms = {}
   for num, r in pairs(G) do
-    rooms[#rooms + 1] = { num = num, area = r.area, name = r.name, exits = r.exits, last = r.last }
+    rooms[#rooms + 1] = { num = num, area = r.area, name = r.name, exits = r.exits, last = r.last,
+                          shift = r.shift }
   end
   WORLD.set("graph", scrye.json.encode({ rooms = rooms }))
   WORLD.set("excludes", scrye.json.encode(X))
   WORLD.set("party", scrye.json.encode(PT))
   WORLD.set("never", scrye.json.encode(NV))
+  do
+    local rules = {}
+    for num, rule in pairs(RR) do rules[#rules + 1] = { num = num, rule = rule } end
+    WORLD.set("roomrules", scrye.json.encode(rules))
+  end
   scrye.store.set("pace", tostring(C.pace))
   scrye.store.set("rest", C.rest_below .. " " .. C.rest_secs)
   scrye.store.set("hp", C.hp_start .. " " .. C.hp_panic)
@@ -157,7 +166,8 @@ local function load()
         -- THIS run, and zero says exactly that.
         G[num] = { area = tostring(r.area or ""), name = tostring(r.name or ""),
                    exits = type(r.exits) == "table" and r.exits or {},
-                   last = 0 }
+                   last = 0,
+                   shift = (type(r.shift) == "table" and next(r.shift) ~= nil) and r.shift or nil }
       end
     end
   end
@@ -167,6 +177,14 @@ local function load()
   if ok3 and type(pt) == "table" then PT = pt end
   local ok4, nv = pcall(scrye.json.decode, WORLD.get("never") or "")
   if ok4 and type(nv) == "table" then NV = nv end
+  local ok5, rr = pcall(scrye.json.decode, WORLD.get("roomrules") or "")
+  if ok5 and type(rr) == "table" then
+    RR = {}
+    for _, e in ipairs(rr) do
+      local n = tonumber(e.num)
+      if n and (e.rule == "avoid" or e.rule == "pass") then RR[n] = e.rule end
+    end
+  end
   C.pace = tonumber(scrye.store.get("pace")) or C.pace
   local rb, rs = tostring(scrye.store.get("rest") or ""):match("^(%d+) (%d+)$")
   if rb then C.rest_below, C.rest_secs = tonumber(rb), tonumber(rs) end
@@ -304,6 +322,7 @@ end
 -- The next mob worth killing, from the freshest roster: not excluded, not the party's,
 -- not given up on in this room.
 local function next_target()
+  if here and RR[here] == "pass" then return nil end   -- walk through, never fight here
   for _, name in ipairs(B.mobs) do
     if not is_excluded(name) and not in_party(name) and not B.skip[name] then
       local kw = keyword(name)
@@ -319,6 +338,20 @@ local function in_area(num)
   return r ~= nil and S.lock ~= nil and r.area == S.lock
 end
 
+-- Is stepping `dir` into `dest` a patrol step? In the fence - and not through a door whose
+-- way back is SHIFTING (the mapper's mark, handed over with the room: an elevator car's
+-- 's' names a different floor every ride). The car sits in the same area as its lobbies
+-- and the lobby's 'n' leads straight into it, so by area alone it is a room to patrol -
+-- and the patrol rode the Megacity lift (Joakim, 17 Sep 2026). The rule is the mapper's
+-- own layout rule: a link into a room whose reverse exit shifts joins nothing.
+local function patrol_link(dir, dest)
+  if not in_area(dest) then return false end
+  if RR[dest] == "avoid" then return false end     -- a room you said never to enter
+  local sh = G[dest].shift
+  local back = DIRS[dir]
+  return not (sh and back and sh[back])
+end
+
 -- Breadth-first over the fenced graph. Collects every reachable in-area room and the first
 -- step toward each, in one pass - target choice and routing come out of the same search.
 local function survey()
@@ -329,7 +362,7 @@ local function survey()
     local at = queue[qi] ; qi = qi + 1
     for dir, dest in pairs(G[at].exits) do
       dest = tonumber(dest)
-      if dest and not seen[dest] and in_area(dest) then
+      if dest and not seen[dest] and patrol_link(dir, dest) then
         seen[dest] = true
         first[dest] = (at == here) and dir or first[at]
         order[#order + 1] = dest
@@ -412,13 +445,17 @@ local function pick_target()
   local los = B.los
   if los then
     for _, num in ipairs(order) do
-      if los.mobs[num] then return num, first[num], "mobs in sight" end   -- a cell is 'm' or 'p', never both
+      -- a cell is 'm' or 'p', never both; an 'm' on the room we just left, whose roster
+      -- was only ever our own followers, is them catching up - not a reason to turn round;
+      -- and a pass-through room is never a destination, mobs or no mobs
+      local followers = B.left and B.left.num == num and B.left.quiet
+      if los.mobs[num] and not followers and RR[num] ~= "pass" then return num, first[num], "mobs in sight" end
     end
   end
   local best, best_last = nil, nil
   for _, num in ipairs(order) do
     local l = G[num].last
-    if not (los and los.players[num]) and (best_last == nil or l < best_last) then
+    if RR[num] ~= "pass" and not (los and los.players[num]) and (best_last == nil or l < best_last) then
       best, best_last = num, l
     end
   end
@@ -557,7 +594,17 @@ local function on_room_info(json)
 
   local moved = (num ~= here)
   local explained = S.step ~= nil and S.step.to == num
-  if moved then B.skip = {} ; B.kwidx = {} ; B.los = nil end   -- give-ups, keyword tries and the LOS picture are per room
+  if moved then
+    -- The room we are leaving, and whether its roster held anything worth a swing. Your
+    -- own followers - a Viking's hirdmadrs, any guild's cousin of them - are mob-typed
+    -- and trail one room behind, so the grid on arrival shows 'm' exactly where you just
+    -- stood. If that room's roster was NOTHING BUT non-targets when you left (never-listed,
+    -- excluded, party), the 'm' there now is them, and steering toward it is a two-room
+    -- dance with your own guards (Goran, 17 Sep 2026). A room that was simply empty is
+    -- not "quiet" in this sense: an 'm' appearing there is something new, worth a look.
+    B.left = { num = here, quiet = #B.mobs > 0 and next_target() == nil }   -- B.mobs is still that room's
+    B.skip = {} ; B.kwidx = {} ; B.los = nil   -- give-ups, keyword tries and the LOS picture are per room
+  end
 
   -- The roster is deliberately NOT touched on arrival. The server suppresses a
   -- Room.Contents whose payload is IDENTICAL to the last one it sent - so silence on
@@ -569,7 +616,24 @@ local function on_room_info(json)
 
   -- The graph learns from every arrival, on patrol or not: standing in a room is what
   -- makes it farmable later.
-  G[num] = { area = area, name = tostring(r.name or ""), exits = exits, last = now }
+  -- The shifting marks: the mapper's map.room feed carries them, the server's Room.Info
+  -- never does - so a payload without the field keeps what the room already had.
+  local shift = type(r.shift) == "table" and next(r.shift) ~= nil and r.shift
+                or (G[num] and G[num].shift) or nil
+  -- An exit the server lists but WITHHOLDS (0) keeps the destination this graph already
+  -- knows - the one the mapper resolved by walking and handed over at 'farm start'.
+  -- Megacity withholds most of its destinations ('e>?' on the map, '*' where the mapper
+  -- walked it), and replacing the exits wholesale on every arrival threw the handover
+  -- away one room at a time, until only the told links were left: a four-room orbit
+  -- around the Central Plaza (Joakim, 17 Sep 2026). The server's LISTING still wins: a
+  -- direction it no longer names is gone, and a destination it names is its own.
+  local old = G[num] and G[num].exits or nil
+  if old then
+    for d, v in pairs(exits) do
+      if v == 0 and (tonumber(old[d]) or 0) ~= 0 then exits[d] = old[d] end
+    end
+  end
+  G[num] = { area = area, name = tostring(r.name or ""), exits = exits, last = now, shift = shift }
   dirty = true
 
   if S.on and moved then
@@ -605,6 +669,7 @@ local function on_room_contents(json)
   B.mobs = {}
   B.count = {}
   B.player = false
+  B.players = {}          -- every player listed, party or not, for the roster
   if type(info.items) ~= "table" then return end
   for _, it in ipairs(info.items) do
     if type(it) == "table" then
@@ -615,6 +680,7 @@ local function on_room_contents(json)
           B.mobs[#B.mobs + 1] = name
           B.count[name] = tonumber(it.count) or 1
         elseif kind == "player" then
+          B.players[#B.players + 1] = name
           if not in_party(name) then B.player = true end
         end
       end
@@ -726,6 +792,58 @@ local function exclude(name)
   dirty = true ; save()
   note("excluded in " .. S.lock .. ": " .. name .. " (substring match, case-insensitive)")
   draw()
+end
+
+-- Room rules, the one way they change - the typed verb, the map's menu and the panel's
+-- table all come here. An avoided room drops out of the fence at once: a patrol standing
+-- in it walks out on the next step, and a route through it is re-found around it.
+local function room_rule(num, rule)
+  local old = RR[num]
+  RR[num] = rule
+  dirty = true ; save()
+  local name = G[num] and G[num].name or ("room " .. num)
+  if rule == "avoid" then note(name .. " (" .. num .. "): the patrol will never enter it")
+  elseif rule == "pass" then note(name .. " (" .. num .. "): the patrol may pass through, never fights there")
+  elseif old then note(name .. " (" .. num .. "): rule cleared")
+  else note(name .. " (" .. num .. ") had no rule") end
+  draw()
+end
+
+-- The party list, the two ways it changes - the typed verb and the panel both come here.
+-- A change re-reads the room: the player already standing here stops (or starts) being a
+-- stranger the moment the list changes, not on the next Room.Contents.
+local function party_recount()
+  B.player = false
+  for _, name in ipairs(B.players or {}) do if not in_party(name) then B.player = true end end
+end
+
+local function party_add(who)
+  for _, m in ipairs(PT) do if m == who then note("'" .. who .. "' is already in the party list") return end end
+  PT[#PT + 1] = who
+  party_recount()
+  dirty = true ; save() ; draw()
+  note("party: " .. table.concat(PT, ", "))
+end
+
+local function party_drop(who)
+  for i, m in ipairs(PT) do if m == who then table.remove(PT, i) break end end
+  party_recount()
+  dirty = true ; save() ; draw()
+  note("party: " .. (#PT > 0 and table.concat(PT, ", ") or "(empty)"))
+end
+
+-- The never-list, the two ways it changes - the typed verb and the panel both come here.
+local function never_add(who)
+  for _, m in ipairs(NV) do if m == who then note("'" .. who .. "' is already on the never-list") return end end
+  NV[#NV + 1] = who
+  dirty = true ; save() ; draw()
+  note("never attacked anywhere: " .. table.concat(NV, ", "))
+end
+
+local function never_drop(who)
+  for i, m in ipairs(NV) do if m == who then table.remove(NV, i) break end end
+  dirty = true ; save() ; draw()
+  note("never-list: " .. (#NV > 0 and table.concat(NV, ", ") or "(empty)"))
 end
 
 local function include(name)
@@ -888,30 +1006,18 @@ scrye.addAlias{
                       or "never-list empty - 'farm never <name>' adds. Guild followers go here:")
         if #NV == 0 then note("  a warband (or any guild's cousin of one) is mob-typed and follows you everywhere") end
       elseif rest:sub(1, 1) == "-" then
-        local who = rest:sub(2):lower():gsub("^%s+", "")
-        for i, m in ipairs(NV) do if m == who then table.remove(NV, i) break end end
-        dirty = true ; save() ; draw()
-        note("never-list: " .. (#NV > 0 and table.concat(NV, ", ") or "(empty)"))
+        never_drop((rest:sub(2):lower():gsub("^%s+", "")))
       else
-        local who = rest:lower()
-        for _, m in ipairs(NV) do if m == who then note("'" .. who .. "' is already on the never-list") return end end
-        NV[#NV + 1] = who
-        dirty = true ; save() ; draw()
-        note("never attacked anywhere: " .. table.concat(NV, ", "))
+        never_add(rest:lower())
       end
     elseif verb == "party" then
       if rest == "" then
         note(#PT > 0 and ("party (players who are not strangers): " .. table.concat(PT, ", "))
                       or "party list empty - 'farm party <name>' adds real player party members")
       elseif rest:sub(1, 1) == "-" then
-        local who = rest:sub(2):lower():gsub("^%s+", "")
-        for i, m in ipairs(PT) do if m == who then table.remove(PT, i) break end end
-        dirty = true ; save()
-        note("party: " .. (#PT > 0 and table.concat(PT, ", ") or "(empty)"))
+        party_drop((rest:sub(2):lower():gsub("^%s+", "")))
       else
-        PT[#PT + 1] = rest:lower()
-        dirty = true ; save()
-        note("party: " .. table.concat(PT, ", "))
+        party_add(rest:lower())
       end
     elseif verb == "rest" then
       local below, secs = rest:match("^(%d+)%s+(%d+)$")
@@ -956,6 +1062,27 @@ scrye.addAlias{
         C.panic_cmd = rest == "-" and "" or rest
         dirty = true ; save()
         note(C.panic_cmd ~= "" and ("at the panic floor: '" .. C.panic_cmd .. "'") or "panic command cleared")
+      end
+    elseif verb == "room" then
+      local n, what = rest:match("^(%d+)%s*(%S*)$")
+      n = tonumber(n)
+      if not n then
+        local list = {}
+        for num, rule in pairs(RR) do list[#list + 1] = { num = num, rule = rule } end
+        table.sort(list, function(a, b) return a.num < b.num end)
+        if #list == 0 then note("no room rules - 'farm room <n> avoid' never enters it, 'farm room <n> pass' walks through without fighting; '-' clears")
+        else
+          note(#list .. " room rule(s):")
+          for _, e in ipairs(list) do
+            note(string.format("  %-6d %-30s %s", e.num, G[e.num] and G[e.num].name or "?", e.rule == "avoid" and "never enter" or "pass through, no fighting"))
+          end
+        end
+      elseif what == "avoid" or what == "pass" then
+        room_rule(n, what)
+      elseif what == "-" or what == "clear" then
+        room_rule(n, nil)
+      else
+        note("farm room <n> avoid | pass | -")
       end
     elseif verb == "exclude" and rest ~= "" then exclude(rest)
     elseif verb == "include" and rest ~= "" then include(rest)
@@ -1011,6 +1138,7 @@ scrye.addAlias{
       note("farm pause      hand brake, toggles")
       note("farm pace <s>   seconds between arrival and the next step (now " .. C.pace .. ")")
       note("farm exclude <name>   never attack this here (phase 3) - substring match")
+      note("farm room <n> avoid|pass|-   never enter that room / walk through but never fight there / clear")
       note("farm include <name>   un-exclude")
       note("farm excludes   list this area's excludes")
       note("farm party [<name>|-<name>]   real players whose presence is not a stranger's")
@@ -1169,6 +1297,7 @@ local panel_mood = nil
 -- the farmer makes of it - the same verdict next_target() would reach, spelled out, so a
 -- mob that is not being attacked says WHY on the HUD rather than in a 'farm status' dump.
 local roster_names = {}   -- panel row index -> the mob's name as listed, for row clicks
+local rule_rows = {}      -- panel row index -> the room number of that rule row
 local function roster_rows()
   local rows = {}
   roster_names = {}
@@ -1176,6 +1305,7 @@ local function roster_rows()
     roster_names[#rows + 1] = name
     local verdict
     if B.hunting and B.target and B.target.name == name then verdict = "fighting"
+    elseif here and RR[here] == "pass" then verdict = "pass room"
     elseif in_party(name) then verdict = "party"
     elseif is_excluded(name) then verdict = "excluded"
     elseif B.skip[name] then verdict = "gave up"
@@ -1183,7 +1313,12 @@ local function roster_rows()
     else verdict = "next" end
     rows[#rows + 1] = name .. "\t" .. tostring(B.count[name] or 1) .. "\t" .. verdict
   end
-  if B.player then rows[#rows + 1] = "(a player is here)\t\thands off" end
+  -- players, by name: party members are company, anyone else parks the fists. A click
+  -- on a player row toggles them in the party list (see the table's onRowClick).
+  for _, name in ipairs(B.players or {}) do
+    roster_names[#rows + 1] = name
+    rows[#rows + 1] = name .. "\t\t" .. (in_party(name) and "party" or "stranger - hands off")
+  end
   return table.concat(rows, "\n")
 end
 
@@ -1216,6 +1351,26 @@ draw = function()
   }, "\n"))
   local ex = excludes_here()
   scrye.setState(P .. "excludes", ex and ("excluded here: " .. table.concat(ex, ", ")) or "")
+  -- The two lists as tables, one name per row, so they can be read - and clicked away.
+  -- Row index -> name is the table's own order, which is the lists' own order.
+  scrye.setState(P .. "neverlist", #NV > 0 and table.concat(NV, "\n") or "(nothing - click a mob's row, right-click, 'Never attack anywhere')")
+  scrye.setState(P .. "partylist", #PT > 0 and table.concat(PT, "\n") or "(nobody - any player in a room parks the fists; click a player's row to add them)")
+  scrye.setState(P .. "exlist", ex and table.concat(ex, "\n")
+                 or (S.lock and "(nothing excluded in " .. S.lock .. ")" or "(per area - starts with the patrol)"))
+  -- room rules, sorted by number: row index -> rule_rows[index] for the click
+  rule_rows = {}
+  for num in pairs(RR) do rule_rows[#rule_rows + 1] = num end
+  table.sort(rule_rows)
+  local rr = {}
+  for _, num in ipairs(rule_rows) do
+    rr[#rr + 1] = string.format("%d %s\t%s", num, (G[num] and G[num].name or "?"):sub(1, 24),
+                                RR[num] == "avoid" and "never enter" or "pass, no fights")
+  end
+  scrye.setState(P .. "rules", #rr > 0 and table.concat(rr, "\n") or "(none - right-click a room on the map)\t")
+  -- and for the map, which colours these rooms: "num:rule,num:rule"
+  local pub = {}
+  for _, num in ipairs(rule_rows) do pub[#pub + 1] = num .. ":" .. RR[num] end
+  scrye.setState(P .. "roomrules", table.concat(pub, ","))
   local m = mood()
   if m ~= panel_mood and build_panel then panel_mood = m ; build_panel(m) end
 end
@@ -1271,6 +1426,12 @@ build_panel = function(m)
         local name = roster_names[index]
         if not name then return end
         local low = name:lower()
+        for _, pn in ipairs(B.players or {}) do
+          if pn == name then           -- a player row: toggle them in the party list
+            for _, m in ipairs(PT) do if m == low then party_drop(low) return end end
+            party_add(low) return
+          end
+        end
         for _, e in ipairs(S.lock and X[S.lock] or {}) do
           if e == low then include(low) return end
         end
@@ -1280,6 +1441,14 @@ build_panel = function(m)
         local name = roster_names[index]
         if not name then return end
         local low = name:lower()
+        for _, pn in ipairs(B.players or {}) do
+          if pn == name then
+            for _, m in ipairs(PT) do
+              if m == low then return { { "Not in my party", "farm party -" .. low } } end
+            end
+            return { { "In my party", "farm party " .. low } }
+          end
+        end
         local here_x, never = false, false
         for _, e in ipairs(S.lock and X[S.lock] or {}) do if e == low then here_x = true end end
         for _, e in ipairs(NV) do if e == low then never = true end end
@@ -1291,7 +1460,43 @@ build_panel = function(m)
         }
       end },
     { type = "list", bind = P .. "counters" },
-    { type = "label", bind = P .. "excludes", color = "dim" },
+    -- The lists themselves, visible (Joakim, 17 Sep 2026: "so it's easier to see"). A row
+    -- click removes that name - the typed command, so the list and the panel agree - and
+    -- the box under the never-list adds one by hand for a follower that is not in the
+    -- room right now. Placeholder rows (no entries) carry no name and do nothing.
+    { type = "table", bind = P .. "neverlist", columns = { "Never attacked anywhere (click to allow)" },
+      onRowClick = function(_, index)
+        local name = NV[index]
+        if name then never_drop(name) end
+      end },
+    { type = "input", text = "never <name>", bind = P .. "neverbox",
+      onSubmit = function(text)
+        text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+        if text ~= "" then never_add(text) ; scrye.setState(P .. "neverbox", "") end
+      end },
+    { type = "table", bind = P .. "partylist", columns = { "Party - players who are not strangers (click to drop)" },
+      onRowClick = function(_, index)
+        local name = PT[index]
+        if name then party_drop(name) end
+      end },
+    { type = "input", text = "party <name>", bind = P .. "partybox",
+      onSubmit = function(text)
+        text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+        if text ~= "" then party_add(text) ; scrye.setState(P .. "partybox", "") end
+      end },
+    { type = "table", bind = P .. "exlist", columns = { "Excluded in this area (click to allow)" },
+      onRowClick = function(_, index)
+        local ex = excludes_here()
+        local name = ex and ex[index]
+        if name then include(name) end
+      end },
+    -- Room rules, set from the map's right-click menu ('Farmer: never enter' / 'Farmer:
+    -- pass through only' - typed 'farm room <n> ...' commands); a row click clears one.
+    { type = "table", bind = P .. "rules", separator = "\t", columns = { "Room rule (click to clear)", "Rule" },
+      onRowClick = function(_, index)
+        local num = rule_rows[index]
+        if num then room_rule(num, nil) end
+      end },
   },
   }
 end
@@ -1318,7 +1523,7 @@ scrye.on("map.area.rooms", function(data)
   local ok, t = pcall(scrye.json.decode, data)
   if not ok or type(t) ~= "table" or type(t.rooms) ~= "table" then return end
   local asked = tostring(t.area or "")
-  local added, fixed, linked = 0, 0, 0
+  local added, fixed, linked, marked = 0, 0, 0, 0
   local elsewhere = {}         -- offered rooms whose area is a different NAME: they matched
                                -- the mapper's substring search but not the exact fence
   for _, r in ipairs(t.rooms) do
@@ -1332,9 +1537,12 @@ scrye.on("map.area.rooms", function(data)
       if type(r.exits) == "table" then
         for d, v in pairs(r.exits) do exits[tostring(d):lower()] = tonumber(v) or 0 end
       end
+      local shift = type(r.shift) == "table" and next(r.shift) ~= nil and r.shift or nil
       local g = G[num]
+      if g and (g.shift ~= nil) ~= (shift ~= nil) then marked = marked + 1 end
+      if g then g.shift = shift end          -- the mapper's mark is the truth, both ways
       if not g then
-        G[num] = { area = a, name = tostring(r.name or ""), exits = exits, last = 0 }
+        G[num] = { area = a, name = tostring(r.name or ""), exits = exits, last = 0, shift = shift }
         added = added + 1
       elseif g.area ~= a then
         g.area = a
@@ -1359,7 +1567,7 @@ scrye.on("map.area.rooms", function(data)
       if a ~= asked then elsewhere[a] = (elsewhere[a] or 0) + 1 end
     end
   end
-  if added > 0 or fixed > 0 or linked > 0 then dirty = true ; save() end
+  if added > 0 or fixed > 0 or linked > 0 or marked > 0 then dirty = true ; save() end
   note(string.format("the mapper offered %d room(s) for this area - %d adopted, %d corrected, %d already right",
                      #t.rooms, added, fixed, #t.rooms - added - fixed))
   if linked > 0 then
