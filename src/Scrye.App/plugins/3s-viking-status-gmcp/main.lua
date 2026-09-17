@@ -4941,6 +4941,28 @@ end
 -- composers all tolerate "" (they print "?" / "none" / skip the section).
 local function T(t, k) return type(t[k]) == "table" and t[k] or {} end
 
+-- The refinery: name:tier:cur:max:stages, stages = "grade,qty,pct;..." (build_city's
+-- shape). Fed by whichever package carries it - Guild.Trade's last pages did until
+-- mid-September 2026, when the server moved it to its own Guild.Refinery (3 pages: the
+-- buildings and their grades). Both call this; a snapshot without the key is left alone.
+local function refinery_adapt(t)
+  if type(t.refinery) ~= "table" then return end
+  local grades = {}
+  for _, g in ipairs(type(t.refinery_grades) == "table" and t.refinery_grades or {}) do
+    local k = S(g.bldg)
+    grades[k] = grades[k] or {}
+    grades[k][#grades[k] + 1] = S(g.grade):gsub("[,;:|]", " ") .. "," .. S(g.qty) .. "," .. S(g.pct)
+  end
+  local out = {}
+  for _, r in ipairs(t.refinery) do
+    out[#out + 1] = table.concat({ S(r.bldg), S(r.tier), S(r.stock), S(r.cap),
+      table.concat(grades[S(r.bldg)] or {}, ";") }, ":")
+  end
+  vset("refinery", table.concat(out, "|"))
+end
+
+gasm("Guild.Refinery", function(t) refinery_adapt(t) end)
+
 gasm("Guild.State", function(t)
   vset("daler", t.daler)
   vset("fury", T(t, "points").fury)
@@ -5113,21 +5135,7 @@ gasm("Guild.Trade", function(t)
     "origin", "town", "goods" }))
   scrye.setState(P .. "missions_raw", gv("MISSIONS"))
   scrye.setState(P .. "errand_raw", gv("ERRAND"))
-  if type(t.refinery) == "table" then
-    -- build_city's shape: name:tier:cur:max:stages, stages = "grade,qty,pct;..."
-    local grades = {}
-    for _, g in ipairs(type(t.refinery_grades) == "table" and t.refinery_grades or {}) do
-      local k = S(g.bldg)
-      grades[k] = grades[k] or {}
-      grades[k][#grades[k] + 1] = S(g.grade):gsub("[,;:|]", " ") .. "," .. S(g.qty) .. "," .. S(g.pct)
-    end
-    local out = {}
-    for _, r in ipairs(t.refinery) do
-      out[#out + 1] = table.concat({ S(r.bldg), S(r.tier), S(r.stock), S(r.cap),
-        table.concat(grades[S(r.bldg)] or {}, ";") }, ":")
-    end
-    vset("refinery", table.concat(out, "|"))
-  end
+  refinery_adapt(t)
   -- wstock_cap rides Guild.Trade's last page as well as Guild.Warehouse's;
   -- whichever spoke last wins (they agree - same server figure)
   if t.wstock_cap ~= nil then ws_cap_feed = tonumber(t.wstock_cap) end
