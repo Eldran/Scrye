@@ -257,6 +257,17 @@ public sealed class SequenceEngine
 public static class SequenceParser
 {
     private static readonly Regex WaitRe = new(@"^(?:wait|pause)\s+([0-9]*\.?[0-9]+)$", RegexOptions.IgnoreCase);
+
+    /// <summary>Is <paramref name="step"/> a <c>wait N</c> / <c>pause N</c>? The one grammar
+    /// for a delay, shared with a rule's Send (<see cref="AutomationEngine"/>), so a trigger
+    /// pauses with the same word a sequence does.</summary>
+    public static bool TryParseWait(string step, out double seconds)
+    {
+        Match w = WaitRe.Match(step.Trim());
+        seconds = w.Success ? double.Parse(w.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+        return w.Success;
+    }
+
     private static readonly Regex RepeatRe = new(@"^(.*?)\s*[x*]\s*(\d+)$", RegexOptions.IgnoreCase);
 
     public static SequenceDef Parse(string name, string text, bool promptGated = true)

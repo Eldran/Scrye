@@ -18,6 +18,23 @@ public sealed class AutomationEngine
     private readonly List<Trig> _triggers = new();
     private readonly List<Als> _aliases = new();
     private readonly List<Tmr> _timers = new();
+
+    /// <summary>A rule's Send parked at a <c>wait N</c>: the commands after the wait, and the
+    /// seconds left before the next one goes. Several can be pending at once (two triggers
+    /// firing in one round each own their own chain); each is bounded by what its author
+    /// wrote, and none touches the sequence runner, so a walk in progress is never replaced
+    /// by a trigger that merely wanted to pause between two commands.</summary>
+    private sealed class Chain
+    {
+        public List<(string Text, double Wait)> Steps = new();   // Text == "" marks a wait
+        public int Cursor;
+        public double Remaining;
+        public bool Client;
+    }
+    private readonly List<Chain> _chains = new();
+
+    /// <summary>Rule chains currently parked at a wait.</summary>
+    public int PendingChains => _chains.Count;
     private readonly VariableStore _vars;
 
     public AutomationEngine(VariableStore vars) => _vars = vars;
@@ -213,6 +230,20 @@ public sealed class AutomationEngine
 
     public void Tick(double dtSeconds, IWorldActions ctx)
     {
+        // Chains first, and not subject to the timer suspension: a chain is the tail of a rule
+        // that already fired, bounded by its author's own waits - not a periodic action the
+        // idle guard exists to stop. Iterate a snapshot: a step can fire a rule whose Send
+        // parks a chain of its own.
+        if (_chains.Count > 0)
+        {
+            foreach (Chain c in _chains.ToArray())
+            {
+                c.Remaining -= dtSeconds;
+                if (c.Remaining > 0) continue;
+                RunChain(c, ctx);
+            }
+        }
+
         if (TimersSuspended) return;
 
         for (int i = 0; i < _timers.Count; i++)
@@ -249,6 +280,20 @@ public sealed class AutomationEngine
 
         switch (sendTo)
         {
+            // A Send with a 'wait N' in it (a line, or a ';' part of a Client send) becomes a
+            // chain: everything before the first wait goes now, in order, the rest when the
+            // waits run out. Same word a sequence uses, so a trigger reads like a walk.
+            case SendTo.World when text.Length > 0 && HasWait(SplitLines(text)):
+                StartChain(SplitLines(text), client: false, ctx); break;
+            case SendTo.Client when !string.IsNullOrEmpty(send) && HasWait(ClientParts(send!)):
+            {
+                var expanded = new List<string>();
+                foreach (string part in ClientParts(send!))
+                    expanded.Add(SequenceParser.TryParseWait(part, out _) ? part : Template.Expand(part, m, _vars));
+                StartChain(expanded, client: true, ctx);
+                break;
+            }
+
             // Multi-line send: each non-empty line is its own command (MUSHclient-style).
             case SendTo.World when text.Length > 0: ForEachLine(text, ctx.Send); break;
             case SendTo.Output: ForEachLine(text, ctx.Echo); break;
@@ -275,6 +320,67 @@ public sealed class AutomationEngine
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
         return Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
+    }
+
+    // ---- waits inside a Send ----------------------------------------------
+
+    private static List<string> SplitLines(string text)
+    {
+        var parts = new List<string>();
+        ForEachLine(text, parts.Add);
+        return parts;
+    }
+
+    /// <summary>A Client send's parts, in order: each line, and each ';' part of a line -
+    /// the TEMPLATE, unexpanded, exactly as the non-wait path splits it.</summary>
+    private static List<string> ClientParts(string send)
+    {
+        var parts = new List<string>();
+        ForEachLine(send, template =>
+        {
+            IReadOnlyList<string>? split = CommandSeparator.Split(template);
+            if (split is null) parts.Add(template); else parts.AddRange(split);
+        });
+        return parts;
+    }
+
+    private static bool HasWait(List<string> parts)
+    {
+        foreach (string p in parts) if (SequenceParser.TryParseWait(p, out _)) return true;
+        return false;
+    }
+
+    /// <summary>Run the parts up to the first wait now, and park the rest. A wait of zero, or
+    /// a chain with nothing after its last wait, needs no parking.</summary>
+    private void StartChain(List<string> parts, bool client, IWorldActions ctx)
+    {
+        var c = new Chain { Client = client };
+        foreach (string p in parts)
+        {
+            if (SequenceParser.TryParseWait(p, out double secs)) c.Steps.Add(("", secs));
+            else if (p.Length > 0) c.Steps.Add((p, 0));
+        }
+        RunChain(c, ctx);
+    }
+
+    /// <summary>Advance a chain: send until the next wait, then park with that wait's
+    /// seconds; drop it when it runs out of steps.</summary>
+    private void RunChain(Chain c, IWorldActions ctx)
+    {
+        while (c.Cursor < c.Steps.Count)
+        {
+            (string text, double wait) = c.Steps[c.Cursor++];
+            if (text.Length == 0)
+            {
+                if (wait <= 0) continue;
+                if (c.Cursor >= c.Steps.Count) break;          // a trailing wait waits for nothing
+                c.Remaining = wait;
+                if (!_chains.Contains(c)) _chains.Add(c);
+                return;
+            }
+            if (c.Client) ctx.SendToClient(text); else ctx.Send(text);
+        }
+        _chains.Remove(c);
     }
 
     /// <summary>Expand one client-pipeline command template and run it. Empty after

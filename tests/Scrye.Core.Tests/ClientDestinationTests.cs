@@ -387,6 +387,103 @@ public class ClientDestinationTests
         Assert.Equal(3, seen[0].Total);
     }
 
+    // ---- 'wait N' inside a Send --------------------------------------------
+    // A rule could never pause: every command of a Send went out at once, and the one place
+    // Scrye knew how to wait - the sequence runner - was out of a rule's reach ('.walk' is
+    // intercepted at the input box). Now 'wait N' in a Send is honoured, with the word a
+    // sequence uses, and on the engine's own clock rather than the sequence runner's - so a
+    // trigger pausing between two commands can never replace a walk in progress.
+
+    [Fact]
+    public void A_wait_in_a_client_send_holds_the_rest_until_the_clock_says_so()
+    {
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^loot$", "open cask;wait 2;get all;close cask");
+        e.ProcessInput("loot", w);
+        Assert.Equal(new[] { "open cask" }, w.Client);        // up to the wait, now
+        Assert.Equal(1, e.PendingChains);
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "open cask" }, w.Client);        // one second is not two
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "open cask", "get all", "close cask" }, w.Client);
+        Assert.Equal(0, e.PendingChains);
+        Assert.Empty(w.Wire);
+    }
+
+    [Fact]
+    public void A_wait_in_a_world_send_works_the_same_on_the_wire()
+    {
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^loot$", "open cask\nwait 1\nget all", SendTo.World);
+        e.ProcessInput("loot", w);
+        Assert.Equal(new[] { "open cask" }, w.Wire);
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "open cask", "get all" }, w.Wire);
+        Assert.Empty(w.Client);
+    }
+
+    [Fact]
+    public void Wildcards_are_expanded_when_the_rule_fires_not_when_the_wait_ends()
+    {
+        // The match is gone by the time the clock runs out; the text must already be final.
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^open (.*)$", "open %1;wait 1;get all from %1");
+        e.ProcessInput("open cask", w);
+        e.ProcessInput("open chest", w);                       // a second chain, its own %1
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "open cask", "open chest", "get all from cask", "get all from chest" }, w.Client);
+    }
+
+    [Fact]
+    public void Waits_add_up_and_a_trailing_wait_waits_for_nothing()
+    {
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^x$", "a;wait 1;b;wait 2;c;wait 5");
+        e.ProcessInput("x", w);
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "a", "b" }, w.Client);
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "a", "b" }, w.Client);
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "a", "b", "c" }, w.Client);
+        Assert.Equal(0, e.PendingChains);                      // the trailing wait parks nothing
+    }
+
+    [Fact]
+    public void A_wait_in_a_wildcard_is_text_not_a_pause()
+    {
+        // The MUD does not get to make a rule pause: only a wait the author wrote counts.
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^say (.*)$", "say %1");
+        e.ProcessInput("say wait 2", w);
+        Assert.Equal(new[] { "say wait 2" }, w.Client);
+        Assert.Equal(0, e.PendingChains);
+    }
+
+    [Fact]
+    public void A_chain_keeps_running_while_timers_are_suspended()
+    {
+        // The idle guard suspends periodic timers; a chain is the tail of a rule that already
+        // fired, bounded by its own waits, and finishes.
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^x$", "a;wait 1;b");
+        e.ProcessInput("x", w);
+        e.TimersSuspended = true;
+        e.Tick(1.0, w);
+        Assert.Equal(new[] { "a", "b" }, w.Client);
+    }
+
+    [Fact]
+    public void A_send_without_a_wait_is_untouched()
+    {
+        // The whole existing behaviour: inline, in order, nothing parked.
+        var w = new Spy();
+        AutomationEngine e = WithAlias("^x$", "a;b;c");
+        e.ProcessInput("x", w);
+        Assert.Equal(new[] { "a", "b", "c" }, w.Client);
+        Assert.Equal(0, e.PendingChains);
+    }
+
     // ---- the MUSHclient importer -------------------------------------------
 
     [Fact]
