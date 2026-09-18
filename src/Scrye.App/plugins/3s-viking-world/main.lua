@@ -1703,7 +1703,23 @@ local function names(list)
   return table.concat(out, ", ")
 end
 
+-- same contract as the sibling plugins: f1=name f3=state f4=target f5=secs.
+-- Guild.Fleet's `ships` until mid-September 2026; since the 17 Sep capture the
+-- same records ride Guild.Voyage's pages as `longship` (no Guild.Fleet was sent
+-- at all). A snapshot without the key is left alone.
+local function ships_adapt(t, key)
+  if type(t[key]) ~= "table" then return end
+  local out = {}
+  for _, e in ipairs(t[key]) do
+    out[#out + 1] = table.concat({ S(e.name):gsub("[|;]", " "), S(e.tier),
+      S(e.state), S(e.target):gsub("[|;]", " "), S(e.secs) }, "|")
+  end
+  vset("ships", table.concat(out, ";"))
+end
+
+
 gasm("Guild.Voyage", function(t)
+  ships_adapt(t, "longship")
   local vy = T(t, "voyage")
   if vy.state == nil or S(vy.state) == "" then
     vset("voyage", "")            -- no voyage under way (voyage:{} clears it)
@@ -1784,15 +1800,7 @@ gasm("Guild.Voyage", function(t)
   vset("vcurios", names(t.vcurios))
 end)
 
-gasm("Guild.Fleet", function(t)
-  -- same contract as the sibling plugins: f1=name f3=state f4=target f5=secs
-  local out = {}
-  for _, e in ipairs(T(t, "ships")) do
-    out[#out + 1] = table.concat({ S(e.name):gsub("[|;]", " "), S(e.tier),
-      S(e.state), S(e.target):gsub("[|;]", " "), S(e.secs) }, "|")
-  end
-  vset("ships", table.concat(out, ";"))
-end)
+gasm("Guild.Fleet", function(t) ships_adapt(t, "ships") end)
 
 gasm("Guild.Settlement", function(t)
   local sp = T(t, "shplots")

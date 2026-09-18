@@ -5013,6 +5013,23 @@ gasm("Guild.Info", function(t)
   vset("renown", t.renown)
 end)
 
+-- cp_accumulate's shape: ?|col|row|w|h|?|letter|name. Fed by Guild.City until
+-- mid-September 2026, by Guild.CityBuildings since; a snapshot without the key is
+-- left alone.
+local function cpb_adapt(t)
+  if type(t.cityplan_buildings) ~= "table" or not t.cityplan_buildings[1] then return end
+  local out = {}
+  for _, b in ipairs(t.cityplan_buildings) do
+    local glyph = S(b.glyph)
+    local name = b.name ~= nil and S(b.name)
+      or (PLAN_BY_L[glyph] and PLAN_BY_L[glyph].name)
+      or (S(b.id):gsub("_", " "))
+    out[#out + 1] = table.concat({ "-", S(b.x), S(b.y), S(b.w or 1), S(b.h or 1), "-",
+      glyph, name:gsub("[|;]", " ") }, "|")
+  end
+  vset("cpb", table.concat(out, ";"))
+end
+
 gasm("Guild.City", function(t)
   vset("nexttick", t.nexttick)
   local dc = T(t, "dcycle")
@@ -5049,16 +5066,18 @@ gasm("Guild.City", function(t)
   vset("builds", join(T(t, "builds"), { "id", "tier", "done", "total", "secs" }))
   local cp = T(t, "cityplan")
   vset("cplan", cp.dim and (S(cp.dim) .. "|" .. S(cp.wall) .. "|" .. S(cp.placed) .. "|" .. S(cp.cap)) or "")
-  if type(t.cityplan_buildings) == "table" and t.cityplan_buildings[1] then
-    -- cp_accumulate's shape: ?|col|row|w|h|?|letter|name
-    local out = {}
-    for _, b in ipairs(t.cityplan_buildings) do
-      out[#out + 1] = table.concat({ "-", S(b.x), S(b.y), S(b.w), S(b.h), "-",
-        S(b.glyph), S(b.name):gsub("[|;]", " ") }, "|")
-    end
-    vset("cpb", table.concat(out, ";"))
-  end
+  cpb_adapt(t)
+  -- cdtime moved from Guild.Trade to Guild.City's last page (17 Sep capture);
+  -- both adapters set it only when their snapshot carries it, so neither wipes
+  -- the other's figure
+  if t.cdtime ~= nil then vset("cdtime", t.cdtime) end
 end)
+
+-- Guild.CityBuildings: the placed city-plan buildings, split out of Guild.City
+-- into their own 5-page package (17 Sep capture). Records are {id, glyph, pal, x,
+-- y[, w, h]} - no name any more (the palette table knows it by glyph), and w/h
+-- only when the footprint is bigger than 1x1.
+gasm("Guild.CityBuildings", function(t) cpb_adapt(t) end)
 
 gasm("Guild.Settlement", function(t)
   local se = T(t, "settlers")
@@ -5121,7 +5140,7 @@ gasm("Guild.Trade", function(t)
     for _, e in ipairs(T(t, "cupg")) do out[#out + 1] = type(e) == "table" and S(e.cart_id) or S(e) end
     vset("cupg", table.concat(out, ";"))
   end
-  vset("cdtime", t.cdtime)
+  if t.cdtime ~= nil then vset("cdtime", t.cdtime) end   -- on Guild.City since 17 Sep
   -- routes: NEW in the 28 Aug capture ({name, village, road_name, road_tier,
   -- road_maint, fort_name, fort_tier, fort_maint}). build_production reads
   -- f2 = town name, f7 = road name ("No ..." = none), f8 = fort name.
@@ -5167,9 +5186,20 @@ gasm("Guild.Warehouse", function(t)
   vset("wstock", compose_wstock())
 end)
 
+-- The fleet: build_city reads f1=name f3=state f4=target f5=secs (3s-viking-world
+-- reads f3). Guild.Fleet's `ships` carried it until mid-September 2026; the 17 Sep
+-- capture (9,700 messages, no Guild.Fleet at all) has the same records - plus crew,
+-- saga and captain fields - as `longship` on Guild.Voyage's pages. Whichever speaks
+-- sets the feed; a snapshot without the key is left alone.
+local function ships_adapt(t, key)
+  if type(t[key]) ~= "table" then return end
+  vset("ships", join(t[key], { "name", "tier", "state", "target", "secs" }))
+end
+
+gasm("Guild.Voyage", function(t) ships_adapt(t, "longship") end)
+
 gasm("Guild.Fleet", function(t)
-  -- build_city reads f1=name f3=state f4=target f5=secs (3s-viking-world reads f3)
-  vset("ships", join(T(t, "ships"), { "name", "tier", "state", "target", "secs" }))
+  ships_adapt(t, "ships")
   -- the village order for Guild.TradeGoods: lin 0 = Midgard, lin i = lineage[i]
   -- (the 29 Aug overview confirmed the lineage list IS the market's row order)
   if type(t.rtargets_lineage) == "table" and t.rtargets_lineage[1] and mk_set_towns then
@@ -5188,10 +5218,35 @@ gasm("Guild.TradeGoods", function(t)
   if mk_goods_feed then pcall(mk_goods_feed, t) end
 end)
 
+-- varangians away/inbound: "in N, out M" or "" - on Guild.Kingdom until mid-September
+-- 2026, on Guild.Roster since. Both call this; a snapshot without the keys is left alone.
+local function varang_adapt(t)
+  if type(t.varang_in) ~= "table" and type(t.varang_out) ~= "table" then return end
+  local nin  = type(t.varang_in)  == "table" and #t.varang_in  or 0
+  local nout = type(t.varang_out) == "table" and #t.varang_out or 0
+  vset("varang", (nin + nout) == 0 and "" or ("in " .. nin .. ", out " .. nout))
+end
+
 gasm("Guild.Roster", function(t)
   -- build_people reads f2=name f4..f7 f9 f10; bonds' name lookup reads f1=id f2=name
-  vset("hird", join(T(t, "hird"), { "id", "name", "level", "atk", "def", "loyalty",
-    "level", "mode", "status", "age" }))
+  -- the hird comes sliced since the 17 Sep capture: hird_0, hird_1, ... (hird_slices
+  -- of them, hird_total men), each slice paged on its own. Merge them in slice order;
+  -- a plain "hird" list (the old shape) still reads.
+  do
+    local men, idx = {}, {}
+    for k, v in pairs(t) do
+      local n = k:match("^hird_(%d+)$")
+      if n and type(v) == "table" then idx[#idx + 1] = tonumber(n) end
+    end
+    table.sort(idx)
+    for _, n in ipairs(idx) do
+      for _, m in ipairs(t["hird_" .. n]) do men[#men + 1] = m end
+    end
+    if #idx == 0 then men = T(t, "hird") end
+    vset("hird", join(men, { "id", "name", "level", "atk", "def", "loyalty",
+      "level", "mode", "status", "age" }))
+  end
+  varang_adapt(t)   -- varang_in/out ride Guild.Roster's last page since 17 Sep
   do
     local out = {}
     for _, b in ipairs(T(t, "bonds")) do
@@ -5221,6 +5276,7 @@ end, function(k)
   return (k:match("^lmarket") or k:match("^lfind")) and "market" or "herds"
 end)
 
+local kg_towns = { [0] = "Midgard" }   -- lin -> town, learned from grudges
 gasm("Guild.Kingdom", function(t)
   if type(t.vrep) == "table" then
     -- parse_idx_table + build_holds: idx|name|rep
@@ -5239,10 +5295,21 @@ gasm("Guild.Kingdom", function(t)
     end
     vset("standings", table.concat(out, ";"))
   end
-  if type(t.varang_in) == "table" or type(t.varang_out) == "table" then
-    local nin  = type(t.varang_in)  == "table" and #t.varang_in  or 0
-    local nout = type(t.varang_out) == "table" and #t.varang_out or 0
-    vset("varang", (nin + nout) == 0 and "" or ("in " .. nin .. ", out " .. nout))
+  varang_adapt(t)   -- where they lived before 17 Sep
+  -- the market's village order: Guild.Fleet's rtargets_lineage carried it until
+  -- Guild.Fleet went (17 Sep). The grudges list names each town WITH its lineage
+  -- number, which is the same order (it matched TG_ORDER town for town in the 17 Sep
+  -- capture); it is partial - only towns holding a grudge - so it overlays the
+  -- defaults rather than replacing them.
+  if type(t.grudges) == "table" and mk_set_towns then
+    local any = false
+    for _, g in ipairs(t.grudges) do
+      local lin = tonumber(g.lineage)
+      if lin and g.town ~= nil and S(g.town) ~= "" then
+        kg_towns[lin] = S(g.town); any = true
+      end
+    end
+    if any then mk_set_towns(kg_towns) end
   end
 end)
 
