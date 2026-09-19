@@ -688,26 +688,20 @@ ones you want.
 
 ### Two lines: classic and GMCP
 
-Several plugins ship twice. **3Scapes** speaks GMCP, so it gets the maintained line. **3K‑3Kingdoms**
-speaks only MIP, so the older dead‑reckoning versions are kept alive beside them, frozen (bugfixes
-only). The pairs answer to *different* aliases on purpose, so having both installed never causes a
+One plugin ships twice. **3Scapes** speaks GMCP, so it gets the maintained line. **3K‑3Kingdoms**
+speaks only MIP, so the older dead‑reckoning version is kept alive beside it, frozen (bugfixes
+only). The pair answers to *different* aliases on purpose, so having both installed never causes a
 collision:
 
 | Job | GMCP line (3Scapes) | Classic line |
 |---|---|---|
 | Chaos‑sea bot | **3S Chaos Sea** — `cs` | **Chaos Sea (classic)** — `csc` |
-| Auto‑raid | **3S Auto‑Raid (GMCP)** — `araid` | **3S Auto‑Raid (classic)** — `araidc` |
-| Viking HUD | **Viking Status / World / Kingdom** | **3S Viking Status (classic)** |
 
 The classic chaos‑sea bot is for **3K**, or any character without GMCP. (There is no classic
 mapper any more: the dead‑reckoning 3S Map was retired in favour of the GMCP one, which since 1.8.0
-also carries the auto‑explore sweep.) The two Viking
-classics are **not** — the Viking guild doesn't exist on 3K at all; they're for a 3Scapes character
-still running MIP.
-
-The one exception is the Viking HUD: the classic and the GMCP plugins answer to the **same**
-commands (`vgo`, `build`, `atrade`, …), because the classic predates the split. **Run one or the
-other, never both.**
+also carries the auto‑explore sweep. The two Viking classics — the MIP Viking Status and the MIP
+Auto‑Raid — were retired in September 2026 when 3Scapes dropped its MIP feed; the Viking guild
+doesn't exist on 3K, so nothing was left for them to read.)
 
 ### Every alias at a glance
 
@@ -727,7 +721,7 @@ other, never both.**
 | `merc` | 3S Mercenary |
 | `mage` | 3S Mage |
 | `vfx` | Viking Effects |
-| `araid` · `araidc` | Auto‑Raid (GMCP / classic) |
+| `araid` | Auto‑Raid |
 
 ---
 
@@ -1072,8 +1066,8 @@ runner. What it needs **Viking Status** for is two tabs: **Mission** reads the m
 publishes, and **Plan** draws the grid Status computes. Without Status those two sit empty and
 everything else works.
 
-Two more Viking plugins are documented on their own below because they pair with a frozen classic:
-**Auto‑Raid** (`araid`), which dispatches your longships, and **3S Vitals**, which draws a Viking's
+Two more Viking plugins are documented on their own below: **Auto‑Raid** (`araid`), which
+dispatches your longships, and **3S Vitals**, which draws a Viking's
 HP / Seid / Vig / Rad bars — and every other guild's too.
 
 ---
@@ -1480,7 +1474,7 @@ understood"* block on the Status tab: `school_casts`.
 
 ---
 
-### Auto‑Raid — `araid` (classic: `araidc`)
+### Auto‑Raid — `araid`
 
 Dispatches your docked longships at a target town, solo or as a convoy. Auto‑targeting picks at
 random among the **calm pool** — the towns within 2 heat of the lowest — and rotates on a timer, so
@@ -1512,26 +1506,6 @@ sitting in the dock — otherwise it falls back to ship‑by‑ship so the named
 **With the mouse.** Clicking any town name — in the panel or in `araid heat` output — targets it.
 The Raid tab has toggles for arming, auto‑target, pool and convoy; the Settings tab has an input box
 for each of the five values.
-
-**The classic (`araidc`)** is the same bot on the MIP feed, with one difference: it has **no
-`pool`** setting, so auto‑targeting is always the calm home town. You can still target a foreign
-town by hand.
-
----
-
-### 3S Viking Status (classic, MIP) — frozen
-
-The original single‑panel Viking HUD on the MIP feed, kept for a 3Scapes character still running
-MIP. Seventeen tabs in one panel — everything Status and World now hold separately, plus the build
-planner, the market scanner and auto‑trader, travel and the mission runner — under the **same
-commands** (`vgo`, `build`, `atrade`, `mkref`, `vmrun`, …).
-
-That shared vocabulary is exactly why you must **enable it or the GMCP line, never both**: the
-aliases collide, across Status *and* World.
-
-It is not a full substitute for the modern set, though. The classic has no **Skills** tab and no
-`vsk`, no `vstock`, and none of **Viking Kingdom**'s seven tabs — the hird, recruiting, thralls,
-grudges, dynasty and war pages are content the old panel never showed.
 
 ## Mobile companion
 
@@ -1660,10 +1634,10 @@ command, so you flip sources without remembering any syntax. The bundled sources
 | Plugin | Source | Default | Command |
 |---|---|---|---|
 | 3s-chat | Tells / sound / channels / watched names | tells on | `chat notify …` (table below) |
-| 3s-raid | Fleet returns; each auto-dispatch | off | `araid notify fleet\|send on\|off` |
+| 3s-raid-gmcp | Fleet returns; each auto-dispatch | off | `araid notify fleet\|send on\|off` |
 | 3s-chaossea | Bot pauses: goal found, wimpy, out of rooms, idle guard | on | `cs notify on\|off` |
 | 3s-stepper | Route done / arrived home / idle guard | on | `.set notify on\|off` |
-| 3s-viking-status | Each cart the auto-trader sends | off | `atrade notify on\|off` |
+| 3s-viking-status-gmcp | Each cart the auto-trader sends | off | `atrade notify on\|off` |
 
 The bot plugins default **on** because their notifies fire exactly when the bot has stopped
 and is waiting for you; the raid and auto-trade ones default **off** because they fire during

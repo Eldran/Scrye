@@ -143,11 +143,11 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 
 ```json
 {
-  "id": "3s-viking-status",
-  "name": "3S Viking Status",
-  "version": "1.0.0",
+  "id": "3s-viking-status-gmcp",
+  "name": "3S Viking Status (GMCP)",
+  "version": "2.26.0",
   "author": "Joakim",
-  "description": "Tabbed Viking status HUD panel fed by the BBE viking feed",
+  "description": "Tabbed Viking status HUD panel fed by the Guild.* GMCP packages",
   "mudIds": ["*"],
   "entry": "main.lua",
   "lang": "lua",
@@ -162,7 +162,7 @@ The **plugin API is versioned independently of the client** (currently 1.11, and
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
-Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. The bundled 3Scapes plugins include `3s-chaossea`, `3s-chat`, `3s-map-gmcp` (the automapper, with the auto‑explore sweep), `3s-farmer`, `3s-raid`, `3s-stepper`, `3s-viking-status` and `3s-vitals`; the old dead‑reckoning `3s-map` was retired in favour of the GMCP mapper. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status`, and the market scanner and auto-trader its **Trade** tabs.
+Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. The bundled 3Scapes plugins include `3s-chaossea`, `3s-chat`, `3s-map-gmcp` (the automapper, with the auto‑explore sweep), `3s-farmer`, `3s-raid-gmcp`, `3s-stepper`, `3s-viking-status-gmcp` (with `3s-viking-world` and `3s-viking-kingdom`) and `3s-vitals`; the old dead‑reckoning `3s-map` was retired in favour of the GMCP mapper, and the MIP‑fed Viking Status and Auto‑Raid classics went in September 2026 when 3Scapes dropped its MIP feed. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status-gmcp`, and the market scanner and auto-trader its **Trade** tabs.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:
 
