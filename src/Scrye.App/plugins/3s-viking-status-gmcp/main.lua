@@ -4945,9 +4945,10 @@ end
 local function T(t, k) return type(t[k]) == "table" and t[k] or {} end
 
 -- The refinery: name:tier:cur:max:stages, stages = "grade,qty,pct;..." (build_city's
--- shape). Fed by whichever package carries it - Guild.Trade's last pages did until
--- mid-September 2026, when the server moved it to its own Guild.Refinery (3 pages: the
--- buildings and their grades). Both call this; a snapshot without the key is left alone.
+-- shape). Fed by whichever package carries it - Guild.Trade's last pages until
+-- mid-September 2026, its own Guild.Refinery for three days, Guild.Settlement's first
+-- pages since the 20 Sep capture. All three call this; a snapshot without the key is
+-- left alone.
 local function refinery_adapt(t)
   if type(t.refinery) ~= "table" then return end
   local grades = {}
@@ -5115,6 +5116,10 @@ end)
 gasm("Guild.CityBuildings", function(t) cpb_adapt(t) end)
 
 gasm("Guild.Settlement", function(t)
+  -- the refinery rides here since the 20 Sep capture (Guild.Refinery, its home for three
+  -- days, was not sent at all); the records grew in/out/wstock, which the tab does not
+  -- need yet, and the grades are unchanged
+  refinery_adapt(t)
   local se = T(t, "settlers")
   vset("spop", se.settlers)
   vset("smood", se.mood)
