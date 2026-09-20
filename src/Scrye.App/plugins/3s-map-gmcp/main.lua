@@ -126,9 +126,21 @@ local PALETTE = { ["@"] = "accent", ["#"] = "dim", ["?"] = "warning", ["!"] = "w
   ["^"] = "dim", ["v"] = "dim", ["%"] = "dim", [">"] = "info", ["."] = "inset",
   ["-"] = "line", ["|"] = "line", ["/"] = "line", ["\\"] = "line", ["x"] = "line",
   -- the farmer's room rules, read off the state it publishes (17 Sep): 'A' a room it
-  -- never enters, 'P' one it passes through without fighting
-  ["A"] = "error", ["P"] = "success" }
-local TILE_MARKS = "^v%>!AP"
+  -- never enters, 'P' one it passes through without fighting, 'R' where it goes to rest
+  ["A"] = "error", ["P"] = "success", ["R"] = "info",
+  -- the overlays (20 Sep): what Room.Map shows in sight - 'm' a room with monsters (the
+  -- MUD's own purple, the one literal here, because it is the game's convention and not
+  -- a theme's), 'p' one with players; and a route - 'o' a room on it, 's' the next
+  -- step, 't' its end - your own walk's, or the farmer's when it is the one walking
+  ["m"] = "#B36BFF", ["p"] = "success",
+  ["o"] = "info", ["s"] = "accent", ["t"] = "info",
+  -- a place: a room you bookmarked ('mapg place <name>', the Places tab)
+  ["b"] = "info",
+  -- a room whose name matches 'mapg find'
+  ["f"] = "warning" }
+local TILE_MARKS = "^v%>!APR"
+-- micro-icons (host API 1.8) for the overlay tiles; a text host shows the letters instead
+local TILE_ICONS = { m = "cross", p = "person", o = "dot", s = "star", t = "flag", R = "house", b = "anchor", f = "crown" }
 
 -- The farmer's room rules, as it publishes them: "num:avoid,num:pass". Read at draw
 -- time, so the map colours a rule the moment the farmer sets one (it redraws on the
@@ -142,6 +154,31 @@ local function farmer_rules()
   return out
 end
 
+-- ---------- what Room.Map shows (the line-of-sight overlay) ----------
+-- The server draws a line-of-sight grid on every arrival: 'm' where a neighbouring room
+-- holds monsters, 'p' where it holds players, several rooms out. It has no room numbers,
+-- but it has geometry - rooms two cells apart with a link glyph between, and each hop is
+-- an exit of the room hopped from - so from '@', following the links and pairing each
+-- hop with the store's own exits names the room in every cell the store can name. The
+-- same walk the farmer does for its targeting; here it paints the map.
+local LOS_LINKS = { e = { 1, 0, "-" }, w = { -1, 0, "-" }, n = { 0, -1, "|" }, s = { 0, 1, "|" },
+                    ne = { 1, -1, "/" }, sw = { -1, 1, "/" }, nw = { -1, -1, "\\" }, se = { 1, 1, "\\" } }
+local LOS_ROOM = { O = true, m = true, p = true, ["^"] = true, v = true, ["+"] = true, E = true, ["@"] = true }
+local los = nil           -- { mobs = {num=true}, players = {num=true} } from the last Room.Map
+
+-- A route to draw: { steps = { {dir,to}... }, idx = first step still to take } - your own
+-- walk (kept in step with it), a 'Show route' you asked for (shown until you move), or
+-- the farmer's, read off the state it publishes as it patrols.
+local route_show = nil
+local FARMER_ROUTE = "plugin.3s-farmer.route"
+local function farmer_route()
+  local raw = tostring(scrye.getState(FARMER_ROUTE) or "")
+  if raw == "" then return nil end
+  local steps = {}
+  for num in raw:gmatch("%d+") do steps[#steps + 1] = { to = tonumber(num) } end
+  return steps[1] and { steps = steps, idx = 1 } or nil
+end
+
 -- The legend under the map: the same tiles, in the same theme colours the palette above
 -- gives them, each a swatch (background = the cell's colour) followed by what it means.
 -- Built from one table so the palette and the legend cannot drift apart: each entry names
@@ -153,7 +190,10 @@ local LEGEND_ROWS = {
   { { "@", "you" }, { "#", "room" }, { ">", "way to another map" } },
   { { "^", "up" }, { "v", "down" }, { "%", "both" } },
   { { "?", "unexplored exit" }, { "!", "drawn off its links" } },
-  { { "A", "farmer: never enters" }, { "P", "farmer: passes through" } },
+  { { "A", "farmer: never enters" }, { "P", "farmer: passes through" }, { "R", "farmer: rests" } },
+  { { "m", "monsters in sight" }, { "p", "players in sight" } },
+  { { "o", "route" }, { "s", "next step" }, { "t", "its end" }, { "b", "a place" } },
+  { { "f", "matches 'mapg find'" } },
 }
 local function legend_text()
   local lines = {}
@@ -190,6 +230,18 @@ local favs = {}           -- favourite maps, as ROOM numbers (any member room): 
                           -- Persisted with the store, shared like it; capped at FAV_CAP.
 local favlist_nums = {}   -- Favs tab row index -> that row's resolved room, for clicks
 local FAV_CAP = 20
+local places = {}         -- room bookmarks: { name, num }, in the order made (persisted,
+                          -- shared like the store); 'mapg go <name>' walks to one
+local placelist_idx = {}  -- Places tab row index -> index into places, for clicks
+local PLACE_CAP = 40
+local seen = {}           -- num -> what Room.Contents last showed there: { at, mobs, players }
+                          -- (this session only: a roster is a moment, not a fact)
+local clock = 0           -- seconds since load, for "how long ago"
+local find_text = ""      -- 'mapg find': the search, lowercased ("" = none)
+local find_hits = {}      -- num -> true for every room whose name matches it
+local findlist_nums = {}  -- Find tab row index -> room, for clicks
+local doorlist = {}       -- Doors table row index -> { to = room }, for clicks
+local detail_num = nil    -- the room the details line is about (re-composed on redraw)
 local walk    = nil       -- { steps, idx, target, sent, why } while walking
 local stats   = { told = 0, walked = 0, contradictions = 0, desyncs = 0, new = 0 }
 local quiet_timer, flush_timer
@@ -222,6 +274,8 @@ local in_sea  = false     -- last arrival was a Sea of Chaos layer; kept so ente
                           -- leaving are each said once rather than once per room
 local refresh_maplist                      -- defined with the panel, called by the drawing
 local refresh_favlist                      -- likewise, for the Favs tab
+local refresh_placelist                    -- and the Places tab
+local show_detail                          -- the details line; defined with the peek
 local fav_toggle                           -- defined with the panel, used by the alias too
 local now     = 0         -- seconds, advanced by the 1 s tick (the flush rides every 15th)
 
@@ -358,6 +412,31 @@ end
 -- Rooms are saved as an ARRAY of records with the number inside, not as an
 -- object keyed by number: JSON object keys are strings, so the obvious
 -- shape would silently turn every room id into "50942" and back again.
+-- ---------- places ----------
+local function place_named(name)
+  name = tostring(name or ""):lower()
+  for i, pl in ipairs(places) do if pl.name:lower() == name then return i, pl end end
+  return nil
+end
+local function place_of(num)
+  for _, pl in ipairs(places) do if pl.num == num then return pl end end
+  return nil
+end
+local function places_of(num)
+  local out = {}
+  for _, pl in ipairs(places) do if pl.num == num then out[#out + 1] = pl.name end end
+  return out
+end
+-- a room reference as typed: a number, or a place's name
+local function resolve_room(text)
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local n = tonumber(text)
+  if n then return n end
+  local _, pl = place_named(text)
+  if pl then return pl.num, pl.name end
+  return nil
+end
+
 local function save(force)
   if not (dirty or force) then return end
   local list = {}
@@ -368,8 +447,10 @@ local function save(force)
   end
   local names = {}
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
+  local pls = {}
+  for _, pl in ipairs(places) do pls[#pls + 1] = { name = pl.name, num = pl.num } end
   WORLD.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names,
-                                          favs = favs })
+                                          favs = favs, places = pls })
   dirty = false
   return #list
 end
@@ -415,6 +496,55 @@ local function load()
     local num = tonumber(f)
     if num and #favs < FAV_CAP then favs[#favs + 1] = num end
   end
+  for _, pl in ipairs(type(data.places) == "table" and data.places or {}) do
+    local num, name = tonumber(pl.num), tostring(pl.name or "")
+    if num and name ~= "" and #places < PLACE_CAP then places[#places + 1] = { name = name, num = num } end
+  end
+end
+
+-- 'mapg place <name> [<n>]' and the Places box: bookmark a room under a name. A name
+-- already in use moves to the new room; numbers are refused as names (they would
+-- collide with room numbers in 'mapg go').
+local function place_add(name, num)
+  name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if name == "" then
+    note("mapg place <name> [<room>]   bookmark this room (or that one) under a name; 'mapg places' lists them")
+  elseif tonumber(name) then note("a place needs a name, not a number")
+  elseif not num or not rooms[num] then note("we are not anywhere the store knows - walk one room first")
+  else
+    local _, old = place_named(name)
+    if old then
+      old.num = num
+      note(string.format("place '%s' moved to %d %s", old.name, num, name_of(num)))
+    elseif #places >= PLACE_CAP then
+      note("places are full (" .. PLACE_CAP .. ") - 'mapg unplace <name>' frees one")
+      return
+    else
+      places[#places + 1] = { name = name, num = num }
+      note(string.format("place '%s': %d %s - 'mapg go %s' walks there", name, num, name_of(num), name))
+    end
+    dirty = true ; save() ; draw()
+  end
+end
+
+-- ---------- find ----------
+-- 'mapg find <text>' / the Find tab: every room whose NAME contains the text (case-blind),
+-- lit on the map ('f') and listed with the map each is on; blank clears. Session-local.
+local refresh_findlist                     -- defined with the panel
+local function find_rooms(text)
+  find_text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+  find_hits = {}
+  local n = 0
+  if find_text ~= "" then
+    for num, r in pairs(rooms) do
+      if tostring(r.name or ""):lower():find(find_text, 1, true) then find_hits[num] = true ; n = n + 1 end
+    end
+  end
+  if find_text == "" then note("find cleared")
+  elseif n == 0 then note("no room named like '" .. find_text .. "' - names only; 'mapg rooms <area>' lists an area")
+  else note(n .. " room(s) named like '" .. find_text .. "' - lit on the map, listed on the Find tab") end
+  if refresh_findlist then refresh_findlist() end
+  draw()
 end
 
 -- ---------- the move queue ----------
@@ -502,6 +632,7 @@ local function on_room_info(json)
     prev.name, prev.area, prev.exits = name, area, exits
     prev.visits = prev.visits + 1
   end
+  local moved = (here ~= num)
   here = num
   dirty = true
   if shape_changed then forget_adjacency() end
@@ -593,6 +724,8 @@ local function on_room_info(json)
   end
 
   view_z = nil          -- moving means we care about our own level again
+  if route_show and moved then route_show = nil end   -- a shown route is for where you stood
+  los = nil             -- the sight marks were from the room we left; Room.Map redraws them
   draw()
   -- The position oracle for other plugins: every mapped arrival, exactly as stored. Held
   -- and sea arrivals never reach this line, so the feed goes quiet exactly when the map
@@ -958,6 +1091,22 @@ draw = function()
   end
 
   local rules = farmer_rules()
+  -- the route to light: your own walk while it runs, else a route you asked to see,
+  -- else the farmer's - room -> 'o' on the way, 's' the next step, 't' the end
+  local route_cells = {}
+  do
+    local rt = (walk and not walk.probe) and walk or route_show or farmer_route()
+    if rt and rt.steps then
+      local n = #rt.steps
+      local first = rt.idx or 1
+      -- the step just landed is where you stand: the route starts at the one after it
+      while rt.steps[first] and rt.steps[first].to == here do first = first + 1 end
+      for i = first, n do
+        local st = rt.steps[i]
+        if st.to then route_cells[st.to] = (i == n) and "t" or (i == first) and "s" or "o" end
+      end
+    end
+  end
   for num, p in pairs(L.at) do
     if p.z == z then
       local r = rooms[num]
@@ -973,7 +1122,17 @@ draw = function()
       if up and down then ch = "%" elseif up then ch = "^" elseif down then ch = "v" end
       if door then ch = ">" end
       if p.off then ch = "!" end        -- the layout could not honour its links
-      if rules[num] == "avoid" then ch = "A" elseif rules[num] == "pass" then ch = "P" end
+      if find_hits[num] then ch = "f" end
+      if place_of(num) then ch = "b" end
+      if rules[num] == "avoid" then ch = "A" elseif rules[num] == "pass" then ch = "P"
+      elseif rules[num] == "rest" then ch = "R" end
+      -- the overlays, most telling on top: a route under the sight marks, the sight
+      -- marks under nothing - a room the server shows monsters in is drawn so even when
+      -- it is the route's end, because that is the fact the route was chosen for
+      if route_cells[num] then ch = route_cells[num] end
+      if los then
+        if los.players[num] then ch = "p" elseif los.mobs[num] then ch = "m" end
+      end
       put(p.x, p.y, ch, false)
 
       for _, dir in ipairs(sorted_dirs(r.exits)) do
@@ -1018,8 +1177,20 @@ draw = function()
   local bits = { label, L.placed .. " room(s)" }
   if L.displaced > 0 then bits[#bits + 1] = L.displaced .. " displaced (!)" end
   if view_z then bits[#bits + 1] = "level " .. z .. (z == me.z and "" or " (not yours)") end
+  do
+    local rt = (walk and not walk.probe) and walk or route_show
+    if rt then
+      local left = 0
+      for i = rt.idx or 1, #rt.steps do if rt.steps[i].to ~= here then left = left + 1 end end
+      bits[#bits + 1] = string.format("%s: %d step(s) to %s", walk and "walking" or "route",
+        left, name_of(rt.steps[#rt.steps].to))
+    elseif farmer_route() then
+      bits[#bits + 1] = "farmer's route"
+    end
+  end
   scrye.setState(P .. "status", table.concat(bits, "  -  "))
   scrye.setState(P .. "where", string.format("%d  %s", here, name_of(here)))
+  if detail_num then show_detail(detail_num) end
   if refresh_maplist then refresh_maplist() end
 end
 
@@ -1098,12 +1269,14 @@ local function walk_begin(steps, what)
     return
   end
   walk = { steps = steps, idx = 1, target = steps[#steps].to }
+  route_show = nil
   local dirs = {}
   for _, st in ipairs(steps) do dirs[#dirs + 1] = st.dir end
   note(string.format("walking to %s - %d step(s): %s", what, #steps, table.concat(dirs, " ")))
   scrye.emit("map.walk.started", scrye.json.encode({ target = walk.target, steps = #steps }))
   note("  'mapg stop' stops it; so does moving yourself, or anything unexpected")
   walk_step()
+  draw()          -- the route lights up from the first step
 end
 
 -- Called from the feed once the arrival has been recorded, so 'here' is the
@@ -1256,6 +1429,8 @@ local function path_to(target)
   if not steps then return end
   note(string.format("%d -> %d  (%s)", here, target, name_of(target)))
   show_path(steps)
+  route_show = { steps = steps, idx = 1 }     -- lit on the map until you move
+  draw()
 end
 
 -- The route to the nearest room with an exit nobody has walked. Returns nil
@@ -1801,8 +1976,31 @@ scrye.addAlias{
       local n = tonumber(rest)
       if n then room_detail(n) elseif here then room_detail(here) else note("mapg room <number>") end
     elseif verb == "path" then
-      local n = tonumber(rest)
-      if n then path_to(n) else note("mapg path <room number> - 'mapg rooms' lists them") end
+      local n = resolve_room(rest)
+      if n then path_to(n) else note("mapg path <room number | place> - 'mapg rooms' lists them") end
+    elseif verb == "place" then
+      local name, num = rest:match("^(.-)%s+(%d+)$")
+      if not name then name = rest ; num = here end
+      place_add(name, tonumber(num))
+    elseif verb == "find" then
+      find_rooms(rest)
+    elseif verb == "unplace" then
+      local i, pl = place_named(rest)
+      if not pl then note("no place called '" .. rest .. "' - 'mapg places' lists them")
+      else
+        table.remove(places, i)
+        dirty = true ; save() ; draw()
+        note("place '" .. pl.name .. "' removed")
+      end
+    elseif verb == "places" then
+      if #places == 0 then note("no places yet - 'mapg place <name>' bookmarks the room you stand in")
+      else
+        note(#places .. " place(s):")
+        for _, pl in ipairs(places) do
+          note(string.format("  %-16s %-6d %s%s", pl.name, pl.num, name_of(pl.num),
+            rooms[pl.num] and "" or "  (room no longer in the store)"))
+        end
+      end
     elseif verb == "explore"  then
       if rest:lower():match("^all") or rest:lower():match("^area") then
         local mode, n = rest:lower():match("^(%a+)%s*(%d*)$")
@@ -1827,11 +2025,11 @@ scrye.addAlias{
         end
       else explore() end
     elseif verb == "go" then
-      local n = tonumber(rest)
-      if not n then note("mapg go <room number> - 'mapg path <n>' shows the route without walking it")
+      local n, pname = resolve_room(rest)
+      if not n then note("mapg go <room number | place> - 'mapg path <n>' shows the route without walking it")
       else
         local steps = route_to(n)
-        if steps then walk_begin(steps, string.format("%d %s", n, name_of(n))) end
+        if steps then walk_begin(steps, string.format("%d %s%s", n, name_of(n), pname and (" (" .. pname .. ")") or "")) end
       end
     elseif verb == "blocked" then
       if rest:lower() == "clear" then
@@ -1843,6 +2041,7 @@ scrye.addAlias{
     elseif verb == "stop" then
       if walk then walk_stop("walk stopped")   -- takes the explore down with it
       elseif exploring then explore_end("'mapg stop'")
+      elseif route_show then route_show = nil ; draw() ; note("route cleared from the map")
       else note("not walking") end
     elseif verb == "frontier" then frontier()
     elseif verb == "maps"     then maps_list(rest)
@@ -1908,6 +2107,9 @@ scrye.addAlias{
       note("mapg map          which map you are on and what it borders")
       note("mapg maps [text]  every map, alphabetically - text filters by name or border")
       note("mapg fav          save/unsave the map you are on to the Favs tab (max 20)")
+      note("mapg place <name> [<n>]  bookmark this room (or room n) - 'mapg go <name>' walks there; the Places tab")
+      note("mapg unplace <name> | mapg places   drop a place / list them")
+      note("mapg find <text>  light every room named like that and list them (the Find tab); blank clears")
       note("mapg name <text>  call this map something you will recognise ('mapg name -' undoes it)")
       note("mapg level up|down   look at another level; 'mapg level' comes back")
       note("mapg redraw       lay the current map out again from the links")
@@ -1952,8 +2154,53 @@ local function peek(col, row)
   local fr = frontier_dirs(r)
   if #fr > 0 then bits[#bits + 1] = "unexplored " .. table.concat(fr, ",") end
   if L.at[num] and L.at[num].off then bits[#bits + 1] = "[drawn off its links]" end
+  local pls = places_of(num)
+  if #pls > 0 then bits[#bits + 1] = "place: " .. table.concat(pls, ", ") end
   scrye.setState(P .. "peek", table.concat(bits, "  "))
   return num
+end
+
+-- The details line under the map: a click on any room composes it - what the room is,
+-- its ways out, how often you have stood in it, what Room.Contents last showed there
+-- and how long ago - with links that walk there, light the route, or print the room in
+-- full. Markup, so the links are real ('@' in a name is escaped, as everywhere here).
+local function esc(s) return (tostring(s or ""):gsub("@", "@@")) end
+local function ago(secs)
+  if secs < 60 then return secs .. "s ago" end
+  if secs < 3600 then return (secs // 60) .. "m ago" end
+  return string.format("%d:%02dh ago", secs // 3600, (secs % 3600) // 60)
+end
+show_detail = function(num)
+  detail_num = num
+  local r = num and rooms[num]
+  if not r then scrye.setState(P .. "detail", "") ; return end
+  local L = {}
+  L[#L + 1] = string.format("@{accent,bold}%d %s@{}  @{dim}[%s]@{}", num, esc(name_of(num)), esc(area_of(r)))
+  local ex = {}
+  for _, e in ipairs(neighbours(r)) do ex[#ex + 1] = e.dir end
+  local fr = frontier_dirs(r)
+  local bits = {}
+  if #ex > 0 then bits[#bits + 1] = "exits " .. table.concat(ex, ",") end
+  if #fr > 0 then bits[#bits + 1] = "@{warning}unexplored " .. table.concat(fr, ",") .. "@{}" end
+  bits[#bits + 1] = "seen " .. tostring(r.visits or 0) .. "x"
+  local pls = places_of(num)
+  if #pls > 0 then bits[#bits + 1] = "@{info}place: " .. esc(table.concat(pls, ", ")) .. "@{}" end
+  L[#L + 1] = table.concat(bits, "  ")
+  local sn = seen[num]
+  if sn then
+    local what = {}
+    if sn.mobs ~= "" then what[#what + 1] = "@{#B36BFF}" .. esc(sn.mobs) .. "@{}" end
+    if sn.players ~= "" then what[#what + 1] = "@{success}" .. esc(sn.players) .. "@{}" end
+    L[#L + 1] = "last there: " .. (#what > 0 and table.concat(what, ", ") or "nothing") .. "  @{dim}(" .. ago(clock - sn.at) .. ")@{}"
+  end
+  local links = {}
+  if num ~= here then
+    links[#links + 1] = string.format("@{accent,click=mapg go %d}[Walk]@{}", num)
+    links[#links + 1] = string.format("@{accent,click=mapg path %d}[Route]@{}", num)
+  end
+  links[#links + 1] = string.format("@{accent,click=mapg room %d}[Details]@{}", num)
+  L[#L + 1] = table.concat(links, "  ")
+  scrye.setState(P .. "detail", table.concat(L, "\n"))
 end
 
 -- A click on a panel row: walk to the map containing that room. The same guards a
@@ -2047,11 +2294,13 @@ scrye.addPanel{
     { title = "Map", widgets = {
       { type = "label", bind = P .. "status", color = "dim" },
       { type = "colorgrid", bind = P .. "grid", palette = PALETTE, labels = TILE_MARKS,
-        weave = true,
+        icons = TILE_ICONS, weave = true,
         onHover = function(col, row) peek(col, row) end,
         onClick = function(col, row)
           local num = peek(col, row)
-          if num and num ~= here then path_to(num) end   -- prints it; never walks it
+          if not num then return end
+          show_detail(num)                               -- the details line, for any room
+          if num ~= here then path_to(num) end           -- prints and lights it; never walks it
         end,
         -- The right-click menu (API 1.18): every entry is a command AS YOU WOULD TYPE IT,
         -- so it goes through mapg's own aliases - same caution, same narration, and a
@@ -2074,6 +2323,7 @@ scrye.addPanel{
             menu[#menu + 1] = { "-" }
             menu[#menu + 1] = { "Farmer: pass through only", "farm room " .. num .. " pass" }
             menu[#menu + 1] = { "Farmer: never enter",       "farm room " .. num .. " avoid" }
+            menu[#menu + 1] = { "Farmer: rest here",         "farm room " .. num .. " rest" }
             menu[#menu + 1] = { "Farmer: clear rule",        "farm room " .. num .. " -" }
           end
           return menu
@@ -2096,6 +2346,7 @@ scrye.addPanel{
       } },
       { type = "value", text = "", bind = P .. "where" },
       { type = "value", text = "", bind = P .. "peek" },
+      { type = "text", bind = P .. "detail" },       -- the room you clicked, with links
       { type = "label", bind = P .. "explore", color = "accent" },
       { type = "text", bind = P .. "legend" },     -- what the colours mean, set once below
     } },
@@ -2158,10 +2409,139 @@ scrye.addPanel{
                    { "Room details", "mapg room " .. num } }
         end },
     } },
+    { title = "Find", widgets = {
+      { type = "label", bind = P .. "findhint", color = "dim" },
+      { type = "input", text = "room name", bind = P .. "findbox",
+        onSubmit = function(text) find_rooms(text) end },
+      { type = "table", bind = P .. "findlist", columns = { "Room", "Map", "" }, align = "lll",
+        onRowClick = function(_, index)
+          local num = findlist_nums[index]
+          if not num or num == here then return end
+          if walk then note("already walking - 'mapg stop' first") ; return end
+          local steps = route_to(num)
+          if steps then walk_begin(steps, string.format("%d %s", num, name_of(num))) end
+        end,
+        onRowMenu = function(_, index)
+          local num = findlist_nums[index]
+          if not num then return end
+          return { { "Walk there",   "mapg go "   .. num },
+                   { "Show route",   "mapg path " .. num },
+                   { "Room details", "mapg room " .. num } }
+        end },
+      -- the ways off the map you stand on: a click walks to the room behind the door
+      { type = "label", text = "ways off this map - click to go through", color = "dim" },
+      { type = "table", bind = P .. "doorlist", columns = { "To", "From", "Lands in" }, align = "lll",
+        onRowClick = function(_, index)
+          local e = doorlist[index]
+          if not e then return end
+          if walk then note("already walking - 'mapg stop' first") ; return end
+          local steps = route_to(e.to)
+          if steps then walk_begin(steps, string.format("%d %s [%s]", e.to, name_of(e.to), e.label)) end
+        end,
+        onRowMenu = function(_, index)
+          local e = doorlist[index]
+          if not e then return end
+          return { { "Walk through",   "mapg go "   .. e.to },
+                   { "Show route",     "mapg path " .. e.to },
+                   { "Room details",   "mapg room " .. e.to } }
+        end },
+    } },
+    { title = "Places", widgets = {
+      { type = "label", text = "rooms you named - click one to walk there", color = "dim" },
+      -- the box bookmarks the room you STAND IN under the name typed ('mapg place')
+      { type = "input", text = "name this room", bind = P .. "placebox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+          if text ~= "" then scrye.setState(P .. "placebox", "") ; place_add(text, here) end
+        end },
+      { type = "table", bind = P .. "placelist", columns = { "Place", "Room", "Map" }, align = "llr",
+        onRowClick = function(_, index)
+          -- to the ROOM, not just its map: a place is one room, by name
+          local pl = places[placelist_idx[index] or 0]
+          if not pl then return end
+          if walk then note("already walking - 'mapg stop' first") ; return end
+          local steps = route_to(pl.num)
+          if steps then walk_begin(steps, string.format("%d %s (%s)", pl.num, name_of(pl.num), pl.name)) end
+        end,
+        onRowMenu = function(_, index)
+          local pl = places[placelist_idx[index] or 0]
+          if not pl then return end
+          return { { "Walk there",   "mapg go "      .. pl.num },
+                   { "Show route",   "mapg path "    .. pl.num },
+                   { "Room details", "mapg room "    .. pl.num },
+                   { "Remove place", "mapg unplace " .. pl.name } }
+        end },
+    } },
   },
 }
 scrye.setState(P .. "legend", legend_text())   -- static: the palette does not change at runtime
 if scrye.watch then scrye.watch(FARMER_RULES, function() draw() end) end   -- a rule set is a redraw
+if scrye.watch then scrye.watch(FARMER_ROUTE, function() draw() end) end   -- so is the farmer's next leg
+
+scrye.every(1, function() clock = clock + 1 end)
+
+-- Room.Contents: what is in the room you stand in, remembered per room for the details
+-- line ("last there: 2 small cur"). Names only, counted; this session only.
+scrye.onGmcp("Room.Contents", function(json)
+  local ok, t = pcall(scrye.json.decode, json)
+  if not ok or type(t) ~= "table" or type(t.items) ~= "table" or not here then return end
+  local mobs, players, order = {}, {}, {}
+  for _, it in ipairs(t.items) do
+    if type(it) == "table" then
+      local name, kind = tostring(it.name or ""), tostring(it.type or "")
+      if name ~= "" then
+        if kind == "player" then players[#players + 1] = name
+        elseif kind == "monster" or kind == "mob" or kind == "npc" then
+          if not mobs[name] then mobs[name] = 0 ; order[#order + 1] = name end
+          mobs[name] = mobs[name] + 1
+        end
+      end
+    end
+  end
+  local ms = {}
+  for _, name in ipairs(order) do ms[#ms + 1] = (mobs[name] > 1 and (mobs[name] .. " ") or "") .. name end
+  seen[here] = { at = clock, mobs = table.concat(ms, ", "), players = table.concat(players, ", ") }
+  if detail_num == here then show_detail(here) end
+end)
+
+-- Room.Map: the line-of-sight grid, walked from '@' along the store's exits (see los)
+scrye.onGmcp("Room.Map", function(json)
+  local ok, t = pcall(scrye.json.decode, json)
+  if not ok or type(t) ~= "table" or type(t.rows) ~= "table" or not here or not rooms[here] then return end
+  local rows = t.rows
+  local at_r, at_c
+  for r, line in ipairs(rows) do
+    local c = tostring(line):find("@", 1, true)
+    if c then at_r, at_c = r, c ; break end
+  end
+  if not at_r then return end
+  local function cell(r, c)
+    local line = rows[r]
+    if type(line) ~= "string" or c < 1 or c > #line then return " " end
+    return line:sub(c, c)
+  end
+  local out = { mobs = {}, players = {} }
+  local seen = { [here] = true }
+  local queue, qi = { { num = here, r = at_r, c = at_c } }, 1
+  while queue[qi] do
+    local cur = queue[qi] ; qi = qi + 1
+    for dir, lk in pairs(LOS_LINKS) do
+      local dest = link(rooms[cur.num], dir)
+      if dest and rooms[dest] and not seen[dest] then
+        local mid = cell(cur.r + lk[2], cur.c + lk[1])
+        local g = cell(cur.r + 2 * lk[2], cur.c + 2 * lk[1])
+        if (mid == lk[3] or mid == "X") and LOS_ROOM[g] then
+          seen[dest] = true
+          if g == "m" then out.mobs[dest] = true end
+          if g == "p" then out.players[dest] = true end
+          queue[#queue + 1] = { num = dest, r = cur.r + 2 * lk[2], c = cur.c + 2 * lk[1] }
+        end
+      end
+    end
+  end
+  los = out
+  draw()
+end)
 
 -- The Maps tab, refreshed with the drawing. Alphabetical, and filtered by the search box
 -- (a map shows when the text matches its label OR a bordering map's label - so searching
@@ -2196,12 +2576,89 @@ refresh_maplist = function()
     maplist_filter == "" and "click a map to walk there"
     or string.format("matching '%s' - %d map(s). Blank search shows all", maplist_filter, total))
   refresh_favlist(maps)
+  refresh_placelist(maps)
+  if refresh_findlist then refresh_findlist(maps) end
+  -- the Doors table: every way OUT of the map you stand on - which room, which direction,
+  -- where it lands and on what map. A click walks to the room behind the door.
+  do
+    local rows = {}
+    doorlist = {}
+    local L = layout
+    if L and here and L.set[here] then
+      local idx = label_of()
+      local entries = {}
+      for num in pairs(L.set) do
+        for _, e in ipairs(neighbours(rooms[num])) do
+          local nr = rooms[e.to]
+          if nr and not L.set[e.to] then
+            entries[#entries + 1] = { from = num, dir = e.dir, to = e.to, label = idx[e.to] or area_of(nr) }
+          end
+        end
+      end
+      table.sort(entries, function(a, b)
+        if a.label ~= b.label then return a.label < b.label end
+        if a.from ~= b.from then return a.from < b.from end
+        return a.dir < b.dir
+      end)
+      for _, e in ipairs(entries) do
+        doorlist[#doorlist + 1] = e
+        rows[#rows + 1] = string.format("%s\t%s %s\t%s", e.label:sub(1, 16), name_of(e.from):sub(1, 14), e.dir, name_of(e.to):sub(1, 16))
+      end
+    end
+    scrye.setState(P .. "doorlist", #rows > 0 and table.concat(rows, "\n") or "(no way off this map is known)\t\t")
+  end
 end
 
 -- The Favs tab: each saved room resolved to the map that CONTAINS it now - so a
 -- favourite follows its map through growth and merges. A room the store no longer has is
 -- pruned from the saved list (a wipe or a forget took it); two favourites resolved to
 -- the same map (their maps merged) display once. Alphabetical, like the Maps tab.
+-- The Find tab: the rooms 'mapg find' matched, with the map each is on; a click walks there.
+refresh_findlist = function(maps)
+  maps = maps or sorted_maps()
+  local nums = {}
+  for num in pairs(find_hits) do if rooms[num] then nums[#nums + 1] = num end end
+  table.sort(nums, function(a, b)
+    local na, nb = name_of(a):lower(), name_of(b):lower()
+    if na ~= nb then return na < nb end
+    return a < b
+  end)
+  local rows = {}
+  findlist_nums = {}
+  for i, num in ipairs(nums) do
+    if i > 60 then rows[#rows + 1] = string.format("... and %d more\t\t", #nums - 60) break end
+    local lbl = ""
+    for _, m in ipairs(maps) do if m.set[num] then lbl = m.label break end end
+    findlist_nums[#findlist_nums + 1] = num
+    rows[#rows + 1] = string.format("%d %s\t%s\t%s", num, name_of(num):sub(1, 20), lbl, num == here and "here" or "")
+  end
+  scrye.setState(P .. "findlist", #rows > 0 and table.concat(rows, "\n")
+    or (find_text == "" and "(type part of a room name above)\t\t" or ("(nothing named like '" .. find_text .. "')\t\t")))
+  scrye.setState(P .. "findhint", find_text == "" and "find rooms by name - click one to walk there"
+    or string.format("%d room(s) named like '%s' - lit on the map", #nums, find_text))
+end
+
+-- The Places tab: every bookmark, with the map its room is on now. A place whose room
+-- the store no longer has (a forget, a wipe) is dropped, like a favourite.
+refresh_placelist = function(maps)
+  maps = maps or sorted_maps()
+  local rows, keep = {}, {}
+  placelist_idx = {}
+  for _, pl in ipairs(places) do
+    if rooms[pl.num] then
+      keep[#keep + 1] = pl
+      local lbl = ""
+      for _, m in ipairs(maps) do if m.set[pl.num] then lbl = m.label break end end
+      placelist_idx[#placelist_idx + 1] = #keep
+      rows[#rows + 1] = string.format("%s\t%d %s\t%s", pl.name, pl.num, name_of(pl.num):sub(1, 18), lbl)
+    else
+      dirty = true
+    end
+  end
+  places = keep
+  scrye.setState(P .. "placelist", #rows > 0 and table.concat(rows, "\n") or "(none yet - name the room you stand in above)\t\t")
+end
+
 refresh_favlist = function(maps)
   maps = maps or sorted_maps()
   local entries, seen, keep = {}, {}, {}

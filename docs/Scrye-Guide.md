@@ -797,8 +797,40 @@ up / down / both (`^` `v` `%`), an unexplored exit (a warning‑coloured square 
 exit with nothing known behind it, whether the server withheld the destination or named a room
 nobody has visited; a shifting exit looks the same), and `!` for a room the layout had to draw off
 its links. With the farmer loaded, its room rules show too: `A` (red) for a room it never enters,
-`P` (green) for one it passes through without fighting. The swatches take their colours from the
+`P` (green) for one it passes through without fighting, `R` for the room it rests in. The swatches take their colours from the
 same palette the grid uses, so they always match whatever theme you're on.
+
+**What is in sight, and where you are going (1.9.0).** The server sends a line‑of‑sight grid with
+every arrival (Room.Map), and the map reads it: a room it shows monsters in is painted purple —
+the game's own colour for them — and a room with players in it green, a few rooms out in every
+direction, refreshed as you move. A route lights up too: *Show route* (or a click on a room) tints
+the rooms it runs through, the next step brighter and the end flagged, and stays until you move or
+`mapg stop`; a walk keeps its remaining route lit as it goes; and while the farmer patrols, the
+leg it is walking is lit the same way, so you can see where it is heading before it moves. The
+sight marks are drawn over a route — a room the server shows monsters in is shown so even when it
+is where the route ends, because that is why the farmer chose it.
+
+**Click a room (1.10.0).** Any room on the grid answers a click with a details line under the map:
+its name and area, its exits and which are unexplored, how often you have stood in it, and what
+Room.Contents last showed there — mobs counted, players named, and how long ago — with links that
+walk there, light the route, or print the room in full (`mapg room`). The line follows the room
+you clicked until you click another.
+
+**Places.** `mapg place <name>` bookmarks the room you stand in (`mapg place <name> <n>` any
+room); `mapg go <name>` and `mapg path <name>` take the name from then on. The **Places** tab
+lists them — name, room, map — a click walks to that exact room, a right‑click offers the usual
+walk / route / details plus *Remove*, and the box at the top names the room you stand in. Places
+are marked on the map (an anchor), named when you hover them, saved with the store and shared
+across your characters like it; `mapg unplace <name>` drops one, `mapg places` lists them, and a
+forgotten room takes its place with it. Numbers are refused as names, since `mapg go` would not
+know which you meant.
+
+**Find, and the doors (1.11.0).** `mapg find <text>` — or the box on the **Find** tab — lights every
+room whose *name* contains the text (a crown on the map, case‑blind) and lists them with the map
+each is on; a click walks there, and a blank search clears. Under it the **Doors** table lists
+every way off the map you stand on — which map it leads to, from which room and direction, and the
+room it lands in — so hopping between areas is a click on the door rather than a hunt along the
+border. From the other side, the same door reads the other way.
 
 **With the mouse.** Hovering a room fills the peek line. **Left‑click a room** prints the route to
 it; **right‑click** offers *Walk there* / *Show route* / *Room details* / *Forget room* (the last is
@@ -843,8 +875,14 @@ area (click again to allow it); right‑click for the never‑list — mobs neve
 is where guild followers go. Players in the room are on the roster too, by name, as *party* or
 *stranger — hands off*; click a player's row to put them in your party (or take them out), so the
 mobs beside them are fair game. The lists sit at the bottom of the panel — never‑list, party,
-excludes, room rules — click a name to drop it, and the boxes add a name by hand. A patrol that stands still says why: the panel's **Waiting** row, `farm`, and once in
-the output.
+excludes, room rules — click a name to drop it, and the boxes add a name by hand. The **settings**
+are boxes too — pace, hp, sp, rest, limit, panic — each one the typed command with its arguments,
+so the panel and the commands cannot disagree. The panel is three tabs: **Patrol** (status, the
+buttons, gauges, the roster, counters, the kill log), **Mobs** (never‑list, party, excludes, fight
+order, always‑list) and **Settings** (the after‑kill chain and no‑loot, rotation, the settings
+boxes, room rules). A patrol that stands still says why: the panel's **Waiting** row, `farm`, and once in
+the output. The **Next room** row names the room the patrol is heading for and why (mobs in sight,
+the stalest, or the rest room), and the map lights the leg it is walking there.
 
 | Command | What it does |
 |---|---|
@@ -852,12 +890,19 @@ the output.
 | `farm go <area>` | Ask the mapper to walk you there, then lock and start on arrival. |
 | `farm pace <s>` | Seconds between an arrival and the next step. |
 | `farm exclude <name>` / `farm include <name>` / `farm excludes` | This area's excludes (substring, case‑blind). |
-| `farm room <n> avoid` / `farm room <n> pass` / `farm room <n> -` | Room rules: **avoid** — the patrol never enters that room (routes go round it); **pass** — it may walk through but never fights there and never heads there on purpose; `-` clears. Easiest from the map: right‑click a room and the menu offers *Farmer: pass through only* / *never enter* / *clear rule* whenever the farmer is loaded. `farm room` lists them; they're also a table on the panel, where a click clears one, and the map draws them in their own colours — `A` for a room never entered, `P` for pass‑through (see the map's legend). |
+| `farm room <n> avoid` / `farm room <n> pass` / `farm room <n> rest` / `farm room <n> -` | Room rules: **avoid** — the patrol never enters that room (routes go round it); **pass** — it may walk through but never fights there and never heads there on purpose; **rest** — a pass room that is also where the patrol goes to rest (below); `-` clears. Easiest from the map: right‑click a room and the menu offers *Farmer: pass through only* / *never enter* / *rest here* / *clear rule* whenever the farmer is loaded. `farm room` lists them; they're also a table on the panel, where a click clears one, and the map draws them in their own colours — `A` for a room never entered, `P` for pass‑through, `R` for the rest room (see the map's legend). |
 | `farm never [<name>\|-<name>]` | Mobs never attacked anywhere. |
+| `farm prefer <name>` / `farm prefer -<name>` | The fight order for this area: when several mobs stand together, the first fragment in the list that matches anything present is fought first, then the next, then the roster's own order. On the panel with a box to add and a click to drop. |
+| `farm always <name>` / `farm always -<name>` | A mob fought even with a stranger in the room — the aggro ones that will not let you walk on anyway. Everything else still waits for the stranger to leave, and the **Waiting** row names what is being held back. |
+| `farm rota add <area>` / `farm rota del <area>` / `farm rota on\|off` / `farm rota idle <s>` | Areas farmed in turn. Once the circuit of the current area is done and nothing has been killed for the idle time (300 s by default), the mapper is asked for a walk to the next area in the list — wrapping round — and the patrol starts there on arrival. Never mid‑fight, resting, parking or paused; a kill resets the clock. A one‑room or dead‑end fence counts as a finished circuit. |
 | `farm party [<name>\|-<name>]` | Real player party members, whose presence is not a stranger's. |
-| `farm hp <start%> [<panic%>]` | No new fight or step under start% (it rests); under panic% the fight is abandoned and `farm panic <cmd>` sent once. Refuses to start with a floor set and no HP feed. |
-| `farm rest <seid> <secs>` | Sit out low Seid between fights. |
-| `farm after <cmd>` | One command of yours after each killing blow's breath (`get all from corpse`); `-` clears. |
+| `farm hp <start%> [<panic%>] [<resume%>]` | No new fight or step under start% (it rests — at the rest room if this area has one: it walks there first, fighting nothing on the way); under panic% the fight is abandoned, `farm panic <cmd>` sent once, and the patrol retreats to the rest room, or stops if there is none. A rest ends at resume% (default: start%), so it does not fight one round and rest again. Refuses to start with a floor set and no HP feed. |
+| `farm sp <floor%> [<resume%>]` | The same floor for SP, off `char.vitals.sp/maxsp`. A feed whose max is under its current is no percent, and such a floor stays quiet (`farm sp` says so). |
+| `farm rest <seid> <secs>` | Sit out low Seid between fights; the seconds are also how often any rest re‑checks its floor. |
+| `farm log` / `farm log clear` | The kill log: every mob killed, how many, the average fight length (timed from the `kill` that opened it) and how long ago the last one fell. It is a table on the panel too, most‑killed first, and it survives a restart. |
+| `farm after add <cmd>` / `farm after del <n>` / `farm after -` | The after‑kill chain: commands of yours sent in order after each killing blow's breath (`get all from corpse`, `skin corpse`, `bury corpse`); `farm after` lists them, `-` clears, and the old one‑command form `farm after <cmd>` still works. The panel lists the chain (click a row to remove it) with a box to add one. |
+| `farm noloot <name>` / `farm noloot -<name>` | A mob (substring, per area) whose corpse gets none of the chain — a quest mob you must not bury, a corpse you never want to loot; `farm noloot` lists them, and the panel does too (click allows again). |
+| `farm limit 45m` / `farm limit 2h` / `farm limit 50k` / `farm limit -` | End the run after that long, or that many kills. Checked between fights only — a limit never abandons a mob mid‑swing. Reached, the patrol parks at the rest room when the area has one (walking there, fighting nothing, stopping on arrival) or stops where it stands, and your phone hears either way. One run, one limit; the panel's **Limit** row counts down. |
 | `farm rooms` | Coverage: this area's rooms — reachable, visited this run, or cut off. |
 | `farm wipe yes` | Forget the graph. |
 
@@ -1505,7 +1550,9 @@ sitting in the dock — otherwise it falls back to ship‑by‑ship so the named
 
 **With the mouse.** Clicking any town name — in the panel or in `araid heat` output — targets it.
 The Raid tab has toggles for arming, auto‑target, pool and convoy; the Settings tab has an input box
-for each of the five values.
+for each of the five values; and the **Raids** tab is the raid log the server keeps (Guild.Fleet's
+`raidlog`): every raid with its ship, town, daler and the goods it brought, a total line, and the
+same log folded by town — best paying first, a click targets it — and by ship.
 
 ## Mobile companion
 

@@ -53,6 +53,7 @@ local S = {               -- the run
   step = nil,             -- { dir, to, at } - the one outstanding step
   visited = 0,            -- rooms stepped into this run (panel)
   timer = nil,            -- the pending pace timer, so stop can cancel it
+  route = nil,            -- the rooms of the leg being walked, for the map to light
   started = 0,            -- clock stamp when this patrol began (session counter)
   ended = nil,            -- final length of the LAST patrol, frozen at stop
 }
@@ -64,13 +65,29 @@ local C = {               -- knobs (persisted)
   rest_secs = 30,         -- how long to sit when below it
   hp_start = 50,          -- HP% floor for STARTING a fight or a step; 0 = off
   hp_panic = 0,           -- HP% under which a fight is abandoned outright; 0 = off
+  hp_resume = 0,          -- HP% a rest waits for before the patrol goes on; 0 = hp_start
+  sp_start = 0,           -- SP% floor (char.vitals.sp/maxsp), like hp_start; 0 = off
+  sp_resume = 0,          -- SP% a rest waits for; 0 = sp_start
   panic_cmd = "",         -- one command sent at the panic floor ("flee", "wimpy"...); "" = none
   hunt_wait = 8,          -- seconds a 'kill' may go unanswered before the name is given up
-  after_cmd = "",         -- one command sent after each killing blow's breath ("get all from corpse")
+  after = {},             -- commands sent, in order, after each killing blow's breath
+                          -- ("get all from corpse", "skin corpse"...); 'farm after add|del'
+  limit_secs = 0,         -- run limit: stop after this long (0 = none) - session only
+  limit_kills = 0,        -- ...or after this many kills (0 = none) - session only
 }
 local X = {}              -- excludes: area -> { "name fragment", ... } (persisted)
 local PT = {}             -- party: real player names (lowercase fragments) who are not
                           -- strangers - their presence does not park the fists (persisted)
+local PF = {}             -- prefer: area -> { "name fragment", ... } in order - the mob to
+                          -- attack first when several are in the room (persisted, shared)
+local AL = {}             -- always: mob name fragments attacked even with a stranger in the
+                          -- room - the aggro ones that will not let you walk on (persisted, shared)
+local RT = { on = false, areas = {}, idle = 300 }   -- area rotation ('farm rota'): after a
+                          -- full circuit with no kill for `idle` seconds, travel to the next
+                          -- area in the list and farm there (persisted, private)
+local last_kill_at = 0    -- clock stamp of the last killing blow this run
+local NL = {}             -- no-loot: area -> { "name fragment", ... } - mobs whose corpses
+                          -- get none of the after-kill commands (persisted with the graph)
 local NV = {}             -- the never-list: mob names never attacked ANYWHERE (persisted).
 local RR = {}             -- room rules: num -> "avoid" (never enter) | "pass" (walk through,
                           -- never fight there). Set from the map's right-click menu or
@@ -87,6 +104,7 @@ local B = {               -- the current room's population and the fight (never 
   player = false,         -- a non-party player is here: hands off, walk on
   seen = false,           -- Room.Contents has spoken for this room (absence proves nothing)
   parked = false,         -- the player-present note was said for this population
+  parking = false,        -- the run limit was reached: walking to the rest room to stop there
   hunting = false,        -- committed to clearing this room before patrolling on
   target = nil,           -- { name, kw } of the mob last attacked
   hunt_at = 0,            -- clock stamp of the last 'kill' sent, for the hunt watchdog
@@ -95,7 +113,11 @@ local B = {               -- the current room's population and the fight (never 
   kills = 0,
   resting = false,
   rest_until = 0,
+  retreat = nil,          -- the rest room the patrol is walking to before it rests there
 }
+local KL = {}             -- the kill log: name -> { kills, last (clock), secs (fight time) }
+                          -- (persisted in the private store; 'farm log clear' empties it)
+local kl_rows = {}        -- panel row index -> name, for the log table
 local T = {               -- travel ('farm go', phase 4 - never persisted)
   going = nil,            -- the area we asked the mapper to walk us to
   quiet = nil,            -- the nobody-answered timer, cancelled by any walk event
@@ -112,6 +134,7 @@ local P = "plugin.3s-farmer."
 -- stay in scrye.store. On an older host WORLD degrades to the private store.
 local WORLD = scrye.shared or scrye.store
 local draw                -- defined with the panel
+local farm_cmd            -- the command dispatcher ('farm ...'), defined with the aliases
 
 local function note(s) scrye.print("[farm] " .. s) end
 
@@ -136,9 +159,19 @@ local function save()
   end
   scrye.store.set("pace", tostring(C.pace))
   scrye.store.set("rest", C.rest_below .. " " .. C.rest_secs)
-  scrye.store.set("hp", C.hp_start .. " " .. C.hp_panic)
+  scrye.store.set("hp", C.hp_start .. " " .. C.hp_panic .. " " .. C.hp_resume)
+  scrye.store.set("sp", C.sp_start .. " " .. C.sp_resume)
   scrye.store.set("panic_cmd", C.panic_cmd)
-  scrye.store.set("after_cmd", C.after_cmd)
+  scrye.store.set("after_cmd", table.concat(C.after, "\n"))
+  WORLD.set("noloot", scrye.json.encode(NL))
+  WORLD.set("prefer", scrye.json.encode(PF))
+  WORLD.set("always", scrye.json.encode(AL))
+  scrye.store.set("rota", scrye.json.encode(RT))
+  do
+    local log = {}
+    for name, e in pairs(KL) do log[#log + 1] = { name = name, kills = e.kills, secs = e.secs } end
+    scrye.store.set("killlog", scrye.json.encode(log))
+  end
 end
 
 local function load()
@@ -182,16 +215,40 @@ local function load()
     RR = {}
     for _, e in ipairs(rr) do
       local n = tonumber(e.num)
-      if n and (e.rule == "avoid" or e.rule == "pass") then RR[n] = e.rule end
+      if n and (e.rule == "avoid" or e.rule == "pass" or e.rule == "rest") then RR[n] = e.rule end
     end
   end
   C.pace = tonumber(scrye.store.get("pace")) or C.pace
   local rb, rs = tostring(scrye.store.get("rest") or ""):match("^(%d+) (%d+)$")
   if rb then C.rest_below, C.rest_secs = tonumber(rb), tonumber(rs) end
-  local hs, hpn = tostring(scrye.store.get("hp") or ""):match("^(%d+) (%d+)$")
-  if hs then C.hp_start, C.hp_panic = tonumber(hs), tonumber(hpn) end
+  local hs, hpn, hpr = tostring(scrye.store.get("hp") or ""):match("^(%d+) (%d+) ?(%d*)$")
+  if hs then C.hp_start, C.hp_panic, C.hp_resume = tonumber(hs), tonumber(hpn), tonumber(hpr) or 0 end
+  local ss, sr = tostring(scrye.store.get("sp") or ""):match("^(%d+) (%d+)$")
+  if ss then C.sp_start, C.sp_resume = tonumber(ss), tonumber(sr) end
+  local ok6, log = pcall(scrye.json.decode, scrye.store.get("killlog") or "")
+  if ok6 and type(log) == "table" then
+    for _, e in ipairs(log) do
+      if type(e) == "table" and e.name then
+        KL[tostring(e.name)] = { kills = tonumber(e.kills) or 0, secs = tonumber(e.secs) or 0, last = 0 }
+      end
+    end
+  end
   C.panic_cmd = tostring(scrye.store.get("panic_cmd") or "")
-  C.after_cmd = tostring(scrye.store.get("after_cmd") or "")
+  C.after = {}
+  for line in tostring(scrye.store.get("after_cmd") or ""):gmatch("[^\n]+") do C.after[#C.after + 1] = line end
+  local ok7, nl = pcall(scrye.json.decode, WORLD.get("noloot") or "")
+  if ok7 and type(nl) == "table" then NL = nl end
+  local ok8, pf = pcall(scrye.json.decode, WORLD.get("prefer") or "")
+  if ok8 and type(pf) == "table" then PF = pf end
+  local ok9, al = pcall(scrye.json.decode, WORLD.get("always") or "")
+  if ok9 and type(al) == "table" then AL = al end
+  local ok10, rt = pcall(scrye.json.decode, scrye.store.get("rota") or "")
+  if ok10 and type(rt) == "table" then
+    RT.on = rt.on == true
+    RT.idle = tonumber(rt.idle) or RT.idle
+    RT.areas = {}
+    for _, a in ipairs(type(rt.areas) == "table" and rt.areas or {}) do RT.areas[#RT.areas + 1] = tostring(a) end
+  end
 end
 
 -- ---------- the fight ----------
@@ -248,11 +305,22 @@ local function get_hp()
   return math.floor(cur * 100 / max)
 end
 
+-- SP as a percent off Char.Vitals, or nil: no feed, or a feed whose max is below its
+-- current (the 17 Sep capture had sp 4885 over maxsp 53 - a server-side quirk, and a
+-- percent of that would be a lie), so an SP floor over such a feed never fires.
+local function get_sp()
+  local cur, max = tonumber(scrye.getState("char.vitals.sp")), tonumber(scrye.getState("char.vitals.maxsp"))
+  if not cur or not max or max <= 0 or cur > max then return nil end
+  return math.floor(cur * 100 / max)
+end
+
 -- Why we are not fit to start a fight or a step right now, or nil. One gate for every
--- floor - Seid (guild-specific, the original) and HP (any guild) - so the patrol and the
--- prompt agree on it: a mob in the room is not attacked at 20% HP any more than the next
--- room is walked into.
-local function unfit()
+-- floor - Seid (guild-specific, the original), HP and SP (any guild) - so the patrol and
+-- the prompt agree on it: a mob in the room is not attacked at 20% HP any more than the
+-- next room is walked into. `resuming` asks the higher bar a rest waits for (farm hp's
+-- third number, farm sp's second): a rest that ended at the same floor it began at
+-- would fight one round and rest again.
+local function unfit(resuming)
   if C.rest_below > 0 then
     local seid = get_seid()
     if seid and seid < C.rest_below then
@@ -261,8 +329,16 @@ local function unfit()
   end
   if C.hp_start > 0 then
     local hp = get_hp()
-    if hp and hp < C.hp_start then
-      return string.format("HP low (%d%% < %d%%)", hp, C.hp_start)
+    local floor = resuming and math.max(C.hp_start, C.hp_resume) or C.hp_start
+    if hp and hp < floor then
+      return string.format("HP low (%d%% < %d%%)", hp, floor)
+    end
+  end
+  if C.sp_start > 0 then
+    local sp = get_sp()
+    local floor = resuming and math.max(C.sp_start, C.sp_resume) or C.sp_start
+    if sp and sp < floor then
+      return string.format("SP low (%d%% < %d%%)", sp, floor)
     end
   end
   return nil
@@ -272,6 +348,14 @@ local function in_party(name)
   local low = tostring(name or ""):lower()
   for _, member in ipairs(PT) do
     if low:find(member, 1, true) then return true end
+  end
+  return false
+end
+
+local function no_loot(name)
+  name = tostring(name or ""):lower()
+  for _, frag in ipairs(S.lock and NL[S.lock] or {}) do
+    if name:find(frag, 1, true) then return true end
   end
   return false
 end
@@ -321,16 +405,47 @@ end
 
 -- The next mob worth killing, from the freshest roster: not excluded, not the party's,
 -- not given up on in this room.
-local function next_target()
-  if here and RR[here] == "pass" then return nil end   -- walk through, never fight here
+-- The always-list: a mob attacked even with a stranger in the room (it will not let you
+-- walk on anyway). Fragments, case-blind, everywhere - like the never-list.
+local function is_always(name)
+  name = tostring(name or ""):lower()
+  for _, frag in ipairs(AL) do if name:find(frag, 1, true) then return true end end
+  return false
+end
+
+-- The roster in the order it is fought: the area's preference list first (the first
+-- fragment that matches anything in the room wins, then the second...), then the
+-- server's own order for the rest. So the valuable mob dies first when several stand
+-- together, and nothing is fought twice.
+local function fight_order()
+  local out, taken = {}, {}
+  for _, frag in ipairs(S.lock and PF[S.lock] or {}) do
+    for _, name in ipairs(B.mobs) do
+      if not taken[name] and name:lower():find(frag, 1, true) then taken[name] = true ; out[#out + 1] = name end
+    end
+  end
   for _, name in ipairs(B.mobs) do
-    if not is_excluded(name) and not in_party(name) and not B.skip[name] then
+    if not taken[name] then taken[name] = true ; out[#out + 1] = name end
+  end
+  return out
+end
+
+-- The mob to swing at: the first in fight order that is not excluded, party, given up on
+-- here - and, with a stranger in the room, not on the always-list either (the stranger
+-- rule: hands off, unless the mob is one you fight regardless). `despite_stranger` asks
+-- the same question with the stranger rule off - what WOULD be fought - for the notes.
+local function pick_from_roster(despite_stranger)
+  if here and (RR[here] == "pass" or RR[here] == "rest") then return nil end   -- walk through, never fight here
+  for _, name in ipairs(fight_order()) do
+    if not is_excluded(name) and not in_party(name) and not B.skip[name]
+       and (despite_stranger or not B.player or is_always(name)) then
       local kw = keyword(name)
       if kw then return name, kw end
     end
   end
   return nil
 end
+local function next_target() return pick_from_roster(false) end
 
 -- ---------- the patrol ----------
 local function in_area(num)
@@ -352,11 +467,16 @@ local function patrol_link(dir, dest)
   return not (sh and back and sh[back])
 end
 
--- Breadth-first over the fenced graph. Collects every reachable in-area room and the first
--- step toward each, in one pass - target choice and routing come out of the same search.
+-- A room the patrol walks through but never stands in for its own sake: a pass room,
+-- or the rest room (where it stands only to rest)
+local function passing(num) return RR[num] == "pass" or RR[num] == "rest" end
+
+-- Breadth-first over the fenced graph. Collects every reachable in-area room, the first
+-- step toward each and the room each was reached from, in one pass - target choice,
+-- routing and the leg the map lights all come out of the same search.
 local function survey()
   if not here or not in_area(here) then return nil end
-  local first, order = {}, {}
+  local first, order, prev = {}, {}, {}
   local seen, queue, qi = { [here] = true }, { here }, 1
   while queue[qi] do
     local at = queue[qi] ; qi = qi + 1
@@ -365,12 +485,29 @@ local function survey()
       if dest and not seen[dest] and patrol_link(dir, dest) then
         seen[dest] = true
         first[dest] = (at == here) and dir or first[at]
+        prev[dest] = at
         order[#order + 1] = dest
         queue[#queue + 1] = dest
       end
     end
   end
-  return order, first
+  return order, first, prev
+end
+
+-- The rooms from here to `target`, in walking order, off the survey's parent links
+local function leg_to(target, prev)
+  local path, cur = {}, target
+  while cur and cur ~= here do table.insert(path, 1, cur) ; cur = prev[cur] end
+  return path
+end
+
+-- The nearest rest room the fence can reach (BFS order is distance order), or nil
+local function nearest_rest()
+  if here and RR[here] == "rest" then return here end
+  local order = survey()
+  if not order then return nil end
+  for _, num in ipairs(order) do if RR[num] == "rest" then return num end end
+  return nil
 end
 
 -- The next room worth standing in: the reachable in-area room we have not stood in for the
@@ -440,7 +577,7 @@ end
 -- BFS order gives for free (survey() visits rooms in increasing distance, so the first
 -- room carrying the minimum stamp is the closest one carrying it).
 local function pick_target()
-  local order, first = survey()
+  local order, first, prev = survey()
   if not order then return nil end
   local los = B.los
   if los then
@@ -449,25 +586,26 @@ local function pick_target()
       -- was only ever our own followers, is them catching up - not a reason to turn round;
       -- and a pass-through room is never a destination, mobs or no mobs
       local followers = B.left and B.left.num == num and B.left.quiet
-      if los.mobs[num] and not followers and RR[num] ~= "pass" then return num, first[num], "mobs in sight" end
+      if los.mobs[num] and not followers and not passing(num) then return num, first[num], "mobs in sight", prev end
     end
   end
   local best, best_last = nil, nil
   for _, num in ipairs(order) do
     local l = G[num].last
-    if RR[num] ~= "pass" and not (los and los.players[num]) and (best_last == nil or l < best_last) then
+    if not passing(num) and not (los and los.players[num]) and (best_last == nil or l < best_last) then
       best, best_last = num, l
     end
   end
   if not best then return nil end
-  return best, first[best]
+  return best, first[best], nil, prev
 end
 
 local function stop_patrol(why)
   if not S.on then return end
   S.ended = now - (S.started or now)   -- freeze the session clock at its final length
-  S.on = false ; S.step = nil
+  S.on = false ; S.step = nil ; S.route = nil
   B.hunting = false ; B.target = nil   -- no patrol, no hunt: the HUD shows no target
+  B.retreat = nil ; B.parking = false ; B.resting = false
   if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
   if why then note(why .. " - patrol stopped. 'farm start' starts it again") end
   draw()
@@ -475,16 +613,20 @@ end
 
 local step_out   -- forward: the rest timer below resumes into it
 
+local retreat_step   -- forward: the walk to the rest room, one step per arrival
+
 local function rest_over()
-  if not B.resting then return end
-  local why = unfit()
+  if not B.resting or B.parking then return end
+  local why = unfit(true)
   if why then
     B.rest_until = now + C.rest_secs
-    note(why .. " still - resting " .. C.rest_secs .. "s more")
+    note(why .. (B.retreat and " still - on the way to the rest room" or (" still - resting " .. C.rest_secs .. "s more")))
     scrye.after(C.rest_secs, rest_over)
     return
   end
-  B.resting = false
+  -- fit again - on the way to the rest room as much as at it: the walk there was for
+  -- the rest, and there is no rest to have
+  B.resting = false ; B.retreat = nil
   note("recovered - patrol resuming")
   if S.on and not S.paused then
     if S.timer then scrye.cancel(S.timer) end
@@ -493,11 +635,21 @@ local function rest_over()
   draw()
 end
 
--- Sit out a floor: nothing is sent until rest_over finds us fit again.
+-- Sit out a floor: nothing is sent until rest_over finds us fit again - at the rest
+-- room, when the fence has one ('farm room <n> rest', or the map's right-click): the
+-- patrol walks there first, fighting nothing on the way, and rests where you chose.
 local function begin_rest(why)
   B.resting = true
   B.rest_until = now + C.rest_secs
-  note(why .. " - resting " .. C.rest_secs .. "s before going on")
+  local rr = nearest_rest()
+  if rr and rr ~= here then
+    B.retreat = rr
+    note(why .. " - going to rest at " .. (G[rr] and G[rr].name or "?") .. " (" .. rr .. ")")
+    if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
+    if not S.step then retreat_step() end     -- a step in flight lands first; its arrival goes on
+  else
+    note(why .. " - resting " .. C.rest_secs .. "s before going on")
+  end
   scrye.after(C.rest_secs, rest_over)
   draw()
 end
@@ -510,15 +662,16 @@ local consider            -- the attack decision; defined with the prompt, used 
 local function blocker()
   if not S.on then return nil end
   if S.paused then return "paused" end
-  if B.resting then return "resting" end
+  if B.resting then return B.retreat and ((B.parking and "parking at rest room " or "retreating to rest room ") .. B.retreat) or "resting" end
   if S.fighting then return "in combat (Char.Combat)" end
   if B.hunting then return "hunting " .. (B.target and B.target.name or "?") end
   if in_combat() then
     return "in combat (enemy.name = '" .. tostring(scrye.getState("enemy.name")) .. "')"
   end
   local name = next_target()
-  if name and B.player then return "a player is here - leaving " .. name .. " alone" end
   if name then return "about to attack " .. name end
+  local held = B.player and pick_from_roster(true)
+  if held then return "a player is here - leaving " .. held .. " alone" end
   if S.step then return "stepping " .. S.step.dir end
   return nil
 end
@@ -532,11 +685,31 @@ local function hold(why)
   S.timer = scrye.after(C.pace * 5, step_out)
 end
 
+-- One step toward the rest room. The same one-step-per-confirmed-arrival chassis as the
+-- patrol, over the same fence; a room in the way is walked through whatever is in it,
+-- because the point is to get out of here.
+retreat_step = function()
+  if not (S.on and B.resting and B.retreat) or S.paused or S.step then return end
+  if here == B.retreat then B.retreat = nil ; S.route = nil ; draw() ; return end
+  local _, first, prev = survey()
+  local dir = first and first[B.retreat]
+  if not dir then
+    note("no way to the rest room from here - resting where we stand")
+    B.retreat = nil ; S.route = nil ; draw()
+    return
+  end
+  S.route = leg_to(B.retreat, prev)
+  S.step = { dir = dir, to = tonumber(G[here].exits[dir]), at = now }
+  S.led = false
+  scrye.send(dir)
+  draw()
+end
+
 step_out = function()
   S.timer = nil
   if not S.on or S.paused or S.step then return end
   if S.fighting or B.hunting or in_combat() then hold(blocker()) return end
-  if next_target() ~= nil and not B.player then
+  if next_target() ~= nil then
     -- A fight is about to start. The prompt is where attacks are decided, but the tick
     -- is entitled to the same decision: a prompt the client never flagged (no telnet
     -- GA that time) must not leave a live target unfought and the patrol frozen.
@@ -544,21 +717,25 @@ step_out = function()
     if not B.hunting then hold(blocker()) end
     return
   end
-  if B.resting then return end
+  if B.resting then retreat_step() return end
   S.held_on = nil
   do
     local why = unfit()
     if why then begin_rest(why) return end
   end
-  local target, dir, why_target = pick_target()
+  local target, dir, why_target, prev = pick_target()
   if not target then
     -- A one-room area, or the fence has nothing else reachable. Not an error: sit here
-    -- (phase 3 fights what respawns) and look again in a while.
+    -- (phase 3 fights what respawns) and look again in a while. The circuit, such as it
+    -- is, is done - so a rotation can move on from here.
+    S.swept = true
     S.timer = scrye.after(C.pace * 5, step_out)
     return
   end
   if target == here then
     -- we are already the stalest room; wait for time to pass rather than jitter in place
+    -- (and the circuit is trivially done - a one-room fence counts as swept)
+    S.swept = true
     S.timer = scrye.after(C.pace * 5, step_out)
     return
   end
@@ -571,6 +748,7 @@ step_out = function()
   local dest = tonumber(G[here].exits[dir])
   S.step = { dir = dir, to = dest, at = now }
   S.led = why_target ~= nil
+  S.route = prev and leg_to(target, prev) or { dest }   -- the leg, for the map to light
   scrye.send(dir)
   draw()
 end
@@ -602,7 +780,7 @@ local function on_room_info(json)
     -- excluded, party), the 'm' there now is them, and steering toward it is a two-room
     -- dance with your own guards (Goran, 17 Sep 2026). A room that was simply empty is
     -- not "quiet" in this sense: an 'm' appearing there is something new, worth a look.
-    B.left = { num = here, quiet = #B.mobs > 0 and next_target() == nil }   -- B.mobs is still that room's
+    B.left = { num = here, quiet = #B.mobs > 0 and pick_from_roster(true) == nil }   -- B.mobs is still that room's
     B.skip = {} ; B.kwidx = {} ; B.los = nil   -- give-ups, keyword tries and the LOS picture are per room
   end
 
@@ -641,7 +819,21 @@ local function on_room_info(json)
       here = num
       S.step = nil
       S.visited = S.visited + 1
-      schedule_step()
+      if B.retreat then
+        if num == B.retreat and B.parking then
+          B.retreat = nil ; S.route = nil ; B.resting = false ; B.parking = false
+          stop_patrol("parked at the rest room")
+          scrye.notify("farm: run limit reached - parked at the rest room, patrol stopped")
+        elseif num == B.retreat then
+          B.retreat = nil ; S.route = nil
+          note("at the rest room - resting " .. C.rest_secs .. "s before going on")
+        else
+          if S.timer then scrye.cancel(S.timer) end
+          S.timer = scrye.after(C.pace, function() S.timer = nil ; retreat_step() end)
+        end
+      else
+        schedule_step()
+      end
     elseif S.step then
       here = num
       stop_patrol(string.format("stepped %s expecting %d but arrived in %d %s",
@@ -712,9 +904,9 @@ end
 consider = function()
   if not S.on or S.paused or B.resting then return end
   if B.hunting or in_combat() then return end
-  if not next_target() then return end
-  if B.player then
-    if not B.parked then
+  if not next_target() then
+    -- a stranger holding the fists off something we would otherwise fight: say so once
+    if B.player and pick_from_roster(true) and not B.parked then
       B.parked = true
       note("a player is here - leaving the room's mobs alone, walking on")
       schedule_step()
@@ -794,6 +986,87 @@ local function exclude(name)
   draw()
 end
 
+local function after_add(cmd)
+  C.after[#C.after + 1] = cmd
+  dirty = true ; save() ; draw()
+  note(string.format("after each kill, %d%s: '%s'", #C.after,
+    #C.after == 1 and "st" or #C.after == 2 and "nd" or #C.after == 3 and "rd" or "th", cmd))
+end
+local function after_del(i)
+  local gone = C.after[i] and table.remove(C.after, i)
+  if not gone then return end
+  dirty = true ; save() ; draw()
+  note("after-kill command removed: '" .. gone .. "'")
+end
+
+local function noloot_here() return S.lock and NL[S.lock] or nil end
+local function noloot_add(name)
+  if not S.lock then note("no area locked - 'farm start' first, no-loot is per area") return end
+  name = name:lower()
+  NL[S.lock] = NL[S.lock] or {}
+  for _, e in ipairs(NL[S.lock]) do
+    if e == name then note("'" .. name .. "' already gets no after-kill commands in " .. S.lock) return end
+  end
+  table.insert(NL[S.lock], name)
+  dirty = true ; save()
+  note("no loot in " .. S.lock .. ": " .. name .. " - the after-kill commands skip it (substring, case-insensitive)")
+  draw()
+end
+local function noloot_drop(name)
+  if not S.lock or not NL[S.lock] then note("nothing is on the no-loot list here") return end
+  name = name:lower()
+  for i, e in ipairs(NL[S.lock]) do
+    if e == name then
+      table.remove(NL[S.lock], i)
+      if #NL[S.lock] == 0 then NL[S.lock] = nil end
+      dirty = true ; save()
+      note("'" .. name .. "' gets the after-kill commands again in " .. S.lock)
+      draw()
+      return
+    end
+  end
+  note("'" .. name .. "' is not on the no-loot list here")
+end
+
+local function prefer_here() return S.lock and PF[S.lock] or nil end
+local function prefer_add(name)
+  if not S.lock then note("no area locked - 'farm start' first, preferences are per area") return end
+  name = name:lower()
+  PF[S.lock] = PF[S.lock] or {}
+  for _, e in ipairs(PF[S.lock]) do
+    if e == name then note("'" .. name .. "' is already preferred in " .. S.lock) return end
+  end
+  table.insert(PF[S.lock], name)
+  dirty = true ; save()
+  note("preferred in " .. S.lock .. ", in order: " .. table.concat(PF[S.lock], ", "))
+  draw()
+end
+local function prefer_drop(name)
+  if not S.lock or not PF[S.lock] then note("nothing is preferred here") return end
+  name = name:lower()
+  for i, e in ipairs(PF[S.lock]) do
+    if e == name then
+      table.remove(PF[S.lock], i)
+      if #PF[S.lock] == 0 then PF[S.lock] = nil end
+      dirty = true ; save() ; draw()
+      note("'" .. name .. "' no longer preferred in " .. S.lock)
+      return
+    end
+  end
+  note("'" .. name .. "' is not preferred here")
+end
+local function always_add(who)
+  for _, m in ipairs(AL) do if m == who then note("'" .. who .. "' is already on the always-list") return end end
+  AL[#AL + 1] = who
+  dirty = true ; save() ; draw()
+  note("attacked even with a stranger in the room: " .. table.concat(AL, ", "))
+end
+local function always_drop(who)
+  for i, m in ipairs(AL) do if m == who then table.remove(AL, i) break end end
+  dirty = true ; save() ; draw()
+  note(#AL > 0 and ("always-list: " .. table.concat(AL, ", ")) or "always-list empty")
+end
+
 -- Room rules, the one way they change - the typed verb, the map's menu and the panel's
 -- table all come here. An avoided room drops out of the fence at once: a patrol standing
 -- in it walks out on the next step, and a route through it is re-found around it.
@@ -804,6 +1077,7 @@ local function room_rule(num, rule)
   local name = G[num] and G[num].name or ("room " .. num)
   if rule == "avoid" then note(name .. " (" .. num .. "): the patrol will never enter it")
   elseif rule == "pass" then note(name .. " (" .. num .. "): the patrol may pass through, never fights there")
+  elseif rule == "rest" then note(name .. " (" .. num .. "): the patrol rests here when a floor is reached (and never fights here)")
   elseif old then note(name .. " (" .. num .. "): rule cleared")
   else note(name .. " (" .. num .. ") had no rule") end
   draw()
@@ -891,6 +1165,7 @@ local function start()
   S.swept = false
   S.held_on = nil
   S.started = now ; S.ended = nil
+  last_kill_at = now
   B.kills = 0 ; B.hunting = false ; B.parked = false ; B.resting = false
   -- Ask the mapper what it knows about this area; its answer (map.area.rooms) arrives
   -- before this emit returns - events dispatch in-process - so the note below already
@@ -961,10 +1236,7 @@ local function status()
     C.panic_cmd ~= "" and (" -> '" .. C.panic_cmd .. "'") or ""))
 end
 
-scrye.addAlias{
-  pattern = "^farm(?:\\s+(.*))?$",
-  regex = true,
-  run = function(args)
+farm_cmd = function(args)
     args = tostring(args or ""):gsub("^%s+", ""):gsub("%s+$", "")
     local verb, rest = args:match("^(%S*)%s*(.*)$")
     verb = verb:lower()
@@ -1032,28 +1304,142 @@ scrye.addAlias{
         dirty = true ; save()
       end
     elseif verb == "hp" then
-      local start_, panic = rest:match("^(%d+)%s+(%d+)$")
-      if not start_ then start_ = rest:match("^(%d+)$") ; panic = start_ and tostring(C.hp_panic) end
+      local start_, panic, resume = rest:match("^(%d+)%s+(%d+)%s+(%d+)$")
+      if not start_ then start_, panic = rest:match("^(%d+)%s+(%d+)$") ; resume = start_ and tostring(C.hp_resume) end
+      if not start_ then start_ = rest:match("^(%d+)$") ; panic = start_ and tostring(C.hp_panic) ; resume = start_ and tostring(C.hp_resume) end
       if not start_ then
-        note(string.format("farm hp <start%%> [<panic%%>]   (now: start %s, panic %s)",
-             C.hp_start > 0 and (C.hp_start .. "%") or "off", C.hp_panic > 0 and (C.hp_panic .. "%") or "off"))
-        note("  under start%, no new fight and no step - it rests like the Seid floor; under panic% a")
-        note("  fight is abandoned: patrol stopped, a notify, and 'farm panic <cmd>' sent if set. 0 = off")
+        note(string.format("farm hp <start%%> [<panic%%>] [<resume%%>]   (now: start %s, panic %s, resume %s)",
+             C.hp_start > 0 and (C.hp_start .. "%") or "off", C.hp_panic > 0 and (C.hp_panic .. "%") or "off",
+             C.hp_resume > 0 and (C.hp_resume .. "%") or "at start%"))
+        note("  under start%, no new fight and no step - it rests like the Seid floor, at the rest room if the")
+        note("  fence has one ('farm room <n> rest'); under panic% a fight is abandoned: a notify, 'farm panic <cmd>'")
+        note("  if set, then the rest room - or the patrol stops if there is none. A rest ends at resume%. 0 = off")
       else
-        C.hp_start, C.hp_panic = math.min(100, tonumber(start_)), math.min(100, tonumber(panic))
+        C.hp_start, C.hp_panic, C.hp_resume = math.min(100, tonumber(start_)), math.min(100, tonumber(panic)), math.min(100, tonumber(resume))
         dirty = true ; save()
-        note(string.format("HP floors: start below %s, panic below %s",
-             C.hp_start > 0 and (C.hp_start .. "%") or "off", C.hp_panic > 0 and (C.hp_panic .. "%") or "off"))
+        note(string.format("HP floors: start below %s, panic below %s, rest until %s",
+             C.hp_start > 0 and (C.hp_start .. "%") or "off", C.hp_panic > 0 and (C.hp_panic .. "%") or "off",
+             C.hp_resume > 0 and (C.hp_resume .. "%") or "start%"))
+      end
+    elseif verb == "sp" then
+      local floor, resume = rest:match("^(%d+)%s+(%d+)$")
+      if not floor then floor = rest:match("^(%d+)$") ; resume = floor and tostring(C.sp_resume) end
+      if not floor then
+        local sp = get_sp()
+        note(string.format("farm sp <floor%%> [<resume%%>]   (now: floor %s, resume %s; SP %s)",
+             C.sp_start > 0 and (C.sp_start .. "%") or "off", C.sp_resume > 0 and (C.sp_resume .. "%") or "at floor%",
+             sp and (sp .. "%") or "unknown - no usable char.vitals.sp/maxsp"))
+      else
+        C.sp_start, C.sp_resume = math.min(100, tonumber(floor)), math.min(100, tonumber(resume))
+        dirty = true ; save()
+        note(string.format("SP floor: rest below %s, until %s",
+             C.sp_start > 0 and (C.sp_start .. "%") or "off", C.sp_resume > 0 and (C.sp_resume .. "%") or "floor%"))
+      end
+    elseif verb == "log" then
+      if rest == "clear" then
+        KL = {} ; dirty = true ; save() ; draw()
+        note("kill log cleared")
+      else
+        local names = {}
+        for name in pairs(KL) do names[#names + 1] = name end
+        table.sort(names, function(a, b) return KL[a].kills > KL[b].kills end)
+        if #names == 0 then note("kill log: nothing yet ('farm log clear' empties it)") return end
+        note("kill log (" .. #names .. " mob(s)):")
+        for _, name in ipairs(names) do
+          local e = KL[name]
+          note(string.format("  %-30s %4d kill(s)  avg fight %ds", name, e.kills, e.kills > 0 and e.secs // e.kills or 0))
+        end
       end
     elseif verb == "after" then
+      local sub, arg = rest:match("^(%S+)%s*(.-)$")
       if rest == "" then
-        note("farm after <command>   sent once after each killing blow's breath (now: "
-             .. (C.after_cmd ~= "" and ("'" .. C.after_cmd .. "'") or "none") .. "); 'farm after -' clears")
+        if #C.after == 0 then note("farm after add <command>   sent after each killing blow's breath, in the order added")
+        else
+          note(#C.after .. " after-kill command(s), in order:")
+          for i, cmd in ipairs(C.after) do note(string.format("  %d. %s", i, cmd)) end
+        end
+        note("  'farm after add <cmd>' / 'farm after del <n>' / 'farm after -' (clear all); 'farm noloot <name>' skips a mob")
+      elseif sub == "add" and arg ~= "" then
+        after_add(arg)
+      elseif sub == "del" and tonumber(arg) and C.after[tonumber(arg)] then
+        after_del(tonumber(arg))
+      elseif rest == "-" then
+        C.after = {} ; dirty = true ; save() ; draw()
+        note("after-kill commands cleared")
+      elseif sub == "add" or sub == "del" then
+        note("farm after add <command> | farm after del <n> | farm after -")
       else
-        C.after_cmd = rest == "-" and "" or rest
-        dirty = true ; save()
-        note(C.after_cmd ~= "" and ("after each kill: '" .. C.after_cmd .. "'") or "after-kill command cleared")
+        -- the old one-command form still works: it becomes the whole list
+        C.after = { rest } ; dirty = true ; save() ; draw()
+        note("after each kill: '" .. rest .. "'  ('farm after add' appends more)")
       end
+    elseif verb == "prefer" then
+      if rest == "" then
+        local pf = prefer_here()
+        if pf then note("preferred in " .. S.lock .. ", in order: " .. table.concat(pf, ", "))
+        else note(S.lock and ("no preference in " .. S.lock .. " - the roster's own order") or "no area locked - preferences are per area") end
+      elseif rest:sub(1, 1) == "-" then prefer_drop((rest:sub(2):gsub("^%s+", "")))
+      else prefer_add(rest) end
+    elseif verb == "always" then
+      if rest == "" then
+        note(#AL > 0 and ("attacked even with a stranger in the room: " .. table.concat(AL, ", ")) or "always-list empty - 'farm always <name>' adds a mob")
+      elseif rest:sub(1, 1) == "-" then always_drop((rest:sub(2):gsub("^%s+", "")):lower())
+      else always_add(rest:lower()) end
+    elseif verb == "rota" then
+      local sub, arg = rest:match("^(%S*)%s*(.-)$")
+      sub = sub:lower()
+      if rest == "" then
+        if #RT.areas == 0 then note("rotation: no areas - 'farm rota add <area>' adds one; 'farm rota on' turns it on")
+        else
+          note(string.format("rotation %s - %s; after a full circuit with no kill for %ds the next area is farmed",
+            RT.on and "ON" or "off", table.concat(RT.areas, " -> "), RT.idle))
+        end
+      elseif sub == "add" and arg ~= "" then
+        for _, a in ipairs(RT.areas) do if a:lower() == arg:lower() then note("'" .. a .. "' is already in the rotation") return end end
+        RT.areas[#RT.areas + 1] = arg
+        dirty = true ; save() ; draw()
+        note("rotation: " .. table.concat(RT.areas, " -> "))
+      elseif sub == "del" and arg ~= "" then
+        for i, a in ipairs(RT.areas) do
+          if a:lower() == arg:lower() then table.remove(RT.areas, i) ; dirty = true ; save() ; draw() ; note("rotation: " .. (#RT.areas > 0 and table.concat(RT.areas, " -> ") or "(empty)")) return end
+        end
+        note("'" .. arg .. "' is not in the rotation")
+      elseif sub == "on" or sub == "off" then
+        RT.on = sub == "on" ; dirty = true ; save() ; draw()
+        note("rotation " .. (RT.on and "on" or "off"))
+      elseif sub == "idle" and tonumber(arg) then
+        RT.idle = math.max(30, tonumber(arg)) ; dirty = true ; save()
+        note("rotation moves on after " .. RT.idle .. "s without a kill (once the circuit is done)")
+      else
+        note("farm rota add <area> | del <area> | on | off | idle <secs>")
+      end
+    elseif verb == "noloot" then
+      if rest == "" then
+        local nl = noloot_here()
+        if nl then note("no loot in " .. S.lock .. ": " .. table.concat(nl, ", "))
+        else note(S.lock and ("everything killed in " .. S.lock .. " gets the after-kill commands") or "no area locked - no-loot is per area") end
+      elseif rest:sub(1, 1) == "-" then noloot_drop((rest:sub(2):gsub("^%s+", "")))
+      else noloot_add(rest) end
+    elseif verb == "limit" then
+      local n, unit = rest:lower():match("^(%d+)%s*(%a*)$")
+      if rest == "" then
+        note(string.format("farm limit <N>m | <N>h | <N>k | -   (now: %s)", (C.limit_secs > 0 or C.limit_kills > 0)
+          and ((C.limit_secs > 0 and (C.limit_secs // 60 .. " minute(s)") or "") .. (C.limit_secs > 0 and C.limit_kills > 0 and ", " or "")
+               .. (C.limit_kills > 0 and (C.limit_kills .. " kill(s)") or "")) or "none"))
+        note("  the patrol finishes its fight, parks in the rest room if this area has one, stops, and tells your phone")
+      elseif rest == "-" then
+        C.limit_secs, C.limit_kills = 0, 0
+        note("run limit cleared")
+      elseif n and (unit == "m" or unit == "min" or unit == "") then
+        C.limit_secs = tonumber(n) * 60 ; note("run limit: " .. n .. " minute(s) from the start of the run")
+      elseif n and unit == "h" then
+        C.limit_secs = tonumber(n) * 3600 ; note("run limit: " .. n .. " hour(s) from the start of the run")
+      elseif n and (unit == "k" or unit == "kills") then
+        C.limit_kills = tonumber(n) ; note("run limit: " .. n .. " kill(s)")
+      else
+        note("farm limit 45m | 2h | 50k | -")
+      end
+      draw()
     elseif verb == "panic" then
       if rest == "" then
         note("farm panic <command>   one command sent at the panic floor (now: "
@@ -1074,15 +1460,16 @@ scrye.addAlias{
         else
           note(#list .. " room rule(s):")
           for _, e in ipairs(list) do
-            note(string.format("  %-6d %-30s %s", e.num, G[e.num] and G[e.num].name or "?", e.rule == "avoid" and "never enter" or "pass through, no fighting"))
+            note(string.format("  %-6d %-30s %s", e.num, G[e.num] and G[e.num].name or "?",
+              e.rule == "avoid" and "never enter" or e.rule == "rest" and "rest room" or "pass through, no fighting"))
           end
         end
-      elseif what == "avoid" or what == "pass" then
+      elseif what == "avoid" or what == "pass" or what == "rest" then
         room_rule(n, what)
       elseif what == "-" or what == "clear" then
         room_rule(n, nil)
       else
-        note("farm room <n> avoid | pass | -")
+        note("farm room <n> avoid | pass | rest | -")
       end
     elseif verb == "exclude" and rest ~= "" then exclude(rest)
     elseif verb == "include" and rest ~= "" then include(rest)
@@ -1148,11 +1535,20 @@ scrye.addAlias{
       note("farm panic <cmd>              the one command sent at the panic floor ('-' clears)")
       note("farm after <cmd>              sent after each killing blow's breath, e.g. get all from corpse ('-' clears)")
       note("farm rooms      this area's rooms: reachable, visited this run, or cut off")
+      note("farm prefer <name> | -<name>   fought first in this area (in the order added)")
+      note("farm always <name> | -<name>   attacked even with a stranger in the room")
+      note("farm rota add|del <area> | on|off | idle <s>   farm areas in turn once one is farmed out")
+      note("farm after add|del|-  farm noloot <name>  farm limit 45m|50k  farm sp <floor>  farm log")
       note("farm wipe yes   forget the graph")
     else
       note("don't know 'farm " .. args .. "' - 'farm help' lists what there is")
     end
-  end,
+end
+
+scrye.addAlias{
+  pattern = "^farm(?:\\s+(.*))?$",
+  regex = true,
+  run = function(args) farm_cmd(args) end,
 }
 
 -- ---------- what stops us ----------
@@ -1163,14 +1559,30 @@ scrye.onCommand(function(cmd)
   if S.on then stop_patrol("you moved yourself") end
 end)
 
-scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true, run = function()
+scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true, run = function(victim)
   if not (S.on and B.hunting) then return end
   B.kills = B.kills + 1
+  last_kill_at = now
+  do
+    -- the log: by the roster name we swung at (the blow's own wording can differ), the
+    -- fight timed from the 'kill' that opened it
+    local name = (B.target and B.target.name) or tostring(victim or "?")
+    local e = KL[name] or { kills = 0, secs = 0, last = 0 }
+    e.kills = e.kills + 1
+    e.secs = e.secs + math.max(0, now - (B.hunt_at or now))
+    e.last = now
+    KL[name] = e
+    dirty = true
+  end
   draw()
+  local victim_name = (B.target and B.target.name) or tostring(victim or "")
   scrye.after(C.breath, function()
-    -- your own looting triggers went first, during the breath; the one command you
-    -- asked for goes now, before the roster is consulted for the next mob
-    if C.after_cmd ~= "" and S.on then scrye.send(C.after_cmd) end
+    -- your own looting triggers went first, during the breath; the commands you asked
+    -- for go now, in order, before the roster is consulted for the next mob - unless
+    -- this mob is on the area's no-loot list ('farm noloot <name>')
+    if S.on and not no_loot(victim_name) then
+      for _, cmd in ipairs(C.after) do scrye.send(cmd) end
+    end
     resume_hunt()
   end)
 end }
@@ -1241,14 +1653,60 @@ scrye.every(1, function()
   -- patrol (nothing here resumes on its own), say so where the phone hears it, and send
   -- the one command the player chose for this moment - a flee or a wimpy moves us, which
   -- the arrival-nothing-ordered rule already treats as the end of the patrol.
-  if S.on and C.hp_panic > 0 then
+  if S.on and C.hp_panic > 0 and not B.resting then
     local hp = get_hp()
     if hp and hp < C.hp_panic then
       local why = string.format("HP %d%% under the panic floor of %d%%", hp, C.hp_panic)
-      stop_patrol(why)
-      B.hunting = false
+      B.hunting = false ; B.target = nil
       scrye.notify("farm: " .. why)
       if C.panic_cmd ~= "" then scrye.send(C.panic_cmd) end
+      local rr = nearest_rest()
+      if rr then
+        -- a rest room to run to: the fight is abandoned and the patrol goes there (20 Sep)
+        if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
+        begin_rest(why)
+      else
+        stop_patrol(why)
+      end
+    end
+  end
+  -- Area rotation: the circuit done and nothing killed for RT.idle seconds, the area is
+  -- farmed out for now - ask the mapper for a walk to the next one in the list; the
+  -- patrol starts there on arrival. Never mid-fight, never while resting or parking.
+  if S.on and RT.on and #RT.areas > 0 and S.swept and not S.paused and not B.resting and not B.parking
+     and not (S.fighting or B.hunting or in_combat()) and (now - last_kill_at) >= RT.idle then
+    local cur = 0
+    for i, a in ipairs(RT.areas) do if a:lower() == tostring(S.lock):lower() then cur = i end end
+    local nxt = RT.areas[cur % #RT.areas + 1]
+    if nxt and nxt:lower() ~= tostring(S.lock):lower() then
+      note(string.format("rotation: no kill in %s for %ds since the circuit - moving on to %s", S.lock, RT.idle, nxt))
+      travel(nxt)
+    end
+  end
+  -- The run limit: reached, the patrol finishes what it is fighting, then parks in the
+  -- rest room when the area has one (stopping on arrival) or stops on the spot; either
+  -- way the phone hears about it. Checked between fights only - a limit is not a reason
+  -- to walk away from a mob mid-swing.
+  if S.on and not B.parking and (C.limit_secs > 0 or C.limit_kills > 0)
+     and not (S.fighting or B.hunting or in_combat()) then
+    local secs = now - (S.started or now)
+    local why = (C.limit_secs > 0 and secs >= C.limit_secs) and string.format("run limit: %d minute(s) up", C.limit_secs // 60)
+             or (C.limit_kills > 0 and B.kills >= C.limit_kills) and string.format("run limit: %d kill(s) reached", C.limit_kills)
+             or nil
+    if why then
+      C.limit_secs, C.limit_kills = 0, 0        -- one run, one limit
+      local rr = nearest_rest()
+      if rr and rr ~= here then
+        B.parking = true
+        B.hunting = false ; B.target = nil
+        note(why .. " - parking at the rest room, then stopping")
+        if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
+        B.resting = true ; B.retreat = rr
+        retreat_step()
+      else
+        stop_patrol(why .. (rr and " - parked at the rest room" or ""))
+        scrye.notify("farm: " .. why .. " - patrol stopped" .. (rr and " at the rest room" or ""))
+      end
     end
   end
   do
@@ -1346,9 +1804,54 @@ draw = function()
     "Rooms\t" .. tostring(S.visited),
     "Kills\t" .. tostring(B.kills),
     "Kills/h\t" .. kph,
-    "Next room\t" .. (S.on and (S.led and "mobs in sight" or "stalest") or "-"),
+    "Next room\t" .. (S.on and S.route and S.route[1] and
+      string.format("%s (%s)", (G[S.route[#S.route]] and G[S.route[#S.route]].name or "?"):sub(1, 22),
+        B.retreat and "rest room" or S.led and "mobs in sight" or "stalest") or "-"),
     "Waiting\t" .. (blocker() or "-"),
+    "Rotation\t" .. ((RT.on and #RT.areas > 0) and (table.concat(RT.areas, " > ") .. (S.on and S.swept
+        and string.format(" (%ds without a kill moves on)", math.max(0, RT.idle - (now - last_kill_at))) or "")) or "-"),
+    "Limit\t" .. ((C.limit_secs > 0 or C.limit_kills > 0) and
+      ((C.limit_secs > 0 and (math.max(0, C.limit_secs - session_secs()) // 60 .. "m left") or "")
+       .. (C.limit_secs > 0 and C.limit_kills > 0 and ", " or "")
+       .. (C.limit_kills > 0 and (math.max(0, C.limit_kills - B.kills) .. " kill(s) left") or "")) or "-"),
   }, "\n"))
+  do
+    local rows = {}
+    for i, cmd in ipairs(C.after) do rows[#rows + 1] = string.format("%d. %s", i, cmd) end
+    scrye.setState(P .. "afterlist", #rows > 0 and table.concat(rows, "\n") or "(none - type a command below: get all from corpse)")
+    local nl = noloot_here()
+    scrye.setState(P .. "nolootlist", nl and table.concat(nl, "\n")
+      or (S.lock and "(every kill in " .. S.lock .. " gets them)" or "(per area - starts with the patrol)"))
+    local pf = prefer_here()
+    local prows = {}
+    for i, frag in ipairs(pf or {}) do prows[#prows + 1] = i .. ". " .. frag end
+    scrye.setState(P .. "preferlist", #prows > 0 and table.concat(prows, "\n")
+      or (S.lock and "(the roster's own order in " .. S.lock .. ")" or "(per area - starts with the patrol)"))
+    scrye.setState(P .. "alwayslist", #AL > 0 and table.concat(AL, "\n") or "(none - a stranger in the room parks the fists for every mob)")
+    scrye.setState(P .. "rotalist", #RT.areas > 0 and table.concat(RT.areas, "\n") or "(none - add an area below)")
+    scrye.setState(P .. "rotahint", #RT.areas > 0 and (RT.on and "rotation ON - click an area to drop it" or "rotation off ('farm rota on') - click an area to drop it")
+      or "areas farmed in turn - 'farm rota on' turns it on")
+  end
+  -- the kill log, most killed first: row index -> kl_rows[index]
+  kl_rows = {}
+  for name in pairs(KL) do kl_rows[#kl_rows + 1] = name end
+  table.sort(kl_rows, function(a, b)
+    if KL[a].kills ~= KL[b].kills then return KL[a].kills > KL[b].kills end
+    return a < b
+  end)
+  do
+    local rows = {}
+    for _, name in ipairs(kl_rows) do
+      local e = KL[name]
+      local ago = e.last > 0 and (now - e.last) or nil
+      rows[#rows + 1] = string.format("%s\t%d\t%ds\t%s", name:sub(1, 26), e.kills,
+        e.kills > 0 and e.secs // e.kills or 0,
+        ago and (ago < 60 and (ago .. "s") or (ago // 60 .. "m")) or "-")
+    end
+    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n") or "(no kills logged yet)\t\t\t")
+  end
+  -- the leg being walked, for the map to light: "num,num,..." (empty = nothing to light)
+  scrye.setState(P .. "route", (S.on and S.route) and table.concat(S.route, ",") or "")
   local ex = excludes_here()
   scrye.setState(P .. "excludes", ex and ("excluded here: " .. table.concat(ex, ", ")) or "")
   -- The two lists as tables, one name per row, so they can be read - and clicked away.
@@ -1364,7 +1867,7 @@ draw = function()
   local rr = {}
   for _, num in ipairs(rule_rows) do
     rr[#rr + 1] = string.format("%d %s\t%s", num, (G[num] and G[num].name or "?"):sub(1, 24),
-                                RR[num] == "avoid" and "never enter" or "pass, no fights")
+                                RR[num] == "avoid" and "never enter" or RR[num] == "rest" and "rest room" or "pass, no fights")
   end
   scrye.setState(P .. "rules", #rr > 0 and table.concat(rr, "\n") or "(none - right-click a room on the map)\t")
   -- and for the map, which colours these rooms: "num:rule,num:rule"
@@ -1384,119 +1887,188 @@ end
 build_panel = function(m)
   scrye.addPanel{
   title = "3S Farmer",
-  widgets = {
-    { type = "label", bind = P .. "status", color = MOOD_COLOR[m] or "dim" },
-    { type = "buttonrow", buttons = {
-      { text = "Start", action = function() start() end },
-      { text = S.paused and "Resume" or "Pause", action = function()
-          if not S.on then note("not patrolling") ; return end
-          S.paused = not S.paused
-          if S.paused then
-            if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
-            note("patrol PAUSED - Pause again to continue")
-          else
-            note("patrol resuming")
-            schedule_step()
+  tabs = {
+    { title = "Patrol", widgets = {
+      { type = "label", bind = P .. "status", color = MOOD_COLOR[m] or "dim" },
+      { type = "buttonrow", buttons = {
+        { text = "Start", action = function() start() end },
+        { text = S.paused and "Resume" or "Pause", action = function()
+            if not S.on then note("not patrolling") ; return end
+            S.paused = not S.paused
+            if S.paused then
+              if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
+              note("patrol PAUSED - Pause again to continue")
+            else
+              note("patrol resuming")
+              schedule_step()
+            end
+            draw()
+          end },
+        { text = "Stop", action = function()
+            -- the same full stop the typed verb does: a trip in flight goes down too
+            if T.going then
+              T.going = nil ; travel_answered()
+              scrye.emit("map.stop", "{}")
+              note("travel cancelled")
+            end
+            if S.on then stop_patrol(nil) ; note("patrol stopped") end
+            draw()
+          end },
+      } },
+      { type = "gauge", text = "HP", value = P .. "hp", max = 100, dim = true },
+      -- the enemy's health straight from Char.Combat (the vitals plugin binds the same path)
+      { type = "gauge", text = "Enemy", value = "char.combat.attacker_hp", max = 100 },
+      { type = "value", text = "Target: ", bind = P .. "target" },
+      { type = "table", bind = P .. "roster", separator = "\t", columns = { "Mob", "N", "Verdict" },
+        align = { "left", "right", "left" },
+        -- Excluding from the roster itself: a left click on a mob row toggles it in THIS
+        -- area's exclude list (the exact name, so the toggle finds its own entry again);
+        -- right-click offers the never-list too, for the guild follower that turns up in
+        -- every area. Every entry is the typed command, so 'farm excludes' / 'farm never'
+        -- and the panel can never disagree about what is excluded.
+        onRowClick = function(_, index)
+          local name = roster_names[index]
+          if not name then return end
+          local low = name:lower()
+          for _, pn in ipairs(B.players or {}) do
+            if pn == name then           -- a player row: toggle them in the party list
+              for _, m in ipairs(PT) do if m == low then party_drop(low) return end end
+              party_add(low) return
+            end
           end
-          draw()
+          for _, e in ipairs(S.lock and X[S.lock] or {}) do
+            if e == low then include(low) return end
+          end
+          exclude(low)
+        end,
+        onRowMenu = function(_, index)
+          local name = roster_names[index]
+          if not name then return end
+          local low = name:lower()
+          for _, pn in ipairs(B.players or {}) do
+            if pn == name then
+              for _, m in ipairs(PT) do
+                if m == low then return { { "Not in my party", "farm party -" .. low } } end
+              end
+              return { { "In my party", "farm party " .. low } }
+            end
+          end
+          local here_x, never = false, false
+          for _, e in ipairs(S.lock and X[S.lock] or {}) do if e == low then here_x = true end end
+          for _, e in ipairs(NV) do if e == low then never = true end end
+          return {
+            here_x and { "Attack again here",      "farm include " .. low }
+                   or { "Exclude here",           "farm exclude " .. low },
+            never  and { "Allow everywhere again", "farm never -" .. low }
+                   or { "Never attack anywhere",  "farm never " .. low },
+          }
         end },
-      { text = "Stop", action = function()
-          -- the same full stop the typed verb does: a trip in flight goes down too
-          if T.going then
-            T.going = nil ; travel_answered()
-            scrye.emit("map.stop", "{}")
-            note("travel cancelled")
-          end
-          if S.on then stop_patrol(nil) ; note("patrol stopped") end
-          draw()
+      { type = "list", bind = P .. "counters" },
+      -- The kill log: every mob killed this session (and the last ones - it persists), how
+      -- many, how long a fight takes on average, and how long ago the last one fell.
+      { type = "table", bind = P .. "killlog", separator = "\t", columns = { "Kill log", "Kills", "Avg", "Last" },
+        align = "lrrr" },
+    } },
+    { title = "Mobs", widgets = {
+      -- The lists themselves, visible (Joakim, 17 Sep 2026: "so it's easier to see"). A row
+      -- click removes that name - the typed command, so the list and the panel agree - and
+      -- the box under the never-list adds one by hand for a follower that is not in the
+      -- room right now. Placeholder rows (no entries) carry no name and do nothing.
+      { type = "table", bind = P .. "neverlist", columns = { "Never attacked anywhere (click to allow)" },
+        onRowClick = function(_, index)
+          local name = NV[index]
+          if name then never_drop(name) end
+        end },
+      { type = "input", text = "never <name>", bind = P .. "neverbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if text ~= "" then never_add(text) ; scrye.setState(P .. "neverbox", "") end
+        end },
+      { type = "table", bind = P .. "partylist", columns = { "Party - players who are not strangers (click to drop)" },
+        onRowClick = function(_, index)
+          local name = PT[index]
+          if name then party_drop(name) end
+        end },
+      { type = "input", text = "party <name>", bind = P .. "partybox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if text ~= "" then party_add(text) ; scrye.setState(P .. "partybox", "") end
+        end },
+      { type = "table", bind = P .. "exlist", columns = { "Excluded in this area (click to allow)" },
+        onRowClick = function(_, index)
+          local ex = excludes_here()
+          local name = ex and ex[index]
+          if name then include(name) end
+        end },
+      -- Fight order and the always-list (round three): the mobs fought first in this area,
+      -- and the ones fought even with a stranger in the room.
+      { type = "table", bind = P .. "preferlist", columns = { "Fought first in this area, in order (click to drop)" },
+        onRowClick = function(_, index)
+          local pf = prefer_here()
+          local name = pf and pf[index]
+          if name then prefer_drop(name) end
+        end },
+      { type = "input", text = "prefer <name>", bind = P .. "preferbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if text ~= "" then scrye.setState(P .. "preferbox", "") ; prefer_add(text) end
+        end },
+      { type = "table", bind = P .. "alwayslist", columns = { "Attacked even with a stranger here (click to drop)" },
+        onRowClick = function(_, index)
+          local name = AL[index]
+          if name then always_drop(name) end
+        end },
+      { type = "input", text = "always <name>", bind = P .. "alwaysbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if text ~= "" then scrye.setState(P .. "alwaysbox", "") ; always_add(text) end
         end },
     } },
-    { type = "gauge", text = "HP", value = P .. "hp", max = 100, dim = true },
-    -- the enemy's health straight from Char.Combat (the vitals plugin binds the same path)
-    { type = "gauge", text = "Enemy", value = "char.combat.attacker_hp", max = 100 },
-    { type = "value", text = "Target: ", bind = P .. "target" },
-    { type = "table", bind = P .. "roster", separator = "\t", columns = { "Mob", "N", "Verdict" },
-      align = { "left", "right", "left" },
-      -- Excluding from the roster itself: a left click on a mob row toggles it in THIS
-      -- area's exclude list (the exact name, so the toggle finds its own entry again);
-      -- right-click offers the never-list too, for the guild follower that turns up in
-      -- every area. Every entry is the typed command, so 'farm excludes' / 'farm never'
-      -- and the panel can never disagree about what is excluded.
-      onRowClick = function(_, index)
-        local name = roster_names[index]
-        if not name then return end
-        local low = name:lower()
-        for _, pn in ipairs(B.players or {}) do
-          if pn == name then           -- a player row: toggle them in the party list
-            for _, m in ipairs(PT) do if m == low then party_drop(low) return end end
-            party_add(low) return
-          end
-        end
-        for _, e in ipairs(S.lock and X[S.lock] or {}) do
-          if e == low then include(low) return end
-        end
-        exclude(low)
-      end,
-      onRowMenu = function(_, index)
-        local name = roster_names[index]
-        if not name then return end
-        local low = name:lower()
-        for _, pn in ipairs(B.players or {}) do
-          if pn == name then
-            for _, m in ipairs(PT) do
-              if m == low then return { { "Not in my party", "farm party -" .. low } } end
-            end
-            return { { "In my party", "farm party " .. low } }
-          end
-        end
-        local here_x, never = false, false
-        for _, e in ipairs(S.lock and X[S.lock] or {}) do if e == low then here_x = true end end
-        for _, e in ipairs(NV) do if e == low then never = true end end
-        return {
-          here_x and { "Attack again here",      "farm include " .. low }
-                 or { "Exclude here",           "farm exclude " .. low },
-          never  and { "Allow everywhere again", "farm never -" .. low }
-                 or { "Never attack anywhere",  "farm never " .. low },
-        }
-      end },
-    { type = "list", bind = P .. "counters" },
-    -- The lists themselves, visible (Joakim, 17 Sep 2026: "so it's easier to see"). A row
-    -- click removes that name - the typed command, so the list and the panel agree - and
-    -- the box under the never-list adds one by hand for a follower that is not in the
-    -- room right now. Placeholder rows (no entries) carry no name and do nothing.
-    { type = "table", bind = P .. "neverlist", columns = { "Never attacked anywhere (click to allow)" },
-      onRowClick = function(_, index)
-        local name = NV[index]
-        if name then never_drop(name) end
-      end },
-    { type = "input", text = "never <name>", bind = P .. "neverbox",
-      onSubmit = function(text)
-        text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
-        if text ~= "" then never_add(text) ; scrye.setState(P .. "neverbox", "") end
-      end },
-    { type = "table", bind = P .. "partylist", columns = { "Party - players who are not strangers (click to drop)" },
-      onRowClick = function(_, index)
-        local name = PT[index]
-        if name then party_drop(name) end
-      end },
-    { type = "input", text = "party <name>", bind = P .. "partybox",
-      onSubmit = function(text)
-        text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
-        if text ~= "" then party_add(text) ; scrye.setState(P .. "partybox", "") end
-      end },
-    { type = "table", bind = P .. "exlist", columns = { "Excluded in this area (click to allow)" },
-      onRowClick = function(_, index)
-        local ex = excludes_here()
-        local name = ex and ex[index]
-        if name then include(name) end
-      end },
-    -- Room rules, set from the map's right-click menu ('Farmer: never enter' / 'Farmer:
-    -- pass through only' - typed 'farm room <n> ...' commands); a row click clears one.
-    { type = "table", bind = P .. "rules", separator = "\t", columns = { "Room rule (click to clear)", "Rule" },
-      onRowClick = function(_, index)
-        local num = rule_rows[index]
-        if num then room_rule(num, nil) end
-      end },
+    { title = "Settings", widgets = {
+      -- After each kill: the commands, in order (a row click removes one; the box adds one),
+      -- and the mobs in this area whose corpses get none of them (click to allow again).
+      { type = "table", bind = P .. "afterlist", columns = { "After each kill, in order (click to remove)" },
+        onRowClick = function(_, index) after_del(index) end },
+      { type = "input", text = "after add <command>", bind = P .. "afterbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+          if text ~= "" then scrye.setState(P .. "afterbox", "") ; after_add(text) end
+        end },
+      { type = "table", bind = P .. "nolootlist", columns = { "No loot in this area (click to allow)" },
+        onRowClick = function(_, index)
+          local nl = noloot_here()
+          local name = nl and nl[index]
+          if name then noloot_drop(name) end
+        end },
+      -- Area rotation
+      { type = "label", bind = P .. "rotahint", color = "dim" },
+      { type = "table", bind = P .. "rotalist", columns = { "Rotation - areas farmed in turn" },
+        onRowClick = function(_, index)
+          local a = RT.areas[index]
+          if a then farm_cmd("rota del " .. a) end
+        end },
+      { type = "input", text = "rota add <area>", bind = P .. "rotabox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+          if text ~= "" then scrye.setState(P .. "rotabox", "") ; farm_cmd("rota add " .. text) end
+        end },
+      -- Settings, as boxes: each is the typed command with its arguments, so the panel and
+      -- the commands cannot disagree; the box shows the current value once set.
+      { type = "label", text = "settings (Enter applies; same as the typed commands)", color = "dim" },
+      { type = "input", text = "pace <s>", bind = P .. "set_pace", onSubmit = function(t) farm_cmd("pace " .. tostring(t or "")) end },
+      { type = "input", text = "hp <start> <panic> <resume>", bind = P .. "set_hp", onSubmit = function(t) farm_cmd("hp " .. tostring(t or "")) end },
+      { type = "input", text = "sp <floor> <resume>", bind = P .. "set_sp", onSubmit = function(t) farm_cmd("sp " .. tostring(t or "")) end },
+      { type = "input", text = "rest <seid> <secs>", bind = P .. "set_rest", onSubmit = function(t) farm_cmd("rest " .. tostring(t or "")) end },
+      { type = "input", text = "limit 45m | 50k | -", bind = P .. "set_limit", onSubmit = function(t) farm_cmd("limit " .. tostring(t or "")) end },
+      { type = "input", text = "panic <cmd> | -", bind = P .. "set_panic", onSubmit = function(t) farm_cmd("panic " .. tostring(t or "")) end },
+      -- Room rules, set from the map's right-click menu ('Farmer: never enter' / 'Farmer:
+      -- pass through only' - typed 'farm room <n> ...' commands); a row click clears one.
+      { type = "table", bind = P .. "rules", separator = "\t", columns = { "Room rule (click to clear)", "Rule" },
+        onRowClick = function(_, index)
+          local num = rule_rows[index]
+          if num then room_rule(num, nil) end
+        end },
+    } },
   },
   }
 end
