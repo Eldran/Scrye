@@ -109,6 +109,8 @@ end
 
 -- the merged snapshots (empty until the first complete burst of each package)
 local FLEET, CITY, VOY, KING = {}, {}, {}, {}
+local raidlog_towns = {}   -- Raids tab "by town" row index -> town, for clicks
+local raidlog_rows = {}    -- Raids tab log row index -> town
 
 -- ---------- the town lists (17 Sep 2026: Guild.Fleet is gone) ----------
 -- The server stopped sending Guild.Fleet in September 2026 (9,700 messages of the
@@ -399,6 +401,64 @@ local function publish()
     end
     scrye.setState(SP .. "heat", table.concat(hl, "\n"))
 
+    -- The Raids tab (20 Sep): Guild.Fleet's raidlog - one record per raid (ship, target,
+    -- daler, thralls, ships lost), the goods it brought joined by idx from raidlog_goods.
+    -- Server order kept; a total line; the same log folded by town and by ship, so "which
+    -- town pays" is a glance. Town rows and log rows are the target picker too.
+    do
+      local log = type(FLEET.raidlog) == "table" and FLEET.raidlog or {}
+      local goods = {}
+      for _, g in ipairs(type(FLEET.raidlog_goods) == "table" and FLEET.raidlog_goods or {}) do
+        local i = tonumber(g.idx)
+        if i then
+          goods[i] = goods[i] or {}
+          goods[i][#goods[i] + 1] = tostring(g.amount or "?") .. " " .. tostring(g.good or "?"):gsub("_", " ")
+        end
+      end
+      local rows, total, thralls, lost = {}, 0, 0, 0
+      local by_town, by_ship, towns, ships = {}, {}, {}, {}
+      raidlog_rows = {}
+      for _, r in ipairs(log) do
+        local town, ship = tostring(r.target or "?"), tostring(r.ship or "?")
+        local d = tonumber(r.daler) or 0
+        total = total + d
+        thralls = thralls + (tonumber(r.thralls) or 0)
+        lost = lost + (tonumber(r.lost) or 0)
+        raidlog_rows[#raidlog_rows + 1] = town
+        rows[#rows + 1] = string.format("%s\t%s\t%d\t%s", esc(ship):sub(1, 10), esc(town):sub(1, 14), d,
+          esc(table.concat(goods[tonumber(r.idx) or -1] or {}, ", ")))
+        if not by_town[town] then by_town[town] = { n = 0, d = 0 } ; towns[#towns + 1] = town end
+        by_town[town].n = by_town[town].n + 1 ; by_town[town].d = by_town[town].d + d
+        if not by_ship[ship] then by_ship[ship] = { n = 0, d = 0 } ; ships[#ships + 1] = ship end
+        by_ship[ship].n = by_ship[ship].n + 1 ; by_ship[ship].d = by_ship[ship].d + d
+      end
+      scrye.setState(SP .. "raidlog", #rows > 0 and table.concat(rows, "\n") or "(no raids logged - Guild.Fleet's raidlog is empty or not here yet)\t\t\t")
+      scrye.setState(SP .. "raidsum", #log > 0 and string.format("%d raid(s): %d daler (%d avg), %d thrall(s), %d ship(s) lost",
+        #log, total, total // #log, thralls, lost) or "no raids logged")
+      table.sort(towns, function(a, b)
+        local ta, tb = by_town[a], by_town[b]
+        if ta.d ~= tb.d then return ta.d > tb.d end
+        return a < b
+      end)
+      table.sort(ships, function(a, b)
+        local ta, tb = by_ship[a], by_ship[b]
+        if ta.d ~= tb.d then return ta.d > tb.d end
+        return a < b
+      end)
+      raidlog_towns = towns
+      local trows, srows = {}, {}
+      for _, t in ipairs(towns) do
+        local e = by_town[t]
+        trows[#trows + 1] = string.format("%s\t%d\t%d\t%d", esc(t):sub(1, 14), e.n, e.d // e.n, e.d)
+      end
+      for _, sh in ipairs(ships) do
+        local e = by_ship[sh]
+        srows[#srows + 1] = string.format("%s\t%d\t%d\t%d", esc(sh):sub(1, 12), e.n, e.d // e.n, e.d)
+      end
+      scrye.setState(SP .. "raidtowns", #trows > 0 and table.concat(trows, "\n") or "\t\t\t")
+      scrye.setState(SP .. "raidships", #srows > 0 and table.concat(srows, "\n") or "\t\t\t")
+    end
+
     -- seed the panel's input fields with the current settings
     scrye.setState(SP .. "v_target",  ar.target)
     scrye.setState(SP .. "v_ships",   tostring(ar.ships))
@@ -590,6 +650,26 @@ scrye.addPanel{
         } },
         { type = "label", text = "Click a town to target it (calm = home auto pool):", color = "dim" },
         { type = "text", bind = SP .. "heat" },
+    } },
+    { title = "Raids", widgets = {
+        { type = "label", bind = SP .. "raidsum", color = "dim" },
+        -- the log, in the server's order; a row click targets that town
+        { type = "table", bind = SP .. "raidlog", separator = "\t", columns = { "Ship", "Town", "Daler", "Brought" },
+          align = "llrl",
+          onRowClick = function(_, index)
+            local town = raidlog_rows[index]
+            if town then ar_config("target " .. town) end
+          end },
+        { type = "label", text = "by town - best paying first (click to target)", color = "dim" },
+        { type = "table", bind = SP .. "raidtowns", separator = "\t", columns = { "Town", "Raids", "Avg", "Total" },
+          align = "lrrr",
+          onRowClick = function(_, index)
+            local town = raidlog_towns[index]
+            if town then ar_config("target " .. town) end
+          end },
+        { type = "label", text = "by ship", color = "dim" },
+        { type = "table", bind = SP .. "raidships", separator = "\t", columns = { "Ship", "Raids", "Avg", "Total" },
+          align = "lrrr" },
     } },
     { title = "Settings", widgets = {
         { type = "label", text = "Type a value, press Enter (or Set):", color = "dim" },
