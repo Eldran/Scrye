@@ -23,8 +23,10 @@
 --     good/amount/grade with the REAL freshness pct, plus wstock_cap. Its adapter
 --     owns WSTOCK from its first burst; the `vtrade stock` text scan stays only as
 --     the fallback for a server without the patch (ws_feed_live gates it off).
---   * production-per-tick, errand, staff, monuments, weather word,
---     kap/aud/vis/soemd: still absent - their lines say "?" or "none".
+--   * production-per-tick: CLOSED 19 Sep 2026 - `production` on Guild.City (the
+--     adapter takes string, object or list until a capture pins the shape).
+--   * errand, staff, monuments, weather word, kap/aud/vis/soemd: still absent -
+--     their lines say "?" or "none".
 --   * Guild.TradeGoods: WIRED (29 Aug) - per-village market prices straight off
 --     the feed; the 30 good codes were solved mechanically from two in-game
 --     pastes cross-validated against the 23:09 capture (zero mismatches; see the
@@ -1129,8 +1131,9 @@ local function build_production()
   add("-- Production / tick --")
   local prod = {}
   for pair in gv("PRODUCTION"):gmatch("[^,]+") do
-    local r, a = pair:match("^(%a+):(%-?%d+)$")
-    if r then prod[#prod + 1] = { r = r, a = tonumber(a) } end
+    -- "res:amt"; a key-form good (salted_fish) reads as words, the amount may be signed
+    local r, a = pair:match("^([^:]+):(%-?%d+%.?%d*)$")
+    if r and tonumber(a) then prod[#prod + 1] = { r = (r:gsub("_", " ")), a = tonumber(a) } end
   end
   if #prod == 0 then add("no data")
   else
@@ -1141,12 +1144,12 @@ local function build_production()
       if not e then return "" end
       local name = (e.r:gsub("^%l", string.upper))
       local amt = (e.a >= 0 and "+" or "") .. e.a
-      local raw = string.format("%-9s %s", name, amt)
+      local raw = string.format("%-12s %s", name, amt)
       local padding = width and string.rep(" ", math.max(0, width - #raw)) or ""
-      return padesc(name, 9) .. " " .. col(e.a >= 0 and "success" or "error", amt) .. padding
+      return padesc(name, 12) .. " " .. col(e.a >= 0 and "success" or "error", amt) .. padding
     end
     for i = 1, rows do
-      add(pcell(prod[i], 24) .. " " .. pcell(prod[i + rows]))
+      add(pcell(prod[i], 28) .. " " .. pcell(prod[i + rows]))
     end
   end
   add("")
@@ -5032,6 +5035,38 @@ end
 
 gasm("Guild.City", function(t)
   vset("nexttick", t.nexttick)
+  -- production per tick (server-side 19 Sep 2026, the last MIP-era gap): the
+  -- Production tab reads "res:amt,res:amt" (a negative amount is a drain). The
+  -- shape it arrives in is taken as it comes - a string in that form is passed
+  -- through, an object is its pairs, a list is one pair per record - and a
+  -- snapshot without the key is left alone until the first burst carries it.
+  if t.production ~= nil then
+    local pr = t.production
+    if type(pr) == "table" then
+      local out = {}
+      if pr[1] ~= nil then
+        for _, e in ipairs(pr) do
+          if type(e) == "table" then
+            local k = e.good or e.id or e.name or e.res
+            local n = e.amount or e.delta or e.qty or e.per_tick or e.net
+            if k ~= nil and n ~= nil then out[#out + 1] = S(k):gsub("[,:]", "") .. ":" .. S(n) end
+          end
+        end
+      else
+        local ks = {}
+        for k in pairs(pr) do ks[#ks + 1] = tostring(k) end
+        table.sort(ks)
+        for _, k in ipairs(ks) do
+          local n = pr[k]
+          if type(n) == "table" then n = n.amount or n.delta or n.net or n.qty end
+          if n ~= nil then out[#out + 1] = k:gsub("[,:]", "") .. ":" .. S(n) end
+        end
+      end
+      vset("production", table.concat(out, ","))
+    else
+      vset("production", pr)
+    end
+  end
   local dc = T(t, "dcycle")
   vset("dcycle", dc.name and (S(dc.name) .. "|" .. S(dc.secs)) or "")
   local bl = T(t, "blot")
