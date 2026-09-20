@@ -1494,7 +1494,7 @@ you don't grind one town's heat up. `keep` and `reserve` protect ships at the do
 | `araid reserve <ship>` | Never send this one — your voyage ship. `araid reserve none` clears it. |
 | `araid hold <secs>` | How long auto‑targeting sticks with a town before rotating. Default **60**. |
 | `araid convoy on\|off` | Send one convoy command and let the game crew it, instead of ship by ship. Default **off**. |
-| `araid targets` | The valid targets from the feed, as Home and Foreign. |
+| `araid targets` | The valid targets, as Home and Foreign - and it sends `vlongship targets`, whose listing the plugin reads to refresh both lists. The home towns come off the feed (Guild.Kingdom names them by lineage, Guild.City carries their heat); the foreign towns have no GMCP source since September 2026, so the listing is what keeps that list current (a built-in default covers the first run). |
 | `araid heat` | Print the per‑town heat table — the names stay clickable there. |
 | `araid notify` | Show both notification settings. |
 | `araid notify fleet on\|off` | Buzz when ships come home. Default **off**. |

@@ -5,6 +5,8 @@
 -- auto-target with the calm-pool tie-break, the 30 s pass throttle, the clickable
 -- heat table — is UNCHANGED. Only the feed layer moved:
 --   * vik.ships      -> Guild.Fleet ships[]            (name/state per longship)
+--                       (Guild.Voyage longship[] since 17 Sep 2026 - see the town
+--                        lists block below for what else moved)
 --   * vik.buildings  -> Guild.City buildings[]         (dock tier -> capacity, tier*2)
 --   * vik.heat       -> Guild.City heat[]              (one slot per home town)
 --   * vik.rtargets   -> Guild.Fleet rtargets_lineage[] (home towns, "Town:good:good")
@@ -106,7 +108,50 @@ local function gasm(pkg, on_snap)
 end
 
 -- the merged snapshots (empty until the first complete burst of each package)
-local FLEET, CITY = {}, {}
+local FLEET, CITY, VOY, KING = {}, {}, {}, {}
+
+-- ---------- the town lists (17 Sep 2026: Guild.Fleet is gone) ----------
+-- The server stopped sending Guild.Fleet in September 2026 (9,700 messages of the
+-- 17 Sep capture, not one). Its ships ride Guild.Voyage as `longship` now, with the
+-- same fields; its two town lists went with nothing to replace them, so:
+--   * HOME towns come from Guild.Kingdom's grudges (town + lineage number - the
+--     same order heat[] is indexed in, town for town against the old list), laid
+--     over a baked-in default of the 13 lineage cities in lineage order;
+--   * FOREIGN towns have no GMCP source at all. A baked-in default (the 24 of
+--     `vlongship targets` on 19 Sep 2026) and a text scan of that same listing
+--     ('araid targets' sends it; the frame lines are read as they come) keep the
+--     list current, persisted across restarts.
+local HOME_DEFAULT = { "Lodbrok's Hold", "Eiriksby", "Imaird", "Holmgard", "Hafrfjord",
+  "Uppsala", "Borgarfjord", "Vestergotland", "Sverkersby", "Ericsgard", "Birka", "Lejre",
+  "Nidaros" }
+local FOREIGN_DEFAULT = { "Paris", "Lindisfarne", "Hamwic", "Dorestad", "Rouen", "Nantes",
+  "Quentovic", "Repton", "Seville", "Hedeby", "Jorvik", "Dublin", "Noirmoutier", "Poitiers",
+  "Sandwich", "Groningen", "Antwerp", "Kaupang", "Ribe", "Waterford", "Winchester",
+  "Trondheim", "Bordeaux", "Utrecht" }
+local home_lin = {}       -- lineage number -> town, learned from grudges (overlay)
+local scanned = { home = nil, foreign = nil }   -- from the last `vlongship targets` scan
+do
+  local function load(k)
+    local raw = scrye.store.get("towns_" .. k)
+    if not raw or raw == "" then return nil end
+    local out = {}
+    for t in raw:gmatch("[^\n]+") do out[#out + 1] = t end
+    return out[1] and out or nil
+  end
+  scanned.home, scanned.foreign = load("home"), load("foreign")
+end
+
+-- the home towns in lineage order (1 = Lodbrok's Hold): grudges overlay the scan
+-- overlays the default, so a renamed or reordered server heals itself
+local function home_towns()
+  local base = scanned.home or HOME_DEFAULT
+  local out = {}
+  for i, t in ipairs(base) do out[i] = home_lin[i] or t end
+  for lin, t in pairs(home_lin) do if lin > #out then out[lin] = t end end
+  local list = {}
+  for i = 1, #out do if out[i] then list[#list + 1] = out[i] end end
+  return list
+end
 
 -- ---------- settings (persisted via scrye.store; armed always starts OFF) ----------
 
@@ -157,7 +202,8 @@ scrye.onDisconnect(function() connected = false end)
 -- docked, available longships (by name), dock capacity (dock tier * 2), raiding count
 local function fleet()
   local avail, raiding = {}, 0
-  for _, s in ipairs(FLEET.ships or {}) do
+  -- Guild.Voyage `longship` since 17 Sep 2026; Guild.Fleet `ships` before it
+  for _, s in ipairs(VOY.longship or FLEET.ships or {}) do
     if s.state == "docked" then avail[#avail + 1] = tostring(s.name or "")
     elseif s.state == "raiding" then raiding = raiding + 1 end
   end
@@ -168,17 +214,15 @@ local function fleet()
   return avail, dock * 2, raiding
 end
 
--- heat by home town: Guild.City heat[] values paired by index with the
--- Guild.Fleet rtargets_lineage[] town order ("Town:good:good" entries)
+-- heat by home town: Guild.City heat[] values paired by index with the lineage
+-- order (heat[i] is lineage i's town - the pairing Guild.Fleet's rtargets_lineage
+-- used, and the grudges' lineage numbers confirm)
 local function heat_of()
   local heats = CITY.heat or {}
   local map, order = {}, {}
-  for i, e in ipairs(FLEET.rtargets_lineage or {}) do
-    local t = tostring(e):match("^([^:]+)")
-    if t and t ~= "" then
-      order[#order + 1] = t
-      map[t] = tonumber(heats[i]) or 0
-    end
+  for i, t in ipairs(home_towns()) do
+    order[#order + 1] = t
+    map[t] = tonumber(heats[i]) or 0
   end
   return map, order
 end
@@ -194,16 +238,48 @@ local function lowest_heat_town()
   return best, bh
 end
 
--- the foreign (historical) towns - Guild.Fleet rtargets_historical[], names only.
--- The feed carries NO heat for them (heat[] is exactly as long as the lineage list),
--- so foreign targeting cannot be heat-guided; see pick_raid_town.
+-- the foreign (historical) towns - the last `vlongship targets` scan, else the
+-- baked-in default. No feed carries heat for them (heat[] is exactly as long as
+-- the lineage list), so foreign targeting cannot be heat-guided; see pick_raid_town.
 local function foreign_towns()
   local out = {}
-  for _, e in ipairs(FLEET.rtargets_historical or {}) do
-    local t = tostring(e):match("^([^:]+)")
-    if t and t ~= "" then out[#out + 1] = t end
-  end
+  for _, t in ipairs(scanned.foreign or FOREIGN_DEFAULT) do out[#out + 1] = t end
   return out
+end
+
+-- ---------- `vlongship targets` scan ----------
+-- The listing is framed "-~*  <town>  <good> & <good>  [<state>]  *~-" under two
+-- section headers; a lineage row ends in a heat word, a historical row does not.
+-- Both lists are taken whole from one listing and persisted; a listing cut short
+-- (disconnect mid-frame) is dropped rather than half-applied.
+local scan_mode, scan_buf = nil, nil
+local function targets_line(inner)
+  inner = trim(inner)
+  if inner:find("^Historical Targets") then scan_mode = "foreign"; scan_buf = scan_buf or { home = {}, foreign = {} } return end
+  if inner:find("^Lineage Cities") then scan_mode = "home"; scan_buf = scan_buf or { home = {}, foreign = {} } return end
+  if inner:find("^Runestones") then
+    if scan_buf and scan_buf.foreign[1] then
+      scanned.foreign = scan_buf.foreign
+      scrye.store.set("towns_foreign", table.concat(scan_buf.foreign, "\n"))
+    end
+    if scan_buf and scan_buf.home[1] then
+      scanned.home = scan_buf.home
+      scrye.store.set("towns_home", table.concat(scan_buf.home, "\n"))
+    end
+    if scan_buf then
+      note(string.format("targets read: %d home, %d foreign", #scan_buf.home, #scan_buf.foreign))
+    end
+    scan_mode, scan_buf = nil, nil
+    return true            -- the lists changed: the caller republishes the table
+  end
+  if not scan_mode or not scan_buf then return end
+  -- "<town>  <good>  & <good>  [<state>]": the town is everything before the first
+  -- run of two or more spaces (multi-word names are single-spaced)
+  local town = inner:match("^(.-)%s%s+%S")
+  if town and town ~= "" and inner:find("&", 1, true) then
+    local list = scan_buf[scan_mode]
+    list[#list + 1] = town
+  end
 end
 
 -- pick a raid target from the chosen pool.
@@ -288,7 +364,7 @@ local function publish()
         is_pool and "  <- auto pool" or "", "@{}")
     end
     if #order == 0 and #foreign == 0 then
-      hl[1] = "no target data yet (waiting on Guild.Fleet + Guild.City GMCP bursts)"
+      hl[1] = "no target data yet"
     else
       if #order > 0 then
         local minh
@@ -421,11 +497,13 @@ local function ar_list_targets()
     for _, e in ipairs(list or {}) do out[#out + 1] = tostring(e):match("^([^:]+)") or tostring(e) end
     return out
   end
-  local home    = names(FLEET.rtargets_lineage)
-  local foreign = names(FLEET.rtargets_historical)
-  if #home == 0 and #foreign == 0 then note("no target list from Guild.Fleet yet") return end
+  local home    = home_towns()
+  local foreign = foreign_towns()
   if #home > 0 then note("Home: " .. table.concat(home, ", ")) end
   if #foreign > 0 then note("Foreign: " .. table.concat(foreign, ", ")) end
+  note(string.format("(%s; 'vlongship targets' refreshes both lists - sending it now)",
+    scanned.foreign and "foreign list from the last listing scan" or "foreign list is the built-in default"))
+  scrye.send("vlongship targets")
 end
 
 local function ar_config(rest)
@@ -539,10 +617,33 @@ end }
 -- matching the original's 6 s driver + 30 s pass interval)
 scrye.every(6, driver)
 
--- Guild.Fleet: ships coming home change the docked pool -> run a pass promptly
--- (the classic's watch("vik.ships")). Guild.City: heat / dock tier -> refresh display.
-gasm("Guild.Fleet", function(snap) FLEET = snap; driver() end)
-gasm("Guild.City",  function(snap) CITY = snap; publish() end)
+-- Ships coming home change the docked pool -> run a pass promptly (the classic's
+-- watch("vik.ships")): Guild.Voyage's longship list since 17 Sep 2026, Guild.Fleet's
+-- ships before it (kept for a server still sending it). Guild.City: heat / dock
+-- tier -> refresh display. Guild.Kingdom: grudges name the home towns by lineage.
+gasm("Guild.Voyage", function(snap) VOY = snap; if snap.longship then driver() end end)
+gasm("Guild.Fleet",  function(snap) FLEET = snap; driver() end)
+gasm("Guild.City",   function(snap) CITY = snap; publish() end)
+gasm("Guild.Kingdom", function(snap)
+  KING = snap
+  if type(snap.grudges) ~= "table" then return end
+  local changed = false
+  for _, g in ipairs(snap.grudges) do
+    local lin, town = tonumber(g.lineage), tostring(g.town or "")
+    if lin and lin > 0 and town ~= "" and home_lin[lin] ~= town then home_lin[lin] = town; changed = true end
+  end
+  if changed then publish() end
+end)
+
+-- the `vlongship targets` listing, read as it scrolls by
+scrye.addTrigger{
+  pattern = [[^-~\*(.*)\*~-\s*$]],
+  regex   = true,
+  run     = function(cap)
+    local ok, changed = pcall(targets_line, cap)
+    if ok and changed then publish() end
+  end,
+}
 
 -- ---------- load ----------
 

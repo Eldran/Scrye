@@ -1,9 +1,9 @@
 {
   "id": "3s-raid-gmcp",
   "name": "3S Auto-Raid (GMCP)",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "Joakim",
-  "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy). Fed by the Guild.Fleet + Guild.City GMCP packages (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). Same strategy core as the classic: auto-target picks randomly among the calm pool (towns within 2 heat of the lowest), hold rotates towns, keep/reserve protect docked ships, convoy sends one command for the game to crew. The town table lists BOTH target groups - home (lineage, with heat) and foreign (historical, no heat in the feed) - every name clickable, and 'araid pool home|foreign' chooses which group the auto-target raids: home hunts the calm pool, foreign spreads at random with the same hold rotation.",
+  "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy). Fed by the Guild.Voyage (longships) + Guild.City (heat, dock) + Guild.Kingdom (home towns) GMCP packages, with the foreign town list read off `vlongship targets` ('araid targets' sends it) - Guild.Fleet, which used to carry the ships and both town lists, stopped in September 2026 (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). Same strategy core as the classic: auto-target picks randomly among the calm pool (towns within 2 heat of the lowest), hold rotates towns, keep/reserve protect docked ships, convoy sends one command for the game to crew. The town table lists BOTH target groups - home (lineage, with heat) and foreign (historical, no heat in the feed) - every name clickable, and 'araid pool home|foreign' chooses which group the auto-target raids: home hunts the calm pool, foreign spreads at random with the same hold rotation.",
   "mudIds": [
     "*"
   ],
@@ -20,6 +20,7 @@
     "storage.private",
     "timers.manage",
     "aliases.manage",
+    "triggers.manage",
     "ui.panels"
   ],
   "enabled": true
