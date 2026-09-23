@@ -331,13 +331,23 @@ local function area_of(r) return (r and r.area ~= "" and r.area) or "?" end
 -- Where a direction leads, as far as we know, and how we know.
 --   "walked" beats "told": if the server said 0 and we went there anyway,
 --   we know better than the thing that declined to say.
+-- A learned link in a direction the server's exit listing does not name is a mis-paired
+-- move, not a hidden exit: all twenty found in Joakim's store on 23 Sep 2026 reached a
+-- room the same room already reached through a LISTED exit (or were the elevator car,
+-- whose listing is 's' alone, "walking" n into floor 30's lobby - which seeded floor
+-- 30's whole layout from the car and pulled it apart). A room with no listing at all has
+-- nothing to contradict, and keeps what it learned.
+local function unlisted(r, dir)
+  return r.exits ~= nil and next(r.exits) ~= nil and r.exits[dir] == nil
+end
+
 local function link(r, dir)
   -- A shifting exit has no destination worth reporting: whatever we walked or
   -- were told is one ride's answer, not the exit's. Everything downstream --
   -- routes, layout, the farmer's handover -- treats it as no link at all.
   if r.shift and r.shift[dir] then return nil, "shift" end
   local w = r.walked and r.walked[dir]
-  if w and w ~= 0 then return w, "walked" end
+  if w and w ~= 0 and not unlisted(r, dir) then return w, "walked" end
   local t = r.exits and r.exits[dir]
   if t and t ~= 0 then return t, "told" end
   return nil, nil
@@ -352,7 +362,7 @@ local function neighbours(r)
     if dest then out[#out + 1] = { dir = dir, to = dest } end
   end
   for _, dir in ipairs(sorted_dirs(r.walked)) do   -- walked a way not listed
-    if not (r.exits and r.exits[dir]) and not (r.shift and r.shift[dir]) then
+    if not (r.exits and r.exits[dir]) and not (r.shift and r.shift[dir]) and not unlisted(r, dir) then
       out[#out + 1] = { dir = dir, to = r.walked[dir] }
     end
   end
@@ -474,6 +484,7 @@ local function load()
     note("  'mapg save' will overwrite it once you are happy to lose whatever was there")
     return
   end
+  local pruned = 0
   for _, r in ipairs(data.rooms) do
     local num = tonumber(r.num)
     if num then
@@ -485,8 +496,16 @@ local function load()
       if type(r.shift) == "table" and next(r.shift) ~= nil then rooms[num].shift = r.shift end
       if type(r.vary) == "table" and next(r.vary) ~= nil then rooms[num].vary = r.vary end
       if type(r.edge) == "table" and next(r.edge) ~= nil then rooms[num].edge = r.edge end
+      -- drop links learned in a direction the room's listing does not name (see unlisted)
+      for d in pairs(rooms[num].walked) do
+        if unlisted(rooms[num], d) then rooms[num].walked[d] = nil ; pruned = pruned + 1 end
+      end
       known = known + 1
     end
+  end
+  if pruned > 0 then
+    dirty = true
+    note(string.format("dropped %d learned link(s) in directions their rooms have no exit for - mis-paired moves, not exits", pruned))
   end
   for _, n in ipairs(type(data.names) == "table" and data.names or {}) do
     local seed = tonumber(n.seed)
@@ -659,6 +678,15 @@ local function on_room_info(json)
         -- Marked shifting: the ride is real -- 'here' has already moved -- but the
         -- link would be one ride's lie, so nothing is learned from it.
         rode_shift = true
+      elseif unlisted(src, mv.dir) then
+        -- The room we left has no such exit: this arrival was not that move's doing
+        -- (being led, a lag-shuffled queue, a ride). Learn nothing, and let the queue go
+        -- - whatever else is in it is out of step too.
+        stats.desyncs = stats.desyncs + 1
+        moves = {}
+        if talking then
+          note(string.format("  %d has no exit '%s' - that arrival was not the move's doing; nothing learned", from, mv.dir))
+        end
       elseif src.walked[mv.dir] ~= num then
         local old = src.walked[mv.dir]
         src.walked[mv.dir] = num
@@ -2482,10 +2510,18 @@ scrye.every(1, function() clock = clock + 1 end)
 
 -- Room.Contents: what is in the room you stand in, remembered per room for the details
 -- line ("last there: 2 small cur"). Names only, counted; this session only.
+-- 23 Sep 2026: each item carries a count (two guards arrive as ONE item, count 2), and a
+-- crowded room arrives paged (pages/page) - page 1 starts the room afresh, later pages
+-- add to it, so a monster on page 3 is not lost to the corpses on page 1.
+local rc = nil            -- the room being assembled: { num, mobs, order, players }
 scrye.onGmcp("Room.Contents", function(json)
   local ok, t = pcall(scrye.json.decode, json)
   if not ok or type(t) ~= "table" or type(t.items) ~= "table" or not here then return end
-  local mobs, players, order = {}, {}, {}
+  local page = tonumber(t.page) or 1
+  if page <= 1 or not rc or rc.num ~= here then
+    rc = { num = here, mobs = {}, order = {}, players = {} }
+  end
+  local mobs, players, order = rc.mobs, rc.players, rc.order
   for _, it in ipairs(t.items) do
     if type(it) == "table" then
       local name, kind = tostring(it.name or ""), tostring(it.type or "")
@@ -2493,7 +2529,7 @@ scrye.onGmcp("Room.Contents", function(json)
         if kind == "player" then players[#players + 1] = name
         elseif kind == "monster" or kind == "mob" or kind == "npc" then
           if not mobs[name] then mobs[name] = 0 ; order[#order + 1] = name end
-          mobs[name] = mobs[name] + 1
+          mobs[name] = mobs[name] + math.max(1, math.tointeger(tonumber(it.count) or 1) or 1)
         end
       end
     end
