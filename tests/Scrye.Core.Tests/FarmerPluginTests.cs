@@ -181,4 +181,27 @@ public sealed class FarmerPluginTests
         for (int i = 0; i < 5; i++) rt.Tick(1);
         Assert.Contains(host.Printed, l => l.Contains("no mapper answered"));
     }
+
+    /// <summary>The 23 Sep server reports a kill twice - the text line and GMCP Room.Death.
+    /// It is one kill (payload shape from the 23 Sep 15:34 capture: corpse and npc are numbers); the pairing names your character, kept in the store, after which a
+    /// Room.Death alone counts as yours.</summary>
+    [Fact]
+    public void RoomDeathAndItsTextLineAreOneKillAndNameYou()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = Load(host);
+        Explore(rt);
+        rt.ProcessLine("You dealt the killing blow to the Wiremouth guard.");
+        rt.DispatchGmcp("Room.Death",
+            """{ "corpse": 1, "killer": "Goran", "npc": 1, "name": "Wiremouth guard" }""");
+        Assert.Equal("Goran", host.Store["me"]);
+        for (int i = 0; i < 5; i++) rt.Tick(1);
+        rt.DispatchGmcp("Room.Death",
+            """{ "corpse": 1, "killer": "Goran", "npc": 1, "name": "Wiremouth guard" }""");
+        rt.DispatchGmcp("Room.Death",
+            """{ "corpse": 1, "killer": "Wiremouth guard", "npc": 0, "name": "Goran" }""");
+        host.Printed.Clear();
+        rt.ProcessInput("farm");
+        Assert.Contains(host.Printed, l => l.Contains("tally: 2 kill(s)") && l.Contains("(you 2)"));
+    }
 }

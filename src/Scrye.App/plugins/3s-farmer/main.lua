@@ -86,6 +86,24 @@ local RT = { on = false, areas = {}, idle = 300 }   -- area rotation ('farm rota
                           -- full circuit with no kill for `idle` seconds, travel to the next
                           -- area in the list and farm there (persisted, private)
 local last_kill_at = 0    -- clock stamp of the last killing blow this run
+local TALLY = { kills = 0, first = nil, last = nil, by = {} }   -- every killing blow seen
+-- Char.XP (23 Sep 2026, after Core subscribed to it): { xp, per_hour, gain30, to_spend,
+-- to_next, maxed, eta_secs, modifier }. The server's own rate (per_hour, gain30 over the
+-- last 30 minutes) is shown as it comes; the run's gain is xp now minus xp when the patrol
+-- started (or when the farmer first saw the feed, off patrol).
+local XP = { seen = false, xp = 0, per_hour = 0, gain30 = 0, base = nil, run0 = nil, run1 = nil,
+             fight0 = nil }   -- fight0: xp when the current fight began (the kill log's XP column)
+local KILL_PAIR = 3       -- clock ticks (seconds) a kill's text line and its Room.Death may lie apart
+local ME = ""             -- your character's name, learned by pairing the two (store 'me')
+local RECENT = {}         -- late kill reports awaiting their pair: { src, key, at, killer, raw, kl, ours, you }
+-- Killers whose kills are YOURS (Joakim, 23 Sep 2026: "make the hird kills count as
+-- mine"): your hird fights as "Hirdmadr" in Room.Death. Lower-case names; 'farm mine'
+-- edits the list, stored per character ('mine'), default the hird.
+local MINE_DEFAULT = { "hirdmadr" }
+local MINE = {}
+                          -- since load or 'farm log clear', yours and your party's, patrolling
+                          -- or not - the counter that keeps counting when someone else's bot
+                          -- is leading (22 Sep); `by` = killer -> kills ("you" for yours)
 local NL = {}             -- no-loot: area -> { "name fragment", ... } - mobs whose corpses
                           -- get none of the after-kill commands (persisted with the graph)
 local NV = {}             -- the never-list: mob names never attacked ANYWHERE (persisted).
@@ -115,7 +133,8 @@ local B = {               -- the current room's population and the fight (never 
   rest_until = 0,
   retreat = nil,          -- the rest room the patrol is walking to before it rests there
 }
-local KL = {}             -- the kill log: name -> { kills, last (clock), secs (fight time) }
+local KL = {}             -- the kill log, per place: place -> name -> { kills, secs, timed, xp }
+                          -- (a place is the area, and its floor when the room names one - 1.5.0)
                           -- (persisted in the private store; 'farm log clear' empties it)
 local kl_rows = {}        -- panel row index -> name, for the log table
 local T = {               -- travel ('farm go', phase 4 - never persisted)
@@ -169,7 +188,11 @@ local function save()
   scrye.store.set("rota", scrye.json.encode(RT))
   do
     local log = {}
-    for name, e in pairs(KL) do log[#log + 1] = { name = name, kills = e.kills, secs = e.secs } end
+    for place, t in pairs(KL) do
+      for name, e in pairs(t) do
+        log[#log + 1] = { place = place, name = name, kills = e.kills, secs = e.secs, timed = e.timed, xp = e.xp }
+      end
+    end
     scrye.store.set("killlog", scrye.json.encode(log))
   end
 end
@@ -229,8 +252,22 @@ local function load()
   if ok6 and type(log) == "table" then
     for _, e in ipairs(log) do
       if type(e) == "table" and e.name then
-        KL[tostring(e.name)] = { kills = tonumber(e.kills) or 0, secs = tonumber(e.secs) or 0, last = 0 }
+        -- a log saved before 1.5.0 has no places: its entries stay together as "earlier"
+        local place = (e.place and tostring(e.place) ~= "") and tostring(e.place) or "earlier"
+        KL[place] = KL[place] or {}
+        KL[place][tostring(e.name)] = { kills = tonumber(e.kills) or 0, secs = tonumber(e.secs) or 0,
+                                 timed = tonumber(e.timed) or tonumber(e.kills) or 0, xp = tonumber(e.xp) }
       end
+    end
+  end
+  ME = tostring(scrye.store.get("me") or "")
+  do
+    local raw = scrye.store.get("mine")
+    MINE = {}
+    if raw == nil then
+      for _, n in ipairs(MINE_DEFAULT) do MINE[#MINE + 1] = n end
+    else
+      for n in tostring(raw):gmatch("[^\n]+") do MINE[#MINE + 1] = n end
     end
   end
   C.panic_cmd = tostring(scrye.store.get("panic_cmd") or "")
@@ -603,6 +640,7 @@ end
 local function stop_patrol(why)
   if not S.on then return end
   S.ended = now - (S.started or now)   -- freeze the session clock at its final length
+  XP.run1 = XP.seen and XP.xp or nil   -- ...and the run's XP with it
   S.on = false ; S.step = nil ; S.route = nil
   B.hunting = false ; B.target = nil   -- no patrol, no hunt: the HUD shows no target
   B.retreat = nil ; B.parking = false ; B.resting = false
@@ -858,10 +896,16 @@ local function on_room_contents(json)
   local ok, info = pcall(scrye.json.decode, json)
   if not ok or type(info) ~= "table" then return end
   B.seen = true
-  B.mobs = {}
-  B.count = {}
-  B.player = false
-  B.players = {}          -- every player listed, party or not, for the roster
+  -- A crowded room arrives paged (23 Sep 2026: corpses and gear over 3 pages): page 1
+  -- (or an unpaged list) starts the roster afresh, later pages add to it - a monster
+  -- listed on page 3 must not be wiped by the page after it.
+  local page = tonumber(info.page) or 1
+  if page <= 1 then
+    B.mobs = {}
+    B.count = {}
+    B.player = false
+    B.players = {}        -- every player listed, party or not, for the roster
+  end
   if type(info.items) ~= "table" then return end
   for _, it in ipairs(info.items) do
     if type(it) == "table" then
@@ -869,8 +913,8 @@ local function on_room_contents(json)
       local kind = tostring(it.type or ""):lower()
       if name ~= "" then
         if kind == "monster" then
-          B.mobs[#B.mobs + 1] = name
-          B.count[name] = tonumber(it.count) or 1
+          if not B.count[name] then B.mobs[#B.mobs + 1] = name end
+          B.count[name] = (B.count[name] or 0) + (tonumber(it.count) or 1)
         elseif kind == "player" then
           B.players[#B.players + 1] = name
           if not in_party(name) then B.player = true end
@@ -878,7 +922,7 @@ local function on_room_contents(json)
       end
     end
   end
-  B.parked = false        -- a new population: the player-present note may be due again
+  if page <= 1 then B.parked = false end   -- a new population: the player-present note may be due again
   draw()                  -- the roster IS the panel's middle: show it as it arrives
 end
 
@@ -955,6 +999,7 @@ local function on_combat(json)
   CC.active = active
   if active then CC.at = now end
   local was = S.fighting
+  if active and not was and XP.seen then XP.fight0 = XP.xp end   -- a fight's XP counts from here
   S.fighting = active
   if active and not was and S.on then
     if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
@@ -1165,6 +1210,7 @@ local function start()
   S.swept = false
   S.held_on = nil
   S.started = now ; S.ended = nil
+  XP.run0 = XP.seen and XP.xp or nil ; XP.run1 = nil   -- the run's gain counts from here
   last_kill_at = now
   B.kills = 0 ; B.hunting = false ; B.parked = false ; B.resting = false
   -- Ask the mapper what it knows about this area; its answer (map.area.rooms) arrives
@@ -1209,6 +1255,51 @@ local function travel_answered()
   if T.quiet then scrye.cancel(T.quiet) ; T.quiet = nil end
 end
 
+-- The kill log's PLACE for a room (Joakim, 23 Sep 2026: "megacity floor 30 would be one
+-- log and floor 40 would be another"): the area, and the floor or level when the room's
+-- name carries one - every Megacity floor is area "Megacity" to the server, but its rooms
+-- say "Central Plaza Open Core floor 30" / "Floor 30   Elevator Lobby".
+local function place_of(num)
+  local r = num and G[num]
+  if not r then return "unknown" end
+  local area = tostring(r.area or "")
+  if area == "" then area = "unknown" end
+  local name = tostring(r.name or ""):lower()
+  local fl = name:match("floor%s*(%-?%d+)")
+  if fl then return area .. " floor " .. fl end
+  local lv = name:match("level%s*(%-?%d+)")
+  if lv then return area .. " level " .. lv end
+  return area
+end
+
+-- 198923091820 -> "198.9G": the feed's numbers are too big to read whole
+local function big(n)
+  n = tonumber(n) or 0
+  local a = math.abs(n)
+  if a >= 1e9 then return string.format("%.1fG", n / 1e9) end
+  if a >= 1e6 then return string.format("%.1fM", n / 1e6) end
+  if a >= 1e4 then return string.format("%.1fk", n / 1e3) end
+  return string.format("%d", math.floor(n + 0.5))
+end
+
+-- the run's XP gain: live while patrolling, frozen at the stop; nil before any feed
+local function run_xp()
+  if not XP.run0 then return nil end
+  return (XP.run1 or XP.xp) - XP.run0
+end
+
+local function xp_line()
+  if not XP.seen then return nil end
+  local parts = { big(XP.per_hour) .. "/h", "+" .. big(XP.gain30) .. " in 30m" }
+  local r = run_xp()
+  if r then
+    parts[#parts + 1] = "run +" .. big(r) .. (B.kills > 0 and (" (" .. big(r / B.kills) .. "/kill)") or "")
+  elseif XP.base then
+    parts[#parts + 1] = "+" .. big(XP.xp - XP.base) .. " since load"
+  end
+  return table.concat(parts, " - ")
+end
+
 local function status()
   note("phase 2 - the chassis: patrols, fences, waits out combat. The kill loop is phase 3.")
   if T.going then note("  traveling to '" .. T.going .. "' - the patrol starts on arrival") end
@@ -1224,6 +1315,15 @@ local function status()
   else
     note("  off, and not anywhere yet")
   end
+  if TALLY.kills > 0 then
+    local ks = {}
+    for k in pairs(TALLY.by) do ks[#ks + 1] = k end
+    table.sort(ks, function(a, b) return TALLY.by[a] > TALLY.by[b] end)
+    local parts = {}
+    for _, k in ipairs(ks) do parts[#parts + 1] = k .. " " .. TALLY.by[k] end
+    note(string.format("  tally: %d kill(s) since load or 'farm log clear', patrolling or not (%s)", TALLY.kills, table.concat(parts, ", ")))
+  end
+  if xp_line() then note("  XP: " .. xp_line()) end
   local rooms = 0 ; for _ in pairs(G) do rooms = rooms + 1 end
   note(string.format("  graph: %d room(s) stood in, across all areas", rooms))
   local ex = excludes_here()
@@ -1282,6 +1382,19 @@ farm_cmd = function(args)
       else
         never_add(rest:lower())
       end
+    elseif verb == "mine" then
+      -- killers whose kills count as yours (the hird by default)
+      if rest ~= "" then
+        local minus = rest:sub(1, 1) == "-"
+        local name = (minus and rest:sub(2) or rest):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local at
+        for i, n in ipairs(MINE) do if n == name then at = i end end
+        if minus and at then table.remove(MINE, at)
+        elseif not minus and not at and name ~= "" then MINE[#MINE + 1] = name end
+        scrye.store.set("mine", table.concat(MINE, "\n"))
+      end
+      note((#MINE > 0 and ("kills counted as yours: " .. table.concat(MINE, ", ")) or "only your own blows count as yours")
+        .. (ME ~= "" and (" (and " .. ME .. ", you)") or "") .. " - 'farm mine <name>' adds, '-<name>' drops")
     elseif verb == "party" then
       if rest == "" then
         note(#PT > 0 and ("party (players who are not strangers): " .. table.concat(PT, ", "))
@@ -1336,18 +1449,43 @@ farm_cmd = function(args)
              C.sp_start > 0 and (C.sp_start .. "%") or "off", C.sp_resume > 0 and (C.sp_resume .. "%") or "floor%"))
       end
     elseif verb == "log" then
-      if rest == "clear" then
-        KL = {} ; dirty = true ; save() ; draw()
-        note("kill log cleared")
+      local low = rest:lower()
+      if low == "clear" then
+        KL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; dirty = true ; save() ; draw()
+        note("kill log (every place) and tally cleared")
+      elseif low == "clear here" then
+        local place = place_of(here)
+        KL[place] = nil ; dirty = true ; save() ; draw()
+        note("kill log for " .. place .. " cleared")
       else
-        local names = {}
-        for name in pairs(KL) do names[#names + 1] = name end
-        table.sort(names, function(a, b) return KL[a].kills > KL[b].kills end)
-        if #names == 0 then note("kill log: nothing yet ('farm log clear' empties it)") return end
-        note("kill log (" .. #names .. " mob(s)):")
-        for _, name in ipairs(names) do
-          local e = KL[name]
-          note(string.format("  %-30s %4d kill(s)  avg fight %ds", name, e.kills, e.kills > 0 and e.secs // e.kills or 0))
+        -- 'farm log' = the place you stand in, 'farm log all' = every place, 'farm log <text>'
+        -- = the places whose name contains it ("floor 40")
+        local places = {}
+        for place in pairs(KL) do
+          if (low == "all") or (low == "" and place == place_of(here))
+             or (low ~= "" and low ~= "all" and place:lower():find(low, 1, true)) then
+            places[#places + 1] = place
+          end
+        end
+        table.sort(places)
+        if #places == 0 then
+          local others = 0 ; for _ in pairs(KL) do others = others + 1 end
+          note("kill log: nothing for " .. (low == "" and place_of(here) or ("'" .. rest .. "'"))
+               .. (others > 0 and (" - " .. others .. " other place(s), 'farm log all'") or ""))
+          return
+        end
+        for _, place in ipairs(places) do
+          local t = KL[place]
+          local names = {}
+          for name in pairs(t) do names[#names + 1] = name end
+          table.sort(names, function(a, b) return t[a].kills > t[b].kills end)
+          note("kill log, " .. place .. " (" .. #names .. " mob(s)):")
+          for _, name in ipairs(names) do
+            local e = t[name]
+            local timed = e.timed or e.kills
+            note(string.format("  %-30s %4d kill(s)  avg fight %-5s  last %s XP", name, e.kills,
+              timed > 0 and ((e.secs // timed) .. "s") or "-", e.xp and big(e.xp) or "-"))
+          end
         end
       end
     elseif verb == "after" then
@@ -1529,6 +1667,7 @@ farm_cmd = function(args)
       note("farm include <name>   un-exclude")
       note("farm excludes   list this area's excludes")
       note("farm party [<name>|-<name>]   real players whose presence is not a stranger's")
+      note("farm mine [<name>|-<name>]    killers whose kills count as yours (default: hirdmadr, your hird)")
       note("farm never [<name>|-<name>]   mobs never attacked anywhere - guild followers go here")
       note("farm rest <seid> <secs>       sit out low Seid between fights")
       note("farm hp <start%> [<panic%>]   no new fight or step under start%; abandon under panic%")
@@ -1559,21 +1698,113 @@ scrye.onCommand(function(cmd)
   if S.on then stop_patrol("you moved yourself") end
 end)
 
-scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true, run = function(victim)
-  if not (S.on and B.hunting) then return end
+-- Every kill SEEN is logged and tallied, patrol or no patrol - yours and your party's
+-- (Joakim, 22 Sep 2026: "both mine and my party members' kills"). Two reports of one kill
+-- can arrive: the text line ("You dealt the killing blow to X." / "<Name> dealt the
+-- killing blow to X.") and, since the 23 Sep server, GMCP Room.Death { killer, name,
+-- npc, corpse }. Whichever comes first counts; the other, arriving within KILL_PAIR
+-- clock ticks for the same victim, is the same kill and only adds what it knows. That
+-- pairing is also how the farmer learns your character's name - no GMCP package states
+-- it: a "You dealt..." line paired with a Room.Death names you, the name is kept
+-- ('me' in the store), and from then on a Room.Death whose killer is you counts as
+-- yours even when no text line comes. A Room.Death with npc = false is a player's
+-- death, not a kill, and is not tallied (npc arrives as 1 / 0).
+-- The mob's name in the log is the roster name swung at when the patrol opened the fight
+-- (the blow's own wording can differ), else Room.Death's name, else the blow's; the fight
+-- is timed only when the patrol timed it, so an observed kill counts without skewing the
+-- average. Only a fight the patrol opened moves its own counters.
+
+local function victim_key(v)
+  local k = tostring(v or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  k = k:gsub("^the ", ""):gsub("^an? ", "")
+  return k
+end
+
+local function mob_label(v)
+  local name = tostring(v or "?"):gsub("^[Tt]he ", ""):gsub("^[Aa]n? ", "")
+  return name:sub(1, 1):upper() .. name:sub(2)
+end
+
+-- The given source's report of this victim, if one came within KILL_PAIR - taken out, so
+-- a second kill of the same mob a moment later pairs with its own report.
+local function take_pair(src, key)
+  for i = #RECENT, 1, -1 do
+    local r = RECENT[i]
+    if now - r.at > KILL_PAIR then table.remove(RECENT, i)
+    elseif r.src == src and r.key == key then table.remove(RECENT, i) ; return r end
+  end
+  return nil
+end
+
+local function learn_me(name)
+  name = tostring(name or "")
+  if name == "" or name == ME then return end
+  ME = name
+  scrye.store.set("me", ME)
+  note("your character is " .. ME .. " (learned from a kill) - Room.Death kills by that name count as yours")
+end
+
+scrye.onGmcp("Char.XP", function(json)
+  local ok, d = pcall(scrye.json.decode, json or "")
+  if not ok or type(d) ~= "table" or tonumber(d.xp) == nil then return end
+  XP.xp = tonumber(d.xp)
+  XP.per_hour = tonumber(d.per_hour) or 0
+  XP.gain30 = tonumber(d.gain30) or 0
+  if not XP.seen then
+    XP.seen = true
+    XP.base = XP.xp
+    if S.on and not XP.run0 then XP.run0 = XP.xp end   -- a run that began before the feed did
+  end
+end)
+
+-- a killer whose kill is yours: you by name, or one of your own ('farm mine')
+local function is_mine(name)
+  name = tostring(name or "")
+  if name == "" then return false end
+  if ME ~= "" and name == ME then return true end
+  local low = name:lower()
+  for _, n in ipairs(MINE) do if n == low then return true end end
+  return false
+end
+
+local function tally(killer, kl)
+  TALLY.kills = TALLY.kills + 1
+  TALLY.first = TALLY.first or now
+  TALLY.last = now
+  TALLY.by[killer] = (TALLY.by[killer] or 0) + 1
+  local place = place_of(here)
+  KL[place] = KL[place] or {}
+  local e = KL[place][kl] or { kills = 0, secs = 0, timed = 0 }
+  e.kills = e.kills + 1
+  KL[place][kl] = e
+  dirty = true
+  -- The XP this kill was worth: Char.XP's xp now, a breath after the blow (the kill's
+  -- own award lands just after it), minus xp when the fight began - every hit pays, so
+  -- the fight's whole take is the mob's worth. The next fight counts from here, so a
+  -- mob killed straight after another is not charged with the first one's XP.
+  local base = XP.fight0
+  if XP.seen and base then
+    XP.fight0 = nil
+    scrye.after(1, function()
+      e.xp = XP.xp - base
+      if not XP.fight0 then XP.fight0 = XP.xp end
+      dirty = true
+      draw()
+    end)
+  end
+  return e
+end
+
+-- The patrol's own consequences of a kill it opened: the fight's time, its counters, the
+-- breath, the after-chain, the next target. Runs once per kill, from whichever report
+-- recognised it as yours first.
+local function own_kill(e, victim)
+  if e then
+    e.secs = e.secs + math.max(0, now - (B.hunt_at or now))
+    e.timed = (e.timed or 0) + 1
+  end
   B.kills = B.kills + 1
   last_kill_at = now
-  do
-    -- the log: by the roster name we swung at (the blow's own wording can differ), the
-    -- fight timed from the 'kill' that opened it
-    local name = (B.target and B.target.name) or tostring(victim or "?")
-    local e = KL[name] or { kills = 0, secs = 0, last = 0 }
-    e.kills = e.kills + 1
-    e.secs = e.secs + math.max(0, now - (B.hunt_at or now))
-    e.last = now
-    KL[name] = e
-    dirty = true
-  end
   draw()
   local victim_name = (B.target and B.target.name) or tostring(victim or "")
   scrye.after(C.breath, function()
@@ -1585,7 +1816,58 @@ scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true, 
     end
     resume_hunt()
   end)
+end
+
+scrye.addTrigger{ pattern = [[^(\S+) dealt the killing blow to (.+)\.]], regex = true, run = function(who, victim)
+  who = tostring(who or "")
+  local you = (who == "You" or who == "you")
+  local mine = you or is_mine(who)
+  local ours = mine and S.on and B.hunting
+  local key = victim_key(victim)
+  local m = take_pair("gmcp", key)
+  if m then
+    -- Room.Death already counted it. If it is yours, it moves the tally over to "you"
+    -- when it had to count it under the name - and "You dealt..." learns your name.
+    if mine then
+      if you then learn_me(m.raw) end
+      if m.killer ~= "you" then
+        TALLY.by[m.killer] = (TALLY.by[m.killer] or 1) - 1
+        if TALLY.by[m.killer] <= 0 then TALLY.by[m.killer] = nil end
+        TALLY.by.you = (TALLY.by.you or 0) + 1
+      end
+    end
+    if ours and not m.ours then own_kill(m.e, victim) else draw() end
+    return
+  end
+  local killer = mine and "you" or who
+  local kl = (ours and B.target and B.target.name) or mob_label(victim)
+  local e = tally(killer, kl)
+  RECENT[#RECENT + 1] = { src = "text", key = key, at = now, killer = killer, e = e, ours = ours, you = you }
+  if ours then own_kill(e, victim) else draw() end
 end }
+
+scrye.onGmcp("Room.Death", function(json)
+  local ok, d = pcall(scrye.json.decode, json or "")
+  if not ok or type(d) ~= "table" then return end
+  -- a player died, not a kill. The server sends npc as a number (23 Sep capture:
+  -- "npc": 1), so 0 is the false case; a boolean false is taken the same way.
+  if d.npc == false or tonumber(d.npc) == 0 then return end
+  local raw = tostring(d.killer or "")
+  local key = victim_key(d.name)
+  local m = take_pair("text", key)
+  if m then
+    -- the text line counted it; a "You dealt..." line names you through this killer
+    if m.you then learn_me(raw) end
+    return
+  end
+  local mine = is_mine(raw)
+  local ours = mine and S.on and B.hunting
+  local killer = mine and "you" or (raw ~= "" and raw or "someone")
+  local kl = (ours and B.target and B.target.name) or mob_label(d.name)
+  local e = tally(killer, kl)
+  RECENT[#RECENT + 1] = { src = "gmcp", key = key, at = now, killer = killer, raw = raw, e = e, ours = ours }
+  if ours then own_kill(e, d.name) else draw() end
+end)
 
 scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true, run = function(what)
   -- We swung at a name the room no longer holds - it died to someone else, wandered off,
@@ -1804,6 +2086,22 @@ draw = function()
     "Rooms\t" .. tostring(S.visited),
     "Kills\t" .. tostring(B.kills),
     "Kills/h\t" .. kph,
+    "XP\t" .. (xp_line() or "- (no Char.XP from the server yet)"),
+    "Tally\t" .. (TALLY.kills > 0 and string.format("%d since %s (%s/h)%s", TALLY.kills,
+        (function() local a = now - TALLY.first ; return a >= 3600 and (a // 3600 .. "h" .. (a % 3600) // 60 .. "m") or (a // 60 .. "m") end)(),
+        (now - TALLY.first) >= 60 and string.format("%.0f", TALLY.kills * 3600 / (now - TALLY.first)) or "-",
+        (function()
+          local ks = {}
+          for k in pairs(TALLY.by) do ks[#ks + 1] = k end
+          if #ks < 2 and (ks[1] == nil or ks[1] == "you") then return "" end
+          table.sort(ks, function(a, b)
+            if TALLY.by[a] ~= TALLY.by[b] then return TALLY.by[a] > TALLY.by[b] end
+            return a < b
+          end)
+          local parts = {}
+          for _, k in ipairs(ks) do parts[#parts + 1] = k .. " " .. TALLY.by[k] end
+          return " - " .. table.concat(parts, ", ")
+        end)()) or "0 - yours and your party's, patrol or not"),
     "Next room\t" .. (S.on and S.route and S.route[1] and
       string.format("%s (%s)", (G[S.route[#S.route]] and G[S.route[#S.route]].name or "?"):sub(1, 22),
         B.retreat and "rest room" or S.led and "mobs in sight" or "stalest") or "-"),
@@ -1833,22 +2131,29 @@ draw = function()
       or "areas farmed in turn - 'farm rota on' turns it on")
   end
   -- the kill log, most killed first: row index -> kl_rows[index]
+  -- ...for the place you stand in (1.5.0: one log per area and floor)
+  local place = place_of(here)
+  local t = KL[place] or {}
   kl_rows = {}
-  for name in pairs(KL) do kl_rows[#kl_rows + 1] = name end
+  for name in pairs(t) do kl_rows[#kl_rows + 1] = name end
   table.sort(kl_rows, function(a, b)
-    if KL[a].kills ~= KL[b].kills then return KL[a].kills > KL[b].kills end
+    if t[a].kills ~= t[b].kills then return t[a].kills > t[b].kills end
     return a < b
   end)
   do
     local rows = {}
     for _, name in ipairs(kl_rows) do
-      local e = KL[name]
-      local ago = e.last > 0 and (now - e.last) or nil
-      rows[#rows + 1] = string.format("%s\t%d\t%ds\t%s", name:sub(1, 26), e.kills,
-        e.kills > 0 and e.secs // e.kills or 0,
-        ago and (ago < 60 and (ago .. "s") or (ago // 60 .. "m")) or "-")
+      local e = t[name]
+      local timed = e.timed or e.kills
+      rows[#rows + 1] = string.format("%s\t%d\t%s\t%s", name:sub(1, 26), e.kills,
+        timed > 0 and ((e.secs // timed) .. "s") or "-",
+        e.xp and big(e.xp) or "-")
     end
-    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n") or "(no kills logged yet)\t\t\t")
+    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n") or "(no kills logged here yet)\t\t\t")
+    local others = 0
+    for p2, t2 in pairs(KL) do if p2 ~= place and next(t2) then others = others + 1 end end
+    scrye.setState(P .. "klplace", "Kill log: " .. place
+      .. (others > 0 and string.format(" (%d other place%s - 'farm log all')", others, others == 1 and "" or "s") or ""))
   end
   -- the leg being walked, for the map to light: "num,num,..." (empty = nothing to light)
   scrye.setState(P .. "route", (S.on and S.route) and table.concat(S.route, ",") or "")
@@ -1964,9 +2269,11 @@ build_panel = function(m)
           }
         end },
       { type = "list", bind = P .. "counters" },
-      -- The kill log: every mob killed this session (and the last ones - it persists), how
-      -- many, how long a fight takes on average, and how long ago the last one fell.
-      { type = "table", bind = P .. "killlog", separator = "\t", columns = { "Kill log", "Kills", "Avg", "Last" },
+      -- The kill log of the place you stand in (area + floor, 1.5.0): every mob killed there
+      -- (it persists), how many, how long a fight takes on average, and the XP the last one
+      -- of its kind was worth (Char.XP, the fight's whole take).
+      { type = "text", bind = P .. "klplace" },
+      { type = "table", bind = P .. "killlog", separator = "\t", columns = { "Mob", "Kills", "Avg", "XP" },
         align = "lrrr" },
     } },
     { title = "Mobs", widgets = {
