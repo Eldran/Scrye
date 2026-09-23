@@ -273,12 +273,12 @@ public class GmcpTests
     public void Subscribes_to_every_root_the_server_advertises()
     {
         Assert.Equal(
-            new[] { "Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" },
+            new[] { "Char 1", "Char.XP 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" },
             MudSession.GmcpPackages);
 
         MudSession s = Connected(out _, out List<byte> wire);
         string sent = Text(wire);
-        foreach (string root in new[] { "Merc 1", "Craft 1", "Mud 1" })
+        foreach (string root in new[] { "Char.XP 1", "Merc 1", "Craft 1", "Mud 1" })
             Assert.Contains(root, sent);
     }
 

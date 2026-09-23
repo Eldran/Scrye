@@ -1204,9 +1204,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// and a Viking actually receives sixteen, so the advertisement is a summary rather than
     /// an inventory. Merc and Craft may likewise deliver more than the five and three names
     /// they advertise.</para>
+    ///
+    /// <para><c>Char.XP</c> is named on its own as well as under <c>Char</c>: the server began
+    /// advertising it on 23 Sep 2026, yet a 3,600-message capture on <c>Char 1</c> held not one
+    /// Char.XP message - not even the login snapshot every other package sends. Asking for a
+    /// package the root already covers is harmless; not asking, if it is registered apart, is
+    /// the silent kind of missing this list exists to prevent.</para>
     /// </summary>
     public static readonly string[] GmcpPackages =
-        { "Char 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" };
+        { "Char 1", "Char.XP 1", "Room 1", "Comm 1", "Guild 1", "Merc 1", "Craft 1", "Mud 1" };
 
     private bool _gmcpHandshakeSent;
     private int _gmcpSecondsSinceSubscribe = -1;
