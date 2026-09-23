@@ -131,6 +131,12 @@ local FOREIGN_DEFAULT = { "Paris", "Lindisfarne", "Hamwic", "Dorestad", "Rouen",
   "Sandwich", "Groningen", "Antwerp", "Kaupang", "Ribe", "Waterford", "Winchester",
   "Trondheim", "Bordeaux", "Utrecht" }
 local home_lin = {}       -- lineage number -> town, learned from grudges (overlay)
+-- 23 Sep 2026: Guild.Fleet is back, and with it both lists - rtargets_lineage (home,
+-- "Town:good:good" in lineage order) on its full burst, rtargets_historical (foreign)
+-- on the delta burst. The two never ride the same burst, and a full burst replaces
+-- the paged keys, so each is kept here as it arrives rather than read off FLEET. When
+-- the feed has a list it wins over the scan and the default; grudges still overlay.
+local fleet_list = { home = nil, foreign = nil }
 local scanned = { home = nil, foreign = nil }   -- from the last `vlongship targets` scan
 do
   local function load(k)
@@ -146,7 +152,7 @@ end
 -- the home towns in lineage order (1 = Lodbrok's Hold): grudges overlay the scan
 -- overlays the default, so a renamed or reordered server heals itself
 local function home_towns()
-  local base = scanned.home or HOME_DEFAULT
+  local base = fleet_list.home or scanned.home or HOME_DEFAULT
   local out = {}
   for i, t in ipairs(base) do out[i] = home_lin[i] or t end
   for lin, t in pairs(home_lin) do if lin > #out then out[lin] = t end end
@@ -245,7 +251,7 @@ end
 -- the lineage list), so foreign targeting cannot be heat-guided; see pick_raid_town.
 local function foreign_towns()
   local out = {}
-  for _, t in ipairs(scanned.foreign or FOREIGN_DEFAULT) do out[#out + 1] = t end
+  for _, t in ipairs(fleet_list.foreign or scanned.foreign or FOREIGN_DEFAULT) do out[#out + 1] = t end
   return out
 end
 
@@ -562,7 +568,8 @@ local function ar_list_targets()
   if #home > 0 then note("Home: " .. table.concat(home, ", ")) end
   if #foreign > 0 then note("Foreign: " .. table.concat(foreign, ", ")) end
   note(string.format("(%s; 'vlongship targets' refreshes both lists - sending it now)",
-    scanned.foreign and "foreign list from the last listing scan" or "foreign list is the built-in default"))
+    fleet_list.foreign and "foreign list from Guild.Fleet"
+      or scanned.foreign and "foreign list from the last listing scan" or "foreign list is the built-in default"))
   scrye.send("vlongship targets")
 end
 
@@ -702,7 +709,21 @@ scrye.every(6, driver)
 -- ships before it (kept for a server still sending it). Guild.City: heat / dock
 -- tier -> refresh display. Guild.Kingdom: grudges name the home towns by lineage.
 gasm("Guild.Voyage", function(snap) VOY = snap; if snap.longship then driver() end end)
-gasm("Guild.Fleet",  function(snap) FLEET = snap; driver() end)
+gasm("Guild.Fleet",  function(snap)
+  FLEET = snap
+  for key, which in pairs({ rtargets_lineage = "home", rtargets_historical = "foreign" }) do
+    local list = snap[key]
+    if type(list) == "table" and list[1] ~= nil then
+      local names = {}
+      for _, e in ipairs(list) do
+        local town = tostring(e):match("^([^:]+)")
+        if town and town ~= "" then names[#names + 1] = town end
+      end
+      if names[1] then fleet_list[which] = names end
+    end
+  end
+  driver()                 -- the pass republishes the town table too
+end)
 gasm("Guild.City",   function(snap) CITY = snap; publish() end)
 gasm("Guild.Kingdom", function(snap)
   KING = snap
