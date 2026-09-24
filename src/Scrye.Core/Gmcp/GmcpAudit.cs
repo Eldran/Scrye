@@ -66,6 +66,39 @@ public sealed class GmcpAudit
     /// <summary>The server's <c>Core.Supported</c> payload, or null if it never answered.</summary>
     public string? Supported { get; private set; }
 
+    /// <summary>What the feed looked like in earlier sessions, and what is new in this one
+    /// (<see cref="GmcpShapeMemory"/>). Kept across <see cref="Reset"/>: a reconnect is a new
+    /// session of the same MUD, not a new MUD.</summary>
+    public GmcpShapeMemory Shape { get; } = new();
+
+    /// <summary>Where <see cref="Shape"/> is kept between sessions; null keeps it in memory only.</summary>
+    public string? ShapeFile { get; private set; }
+
+    /// <summary>Remember the feed's shape in this file (one per MUD): load what it holds now,
+    /// write back on <see cref="SaveShape"/>. A file that cannot be read starts a baseline.</summary>
+    public void UseShapeFile(string path)
+    {
+        ShapeFile = path;
+        string? json = null;
+        try { if (File.Exists(path)) json = File.ReadAllText(path); }
+        catch (IOException) { } catch (UnauthorizedAccessException) { }
+        Shape.LoadJson(json);
+    }
+
+    /// <summary>Write the shape memory to <see cref="ShapeFile"/>. Returns the error, or null.</summary>
+    public string? SaveShape()
+    {
+        if (ShapeFile is null) return null;
+        try
+        {
+            string? dir = Path.GetDirectoryName(ShapeFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(ShapeFile, Shape.ToJson());
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return ex.Message; }
+    }
+
     /// <summary>Echo every package into the output as it arrives (<c>.gmcp raw on</c>).</summary>
     public bool Raw { get; set; }
 
@@ -80,7 +113,10 @@ public sealed class GmcpAudit
     {
         MessagesSeen++;
         if (string.Equals(package, "Core.Supported", StringComparison.OrdinalIgnoreCase))
+        {
             Supported = json;
+            WarnUnsubscribed();
+        }
 
         if (!_seen.TryGetValue(package, out Entry? e)) _seen[package] = e = new Entry();
         e.Count++;
@@ -91,6 +127,7 @@ public sealed class GmcpAudit
         {
             if (e.Distinct.Count < MaxDistinct) e.Distinct.Add(json);
             else e.Truncated = true;
+            Shape.Observe(package, json);   // a payload never seen before may carry a field never seen before
         }
     }
 
@@ -111,6 +148,10 @@ public sealed class GmcpAudit
 
     public void Reset()
     {
+        // what the last connection learned is kept, and becomes "known" for the next one
+        SaveShape();
+        Shape.NewSession();
+        _unsubscribedWarned = false;
         _seen.Clear();
         MessagesSeen = 0;
         Supported = null;
@@ -239,7 +280,178 @@ public sealed class GmcpAudit
             foreach (RoomSeen r in rooms) if (!areas.Contains(r.Area)) areas.Add(r.Area);
             lines.Add($"  {rooms.Count} room(s) in {areas.Count} area(s): " + string.Join(", ", areas));
         }
+        int fresh = Shape.NewThisSession.Count;
+        if (Shape.Baseline) lines.Add("  shape memory: learning the baseline this session");
+        else lines.Add(fresh == 0 ? "  shape memory: nothing new since earlier sessions"
+                                  : $"  shape memory: {fresh} new package(s)/field(s) - '.gmcp new' lists them");
         lines.Add("  '.gmcp <package>' for the whole of the last one; '.gmcp fields' for all of it.");
+        return lines;
+    }
+
+    private bool _unsubscribedWarned;
+
+    /// <summary>The names the subscription asked for ("Char", "Char.XP", ...), versions dropped.</summary>
+    public IReadOnlyList<string> SubscribedNames()
+    {
+        var outp = new List<string>();
+        if (string.IsNullOrWhiteSpace(SubscriptionSent)) return outp;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(SubscriptionSent);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return outp;
+            foreach (JsonElement e in doc.RootElement.EnumerateArray())
+                if (e.ValueKind == JsonValueKind.String)
+                {
+                    string n = (e.GetString() ?? "").Trim();
+                    int sp = n.IndexOf(' ');
+                    if (sp > 0) n = n[..sp];
+                    if (n.Length > 0) outp.Add(n);
+                }
+        }
+        catch (JsonException) { }
+        return outp;
+    }
+
+    /// <summary>Whether the subscription covers a package: its own name, or a group it is in
+    /// ("Guild" covers Guild.City).</summary>
+    public bool Covers(string package)
+    {
+        foreach (string n in SubscribedNames())
+            if (string.Equals(package, n, StringComparison.OrdinalIgnoreCase)
+                || package.StartsWith(n + ".", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>The packages the latest <c>Core.Supported</c> offers (a non-zero value).</summary>
+    public IReadOnlyList<string> Offered()
+    {
+        var outp = new List<string>();
+        if (string.IsNullOrWhiteSpace(Supported) || SubscribedToNothing(Supported)) return outp;
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(Supported);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return outp;
+            foreach (JsonProperty p in doc.RootElement.EnumerateObject())
+                if (p.Value.ValueKind != JsonValueKind.Number || p.Value.GetDouble() != 0) outp.Add(p.Name);
+        }
+        catch (JsonException) { }
+        return outp;
+    }
+
+    /// <summary>Offered by the server, but outside anything Scrye subscribed to: these can
+    /// never arrive until the subscription names them.</summary>
+    public IReadOnlyList<string> OfferedNotSubscribed()
+    {
+        var outp = new List<string>();
+        if (SubscriptionSent is null) return outp;
+        foreach (string p in Offered()) if (!Covers(p)) outp.Add(p);
+        return outp;
+    }
+
+    /// <summary>Offered, subscribed, and still not one message this session.</summary>
+    public IReadOnlyList<string> OfferedNotArrived()
+    {
+        var outp = new List<string>();
+        foreach (string p in Offered()) if (Covers(p) && Find2(p) is null) outp.Add(p);
+        return outp;
+    }
+
+    // Said once per connection, the moment the answer lands: an offered package outside the
+    // subscription is not a "maybe it will come" - it cannot come.
+    private void WarnUnsubscribed()
+    {
+        if (_unsubscribedWarned) return;
+        IReadOnlyList<string> missing = OfferedNotSubscribed();
+        if (missing.Count == 0) return;
+        _unsubscribedWarned = true;
+        Shape.Announce?.Invoke("GMCP: the server offers " + string.Join(", ", missing)
+            + " but Scrye does not subscribe to " + (missing.Count == 1 ? "it" : "them")
+            + " - nothing from " + (missing.Count == 1 ? "it" : "them") + " can arrive ('.gmcp new')");
+    }
+
+    /// <summary>
+    /// What changed: packages and fields never seen before this session, remembered ones that
+    /// did not turn up, and <c>Core.Supported</c> against what arrived. The head of the field
+    /// report, and <c>.gmcp new</c> on its own. Markdown; reads fine as plain text too.
+    /// </summary>
+    public IReadOnlyList<string> ChangesReport()
+    {
+        var lines = new List<string> { "## Changes since earlier sessions", "" };
+        if (Shape.Baseline && Shape.NewThisSession.Count == 0)
+        {
+            lines.Add("Nothing remembered yet and nothing arrived: the first session on this MUD learns the feed's shape.");
+            lines.Add("");
+        }
+        else if (Shape.Baseline)
+        {
+            lines.Add($"No earlier session remembered: this one is the baseline ({Shape.NewThisSession.Count} package(s) and field(s) learned). Changes are reported from the next session on.");
+            lines.Add("");
+        }
+        else
+        {
+            var newPkgs = new List<string>();
+            var newFields = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+            var pkgIsNew = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string k in Shape.NewThisSession)
+            {
+                int bar = k.IndexOf('|');
+                if (bar < 0) { newPkgs.Add(k); pkgIsNew.Add(k); continue; }
+                string pkg = k[..bar];
+                if (pkgIsNew.Contains(pkg)) continue;
+                if (!newFields.TryGetValue(pkg, out List<string>? l)) newFields[pkg] = l = new();
+                l.Add(k[(bar + 1)..]);
+            }
+            if (newPkgs.Count == 0 && newFields.Count == 0) lines.Add("No new packages or fields.");
+            foreach (string p in newPkgs) lines.Add($"- **new package** `{p}`");
+            foreach (KeyValuePair<string, List<string>> kv in newFields)
+                lines.Add($"- **new field{(kv.Value.Count == 1 ? "" : "s")}** in `{kv.Key}`: "
+                          + string.Join(", ", kv.Value.Select(f => "`" + Cell(f) + "`")));
+            lines.Add("");
+
+            IReadOnlyList<string> gone = Shape.KnownButNotSeen();
+            if (gone.Count > 0)
+            {
+                lines.Add("Fields sent before but not in this session (optional ones come and go - a hint, not proof):");
+                lines.Add("");
+                var byPkg = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+                foreach (string k in gone)
+                {
+                    int bar = k.IndexOf('|');
+                    string pkg = k[..bar];
+                    if (!byPkg.TryGetValue(pkg, out List<string>? l)) byPkg[pkg] = l = new();
+                    l.Add(k[(bar + 1)..]);
+                }
+                foreach (KeyValuePair<string, List<string>> kv in byPkg)
+                {
+                    int show = Math.Min(kv.Value.Count, 12);
+                    lines.Add($"- `{kv.Key}`: " + string.Join(", ", kv.Value.Take(show).Select(f => "`" + Cell(f) + "`"))
+                              + (kv.Value.Count > show ? $" and {kv.Value.Count - show} more" : ""));
+                }
+                lines.Add("");
+            }
+            IReadOnlyList<string> quiet = Shape.PackagesNotSeen();
+            if (quiet.Count > 0)
+            {
+                lines.Add("Packages sent before but not in this session: " + string.Join(", ", quiet.Select(p => "`" + p + "`")));
+                lines.Add("");
+            }
+        }
+
+        IReadOnlyList<string> notSub = OfferedNotSubscribed();
+        if (notSub.Count > 0)
+        {
+            lines.Add("**Offered but not subscribed** - these cannot arrive until the subscription names them: "
+                      + string.Join(", ", notSub.Select(p => "`" + p + "`")));
+            lines.Add("");
+        }
+        IReadOnlyList<string> notArrived = OfferedNotArrived();
+        if (notArrived.Count > 0)
+        {
+            lines.Add("Offered and subscribed, but nothing arrived this session: "
+                      + string.Join(", ", notArrived.Select(p => "`" + p + "`")));
+            lines.Add("Some send only on a change or only for some guilds; one that NEVER comes may need asking for by name, the way `Char.XP 1` did.");
+            lines.Add("");
+        }
         return lines;
     }
 
@@ -287,6 +499,8 @@ public sealed class GmcpAudit
         if (Supported is not null)
             lines.Add($"Server answered `Core.Supported {Supported}`.");
         lines.Add("");
+        // What changed goes first: it is the question the report is usually run to answer.
+        lines.AddRange(ChangesReport());
 
         IReadOnlyList<RoomSeen> rooms = Rooms();
         if (rooms.Count > 0)

@@ -196,6 +196,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.GmcpSupported = profile.EnableGmcp;
         _telnet.GmcpEnabled += () =>
             _mailbox.Writer.TryWrite(new SessionMessage.Invoke(OnGmcpNegotiated));
+        // A package or field this MUD has never sent before is said once, as it arrives
+        // (GmcpShapeMemory; '.gmcp watch off' quiets it, '.gmcp new' lists them).
+        GmcpAudit.Shape.Announce = text => RaiseLine(Line.FromText(text, SysColour));
         _telnet.GmcpReceived += (pkg, json) =>
         {
             _events.Emit(SessionEventKind.Gmcp, json, pkg);

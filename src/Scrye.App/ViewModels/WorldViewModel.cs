@@ -510,6 +510,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session = new MudSession(profile);
         _session.LineReady += line => _pending.Enqueue(line);
 
+        // What the GMCP feed has looked like before, one file per MUD (scoped by host like
+        // plugin-shared, so every character on the MUD reads one memory):
+        // %APPDATA%/Scrye/gmcp-shape/<host>.json. A package or field never seen before is then
+        // announced as it arrives, and '.gmcp fields' opens with what changed.
+        {
+            string scope = string.IsNullOrWhiteSpace(profile.Host) ? profile.Name : profile.Host.Trim().ToLowerInvariant();
+            scope = string.Join("_", scope.Split(Path.GetInvalidFileNameChars()));
+            string shapeFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Scrye", "gmcp-shape", scope + ".json");
+            _session.Post(() => _session.GmcpAudit.UseShapeFile(shapeFile));
+        }
+
         // Companion state feed. Fires on the session loop, which is where StateStore lives —
         // publishing is a channel write per subscriber, so nothing crosses back to the UI
         // thread (companion design §4.1). Changed is preferred over Watch: it covers every
@@ -776,7 +788,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 // cheaper than reasoning about a race whose prize is a duplicate notice.
                 Dispatcher.UIThread.Post(MaybeAutoLog);
             }
-            else if (s == ConnectionState.Disconnected) _plugins.DispatchDisconnect();
+            else if (s == ConnectionState.Disconnected)
+            {
+                _plugins.DispatchDisconnect();
+                _session.Post(() => _session.GmcpAudit.SaveShape());   // keep what this session learned
+            }
         };
 
         // The reboot countdown: the session says when the text moves (about once a minute).
@@ -1332,7 +1348,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>
     /// <c>.gmcp</c> — what was subscribed to, what the server said it supports, and what has
     /// actually arrived. <c>.gmcp &lt;package&gt;</c> prints the whole of that package's last
-    /// payload; <c>.gmcp raw on</c> echoes every message as it lands; <c>.gmcp fields</c>
+    /// payload; <c>.gmcp raw on</c> echoes every message as it lands; <c>.gmcp new</c> lists what
+    /// is new since earlier sessions (and <c>.gmcp watch on|off</c> turns the live notice of it
+    /// on and off); <c>.gmcp fields</c>
     /// writes a markdown report of every package and every field seen.
     ///
     /// <para>The first evening of a protocol going live is when this is worth the most, and it
@@ -1355,11 +1373,37 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
+        if (lower is "watch on" or "watch off")
+        {
+            bool on = lower.EndsWith("on");
+            _session.Post(() => _session.GmcpAudit.Shape.Watch = on);
+            AppendSystem(on
+                ? "GMCP watch ON - a package or field never sent on this MUD before is announced as it arrives"
+                : "GMCP watch off - new packages and fields are still remembered; '.gmcp new' lists them");
+            return;
+        }
+
+        if (lower == "new")
+        {
+            _session.Post(() =>
+            {
+                IReadOnlyList<string> lines = _session.GmcpAudit.ChangesReport();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    foreach (string l in lines)
+                        if (l.Length > 0 && !l.StartsWith("## ", StringComparison.Ordinal))
+                            AppendSystem("  " + l.Replace("**", "").Replace("`", ""));
+                });
+            });
+            return;
+        }
+
         if (lower is "fields" or "fields save")
         {
             _session.Post(() =>
             {
                 IReadOnlyList<string> lines = _session.GmcpAudit.FieldReport(Title);
+                _session.GmcpAudit.SaveShape();
                 string? written = null, error = null;
                 try
                 {
@@ -1398,7 +1442,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 if (p is null)
                 {
                     AppendSystem($"no GMCP package '{a}' has arrived on this connection");
-                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields");
+                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields | .gmcp new | .gmcp watch on|off");
                     return;
                 }
                 AppendSystem($"-- {p.Package} -- {p.Count} message(s), last {p.LastAt:HH:mm:ss}");
@@ -1890,5 +1934,6 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Hud.Dispose();
         _session.Events.Emitted -= Debugger.Enqueue;
         await _session.DisposeAsync();
+        _session.GmcpAudit.SaveShape();   // the loop has stopped: nothing else touches it now
     }
 }

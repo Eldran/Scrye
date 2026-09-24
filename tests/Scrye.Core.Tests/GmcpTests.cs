@@ -813,6 +813,24 @@ public class GmcpTests
     }
 
     [Fact]
+    public void A_field_never_sent_before_is_said_in_the_output_as_it_arrives()
+    {
+        // The shape memory (GmcpShapeTests) wired into the session: the day Guild.City grew
+        // "production", this is the line that would have said so.
+        MudSession s = Connected(out TelnetLayer t, out _);
+        var earlier = new GmcpAudit();
+        earlier.Observe("Guild.City", "{\"nexttick\":5140}");
+        s.GmcpAudit.Shape.LoadJson(earlier.Shape.ToJson());
+        var lines = new List<string>();
+        s.LineReady += l => lines.Add(l.PlainText);
+
+        t.Process(Sub("Guild.City { \"nexttick\": 5140, \"production\": { \"grain\": 12 } }"));
+        Assert.Contains(lines, l => l.Contains("GMCP: new field in Guild.City: production.grain"));
+        t.Process(Sub("Guild.City { \"nexttick\": 5100, \"production\": { \"grain\": 13 } }"));
+        Assert.Single(lines, l => l.StartsWith("GMCP: new", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void An_all_zero_supported_answer_is_called_out_as_subscribed_to_nothing()
     {
         // The server answers TWICE — once before the subscription with every package at 0, and

@@ -380,10 +380,23 @@ into one line naming what happened.
 | `.gmcp <package>` | The whole of that package's last payload, pretty-printed. Case-insensitive, so `.gmcp char.vitals` is fine. |
 | `.gmcp raw on` / `off` | Echo every message into the output as it lands. Noisy on purpose — this is the one to run for a few minutes the first time a feed goes live. |
 | `.gmcp fields` | Write a markdown report into the log folder: every room you walked through and which area it was in, then every package with its fields, its raw payloads, and how many *different* ones it sent. The artefact worth keeping from a session — it says what the server actually sends, which is the only thing worth writing a plugin against. |
+| `.gmcp new` | What is new since earlier sessions on this MUD: packages and fields never sent before, remembered fields that did not turn up this time, packages the server offers in `Core.Supported` that Scrye does not subscribe to, and offered ones that have not arrived. The same list opens the `.gmcp fields` report. |
+| `.gmcp watch on` / `off` | Whether a new package or field is announced in the output the moment it arrives (on by default). Off only quiets the notice — the memory still learns. |
 
 The three ways a feed can be silent — never negotiated, negotiated but never subscribed, and
 subscribed but nothing has changed yet — look identical from the output pane and need different
 fixes, so `.gmcp` names which one it is rather than making you guess.
+
+Scrye also remembers the *shape* of the feed — every package and field path this MUD has sent,
+kept between sessions in `%APPDATA%/Scrye/gmcp-shape/<host>.json`, one file per MUD for every
+character on it. When the server adds something (a `production` field on `Guild.City`, a whole
+`Room.Death` package) a line like `GMCP: new field in Guild.City: production` appears as it
+lands, once. Array positions and numbered slices count as one field (`items[].name`,
+`hird_#`), and a room's exit names and the map legend's glyphs are data rather than fields, so
+walking somewhere new does not raise a notice. The first session after the memory starts is the
+baseline and says nothing — on that evening everything is new, so nothing is news. The server
+offering a package outside the subscription (a new top-level group) is said the moment
+`Core.Supported` lands, because such a package cannot arrive at all until Scrye asks for it.
 
 ### What it feeds
 
