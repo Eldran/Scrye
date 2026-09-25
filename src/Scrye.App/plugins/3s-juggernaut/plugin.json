@@ -1,0 +1,23 @@
+{
+  "id": "3s-juggernaut",
+  "name": "3S Juggernaut",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "The Juggernaut guild HUD, fed by the Guild.State / Combat / Suits / Chassis / Tech / Skills / Session / Info GMCP packages. Tabs: Status (heat and stims as bars, battery, ammo, missiles and clan powers against their max, jump jets / low light / follower stim when on, the fight - target condition, rounds, hits last round, frenzy - and the suit worn with its level, guild xp and valour), Suits (every suit, highest level first, guild xp and valour, the worn one marked), Loadout (weapon mounts and their ammo, skills against their max with the next point's cost, the tech tree), Session (this login's kills, time and kills per hour, best / smallest / last kill with the server's class number, missiles and clan powers used / wasted / donated, since reset, lifetime combat, and every kill this login newest first) and Clan (title, clan, honour, rank, evaluation, vault, storage, the depot and what it builds, kill totals). 'jug' prints the Status page into the output window. Built from one capture (icewind, 25 Sep 2026); reset_pct and battery are shown as the server's numbers until their meaning is confirmed. Another guild's same-named packages (a Cyborg's Guild.State) are ignored.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.3 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "state.write",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}

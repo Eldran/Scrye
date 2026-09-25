@@ -119,6 +119,22 @@ local function mage_set(gmcp)
   return nil   -- no MIP shape seen for this guild
 end
 
+-- Juggernaut (capture: icewind, 25 Sep 2026). SP is real (785/785 and it moves),
+-- heat is the mech's limit and stims the reserve that drains in a fight; both are
+-- percents on Guild.State, so their max is the literal 100.
+local function juggernaut_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",         "char.vitals.maxhp"      },
+      { "SP",     "char.vitals.sp",         "char.vitals.maxsp"      },
+      { "Heat",   "guild.state.heat_pct",   100                      },
+      { "Stim",   "guild.state.stim_pct",   100                      },
+      { "Coffin", "char.vitals.coffin",     "char.vitals.coffin_max" },
+    }
+  end
+  return nil   -- no MIP shape seen for this guild
+end
+
 local function generic_set(gmcp, gp1, gp2)
   if gmcp then
     return {
@@ -179,10 +195,11 @@ local function build(set, gmcp, why)
               { text = "Cyborg",  action = function() set_pref("cyborg") end },
               { text = "Gentech", action = function() set_pref("gentech") end },
               { text = "Mage",    action = function() set_pref("mage") end },
+              { text = "Juggernaut", action = function() set_pref("juggernaut") end },
               { text = "Generic", action = function() set_pref("generic") end },
           } },
           { type = "label", color = "dim",
-            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, Mage gets HP/SP/Umbra/Conc, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|mage|generic' works too.)" },
+            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, Mage gets HP/SP/Umbra/Conc, Juggernaut gets HP/SP/Heat/Stim, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|mage|juggernaut|generic' works too.)" },
       } },
     },
   }
@@ -199,19 +216,20 @@ local function apply()
   -- also carries `guild` for a cyborg but NOT for a viking, so it is not a
   -- dependable source - noted rather than used.)
   local gname = gmcp and (scrye.getState("guild.state.guild") or ""):lower() or ""
-  local is_viking, is_cyborg, is_gentech, is_mage
+  local is_viking, is_cyborg, is_gentech, is_mage, is_jugg
   if gmcp then
     is_viking = gname == "viking"
     is_cyborg = gname == "cyborg"
     is_gentech = gname == "gentech"
     is_mage = gname == "mage"
+    is_jugg = gname == "juggernaut"
   else
     is_viking = (scrye.getState("vik.mseid") or "") ~= ""
   end
   local choice = pref
   if choice == "auto" then
     choice = (is_viking and "viking") or (is_cyborg and "cyborg")
-          or (is_gentech and "gentech") or (is_mage and "mage") or "generic"
+          or (is_gentech and "gentech") or (is_mage and "mage") or (is_jugg and "juggernaut") or "generic"
   end
 
   -- A guild with no GMCP has no known shape, so it falls through to generic
@@ -220,9 +238,13 @@ local function apply()
   if choice == "cyborg"  and not cyborg_set(gmcp)  then choice = "generic" end
   if choice == "gentech" and not gentech_set(gmcp) then choice = "generic" end
   if choice == "mage"    and not mage_set(gmcp)    then choice = "generic" end
+  if choice == "juggernaut" and not juggernaut_set(gmcp) then choice = "generic" end
 
   local set, why
-  if choice == "mage" then
+  if choice == "juggernaut" then
+    set = juggernaut_set(gmcp)
+    why = "Juggernaut"
+  elseif choice == "mage" then
     set = mage_set(gmcp)
     why = "Mage"
   elseif choice == "gentech" then
@@ -264,7 +286,7 @@ set_pref = function(v)
 end
 
 scrye.addAlias{
-  pattern = "^vitals guild (auto|viking|cyborg|gentech|mage|generic)$", regex = true,
+  pattern = "^vitals guild (auto|viking|cyborg|gentech|mage|juggernaut|generic)$", regex = true,
   run = function(v) set_pref(v) end,
 }
 

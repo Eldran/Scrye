@@ -381,6 +381,7 @@ into one line naming what happened.
 | `.gmcp raw on` / `off` | Echo every message into the output as it lands. Noisy on purpose — this is the one to run for a few minutes the first time a feed goes live. |
 | `.gmcp fields` | Write a markdown report into the log folder: every room you walked through and which area it was in, then every package with its fields, its raw payloads, and how many *different* ones it sent. The artefact worth keeping from a session — it says what the server actually sends, which is the only thing worth writing a plugin against. |
 | `.gmcp new` | What is new since earlier sessions on this MUD: packages and fields never sent before, remembered fields that did not turn up this time, packages the server offers in `Core.Supported` that Scrye does not subscribe to, and offered ones that have not arrived. The same list opens the `.gmcp fields` report. |
+| `.gmcp learn` | Teach the memory from the field reports already in the log folder — this world's (`gmcp-fields-<world>-*.md`), or `.gmcp learn all` for every report there, or `.gmcp learn <file>` for one. A memory started today then knows what every earlier capture saw, so the first "new" it reports is a real change. The log folder holds every MUD's reports, which is why plain `learn` reads only this world's. |
 | `.gmcp watch on` / `off` | Whether a new package or field is announced in the output the moment it arrives (on by default). Off only quiets the notice — the memory still learns. |
 
 The three ways a feed can be silent — never negotiated, negotiated but never subscribed, and
@@ -730,6 +731,7 @@ doesn't exist on 3K, so nothing was left for them to read.)
 | `vgo` `vhere` `vikloc` `vnav` `vmgo` `vmrun` `vicons` | Viking World |
 | `vgrudge` | Viking Kingdom |
 | `cyb` | 3S Cyborg |
+| `jug` | 3S Juggernaut |
 | `gt` · `gtsys` | 3S Gentech |
 | `merc` | 3S Mercenary |
 | `mage` | 3S Mage |
@@ -1087,7 +1089,8 @@ and figures out which bars you should have on its own.
 A Viking gets HP / Seid / Vig / Rad by their own named keys. A **Cyborg** gets HP / Power / Heat —
 power is the resource and heat is what stops you spending it. A **Gentech** gets HP / PU / CPC, its
 two guild pools. A **Mage** gets HP / SP / Umbra / Conc — SP is real for a mage, spells cost it, so it
-keeps its bar and the two guild pools follow. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
+keeps its bar and the two guild pools follow. A **Juggernaut** gets HP / SP / Heat / Stim, heat and stims
+as the percents the guild feed sends. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
 pools, labelled with the server's own names for them — so any guild's bars come out right without
 the plugin having to know that guild exists. On GMCP the Viking and generic sets carry a fifth
 gauge, **Coffin**; the Cyborg set carries it as its fourth.
@@ -1099,6 +1102,7 @@ gauge, **Coffin**; the Cyborg set carries it as its fourth.
 | `vitals guild cyborg` | Pin the Cyborg set regardless. |
 | `vitals guild gentech` | Pin the Gentech set regardless. |
 | `vitals guild mage` | Pin the Mage set regardless. |
+| `vitals guild juggernaut` | Pin the Juggernaut set regardless. |
 | `vitals guild generic` | Pin the generic set regardless. |
 
 The **Settings** tab has the same choices as buttons, and says which set is active, which feed it's
@@ -1368,6 +1372,33 @@ Bars run red at or under the warn threshold, amber up to four times it, green ab
 hits zero locally shows `gone?` for a few seconds rather than vanishing, in case the server just
 hasn't refreshed yet. The god's name and focus are shown without a countdown, because the server
 gives the expiry as a wall‑clock time the plugin sandbox can't anchor.
+
+---
+
+### 3S Juggernaut — `jug`
+
+The Juggernaut guild HUD, from the guild's GMCP feed. Five tabs:
+
+- **Status** — heat and stims as bars, battery, ammo, missiles and clan powers against their
+  max, jump jets / low light / follower stim when they're on, the fight (the target's condition,
+  rounds on it, hits last round, frenzy), and the suit you wear with its level, guild xp toward
+  the next level and valour.
+- **Suits** — every suit, highest level first, with its guild xp and valour; the one you wear is
+  marked. Kills in this suit and in all suits underneath.
+- **Loadout** — the weapon mounts with their ammo, the skills against their max with the cost of
+  the next point (green when you can afford it), and the tech tree.
+- **Session** — this login's kills, time and kills per hour, the best, smallest and last kill with
+  the server's class number for each, missiles and clan powers used / wasted / donated, the same
+  since reset, lifetime combat, and every kill this login newest first with its rounds and damage.
+- **Clan** — title, clan and honour, rank, evaluation, vault, storage, the depot and what it is
+  building, and your kill totals.
+
+| Command | What it does |
+|---|---|
+| `jug` | Print the Status page into the output window. |
+
+Two numbers are shown as the server's own until their meaning is confirmed: **Reset** (`reset_pct`,
+which climbs slowly out of a fight) and **Battery**.
 
 ---
 
