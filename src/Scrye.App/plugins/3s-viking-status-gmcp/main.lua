@@ -1545,14 +1545,22 @@ do
       add("")
       add(string.format("-- Market: %s (%d lot%s%s) --", HOLDCITY[lin] or ("lineage " .. lin), #lots,
         #lots == 1 and "" or "s", tonumber(LS.lmarket_partial) == 1 and ", partial" or ""))
-      add(col("dim", string.format("%-8s %-16s %3s  %-9s %5s  %3s %3s %3s %3s %3s",
-        "Species", "Breed", "Qty", "Trait", "Price", "Con", "Hrd", "Vig", "Fer", "Yld")))
+      -- Each and Qty (17 Sep lots and later): unit_price is what one head costs and price is
+      -- the whole lot; available is how many of the lot are still for sale, shown as
+      -- "left/lot" when some are gone. A lot without them (older lineages' markets) works
+      -- the unit price out of price/count and shows count alone.
+      add(col("dim", string.format("%-8s %-16s %5s  %-9s %5s %6s  %3s %3s %3s %3s %3s",
+        "Species", "Breed", "Qty", "Trait", "Each", "Lot", "Con", "Hrd", "Vig", "Fer", "Yld")))
       table.sort(lots, function(a, b) return (tonumber(a.idx) or 0) < (tonumber(b.idx) or 0) end)
       for _, l in ipairs(lots) do
         local b = best[tostring(l.species)]
+        local count, avail = tonumber(l.count), tonumber(l.available)
+        local qty = (avail and count and avail ~= count) and (S(avail) .. "/" .. S(count)) or S(l.count)
+        local each = tonumber(l.unit_price)
+          or ((tonumber(l.price) and count and count > 0) and math.floor(tonumber(l.price) / count + 0.5) or nil)
         add(padesc(nice(l.species):sub(1, 8), 8) .. " " .. padesc(nice(l.breed):sub(1, 16), 16)
-          .. esc(string.format(" %3s  ", S(l.count))) .. padesc(trait(l.trait):sub(1, 9), 9)
-          .. esc(string.format(" %5s  ", S(l.price)))
+          .. esc(string.format(" %5s  ", qty)) .. padesc(trait(l.trait):sub(1, 9), 9)
+          .. esc(string.format(" %5s %6s  ", each and S(each) or "", S(l.price)))
           .. versus(l.con, b and b.con) .. " " .. versus(l.hard, b and b.hard) .. " "
           .. versus(l.vigor, b and b.vigor) .. " " .. versus(l.fert, b and b.fert) .. " "
           .. versus(l.yield, b and b.yield))
