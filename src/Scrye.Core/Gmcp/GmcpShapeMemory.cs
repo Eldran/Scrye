@@ -149,6 +149,71 @@ public sealed class GmcpShapeMemory
         catch (JsonException) { _known.Clear(); }
     }
 
+    /// <summary>
+    /// Learn from a saved <c>.gmcp fields</c> report: every payload in it (the pretty-printed
+    /// last one and the one-line different ones under it) goes straight into what is KNOWN,
+    /// as if an earlier session had sent it. So a memory started today knows what every
+    /// capture of the last month saw, and the first "new field" it reports is a real one.
+    /// Returns the number of package and field shapes that were not known before.
+    /// </summary>
+    public int LearnFromReport(string markdown)
+    {
+        int before = _known.Count;
+        string? package = null;
+        var block = new System.Text.StringBuilder();
+        bool inJson = false;
+        foreach (string raw in markdown.Split('\n'))
+        {
+            string line = raw.TrimEnd('\r');
+            if (!inJson)
+            {
+                // a package heading is one word with a dot in it ("## Guild.City"); the report's
+                // other headings ("## Rooms visited", "## Changes since ...") are not packages
+                Match h = Regex.Match(line, @"^## (\S+)$");
+                if (h.Success) { package = h.Groups[1].Value.Contains('.') ? h.Groups[1].Value : null; continue; }
+                if (line.StartsWith("```json", StringComparison.Ordinal)) { inJson = true; block.Clear(); }
+                continue;
+            }
+            if (line.StartsWith("```", StringComparison.Ordinal))
+            {
+                inJson = false;
+                if (package is not null && !string.Equals(package, "Core.Supported", StringComparison.OrdinalIgnoreCase))
+                    LearnBlock(package, block.ToString());
+                continue;
+            }
+            block.Append(line).Append('\n');
+        }
+        // what this session called new and a report already knew is not new after all
+        _newInOrder.RemoveAll(k => _known.Contains(k));
+        return _known.Count - before;
+    }
+
+    // One ```json block: the whole of it when it is one payload (the pretty-printed last one),
+    // else one payload per line (the "different payloads" list).
+    private void LearnBlock(string package, string text)
+    {
+        if (TryLearn(package, text)) return;
+        foreach (string line in text.Split('\n'))
+            if (line.TrimStart().StartsWith('{')) TryLearn(package, line);
+    }
+
+    private bool TryLearn(string package, string json)
+    {
+        try { using JsonDocument _ = JsonDocument.Parse(json); }
+        catch (JsonException) { return false; }
+        _known.Add(package);
+        foreach ((string path, string value) in GmcpAudit.Leaves(json))
+        {
+            if (path == "(not json)" || path == "(value)") continue;
+            string key = FieldKey(package, value == GmcpAudit.EmptyArray ? path + "[0]" : path);
+            for (int at = key.IndexOf("[]", StringComparison.Ordinal); at >= 0 && at + 2 < key.Length;
+                 at = key.IndexOf("[]", at + 2, StringComparison.Ordinal))
+                _known.Add(key[..(at + 2)]);
+            _known.Add(key);
+        }
+        return true;
+    }
+
     /// <summary>A new connection: what the last one learned becomes known, and the session
     /// sets start over - so a reconnect does not announce the same field twice.</summary>
     public void NewSession()

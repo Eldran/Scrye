@@ -194,4 +194,36 @@ public class GmcpShapeTests
         int city = report.ToList().FindIndex(l => l == "## Guild.City");
         Assert.True(changes > 0 && changes < city);
     }
+
+    [Fact]
+    public void ASavedFieldReportTeachesTheMemoryWhatEarlierCapturesSaw()
+    {
+        // what '.gmcp fields' writes: a pretty-printed last payload, then the different ones
+        // one per line; the Rooms and Changes sections and Core.Supported are not packages
+        var earlier = new GmcpAudit { Negotiated = true };
+        earlier.Observe("Core.Supported", """{ "Guild.City": 1 }""");
+        earlier.Observe("Guild.City", City);
+        earlier.Observe("Guild.City", CityWithProduction);
+        earlier.Observe("Room.Info", """{ "num": 4, "name": "Road", "area": "Unknown", "exits": { "n": 5 } }""");
+        earlier.Observe("Guild.Trade", """{ "carts": [ { "good": "mead" } ] }""");
+        string report = string.Join("\n", earlier.FieldReport("Goran"));
+
+        var audit = new GmcpAudit();
+        var said = new List<string>();
+        audit.Shape.Announce = said.Add;
+        audit.Observe("Guild.City", CityWithProduction);        // this session saw it before the learn
+        int learned = audit.Shape.LearnFromReport(report);
+        Assert.True(learned >= 8);
+        Assert.False(audit.Shape.Baseline);
+        Assert.DoesNotContain("Guild.City|production.grain", audit.Shape.NewThisSession);   // not new after all
+        Assert.DoesNotContain(audit.Shape.NewThisSession, k => k.StartsWith("Core.Supported") || k.StartsWith("Rooms") || k.StartsWith("Changes"));
+
+        audit.Observe("Guild.City", CityWithProduction.Replace("12", "14"));
+        audit.Observe("Guild.Trade", """{ "carts": [ ] }""");
+        audit.Observe("Room.Info", """{ "num": 5, "name": "Gate", "area": "Unknown", "exits": { "portal": 6 } }""");
+        Assert.Empty(said);                                     // everything the report held is known
+        audit.Observe("Guild.City", """{ "weather": { "season": "autumn" } }""");
+        Assert.Equal(new[] { "GMCP: new field in Guild.City: weather.season" }, said);
+        Assert.Equal(0, audit.Shape.LearnFromReport(report));   // learning twice learns nothing
+    }
 }

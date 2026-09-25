@@ -1383,6 +1383,51 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
+        if (lower == "learn" || lower.StartsWith("learn ", StringComparison.Ordinal))
+        {
+            // Seed the shape memory from saved field reports, so a memory started today knows
+            // what every earlier capture saw. Plain 'learn' reads this world's reports only
+            // (named after it) - the log folder also holds other MUDs' reports, and 3K's
+            // shape is not 3Scapes'. 'learn all' reads every report; 'learn <file>' one.
+            string what = a.Length > 5 ? a[6..].Trim() : "";
+            string safe = string.Join("_", Title.Split(Path.GetInvalidFileNameChars()));
+            _session.Post(() =>
+            {
+                var files = new List<string>();
+                string? error = null;
+                try
+                {
+                    string dir = MudSession.DefaultLogDirectory();
+                    if (what.Length > 0 && !what.Equals("all", StringComparison.OrdinalIgnoreCase))
+                        files.Add(Path.IsPathRooted(what) ? what : Path.Combine(dir, what));
+                    else if (Directory.Exists(dir))
+                        files.AddRange(Directory.GetFiles(dir, what.Length > 0 ? "gmcp-fields-*.md" : $"gmcp-fields-{safe}-*.md")
+                                                .OrderBy(f => f, StringComparer.Ordinal));
+                }
+                catch (Exception ex) { error = ex.Message; }
+                int learned = 0, read = 0;
+                var failed = new List<string>();
+                foreach (string f in files)
+                {
+                    try { learned += _session.GmcpAudit.Shape.LearnFromReport(File.ReadAllText(f)); read++; }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed.Add(Path.GetFileName(f)); }
+                }
+                string? saveError = read > 0 ? _session.GmcpAudit.SaveShape() : null;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (error is not null) AppendSystem("could not list the field reports: " + error);
+                    else if (files.Count == 0)
+                        AppendSystem(what.Length > 0 ? $"no field report '{what}' found"
+                                                     : $"no field reports for {Title} in the log folder ('.gmcp learn all' reads every report there)");
+                    else
+                        AppendSystem($"GMCP shape memory: read {read} report(s), {learned} package/field shape(s) learned"
+                                     + (failed.Count > 0 ? "; could not read " + string.Join(", ", failed) : "")
+                                     + (saveError is not null ? "; could not save: " + saveError : ""));
+                });
+            });
+            return;
+        }
+
         if (lower == "new")
         {
             _session.Post(() =>
@@ -1442,7 +1487,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 if (p is null)
                 {
                     AppendSystem($"no GMCP package '{a}' has arrived on this connection");
-                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields | .gmcp new | .gmcp watch on|off");
+                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields | .gmcp new | .gmcp watch on|off | .gmcp learn [all|<file>]");
                     return;
                 }
                 AppendSystem($"-- {p.Package} -- {p.Count} message(s), last {p.LastAt:HH:mm:ss}");
