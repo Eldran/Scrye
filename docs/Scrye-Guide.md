@@ -848,6 +848,9 @@ sends is a single bare movement word.
 | `mapg fav` | Add/remove the current map from the **Favs** tab (max 20). |
 | `mapg level up` / `mapg level down` | Shift the view one level. `mapg level` follows your own level again. |
 | `mapg redraw` | Lay the current map out again from its links. |
+| `mapg export` | Write the whole map to Scrye's exports folder (`%APPDATA%\Scrye\exports`) as `3s-map-all-<date>.json`, plus a picture of the map you're on as an `.svg` — open it in any browser; hover a room for its number and name. |
+| `mapg export <area>` · `mapg export svg` | Just that area's rooms · just the picture. |
+| `mapg import <file>` | Add a map someone exported (put the file in your exports folder first) to yours. Rooms you don't have come in whole; rooms you do have keep your name and exits and only gain links you haven't walked; their map names and places come in only where you have none. Nothing of yours is overwritten. `mapg import` alone lists the map files there. |
 | `mapg draw on` / `mapg draw off` | Panel drawing. Default **on**. |
 | `mapg shift` | List every exit marked SHIFTING. |
 | `mapg shift <dir>` | Mark that exit here as shifting — an elevator or portal. Nothing is learned or routed through it and it draws as `~`. |

@@ -1977,6 +1977,260 @@ local function forget_many(kind, key, confirmed)
        n, label, here and "" or " Walk into a room and the map picks you up again."))
 end
 
+-- ---------- export and import (1.12.0, host API 1.21) ----------
+-- A map took hours of walking and could not leave the machine it was walked on, nor be
+-- looked at anywhere but the HUD. 'mapg export' writes it to Scrye's exports folder
+-- (%APPDATA%/Scrye/exports) as two files: the rooms as JSON another player can
+-- 'mapg import', and a picture of the map you are on as SVG, which any browser opens.
+--
+-- IMPORT ADDS, IT NEVER OVERWRITES
+--   Someone else's map is somebody else's walking, possibly older than yours, possibly from
+--   before the server moved a door. So a room you already have is kept exactly as you
+--   have it - its name, area and the exits the server told YOU - and gains only links you
+--   have not learned yet, in directions its own listing names. A room you have never seen
+--   comes in whole. Map names and places come in only where you have none of your own. The
+--   file is data from outside, so everything is checked: numbers are numbers, directions
+--   are short words, text is clipped, and an entry that fails is counted and skipped.
+local EXPORT_FORMAT = "scrye-map"
+local EXPORT_VER    = 1
+local NO_EXPORTS    = "this Scrye cannot write files for plugins - it needs plugin API 1.21 (update Scrye)"
+
+local function slug(s)
+  local out = tostring(s or ""):lower():gsub("[^%w]+", "-"):gsub("^%-+", ""):gsub("%-+$", "")
+  if out == "" then out = "map" end
+  return out:sub(1, 40)
+end
+
+local function stamp() return os.date("%Y%m%d-%H%M") end
+
+-- the rooms of one area (lowercased) or of everything, as the export file carries them
+local function export_data(filter)
+  local list, keep = {}, {}
+  for num, r in pairs(rooms) do
+    if not filter or area_of(r):lower() == filter then
+      keep[num] = true
+      list[#list + 1] = { num = num, name = r.name, area = r.area, exits = r.exits,
+                          walked = (r.walked and next(r.walked) ~= nil) and r.walked or nil,
+                          shift = r.shift, edge = r.edge }
+    end
+  end
+  table.sort(list, function(a, b) return a.num < b.num end)
+  local names, pls = {}, {}
+  for seed, nm in pairs(mapnames) do if keep[seed] then names[#names + 1] = { seed = seed, name = nm } end end
+  table.sort(names, function(a, b) return a.seed < b.seed end)
+  for _, pl in ipairs(places) do if keep[pl.num] then pls[#pls + 1] = { name = pl.name, num = pl.num } end end
+  return { format = EXPORT_FORMAT, ver = EXPORT_VER, from = "3s-map-gmcp", scope = filter or "all",
+           made = os.date("!%Y-%m-%dT%H:%M:%SZ"), rooms = list, names = names, places = pls }, #list
+end
+
+local function xml(s)
+  return (tostring(s or ""):gsub("[&<>\"']", { ["&"] = "&amp;", ["<"] = "&lt;", [">"] = "&gt;",
+                                                 ['"'] = "&quot;", ["'"] = "&#39;" }))
+end
+
+-- The map you are on, at the level you are looking at, as an SVG picture: rooms as squares
+-- where the layout put them, compass links as lines, you in the accent colour, places
+-- labelled, stairs and doors marked. Hover a room in a browser for its number and name.
+local function map_svg()
+  local L = current_layout()
+  if not L or not L.at[here] then return nil end
+  local lvl = view_z or L.at[here].z
+  local minx, maxx, miny, maxy
+  local on = {}
+  for num, p in pairs(L.at) do
+    if p.z == lvl then
+      on[num] = p
+      minx = math.min(minx or p.x, p.x) ; maxx = math.max(maxx or p.x, p.x)
+      miny = math.min(miny or p.y, p.y) ; maxy = math.max(maxy or p.y, p.y)
+    end
+  end
+  if not minx then return nil end
+  local S, M, TOP = 28, 36, 44
+  local W = (maxx - minx) * S + 2 * M
+  local H = (maxy - miny) * S + 2 * M + TOP + 18
+  W = math.max(W, 360)
+  local function cx(x) return M + (x - minx) * S end
+  local function cy(y) return TOP + M + (maxy - y) * S end    -- north is up
+
+  local out = {}
+  local function add(s) out[#out + 1] = s end
+  add(string.format('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" font-family="Segoe UI, sans-serif">', W, H, W, H))
+  add('<style>.room{fill:#8a93a3}.here{fill:#e0a040}.place{fill:#6fb3e0}.off{stroke:#e0c040;stroke-width:1.5;stroke-dasharray:2 2}'
+      .. '.link{stroke:#4c5361;stroke-width:2}.door{fill:none;stroke:#b07ad0;stroke-width:1.5}.stair{fill:#c0c6d0}'
+      .. '.label{fill:#cfd5de;font-size:10px}.title{fill:#e6e9ee;font-size:14px;font-weight:600}.sub{fill:#8a93a3;font-size:11px}</style>')
+  add(string.format('<rect width="%d" height="%d" fill="#1b1e24"/>', W, H))
+  local label = label_of()[L.seed] or L.area
+  local named = mapnames[L.seed]
+  add(string.format('<text class="title" x="%d" y="22">%s</text>', M, xml(named and (named .. " - " .. label) or label)))
+  add(string.format('<text class="sub" x="%d" y="38">level %d - %d room(s) on this level, %d on the map - exported %s by Scrye 3s-map-gmcp</text>',
+      M, lvl, count(on), L.size, os.date("%Y-%m-%d")))
+
+  -- links first, so rooms sit on top of them; each pair once
+  local a, drawn = adjacency(), {}
+  for num, p in pairs(on) do
+    for _, e in ipairs(a.fwd[num] or {}) do
+      local q = on[e.to]
+      local dv = DELTA[e.dir]
+      local key = math.min(num, e.to) .. "-" .. math.max(num, e.to)
+      if q and dv and dv[3] == 0 and e.to ~= num and not drawn[key] then
+        drawn[key] = true
+        add(string.format('<line class="link" x1="%d" y1="%d" x2="%d" y2="%d"/>', cx(p.x), cy(p.y), cx(q.x), cy(q.y)))
+      end
+    end
+  end
+  for num, p in pairs(on) do
+    local r = rooms[num]
+    local x, y = cx(p.x), cy(p.y)
+    local cls = num == here and "here" or (place_of(num) and "place" or "room")
+    add(string.format('<rect class="%s%s" x="%d" y="%d" width="14" height="14" rx="2"><title>%d %s%s</title></rect>',
+        cls, p.off and " off" or "", x - 7, y - 7, num, xml(name_of(num)),
+        p.off and " (drawn out of place: its links want a cell another room has)" or ""))
+    local ex = r and r.exits or {}
+    if ex.u or (r and r.walked and r.walked.u) then add(string.format('<path class="stair" d="M%d %d l4 -5 l4 5 z"/>', x + 8, y - 3)) end
+    if ex.d or (r and r.walked and r.walked.d) then add(string.format('<path class="stair" d="M%d %d l4 5 l4 -5 z"/>', x + 8, y + 3)) end
+    if ex["in"] or ex.out or ex.enter then add(string.format('<circle class="door" cx="%d" cy="%d" r="3"/>', x - 11, y)) end
+    local pl = place_of(num)
+    if pl then add(string.format('<text class="label" x="%d" y="%d">%s</text>', x + 10, y + 12, xml(pl.name))) end
+  end
+  add(string.format('<text class="sub" x="%d" y="%d">orange: where you stood - blue: your places - triangles: up/down - circle: a door to another map - dashed: drawn out of place</text>',
+      M, H - 10))
+  add("</svg>")
+  return table.concat(out, "\n") .. "\n"
+end
+
+local function export_map(arg)
+  if not scrye.exports then note(NO_EXPORTS) ; return end
+  arg = tostring(arg or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local want_data = arg:lower() ~= "svg" and arg:lower() ~= "picture"
+  local filter = (want_data and arg ~= "" and arg:lower() ~= "all") and arg:lower() or nil
+  local wrote = 0
+  if want_data then
+    local data, n = export_data(filter)
+    if n == 0 then
+      note(filter and ("no rooms carry the area '" .. arg .. "' - 'mapg areas' lists them") or "nothing to export - the map is empty")
+      return
+    end
+    local name = string.format("3s-map-%s-%s.json", filter and slug(filter) or "all", stamp())
+    local path, err = scrye.exports.write(name, scrye.json.encode(data))
+    if not path then note("could not write " .. name .. ": " .. tostring(err)) ; return end
+    note(string.format("%d room(s) exported: %s", n, path))
+    note("  give the file to another player: they put it in their exports folder and type 'mapg import " .. name .. "'")
+    wrote = wrote + 1
+  end
+  if filter then return end          -- an area export is data; the picture is of the map you are on
+  local svg = map_svg()
+  if not svg then
+    if not want_data then note("no picture: we are not anywhere yet - walk into a room first") end
+    return
+  end
+  local L = current_layout()
+  local name = string.format("3s-map-%s-%s.svg", slug(mapnames[L.seed] or label_of()[L.seed] or L.area), stamp())
+  local path, err = scrye.exports.write(name, svg)
+  if not path then note("could not write " .. name .. ": " .. tostring(err)) ; return end
+  note("picture of this map: " .. path .. " (open it in a browser; hover a room for its name)")
+end
+
+-- untrusted text from a file: a string, no control characters, clipped
+local function clip(s, n)
+  if type(s) ~= "string" then return "" end
+  return (s:gsub("%c", " ")):sub(1, n or 120)
+end
+
+local function whole(n)
+  n = tonumber(n)
+  return n and n >= 0 and n == math.floor(n) and n < 2^31 and n or nil
+end
+
+-- direction -> room number, keeping only what looks like one
+local function clean_links(t)
+  local out = {}
+  if type(t) ~= "table" then return out end
+  for d, to in pairs(t) do
+    local n = whole(to)
+    if type(d) == "string" and #d <= 12 and d:match("^%a+$") and n then out[d:lower()] = n end
+  end
+  return out
+end
+
+local function clean_marks(t)
+  if type(t) ~= "table" then return nil end
+  local out
+  for d, v in pairs(t) do
+    if type(d) == "string" and #d <= 12 and d:match("^%a+$") and v then out = out or {} ; out[d:lower()] = true end
+  end
+  return out
+end
+
+local function import_map(name)
+  if not scrye.exports then note(NO_EXPORTS) ; return end
+  name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if name == "" then
+    local maps = {}
+    for _, f in ipairs(scrye.exports.list()) do if f:lower():match("%.json$") then maps[#maps + 1] = f end end
+    if #maps == 0 then
+      note("no .json files in the exports folder - put a map someone exported there, then 'mapg import <file>'")
+    else
+      note("map files in the exports folder (newest first) - 'mapg import <file>' adds one to yours:")
+      for i = 1, math.min(#maps, LIST_CAP) do note("  " .. maps[i]) end
+    end
+    return
+  end
+  local text, err = scrye.exports.read(name)
+  if not text then note("could not read " .. name .. ": " .. tostring(err)) ; return end
+  local ok, data = pcall(scrye.json.decode, text)
+  if not ok or type(data) ~= "table" or data.format ~= EXPORT_FORMAT or type(data.rooms) ~= "table" then
+    note(name .. " is not a map exported by 'mapg export'") ; return
+  end
+  if (tonumber(data.ver) or 0) > EXPORT_VER then
+    note(name .. " was exported by a newer mapper (format " .. tostring(data.ver) .. ") - update the plugin first") ; return
+  end
+  local added, links, kept, bad = 0, 0, 0, 0
+  for _, r in ipairs(data.rooms) do
+    local num = type(r) == "table" and whole(r.num) or nil
+    if not num or num == 0 then bad = bad + 1
+    else
+      local mine = rooms[num]
+      if not mine then
+        rooms[num] = { name = clip(r.name), area = clip(r.area, 80), exits = clean_links(r.exits),
+                       walked = clean_links(r.walked), visits = 0,
+                       shift = clean_marks(r.shift), edge = clean_marks(r.edge) }
+        -- the same rule load() applies: a learned link its listing does not name is dropped
+        for d in pairs(rooms[num].walked) do
+          if unlisted(rooms[num], d) then rooms[num].walked[d] = nil end
+        end
+        known = known + 1 ; added = added + 1
+      else
+        kept = kept + 1
+        for d, to in pairs(clean_links(r.walked)) do
+          if to ~= 0 and not (mine.walked and mine.walked[d]) and not unlisted(mine, d)
+             and not (mine.shift and mine.shift[d]) then
+            mine.walked = mine.walked or {} ; mine.walked[d] = to ; links = links + 1
+          end
+        end
+      end
+    end
+  end
+  local newnames, newplaces = 0, 0
+  for _, n in ipairs(type(data.names) == "table" and data.names or {}) do
+    local seed = type(n) == "table" and whole(n.seed) or nil
+    local nm = type(n) == "table" and clip(n.name, 40) or ""
+    if seed and rooms[seed] and nm ~= "" and not mapnames[seed] then mapnames[seed] = nm ; newnames = newnames + 1 end
+  end
+  for _, pl in ipairs(type(data.places) == "table" and data.places or {}) do
+    local num = type(pl) == "table" and whole(pl.num) or nil
+    local nm = type(pl) == "table" and clip(pl.name, 40) or ""
+    if num and rooms[num] and nm ~= "" and not tonumber(nm) and not place_named(nm) and #places < PLACE_CAP then
+      places[#places + 1] = { name = nm, num = num } ; newplaces = newplaces + 1
+    end
+  end
+  dirty = true ; forget_adjacency() ; save() ; draw()
+  note(string.format("imported %s: %d new room(s), %d new link(s) in rooms you had (%d kept as you had them)%s%s%s",
+       name, added, links, kept,
+       newnames > 0 and (", " .. newnames .. " map name(s)") or "",
+       newplaces > 0 and (", " .. newplaces .. " place(s)") or "",
+       bad > 0 and (" - " .. bad .. " unreadable entr" .. (bad == 1 and "y" or "ies") .. " skipped") or ""))
+end
+
 -- ---------- alias ----------
 -- One dispatcher rather than several aliases: a pattern like '^mapg (%w+)$'
 -- registered beside '^mapg$' swallows whichever was added first, which is a
@@ -2085,6 +2339,8 @@ scrye.addAlias{
         note("  MUD geometry is not a grid; the room is right, the cell is approximate")
       end
       if #b > 0 then note("  borders " .. table.concat(b, ", ")) end
+    elseif verb == "export"   then export_map(rest)
+    elseif verb == "import"   then import_map(rest)
     elseif verb == "redraw"   then forget_adjacency(); draw(); note("laid out again from the links")
     elseif verb == "level"    then
       local L = current_layout()
@@ -2141,6 +2397,9 @@ scrye.addAlias{
       note("mapg name <text>  call this map something you will recognise ('mapg name -' undoes it)")
       note("mapg level up|down   look at another level; 'mapg level' comes back")
       note("mapg redraw       lay the current map out again from the links")
+      note("mapg export       the whole map as a file to share, plus a picture of this map (SVG)")
+      note("mapg export <area> just that area's rooms; 'mapg export svg' just the picture")
+      note("mapg import [file] add a shared map to yours (nothing you have is overwritten); no file lists them")
       note("mapg draw on|off  the HUD panel")
       note("mapg shift [n] <dir> [off]  mark an exit shifting (elevator, portal): drawn ~, never routed")
       note("mapg forget <n>   drop one room")
