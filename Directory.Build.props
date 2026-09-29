@@ -1,6 +1,12 @@
 <Project>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- The Scrye release this is. Bump it BEFORE tagging a release (tag v1.9.2 means 1.9.2):
+         the running app compares it with catalog/release.json to say "a new version is out",
+         and Core.Hello reports it to the MUD. The release step of scrye-cli warns if the tag
+         and this number differ. Scrye.PluginContracts sets its own Version (the plugin API),
+         which wins over this one. -->
+    <Version>1.9.1</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

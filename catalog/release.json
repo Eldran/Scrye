@@ -1,0 +1,7 @@
+{
+  "format": 1,
+  "version": "1.9.1",
+  "tag": "v1.9.1",
+  "notes": "v1.9.1 - GMCP shape memory: new packages and fields announced as they arrive, '.gmcp new', '.gmcp watch', '.gmcp learn' from saved reports; Char.XP subscribed. Farmer 1.5.0: every kill counted (yours, your hird's, your party's) via Room.Death, XP row, kill log per area and floor with an XP column, paged room contents. Juggernaut guild HUD (3s-juggernaut 1.0.0) and its Vitals set (3s-vitals 2.2.0). Map 1.11.1: unlisted learned links dropped (Megacity floor 30). Auto-Raid 2.3.1: town lists from Guild.Fleet again. Viking Status 2.27.2: livestock price per head and lot remainder.",
+  "published": "2026-09-25"
+}

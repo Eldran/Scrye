@@ -3,6 +3,7 @@ using Scrye.App.Companion;
 using Scrye.Core.Automation;
 using Scrye.Core.Model;
 using Scrye.Core.Profiles;
+using Scrye.Core.Updates;
 
 namespace Scrye.App.ViewModels;
 
@@ -158,6 +159,93 @@ public sealed class MainWindowViewModel : ViewModelBase
     private GlobalSettingsViewModel? _settings;
     public GlobalSettingsViewModel? Settings { get => _settings; set => SetField(ref _settings, value); }
 
+    // ---- "a new Scrye is out" -------------------------------------------------------
+    // Checked once, a few seconds after start, and again whenever the version line at the
+    // bottom of the sidebar is clicked. A quiet check that fails (offline, GitHub down) says
+    // nothing; a clicked one says why. Nothing is downloaded: the notice links to the release.
+
+    private static readonly string RunningVersion = ReleaseInfo.CurrentVersion();
+
+    /// <summary>"Scrye v1.9.1" - the sidebar's last line, and the button that checks now.</summary>
+    public string VersionText { get; } = "Scrye v" + RunningVersion;
+
+    private ReleaseInfo? _release;
+    private bool _checkingUpdate;
+
+    private bool _updateAvailable;
+    /// <summary>A newer release is known and has not been dismissed.</summary>
+    public bool UpdateAvailable { get => _updateAvailable; private set => SetField(ref _updateAvailable, value); }
+
+    public string? UpdateText => _release is null ? null : $"Scrye v{_release.Version} is out — you have v{RunningVersion}";
+
+    /// <summary>The release note (the tag's annotation), as the notice's tooltip.</summary>
+    public string? UpdateNotes => _release?.Notes ?? "See the release page for what changed.";
+
+    private string? _updateStatus;
+    /// <summary>What a clicked check found, when it found no update ("up to date", or why not).</summary>
+    public string? UpdateStatus { get => _updateStatus; private set => SetField(ref _updateStatus, value); }
+
+    public RelayCommand CheckUpdatesCommand { get; private set; } = null!;
+    public RelayCommand OpenReleaseCommand { get; private set; } = null!;
+    public RelayCommand DismissUpdateCommand { get; private set; } = null!;
+    public RelayCommand SkipUpdateCommand { get; private set; } = null!;
+
+    private void InitUpdateCheck()
+    {
+        CheckUpdatesCommand = new RelayCommand(() => CheckForUpdate(manual: true));
+        OpenReleaseCommand = new RelayCommand(OpenRelease);
+        DismissUpdateCommand = new RelayCommand(() => UpdateAvailable = false);
+        SkipUpdateCommand = new RelayCommand(() =>
+        {
+            if (_release is not null) { _ui.SkippedRelease = _release.Version; Services.UiStateStore.Save(_ui); }
+            UpdateAvailable = false;
+        });
+
+        // not in the first seconds: startup has better things to do than wait on GitHub
+        var timer = new Avalonia.Threading.DispatcherTimer { Interval = System.TimeSpan.FromSeconds(4) };
+        timer.Tick += (_, _) => { timer.Stop(); CheckForUpdate(manual: false); };
+        timer.Start();
+    }
+
+    private async void CheckForUpdate(bool manual)
+    {
+        if (_checkingUpdate) return;
+        _checkingUpdate = true;
+        if (manual) UpdateStatus = "Checking for a new release…";
+        try
+        {
+            ReleaseInfo r = await Services.UpdateChecker.LatestAsync();
+            bool newer = r.IsNewerThan(RunningVersion);
+            // a skipped version stays quiet at startup; asking by hand shows it anyway
+            if (newer && (manual || _ui.SkippedRelease != r.Version))
+            {
+                _release = r;
+                OnPropertyChanged(nameof(UpdateText));
+                OnPropertyChanged(nameof(UpdateNotes));
+                UpdateAvailable = true;
+                UpdateStatus = null;
+            }
+            else if (manual)
+                UpdateStatus = $"Up to date — v{r.Version} is the newest release";
+        }
+        catch (System.Exception ex)
+        {
+            if (manual) UpdateStatus = "Update check failed: " + ex.Message;
+        }
+        finally { _checkingUpdate = false; }
+    }
+
+    private void OpenRelease()
+    {
+        if (_release is null) return;
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            { FileName = _release.PageUrl, UseShellExecute = true });
+        }
+        catch (System.Exception ex) { UpdateStatus = "Could not open the browser: " + ex.Message + " — " + _release.PageUrl; }
+    }
+
     public MainWindowViewModel()
     {
         string dir = System.IO.Path.Combine(
@@ -192,6 +280,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         CancelSettingsCommand = new RelayCommand(() => Settings = null);
         CloseWorldCommand = new RelayCommand<WorldViewModel>(CloseWorld);
         Companion = new CompanionController(this);
+        InitUpdateCheck();
 
         RefreshTree();
     }

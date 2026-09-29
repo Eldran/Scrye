@@ -32,6 +32,23 @@
                     <TextBlock DockPanel.Dock="Top" Text="MUDS" FontWeight="SemiBold" FontSize="11"
                                Foreground="{DynamicResource ScryeAccent}" Margin="2,0,0,8" />
                     <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                        <!-- a newer Scrye has been released: say so, link to it, never install -->
+                        <Border IsVisible="{Binding UpdateAvailable}" Padding="6" CornerRadius="4" Margin="0,0,0,4"
+                                Background="{DynamicResource ScryePanelAlt}" BorderBrush="{DynamicResource ScryeAccent}"
+                                BorderThickness="1">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{Binding UpdateText}" TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{DynamicResource ScryeAccent}" ToolTip.Tip="{Binding UpdateNotes}" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <Button Content="Get it" Command="{Binding OpenReleaseCommand}" Padding="6,1" FontSize="10"
+                                            ToolTip.Tip="Open the release page in your browser" />
+                                    <Button Content="Later" Command="{Binding DismissUpdateCommand}" Padding="6,1" FontSize="10"
+                                            ToolTip.Tip="Hide this until Scrye starts again" />
+                                    <Button Content="Skip" Command="{Binding SkipUpdateCommand}" Padding="6,1" FontSize="10"
+                                            ToolTip.Tip="Do not mention this version again (the next one still will be)" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                         <!-- also in each world's bottom bar; this copy makes Settings reachable
                              BEFORE any world is connected -->
                         <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Stretch" />
@@ -49,6 +66,14 @@
                             <Button Content="+ Character" Command="{Binding AddCharacterCommand}"
                                     ToolTip.Tip="Add a character under the selected MUD or account" />
                         </StackPanel>
+                        <!-- which Scrye this is; clicking it checks for a newer release now -->
+                        <Button Content="{Binding VersionText}" Command="{Binding CheckUpdatesCommand}"
+                                ToolTip.Tip="Check for a newer Scrye" HorizontalAlignment="Left"
+                                Background="Transparent" BorderThickness="0" Padding="2,0" Margin="0,2,0,0"
+                                FontSize="10" Foreground="{DynamicResource ScryeTextDim}" />
+                        <TextBlock Text="{Binding UpdateStatus}" TextWrapping="Wrap" FontSize="10"
+                                   Foreground="{DynamicResource ScryeTextDim}"
+                                   IsVisible="{Binding UpdateStatus, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                     <!-- double-click a character to connect it (handled on the TreeView, not in
                          the template: the XAML compiler cannot take events in nested templates) -->

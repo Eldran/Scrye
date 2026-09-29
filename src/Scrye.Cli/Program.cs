@@ -36,6 +36,7 @@ if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--catalog") return CatalogBuild(args);
+if (args.Length >= 1 && args[0] == "--release") return ReleaseBuild(args);
 if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
@@ -44,7 +45,7 @@ if (args.Length >= 1 && args[0] == "--routing") { RoutingTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--notify") { NotifyTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --catalog <tag> | --login | --mxp | --mccp | --export | --routing | --notify | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --catalog <tag> | --release <tag> | --login | --mxp | --mccp | --export | --routing | --notify | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -980,6 +981,74 @@ static int CatalogBuild(string[] a)
     catch (Exception ex)
     {
         Console.WriteLine("catalog: " + ex.Message);
+        return 1;
+    }
+}
+
+// --release <tag> [--repo <dir>]
+// Everything a release publishes on main, for a tag that is already pushed: the plugin
+// catalogue (as --catalog) and catalog/release.json, which running copies of Scrye read to say
+// "a new version is out". The release note is the tag's own annotation. Warns when the tag's
+// Directory.Build.props still carries another <Version> - a build that does not know it IS
+// the new release would announce the update to itself forever.
+static int ReleaseBuild(string[] a)
+{
+    if (a.Length < 2 || a[1].StartsWith("--"))
+    {
+        Console.WriteLine("usage: scrye-cli --release <tag> [--repo <dir>]");
+        return 1;
+    }
+    string tag = a[1], repo = ".";
+    for (int i = 2; i + 1 < a.Length; i += 2)
+    {
+        if (a[i] == "--repo") repo = a[i + 1];
+        else { Console.WriteLine($"unknown option {a[i]}"); return 1; }
+    }
+
+    int rc = CatalogBuild(new[] { "--catalog", tag, "--repo", repo });
+    if (rc != 0) return rc;
+
+    static string GitText(string repo, params string[] argv)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+            StandardOutputEncoding = Encoding.UTF8,
+        };
+        psi.ArgumentList.Add("-C"); psi.ArgumentList.Add(repo);
+        foreach (string s in argv) psi.ArgumentList.Add(s);
+        using var p = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("git did not start");
+        Task<string> err = p.StandardError.ReadToEndAsync();
+        string text = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', argv)}: {err.Result.Trim()}");
+        return text;
+    }
+
+    try
+    {
+        string notes = GitText(repo, "tag", "-l", "--format=%(contents)", tag);
+        string date = GitText(repo, "tag", "-l", "--format=%(creatordate:short)", tag).Trim();
+        var release = Scrye.Core.Updates.ReleaseInfo.FromTag(tag, notes, date.Length > 0 ? date : null);
+
+        string props = GitText(repo, "show", $"{tag}:Directory.Build.props");
+        var m = System.Text.RegularExpressions.Regex.Match(props, @"<Version>\s*([^<\s]+)\s*</Version>");
+        if (!m.Success)
+            Console.WriteLine($"WARNING: Directory.Build.props at {tag} has no <Version> - that build cannot tell it is {release.Version}");
+        else if (m.Groups[1].Value != release.Version)
+            Console.WriteLine($"WARNING: Directory.Build.props at {tag} says {m.Groups[1].Value}, the tag says {release.Version} - "
+                              + "copies built from it will keep offering this release to themselves");
+
+        string target = Path.Combine(repo, "catalog", "release.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+        File.WriteAllText(target, release.ToJson(), new UTF8Encoding(false));
+        Console.WriteLine($"release {release.Version} ({release.Tag}, {release.Published ?? "undated"}) -> {target}");
+        Console.WriteLine("Commit catalog/index.json and catalog/release.json on main and push.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("release: " + ex.Message);
         return 1;
     }
 }

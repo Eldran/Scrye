@@ -9,6 +9,10 @@ public sealed class UiState
 {
     /// <summary>The MUD-list sidebar is collapsed to its edge strip.</summary>
     public bool SidebarCollapsed { get; set; }
+
+    /// <summary>A release the user said not to mention again ("Skip" on the update notice).
+    /// Only that version is skipped: the next one is announced as usual.</summary>
+    public string? SkippedRelease { get; set; }
 }
 
 /// <summary>

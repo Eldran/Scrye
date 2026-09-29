@@ -44,6 +44,9 @@ public static class PluginCatalogClient
         return CatalogIndex.Parse(System.Text.Encoding.UTF8.GetString(bytes), report);
     }
 
+    /// <summary>Any small https file (the release check), with the same timeout and size cap.</summary>
+    public static Task<byte[]> GetBytesAsync(string url, long cap, CancellationToken ct) => GetAsync(url, cap, ct);
+
     /// <summary>A plugin file, for <see cref="CatalogInstaller.InstallAsync"/>.</summary>
     public static Task<byte[]> FetchAsync(string url, CancellationToken ct) =>
         GetAsync(url, CatalogIndex.MaxPluginBytes, ct);

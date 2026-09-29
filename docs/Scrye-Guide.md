@@ -52,6 +52,14 @@ Each connected world gets its own tab with an output pane and a command line.
   **▼ back to bottom** chip is the exception among buttons — it hands the keyboard back,
   because "take me back to live" is the moment you want to be typing.
 - **F11** — fullscreen on and off.
+- **Which Scrye, and is there a newer one.** The last line of the MUD list says which version
+  you are running (`Scrye v1.9.1`). A few seconds after start Scrye asks GitHub whether a newer
+  release is out, and if so a notice sits above the Settings button: *Scrye v1.9.2 is out* (hover
+  it for the release note), with **Get it** (opens the release page in your browser), **Later**
+  (hides it until the next start) and **Skip** (never mentions that version again — the next one
+  still will be). Clicking the version line checks again on the spot and says what it found. It
+  only ever reads one small file; nothing is downloaded or installed for you, and an offline
+  start simply shows nothing.
 
 ## Several commands at once
 
@@ -733,13 +741,23 @@ Updating a plugin that ships with Scrye does not touch Scrye's own folder: the u
 
 The catalogue is `catalog/index.json` in the Scrye repository. It points at a release tag, so what you install is exactly what that release shipped.
 
-**Publishing a release to it** (for whoever cuts releases): tag and push as usual, then
+**Publishing a release** (for whoever cuts releases):
 
-```
-dotnet run --project src/Scrye.Cli -- --catalog v1.9.2
-```
+1. Set `<Version>` in `Directory.Build.props` to the new number (`1.9.2`) and commit — a build
+   that does not know it is the new release keeps offering that release to itself.
+2. Tag (`v1.9.2`, annotated: its message is the release note Scrye shows) and push the tag.
+3. From the repository root:
 
-from the repository root, and commit and push the `catalog/index.json` it writes on main. It reads the plugin files from the tag through git, not from your working folder, so the checksums are of the exact bytes GitHub serves for that tag — Windows line endings in a checkout cannot break them. Lua test harnesses (`*_test.lua`) and dot-files are left out.
+   ```
+   dotnet run --project src/Scrye.Cli -- --release v1.9.2
+   ```
+
+   It writes `catalog/index.json` (the plugin catalogue for that tag) and
+   `catalog/release.json` (what every running Scrye reads to say a new version is out), and
+   warns if the tag's `Directory.Build.props` still carries another version. Commit both on
+   main and push. `--catalog v1.9.2` writes only the catalogue.
+
+The catalogue step reads the plugin files from the tag through git, not from your working folder, so the checksums are of the exact bytes GitHub serves for that tag — Windows line endings in a checkout cannot break them. Lua test harnesses (`*_test.lua`) and dot-files are left out.
 
 ## The plugins that ship with Scrye
 
