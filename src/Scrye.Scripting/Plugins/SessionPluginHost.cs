@@ -25,6 +25,7 @@ public sealed class SessionPluginHost : IPluginHost
     private readonly Action<string, PanelSpec> _addPanel;       // (pluginId, panel) → App builds the HUD VM
     private readonly PluginDataStore? _data;                    // persistent scrye.store backing (optional)
     private readonly PluginDataStore? _shared;                  // MUD-shared scrye.shared backing (optional, 1.14)
+    private readonly ExportFolder? _exports;                    // scrye.exports backing (optional, 1.21)
     private readonly Func<string, Rgb?>? _resolveColour;        // theme-token lookup for markup
     private readonly Rgb _printFore;                            // default colour for plugin output
 
@@ -36,7 +37,7 @@ public sealed class SessionPluginHost : IPluginHost
     /// <param name="printFore">Colour for uncoloured plugin output (the App's plugin green).</param>
     public SessionPluginHost(MudSession session, Action<string, Line> print, Action<string, PanelSpec> addPanel,
                              PluginDataStore? data = null, Func<string, Rgb?>? resolveColour = null,
-                             Rgb? printFore = null, PluginDataStore? shared = null)
+                             Rgb? printFore = null, PluginDataStore? shared = null, ExportFolder? exports = null)
     {
         _session = session;
         _actions = session;   // MudSession implements IWorldActions
@@ -44,6 +45,7 @@ public sealed class SessionPluginHost : IPluginHost
         _addPanel = addPanel;
         _data = data;
         _shared = shared;
+        _exports = exports;
         _resolveColour = resolveColour;
         _printFore = printFore ?? Rgb.DefaultFore;
     }
@@ -108,6 +110,12 @@ public sealed class SessionPluginHost : IPluginHost
 
     // ---- MUD-shared storage (scrye.shared, 1.14): the same store class, a different root,
     // so every profile on one MUD shares the file (see WorldViewModel for the scoping) ----
+    public string ExportWrite(string pluginId, string name, string text) =>
+        (_exports ?? throw new NotSupportedException("this Scrye has no exports folder")).Write(name, text);
+    public string ExportRead(string pluginId, string name) =>
+        (_exports ?? throw new NotSupportedException("this Scrye has no exports folder")).Read(name);
+    public string[] ExportList(string pluginId) => _exports?.List().ToArray() ?? Array.Empty<string>();
+
     public string? SharedGet(string pluginId, string key) => _shared?.Get(pluginId, key);
     public void SharedSet(string pluginId, string key, string value) => _shared?.Set(pluginId, key, value);
     public void SharedDelete(string pluginId, string key) => _shared?.Delete(pluginId, key);

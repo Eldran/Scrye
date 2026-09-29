@@ -50,6 +50,26 @@ public sealed class PluginRuntimeApiTests : IDisposable
         }
         public void EmitEvent(string sourceId, string name, string data) => EventSink?.Invoke(sourceId, name, data);
 
+        public ExportFolder? Exports;                       // null = the interface default (refuses)
+        public string ExportWrite(string pluginId, string name, string text) =>
+            Exports is null ? ((IPluginHost)new Nothingness()).ExportWrite(pluginId, name, text) : Exports.Write(name, text);
+        public string ExportRead(string pluginId, string name) =>
+            Exports is null ? ((IPluginHost)new Nothingness()).ExportRead(pluginId, name) : Exports.Read(name);
+        public string[] ExportList(string pluginId) => Exports?.List().ToArray() ?? Array.Empty<string>();
+
+        // a host that implements only what it must, to reach the interface's defaults
+        private sealed class Nothingness : IPluginHost
+        {
+            public void Send(string text) { }
+            public void Print(string pluginId, string text) { }
+            public string? GetVariable(string name) => null;
+            public void SetVariable(string name, string value) { }
+            public string GetState(string path) => "";
+            public void SetState(string path, string value) { }
+            public IDisposable WatchState(string path, Action<string, string> onChange) => new Nothing();
+            public void AddPanel(string pluginId, PanelSpec panel) { }
+        }
+
         private sealed class Nothing : IDisposable { public void Dispose() { } }
     }
 
@@ -614,5 +634,44 @@ public sealed class PluginRuntimeApiTests : IDisposable
         host.State.Remove("ran");
         mgr.Rescan();                                    // nothing changed: no reload
         Assert.False(host.State.ContainsKey("ran"));
+    }
+
+    // ---- scrye.exports (1.21) ---------------------------------------------------------
+
+    [Fact]
+    public void ExportsWriteReadAndListThroughTheOneFolder()
+    {
+        var host = new FakeHost { Exports = new ExportFolder(Path.Combine(_dir, "exports")) };
+        LoadLua("exp", """
+            local path, err = scrye.exports.write("exp-test.json", '{"a":1}')
+            scrye.setState("path", tostring(path)); scrye.setState("err", tostring(err))
+            scrye.setState("back", scrye.exports.read("exp-test.json") or "nil")
+            scrye.setState("list", table.concat(scrye.exports.list(), ","))
+            local bad, why = scrye.exports.write("../escape.json", "x")
+            scrye.setState("bad", tostring(bad)); scrye.setState("why", tostring(why))
+            local gone, why2 = scrye.exports.read("never.json")
+            scrye.setState("gone", tostring(gone)); scrye.setState("why2", tostring(why2))
+            """, host);
+
+        Assert.EndsWith("exp-test.json", host.State["path"]);
+        Assert.Equal("nil", host.State["err"]);
+        Assert.Equal("{\"a\":1}", host.State["back"]);
+        Assert.Equal("exp-test.json", host.State["list"]);
+        Assert.Equal("nil", host.State["bad"]);                  // refused, not thrown
+        Assert.Contains("escape.json", host.State["why"]);
+        Assert.Equal("nil", host.State["gone"]);
+        Assert.Contains("never.json", host.State["why2"]);
+        Assert.False(File.Exists(Path.Combine(_dir, "escape.json")));
+    }
+
+    [Fact]
+    public void AHostWithoutAnExportsFolderSaysSo()
+    {
+        var host = new FakeHost();
+        LoadLua("noexp", """
+            local path, err = scrye.exports.write("x.json", "{}")
+            scrye.setState("r", tostring(path) .. "|" .. tostring(err))
+            """, host);
+        Assert.Equal("nil|this Scrye has no exports folder", host.State["r"]);
     }
 }

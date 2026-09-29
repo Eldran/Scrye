@@ -549,6 +549,39 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         });
         l.SetField(-2, "shared");
 
+        // The exports folder (scrye.exports, 1.21): a file by NAME in %APPDATA%/Scrye/exports,
+        // nothing else on disk. Lua convention for failure - nil plus the reason - because a
+        // refused name or a missing file is an answer the script should show, not an error
+        // that aborts the command that asked.
+        //     local path, err = scrye.exports.write("3s-map-all.json", text)
+        //     local text, err = scrye.exports.read("friend-map.json")
+        //     for _, name in ipairs(scrye.exports.list()) do ... end
+        l.NewTable();
+        Bind("write", cl =>
+        {
+            try { cl.PushString(_host.ExportWrite(Id, LuaHost.ArgString(cl, 1), LuaHost.ArgString(cl, 2))); return 1; }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+            { cl.PushNil(); cl.PushString(ex.Message); return 2; }
+        });
+        Bind("read", cl =>
+        {
+            try { cl.PushString(_host.ExportRead(Id, LuaHost.ArgString(cl, 1))); return 1; }
+            catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+            { cl.PushNil(); cl.PushString(ex.Message); return 2; }
+        });
+        Bind("list", cl =>
+        {
+            cl.NewTable();
+            string[] names = _host.ExportList(Id);
+            for (int i = 0; i < names.Length; i++)
+            {
+                cl.PushString(names[i]);
+                cl.RawSetInteger(-2, i + 1);
+            }
+            return 1;
+        });
+        l.SetField(-2, "exports");
+
         // scrye.addPanel{...} — same rebuild-retires-old-callbacks scheme as MoonSharp,
         // plus Unref so the abandoned closures are actually collectable.
         Bind("addPanel", cl =>

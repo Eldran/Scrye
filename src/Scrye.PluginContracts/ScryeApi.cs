@@ -207,7 +207,16 @@ public static class ScryeApi
     //      plugin had to stitch them itself with an onLine hook and a state machine.
     //      Additive: a pre-1.20 host ignores the field and matches the pattern against one
     //      line, so a plugin that needs the block should declare requires.scryeApi >= 1.20.
-    public static readonly Version Current = new(1, 20);
+    // 1.21 scrye.exports: write(name, text) / read(name) / list() in ONE folder the user can
+    //      see, %APPDATA%/Scrye/exports - a file NAME, never a path; .json .svg .txt .csv .md
+    //      .html only; 16 MB. Lua returns nil, err on a refusal; JS returns null and says why
+    //      in lastError(). Declared as the files.export permission.
+    //
+    //      The mapper is why: a map took hours of walking and could not leave the machine it
+    //      was walked on, nor be looked at outside the HUD. Plugins stay without a
+    //      filesystem; this is one door, and nothing written through it can run.
+    //      Additive: on an older host scrye.exports is absent, and a plugin checks for it.
+    public static readonly Version Current = new(1, 21);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

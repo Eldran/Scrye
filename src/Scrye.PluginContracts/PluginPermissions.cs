@@ -41,6 +41,7 @@ public static class PluginPermissions
     public const string UiPanels = "ui.panels";
     public const string CaptureWrite = "capture.write";
     public const string LogWrite = "log.write";
+    public const string FilesExport = "files.export";
 
     /// <summary>Every known permission, in the order they should be listed to a user —
     /// roughly most-consequential first, so a glance at a truncated list is still informative.</summary>
@@ -48,7 +49,7 @@ public static class PluginPermissions
     {
         CommandsSend, OutputModify, OutputRead, TriggersManage, AliasesManage,
         VariablesWrite, VariablesRead, StateWrite, StateRead, TimersManage,
-        StoragePrivate, StorageShared, NotificationsShow, SoundPlay, CaptureWrite, LogWrite, UiPanels,
+        StoragePrivate, StorageShared, FilesExport, NotificationsShow, SoundPlay, CaptureWrite, LogWrite, UiPanels,
     };
 
     /// <summary>A short user-facing phrase for a permission, or null when the name is unknown
@@ -71,6 +72,7 @@ public static class PluginPermissions
         SoundPlay => "Play sounds",
         CaptureWrite => "Route lines into capture panes",
         LogWrite => "Write to its own log file",
+        FilesExport => "Save and read files in Scrye's exports folder",
         UiPanels => "Add HUD panels",
         _ => null,
     };

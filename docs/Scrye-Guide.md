@@ -2030,7 +2030,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.20.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.21.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -2060,7 +2060,8 @@ field**, so a plugin's capture panes exist as soon as it loads instead of on fir
 **1.12 adds the `barlist` stages field**, a seventh column of `qty,pct;…` rawest first, so a
 bar draws one segment per quality stage instead of a single amber/green split. 1.13–1.19 are
 described in `ScryeApi.cs`; **1.20 adds `lines` on `scrye.addTrigger`**, triggers that match a
-block of lines (see [Rules](#rules)).
+block of lines (see [Rules](#rules)); **1.21 adds `scrye.exports`**, a file a plugin may write
+and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-keeps--scryeexports-121)).
 
 ## Permissions
 
@@ -2093,6 +2094,7 @@ sensitive in the manager.
 | `sound.play` | Play sounds |
 | `capture.write` | Route lines into capture panes |
 | `log.write` | Write to its own log file |
+| `files.export` | Save and read files in Scrye's exports folder |
 | `ui.panels` | Add HUD panels |
 
 Unknown names are shown verbatim rather than hidden, so a plugin written for a newer Scrye still
@@ -2242,6 +2244,25 @@ Values are strings — serialize tables with `scrye.json.encode` (1.6). Every `s
 plugin's whole store file, which is fine for a counter and quadratic for a mapper flushing forty
 area keys; that is what `setMany` is for. Unchanged values in a batch are skipped, and a batch
 that changes nothing writes nothing.
+
+### Files the user keeps — `scrye.exports` *(1.21)*
+A plugin has no filesystem, with one exception: the exports folder, `%APPDATA%/Scrye/exports`,
+shared by every plugin and meant for the user — a map to hand to a friend, a picture, a table to
+open in a spreadsheet.
+
+```lua
+local path, err = scrye.exports.write("myplugin-report.csv", text)   -- full path, or nil + why
+local text, err = scrye.exports.read("friend-map.json")              -- the text, or nil + why
+for _, name in ipairs(scrye.exports.list()) do ... end               -- newest first
+```
+
+A **file name, never a path**: letters, digits, space and `. _ - ( )`, ending in `.json` `.svg`
+`.txt` `.csv` `.md` or `.html`, up to 100 characters and 16 MB. Anything else is refused with a
+reason — shown to the user, not thrown — so nothing a plugin writes can land elsewhere or be
+something that runs. Writing a name again replaces the file (it lands whole or not at all).
+Prefix names with your plugin id. JavaScript: `write`/`read` return `null` on failure and
+`scrye.exports.lastError()` says why. Declare `files.export`. On a Scrye before 1.21
+`scrye.exports` is absent — check for it and tell the user to update.
 
 ### Alerts & routing
 | Call | Description |

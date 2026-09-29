@@ -682,7 +682,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             pluginData,
             HudColor.ResolveRgb,
             PluginColour,
-            shared: pluginShared);
+            shared: pluginShared,
+            exports: ExportFolder.Default());   // scrye.exports (1.21): %APPDATA%/Scrye/exports
         // The removable root is the USER one, wherever it landed in the list: a plugin under an
         // extra folder is yours and being edited, and "Remove" deleting it would be a surprise.
         string userPluginRoot = roots[^1];   // %APPDATA%/Scrye/plugins — writable, removable

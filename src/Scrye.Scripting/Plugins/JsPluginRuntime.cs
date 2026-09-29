@@ -414,7 +414,26 @@ public sealed class JsPluginRuntime : IPluginRuntime
             @delete = (Action<string>)(key => _host.SharedDelete(Id, key ?? "")),
             keys = (Func<string[]>)(() => _host.SharedKeys(Id)),
         },
+        // The exports folder (1.21). write/read return the path/text, or null on failure with
+        // the reason in lastError() - the JS face of Lua's `nil, err`.
+        exports = new
+        {
+            write = (Func<string, string, string?>)((name, text) =>
+                ExportTry(() => _host.ExportWrite(Id, name ?? "", text ?? ""))),
+            read = (Func<string, string?>)(name => ExportTry(() => _host.ExportRead(Id, name ?? ""))),
+            list = (Func<string[]>)(() => _host.ExportList(Id)),
+            lastError = (Func<string?>)(() => _exportError),
+        },
     };
+
+    private string? _exportError;
+
+    private string? ExportTry(Func<string> op)
+    {
+        try { _exportError = null; return op(); }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException)
+        { _exportError = ex.Message; return null; }
+    }
 
     private void AddRule(JsValue def, List<PluginRule> into)
     {

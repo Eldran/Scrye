@@ -109,4 +109,22 @@ public interface IPluginHost
     /// host fans it out to every loaded plugin's <c>scrye.on(name, fn)</c> handlers — including
     /// the sender's own. Default no-op so headless hosts and tests need not care.</summary>
     void EmitEvent(string sourceId, string name, string data) { }
+
+    // ---- the exports folder (scrye.exports, API 1.21) --------------------------
+    // One flat folder the user can see (%APPDATA%/Scrye/exports) where a plugin may write a
+    // file by NAME - never a path - and read one back: a map to hand to another player, a
+    // picture of it, a table to open in a spreadsheet. Only harmless text extensions. The
+    // defaults refuse, so a headless host has no files and a script must handle the error.
+
+    /// <summary>Write (or replace) a file in the exports folder; returns its full path.
+    /// Throws with a sentence fit for the user when the name or size is refused.</summary>
+    string ExportWrite(string pluginId, string name, string text) =>
+        throw new NotSupportedException("this Scrye has no exports folder");
+
+    /// <summary>Read a file from the exports folder. Throws when it is missing or refused.</summary>
+    string ExportRead(string pluginId, string name) =>
+        throw new NotSupportedException("this Scrye has no exports folder");
+
+    /// <summary>The files in the exports folder a plugin may read, newest first.</summary>
+    string[] ExportList(string pluginId) => Array.Empty<string>();
 }
