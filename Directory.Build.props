@@ -6,7 +6,7 @@
          and Core.Hello reports it to the MUD. The release step of scrye-cli warns if the tag
          and this number differ. Scrye.PluginContracts sets its own Version (the plugin API),
          which wins over this one. -->
-    <Version>1.9.1</Version>
+    <Version>1.10.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
