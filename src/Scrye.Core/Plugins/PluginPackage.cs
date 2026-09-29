@@ -89,7 +89,8 @@ public static class PluginPackage
         return installed;
     }
 
-    private static string Sanitize(string id)
+    /// <summary>A plugin id as a folder name: letters, digits, '-', '_' and '.' kept, the rest '_'.</summary>
+    public static string Sanitize(string id)
     {
         var sb = new StringBuilder(id.Length);
         foreach (char c in id)

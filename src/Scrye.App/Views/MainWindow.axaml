@@ -501,7 +501,7 @@
 
                                 <!-- plugins manager: list / reload / enable-disable (Ctrl-free; toggle button) -->
                                 <Border IsVisible="{Binding Plugins.IsOpen}" HorizontalAlignment="Left" VerticalAlignment="Top"
-                                        Width="300" MaxHeight="380" Margin="12,10,0,0" Padding="10"
+                                        Width="320" MaxHeight="420" Margin="12,10,0,0" Padding="10"
                                         Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
                                         BorderThickness="1" CornerRadius="6">
                                     <DockPanel>
@@ -509,14 +509,58 @@
                                             <Button DockPanel.Dock="Right" Content="✕" Command="{Binding Plugins.CloseCommand}" Padding="6,1" />
                                             <Button DockPanel.Dock="Right" Content="↻" Command="{Binding Plugins.RescanCommand}" Padding="6,1" Margin="0,0,4,0"
                                                     ToolTip.Tip="Rescan folders + install any .scryeplugin packages dropped in" />
+                                            <!-- the second page: plugins published in the Scrye repo, to install or update -->
+                                            <ToggleButton DockPanel.Dock="Right" Content="Catalogue" IsChecked="{Binding Plugins.ShowCatalogue}"
+                                                          IsVisible="{Binding Plugins.HasCatalogue}" Padding="6,1" FontSize="10" Margin="0,0,4,0"
+                                                          ToolTip.Tip="Plugins published with Scrye: install new ones, update the ones you have" />
                                             <TextBlock Text="PLUGINS" FontWeight="SemiBold" FontSize="11"
                                                        Foreground="{DynamicResource ScryeAccent}" VerticalAlignment="Center" />
                                         </DockPanel>
-                                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="4" Margin="0,6,0,0"
+                                                    IsVisible="{Binding Plugins.ShowInstalled}">
                                             <Button Content="New plugin" Command="{Binding Plugins.NewCommand}" Padding="8,2" FontSize="10" />
                                             <Button Content="Open folder" Command="{Binding Plugins.OpenFolderCommand}" Padding="8,2" FontSize="10" />
                                         </StackPanel>
-                                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <DockPanel DockPanel.Dock="Bottom" Margin="0,6,0,0" IsVisible="{Binding Plugins.ShowCatalogue}">
+                                            <Button DockPanel.Dock="Right" Content="Refresh" Command="{Binding Plugins.RefreshCatalogueCommand}"
+                                                    Padding="8,2" FontSize="10" VerticalAlignment="Top" Margin="4,0,0,0" />
+                                            <TextBlock Text="{Binding Plugins.CatalogueStatus}" FontSize="10" TextWrapping="Wrap"
+                                                       Foreground="{DynamicResource ScryeTextDim}" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                        <Grid>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" IsVisible="{Binding Plugins.ShowCatalogue}">
+                                            <ItemsControl ItemsSource="{Binding Plugins.Catalogue}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:CatalogRowViewModel">
+                                                        <Border Margin="0,0,0,4" Padding="6" CornerRadius="4"
+                                                                Background="{DynamicResource ScryePanelAlt}">
+                                                            <DockPanel>
+                                                                <Button DockPanel.Dock="Right" VerticalAlignment="Top" Content="{Binding ActionLabel}"
+                                                                        Command="{Binding ActCommand}" IsVisible="{Binding HasAction}"
+                                                                        Padding="6,1" FontSize="10" Margin="4,0,0,0" />
+                                                                <StackPanel>
+                                                                    <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" FontSize="11" />
+                                                                    <TextBlock Text="{Binding Detail}" Foreground="{DynamicResource ScryeTextDim}" FontSize="10" />
+                                                                    <TextBlock Text="{Binding StateText}" IsVisible="{Binding !IsProblem}"
+                                                                               Foreground="{DynamicResource ScryeAccent}" FontSize="10" TextWrapping="Wrap" />
+                                                                    <TextBlock Text="{Binding StateText}" IsVisible="{Binding IsProblem}"
+                                                                               Foreground="{DynamicResource ScryeError}" FontSize="10" TextWrapping="Wrap" />
+                                                                    <TextBlock Text="{Binding ShortDescription}" IsVisible="{Binding HasDescription}"
+                                                                               ToolTip.Tip="{Binding Description}"
+                                                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="10"
+                                                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                                    <!-- what it says it will do, before it is on disk -->
+                                                                    <TextBlock Text="{Binding PermissionSummary}" IsVisible="{Binding HasPermissions}"
+                                                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="10"
+                                                                               TextWrapping="Wrap" Margin="0,2,0,0" />
+                                                                </StackPanel>
+                                                            </DockPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+                                        <ScrollViewer VerticalScrollBarVisibility="Auto" IsVisible="{Binding Plugins.ShowInstalled}">
                                             <ItemsControl ItemsSource="{Binding Plugins.Plugins}">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:PluginRowViewModel">
@@ -553,6 +597,7 @@
                                                 </ItemsControl.ItemTemplate>
                                             </ItemsControl>
                                         </ScrollViewer>
+                                        </Grid>
                                     </DockPanel>
                                 </Border>
 

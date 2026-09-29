@@ -716,7 +716,30 @@ Plugins add commands and HUD panels. Manage them in the **Plugins** panel for a 
 - Plugins are **opt‑in per character** — enabling one for a character doesn't add it to every character.
 - Each plugin can be **enabled / disabled / reloaded / removed**.
 - **Reload** re‑reads the plugin's script from disk, so you can edit a Lua plugin and reload it live — no restart needed (this works for script‑only changes; changes to Scrye itself need a rebuild).
-- **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye.
+- **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye. A plugin that is running when ↻ finds a new version of it on disk is reloaded from the new copy.
+
+### The catalogue
+
+**Catalogue** at the top of the Plugins panel lists the plugins published with Scrye's releases that fit this world, each with its version, size, what it declares it will do, and where you stand:
+
+- *not installed* — **Install** downloads it into your user plugins folder. It arrives switched off, like any new plugin: turn it on under the installed list for the characters that want it.
+- *installed v1.4.0 → v1.5.0* — **Update** replaces your copy. If it was running it is reloaded straight away.
+- *installed* — you have this version. *you have v…, newer than this* — your copy is ahead of the release (one you are working on).
+- *cannot run on this Scrye* — it needs a newer plugin API than this build has; update Scrye first.
+
+Every file is checked against the size and SHA‑256 the catalogue lists before anything is written, and the plugin is swapped in whole: a failed or tampered download leaves what you had untouched. **Refresh** reads the list again.
+
+Updating a plugin that ships with Scrye does not touch Scrye's own folder: the update goes into your user plugins folder, and whichever copy has the **higher version** is the one that loads. So an update wins today, and when a later Scrye release bundles a newer version still, that one takes over without you doing anything. **Remove** on the updated copy goes back to the bundled one (switch it on again afterwards — removing turns a plugin off). The extra plugin folder from Global Settings still beats both — the catalogue will not update a plugin you are loading from there.
+
+The catalogue is `catalog/index.json` in the Scrye repository. It points at a release tag, so what you install is exactly what that release shipped.
+
+**Publishing a release to it** (for whoever cuts releases): tag and push as usual, then
+
+```
+dotnet run --project src/Scrye.Cli -- --catalog v1.9.2
+```
+
+from the repository root, and commit and push the `catalog/index.json` it writes on main. It reads the plugin files from the tag through git, not from your working folder, so the checksums are of the exact bytes GitHub serves for that tag — Windows line endings in a checkout cannot break them. Lua test harnesses (`*_test.lua`) and dot-files are left out.
 
 ## The plugins that ship with Scrye
 
@@ -2382,7 +2405,7 @@ mismatch is reported there explicitly rather than looking like a plugin that qui
 
 ## Installing, reloading, packaging
 
-- **Install:** drop the plugin folder into `%APPDATA%/Scrye/plugins/`, enable it for a character in the Plugins panel.
+- **Install:** from the [catalogue](#the-catalogue), or drop the plugin folder into `%APPDATA%/Scrye/plugins/` and enable it for a character in the Plugins panel.
 - **Reload:** after editing the script, click **Reload** — it re‑reads from disk live.
 - **Share:** zip the plugin folder and name it `<something>.scryeplugin` — the `plugin.json` must be at the archive root or inside a single top-level folder. The recipient drops the file straight into their plugins folder and presses **↻**: Scrye extracts it to `<plugins>/<id>/` and deletes the archive. A plain `.zip` still works if they unzip it themselves.
 

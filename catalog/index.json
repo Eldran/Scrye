@@ -1,0 +1,653 @@
+{
+  "format": 1,
+  "ref": "v1.9.1",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.9.1/src/Scrye.App/plugins/",
+  "generated": "2026-09-29T13:45:22Z",
+  "plugins": [
+    {
+      "id": "3k-chaossea",
+      "name": "Chaos Sea (classic)",
+      "version": "1.3.0",
+      "author": "Joakim",
+      "description": "The marker/dead-reckoning chaos-sea stepper, frozen at its long-proven pre-GMCP state - for 3K-3Kingdoms and any character or world without GMCP (needs the '=S='/'=M='/'=P' display settings and MIP for combat truth). Alias 'csc', so it loads beside the GMCP 3s-chaossea ('cs') without a fight. Maps rooms on a 3D grid by dead reckoning, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Frozen legacy: bugfixes only - new features go to the GMCP bot.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.6 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "notifications.show",
+        "variables.read",
+        "variables.write",
+        "storage.private",
+        "timers.manage",
+        "triggers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3k-chaossea",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "42e12716e92b06de14c99b71045e8c82d86765feb89afda3fd556ae6c2a85cd4",
+          "size": 58645
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "28e59e4f27ba80b4f15ebb25c48688acdaec1a6bc65a007cfa380aeb21713788",
+          "size": 1017
+        }
+      ],
+      "totalSize": 59662
+    },
+    {
+      "id": "3s-chaossea",
+      "name": "3S Chaos Sea",
+      "version": "2.2.0",
+      "author": "Joakim",
+      "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Reads the room, its contents and combat from GMCP, and takes its arrival signal from the MUD's own room header - so none of the '=S=', '=M=', '=P=' or '=A|W|I=' display markers need to be switched on. Those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. Which exits are still unexplored comes from the server rather than from dead reckoning: in the sea an exit's destination is 0 until you have walked it, so the frontier survives the coordinate collisions a dead-reckoned map cannot avoid.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.7 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "notifications.show",
+        "variables.read",
+        "variables.write",
+        "storage.private",
+        "timers.manage",
+        "triggers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-chaossea",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "54ff4adfa8f8f331caad576b9e94a199921964ebb934958f52a24b3df28df4eb",
+          "size": 96092
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "f9a55832ac0914fa7adb2dbb687fcaa11e69d0cb8582ccfbbcf89071e85aa27a",
+          "size": 1224
+        }
+      ],
+      "totalSize": 97316
+    },
+    {
+      "id": "3s-chat",
+      "name": "3S Chat",
+      "version": "1.1.2",
+      "author": "Joakim",
+      "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep). 1.1.0: the pane is yours to shape - a Chat panel lists every channel that has spoken; click a channel to pick it, then a colour in the column beside it to paint it (sixteen named colours, the theme tokens, or default); each channel line carries its own hide/show link (hidden = out of the pane, still logged, a notify subscription still fires); 'chat channels', 'chat show|hide <channel>', 'chat color <channel> <name|#hex|->' do the same by command. Both persist.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.10 <2.0",
+      "permissions": [
+        "output.read",
+        "state.write",
+        "capture.write",
+        "notifications.show",
+        "sound.play",
+        "log.write",
+        "storage.private",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-chat",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "31ebc5a26db7cd5e62dc03ffa332ef997152dded6ad6cbaa50ccb35c4a442fd2",
+          "size": 30046
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "e72940362c95d1c3895c4fbcaeb9d591bdbc085a37d25516484f05e4bb04b0b3",
+          "size": 1065
+        }
+      ],
+      "totalSize": 31111
+    },
+    {
+      "id": "3s-cyborg",
+      "name": "3S Cyborg",
+      "version": "1.1.0",
+      "author": "Joakim",
+      "description": "The Cyborg guild HUD, fed by the Guild.State / Chassis / Combat / Progress / Systems / Info GMCP packages (3Scapes only). Tabs: Status (power against its max, stored power and regen, heat with an overheating flag, adrenaline, pain editor, stims, ammo and its loaded type, SI level, guild xp against the cost of the next step, credits, rank and time in the guild), Implants (the activated systems list, two columns, sorted), Chassis (hardpoints, power grid, weapon array and machine percent, then every body slot used and free), and Combat (kills total and this login, combat rounds, online time, the strategy order and the firing patterns). 'cyb' prints the Status page into the output window for a glance without the panel. The four figures a single capture could not settle were answered by Joakim on 1 Sep and are now shown as what they are: stored_power is a RESERVE pool an implant grants alongside power/power_max, so both are displayed; si_pct is hundredths of a percent toward the next SI level (5478 = 54.78%, so 107 becomes 108 at 100%); control_used and control_avail are a used/remaining pair whose sum is the capacity, so the panel shows the ratio and spells out the headroom; and ammo is the magazine while ammo_rounds is the case that refills it, so the two are shown as separate stores and never divided into a ratio. What is still unconfirmed: whether stored_power has a ceiling, and whether power_change is a delta or a target.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-cyborg",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "e93cb2ff21a88d6cc04ec4c4ed7801ea03f87c1d5a1594fdaddcdd746851ca53",
+          "size": 18795
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "1cb837183b171646f6edb44e14c1e4c51eae9396d721abbbd7b0e20532f42682",
+          "size": 1834
+        }
+      ],
+      "totalSize": 20629
+    },
+    {
+      "id": "3s-farmer",
+      "name": "3S Farmer",
+      "version": "1.5.0",
+      "author": "Joakim",
+      "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Kills are logged and tallied patrol or no patrol (1.4.2) - yours and your party's: every '<who> dealt the killing blow to <mob>' the server reports fills the kill log and the panel's Tally row, which counts per killer; only a fight the patrol opened moves its own counters, times the fight, and runs the after-kill chain. 1.5.0 (23 Sep): the kill log is kept per place - the area, and its floor when the room's name gives one (Megacity floor 30 and floor 40 are two logs); the panel shows the place you stand in, 'farm log all' every place, 'farm log clear here' one place - and its Last column became XP, what the last kill of each mob was worth (Char.XP over the fight). Also an XP row from GMCP Char.XP - the server's XP/hour and last-30-minute gain, the run's XP gain (frozen at the stop) and XP per kill, in 'farm' too; a crowded room's paged Room.Contents is read whole, and a monster's count is kept. 1.4.3 (23 Sep): GMCP Room.Death reports kills too; a kill's text line and its Room.Death are paired into one kill, whichever arrives first, and the pairing learns your character's name (kept per character), so a Room.Death alone counts as yours; a player's death (npc 0) is not a kill; your hird's kills (killer 'Hirdmadr') count as yours, and 'farm mine <name>' edits that list. The panel is three tabs (1.4.1): Patrol (status, buttons, gauges, roster, counters, kill log), Mobs (never / party / excludes / prefer / always), Settings (the after-kill chain and no-loot, rotation, the settings boxes, room rules). 1.4.0 (20 Sep): 'farm prefer <name>' sets the fight order per area (the preferred mob dies first when several stand together), 'farm always <name>' fights a mob even with a stranger in the room, 'farm rota add <area> / on' farms areas in turn - after a full circuit with no kill for the idle time the mapper is asked for a walk to the next one - and the settings (pace, hp, sp, rest, limit, panic) are boxes on the panel. 1.3.0 (20 Sep): 'farm after' is a chain - commands sent in order after each kill ('farm after add|del', the panel's table and box) - and 'farm noloot <name>' keeps a mob's corpse out of it per area; 'farm limit 45m|2h|50k' ends the run between fights, parking at the rest room when there is one, and tells your phone. 1.2.0 (20 Sep): a kill log on the panel (per mob: kills, average fight, last kill; 'farm log', 'farm log clear'), a rest room ('farm room <n> rest', or the map's right-click) the patrol walks to before resting and never fights in, the panic floor retreating there instead of stopping when one exists, an SP floor ('farm sp'), a resume bar for rests ('farm hp <start> <panic> <resume>'), and the leg being walked published for the map to light. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.7 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "ui.panels",
+        "aliases.manage",
+        "triggers.manage",
+        "timers.manage",
+        "storage.private",
+        "storage.shared"
+      ],
+      "folder": "3s-farmer",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "5c25a13d1383633c5a6ab3d4cbccf23479cda742b819c49f216faaa853ef8601",
+          "size": 123033
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "1fb8db811368bfc7a9e0bf5c70ed90d32f2a57bb0dd0e0761febfcb169e4eb86",
+          "size": 4927
+        }
+      ],
+      "totalSize": 127960
+    },
+    {
+      "id": "3s-gentech",
+      "name": "3S Gentech",
+      "version": "1.1.0",
+      "author": "Joakim",
+      "description": "The Gentech guild HUD, fed by the Guild.State / Systems / Info / Progress / Stats / Config / Powers GMCP packages (3Scapes only). Tabs: Status (PU, PU store and CPC against their maxima, medkits, timeslides, capsules, guild level and gexp, echelon and its progress toward the next, res credits, attack/defence bias and the tech/gen efficiency), Systems (one row per implanted system - whether it is on, what type or amount it is set to, and its live countdown - plus the energy field level and the DDB / shield / synthorg loadout), Progress (division, class and rank, time in the guild and in combat, kills and deaths, quest points, power slots, every bonus factor, and the quartermaster figures), Stats (this fight's rounds and enemy, the exp and gexp rates, lifetime rounds and CPC used, best and worst enemy by class) and Config (the autoguild order, panic heal, HMS, DNA and the gen timer). 'gt' prints the Status page into the output window and 'gtsys' the Systems page with the countdowns. Built from one capture taken on ANOTHER player's character, so nobody at hand plays the guild: a field whose meaning the capture does not establish is shown under the server's own name with its raw value in a 'Not yet understood' block, rather than given a friendly label that might be wrong. Those fields - g2n, g2n_pct, reset_pct, dgexp, illuminated, rush, phase_rank, and the 'cs' rate suffix on the Stats tab - are listed in docs/Plan-Improvements.md for a Gentech player to identify.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-gentech",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "0e22ac25a4445ffc0d4ffe7282f285b9d289fc01f7829f95ef005c6f149f3cfb",
+          "size": 28630
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "17d691b3c6df1be0dcf591935c0b66990952f6dc511629a68295b37ae07e06bb",
+          "size": 1875
+        }
+      ],
+      "totalSize": 30505
+    },
+    {
+      "id": "3s-juggernaut",
+      "name": "3S Juggernaut",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "The Juggernaut guild HUD, fed by the Guild.State / Combat / Suits / Chassis / Tech / Skills / Session / Info GMCP packages. Tabs: Status (heat and stims as bars, battery, ammo, missiles and clan powers against their max, jump jets / low light / follower stim when on, the fight - target condition, rounds, hits last round, frenzy - and the suit worn with its level, guild xp and valour), Suits (every suit, highest level first, guild xp and valour, the worn one marked), Loadout (weapon mounts and their ammo, skills against their max with the next point's cost, the tech tree), Session (this login's kills, time and kills per hour, best / smallest / last kill with the server's class number, missiles and clan powers used / wasted / donated, since reset, lifetime combat, and every kill this login newest first) and Clan (title, clan, honour, rank, evaluation, vault, storage, the depot and what it builds, kill totals). 'jug' prints the Status page into the output window. Built from one capture (icewind, 25 Sep 2026); reset_pct and battery are shown as the server's numbers until their meaning is confirmed. Another guild's same-named packages (a Cyborg's Guild.State) are ignored.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-juggernaut",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "b9004dba6e530a63fcd278d1169b1f99da577daa6852d51e1be2cf4898891368",
+          "size": 23129
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "6b736da3dfda5b61f7fac0fe23bbbd517ee25666bf1250c58286cc8fa91f3dd3",
+          "size": 1561
+        }
+      ],
+      "totalSize": 24690
+    },
+    {
+      "id": "3s-mage",
+      "name": "3S Mage",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "The Mage guild HUD, fed by the Guild.State / Progress / Info / Assets / Actives / Config / Focus / Skills / Spells GMCP packages (3Scapes only). Tabs: Status (umbra and concentration against their maxima as gauges and text, imbues / bridges / rifts, guild level and gxp to the next, gxp to spend, school and title, the familiar and the staff, and the effects currently up), Spells (the whole spellbook merged from the seven Guild.Spells* packages, one category at a time - level, current and base cost, focus standing, offline marked - with a button per category), Focus (every focused spell with its standing, points and cost reduction, against the allowance), Skills (the tree with children under their parent, have/max, the next cost, affordable rows highlighted, gxp available), Config (the perform setting and the contingencies in priority order) and Progress (gxp, gxp/hour, time in the guild and in combat, join dates, coins and items donated, and the server's own bonus prose). 'mage' prints the Status page into the output window; 'mage spells offensive' (or any category) picks the shelf and prints it; 'mage focus|skills|config|progress' print the others. Also on Status: the gem (what is left before it breaks), the clocks toward the next imbues and bridges and toward the school spells resetting, and progress toward the next guild level; on Progress: SP burnt since joining, clarity, whether the guild quest is solved, and time spent channelling. Built from Joakim's own mage's capture (Eldran, 3 Sep 2026) and named by him; the one field still unexplained, school_casts, is shown under the server's own name, raw, in a 'Not yet understood' block on the Status tab.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels",
+        "storage.private"
+      ],
+      "folder": "3s-mage",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "e0fbd64b551b3dea45e8d2cb662fad9196985044b2072cd52d1881ff16fc472a",
+          "size": 28823
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "16031abac6e6f3a94ecb037543d830df168922aa6e5669af4ec9b7ac1621a8cc",
+          "size": 2087
+        }
+      ],
+      "totalSize": 30910
+    },
+    {
+      "id": "3s-map-gmcp",
+      "name": "3S Map (GMCP)",
+      "version": "1.11.1",
+      "author": "Joakim",
+      "description": "The automapper, rebuilt on GMCP: rooms identified by the number the server gives them rather than by dead reckoning, so position is never inferred and so never drifts. Links are room number to room number, learned from what the server states and from what you actually walk; where the two disagree it says so and believes the walk - unless the exit is marked SHIFTING (an elevator, a portal: 'mapg shift', or automatic after walking it to two different places), in which case nothing is learned or routed through it, you ride it yourself, and the map is cut on both sides of it - each elevator floor its own map, the car a map of its own. Draws one grid per area, and one more for each unconnected piece of an area - so 'Unknown', which labels every stretch of connective realm on the MUD rather than one place, becomes a handful of readable maps instead of one tangle. Coordinates are a layout recomputed from the links, never an identity. Walks routes on request, one confirmed step at a time: the next step goes out only when the server says we reached the room the route expected, and anything unexpected stops it. Explores on request (folded in from the lab's 3s-map-explorer at 1.8.0): 'mapg explore area [N]' sweeps the area you stand in and 'mapg explore all' the whole world, a route to the nearest room with an unexplored exit, then one step through it, then again - one move per confirmed arrival, exactly as a requested walk moves. An exit is unexplored when the room behind it is not in the store. Everything that stops a walk stops the sweep - a combat round starting (it reads Char.Combat for this), a move you typed, the watchdog, 'mapg stop', an HP floor ('mapg explore hp') - and nothing here ever resumes on its own. A probe that does not land marks that exit blocked for the session and the sweep goes on; a fenced sweep that lands in another area steps straight back and remembers the door as an edge; a budget N stops after N new rooms; every end prints and puts on the panel the same summary. Everything it ever sends is a single bare word from the move/door vocabulary. The panel: the map with a colour legend, doors to other maps drawn in their direction, Explore beside Stop and the sweep's live line; the Maps and Favs tabs; right-click a room, or a row, for a menu of typed mapg commands - walk there, the route, the room, forget it - and right-click your own square to mark an exit shifting. 'mapg forget map|area' drops a whole map or area, asking first like 'mapg wipe'. Overlays (1.9.0): Room.Map's line-of-sight grid paints the rooms the server shows monsters or players in; a route lights the rooms it runs through - the walk's own, a 'Show route' you asked for (until you move, or 'mapg stop'), or the farmer's next leg as it patrols; and the farmer's rest room is drawn beside its other rules. Click any room (1.10.0) for a details line under the map - name, exits, how often you stood there, what Room.Contents last showed there - with links that walk, light the route or print the room; and Places: 'mapg place <name>' bookmarks a room, 'mapg go <name>' walks to it, the Places tab lists them (click walks, right-click removes), the map marks them. 'mapg find <text>' (1.11.0) lights every room named like it and lists them on the Find tab, which also carries the Doors table - every way off the map you stand on, a click walks through. The only mapper Scrye ships since 1.8.0; the dead-reckoning 3s-map it ran beside is retired. 1.11.1 (23 Sep): a learned link in a direction the room's exit list does not name is dropped; the details line reads a crowded room's paged Room.Contents whole and counts a monster's count.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.7 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "ui.panels",
+        "aliases.manage",
+        "triggers.manage",
+        "timers.manage",
+        "storage.private",
+        "storage.shared"
+      ],
+      "folder": "3s-map-gmcp",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "8741b24ceabe88acf16025aa264815f84a03294a9dc820e3015ee55e57b697a7",
+          "size": 139686
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "e513f19d81ae07fbb3f7ed38cb27b5dd35585508edf02a742133c7323f8e3471",
+          "size": 4121
+        }
+      ],
+      "totalSize": 143807
+    },
+    {
+      "id": "3s-merc",
+      "name": "3S Mercenary",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "Your hired mercenary's HUD, fed by the five Merc.* GMCP packages (3Scapes only, any guild - a merc is an NPC anyone can hire, so this lives beside 3s-vitals rather than inside a guild plugin). Status: HP, stamina and action points as gauges, the merc's own target and how much of it is left, name, class, weapon type, permanent and instance level against their caps, regen, and whether it is following or dormant. Stats: this session's rounds, damage dealt and taken, healing and abilities beside the lifetime twins, xp toward the next permanent and instance level, and what has been spent on what. Talents and Skills: every allocation with its points, effective value and level gate, and the cost of the next point - the 'can I afford to train yet' question, answered from the feed. 'merc' prints the Status page; the panel does the rest. Built from one capture (Goran, 2 Sep 2026): every field shown was seen, and the ones a capture cannot name (dormant, status, cost, theme, abils) are shown raw under their own names until a player says what they are.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-merc",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "d5337e8a57d44a8bb94ed0c33d3c1ae49d73244e79b72e80b05300257649d2f2",
+          "size": 17752
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "3b9a8c9a22300cfc573da03d33648a0c42e6f03d845d7ddfe43be1acabc8c383",
+          "size": 1424
+        }
+      ],
+      "totalSize": 19176
+    },
+    {
+      "id": "3s-pathfinder",
+      "name": "3S Pathfinder (Rust)",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "BFS path search for the chaos-sea bots, compiled to WebAssembly. Loads next to them and answers their map.path.find events; each falls back to its own Lua search when this isn't loaded. (The retired dead-reckoning 3s-map used it too; the GMCP mapper has its own search.)",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "wasm",
+      "requires": ">=1.6 <2.0",
+      "permissions": [],
+      "folder": "3s-pathfinder",
+      "files": [
+        {
+          "path": "plugin.json",
+          "sha256": "b3ee479c7bff2dd13613d03d7b3c6d73c4f9cf0710129bb3940d19a817647a22",
+          "size": 549
+        },
+        {
+          "path": "scrye_pathfinder.wasm",
+          "sha256": "55115345c2b4b8c832b7464abc6c9aef2cac054fb808c0054f27f588c6a7c038",
+          "size": 195359
+        }
+      ],
+      "totalSize": 195908
+    },
+    {
+      "id": "3s-raid-gmcp",
+      "name": "3S Auto-Raid (GMCP)",
+      "version": "2.3.1",
+      "author": "Joakim",
+      "description": "3Scapes auto-raid: dispatch docked longships to a target town (solo or convoy). Fed by the Guild.Voyage (longships) + Guild.City (heat, dock) + Guild.Kingdom (home towns) GMCP packages, with the foreign town list read off `vlongship targets` ('araid targets' sends it) - Guild.Fleet, which used to carry the ships and both town lists, stopped in September 2026 (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). 2.3.1 (23 Sep): Guild.Fleet is back, and when it carries rtargets_lineage / rtargets_historical those are the home and foreign lists (grudges still overlay the home names; the scan and the default are the fallbacks). A Raids tab (2.3.0) reads Guild.Fleet's raidlog: every raid with its ship, town, daler and the goods it brought, a total line, and the log folded by town (best paying first - a click targets it) and by ship. Same strategy core as the classic: auto-target picks randomly among the calm pool (towns within 2 heat of the lowest), hold rotates towns, keep/reserve protect docked ships, convoy sends one command for the game to crew. The town table lists BOTH target groups - home (lineage, with heat) and foreign (historical, no heat in the feed) - every name clickable, and 'araid pool home|foreign' chooses which group the auto-target raids: home hunts the calm pool, foreign spreads at random with the same hold rotation.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.2 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "notifications.show",
+        "storage.private",
+        "timers.manage",
+        "aliases.manage",
+        "triggers.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-raid-gmcp",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "22be87c29de1db5d85310a5958ab72e55eb19aaeaa4773c1d4c09dd39bbab02e",
+          "size": 36194
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "c41b2a30048d72df3224afe37ad667b0f9c417f200d728acf38ff53bea7cb7ba",
+          "size": 1874
+        }
+      ],
+      "totalSize": 38068
+    },
+    {
+      "id": "3s-stepper",
+      "name": "3S Stepper",
+      "version": "1.1.1",
+      "author": "Joakim",
+      "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper. Reads the room and its contents from GMCP, so the MUD's '=S=', '=M=' and '=P=' display markers are no longer needed; those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.7 <2.0",
+      "permissions": [
+        "commands.send",
+        "output.read",
+        "aliases.manage",
+        "triggers.manage",
+        "timers.manage",
+        "variables.write",
+        "state.write",
+        "storage.private",
+        "ui.panels",
+        "sound.play",
+        "notifications.show"
+      ],
+      "folder": "3s-stepper",
+      "files": [
+        {
+          "path": "areas.json",
+          "sha256": "a87f2ea951ed56438b33c56dfc2324c1751524faebabb9d8eeb7fedcb81032ba",
+          "size": 13241
+        },
+        {
+          "path": "main.lua",
+          "sha256": "9b4640d1cc6a06058e9be7b68ad45d939d9ce5364ee953c285314b4ebe04902d",
+          "size": 36798
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "76b48a62a415556a9eeac92d6e4005a93033ad705408774ec9d6525734fb169a",
+          "size": 921
+        }
+      ],
+      "totalSize": 50960
+    },
+    {
+      "id": "3s-viking-fx",
+      "name": "3S Viking Effects",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "Status-effect timer bar for the 3Scapes Viking guild, fed by the Guild.State GMCP package (fx.stfx). Every active effect as a countdown bar scaled to the longest duration seen this session, ticked down locally between server refreshes, sorted soonest-first. Warns on screen - and optionally on the phone - when an effect drops under the warn threshold (vfx warn <secs>, default 30). Also shows the god name + focus (no countdown: expires_at is a wall-clock epoch the plugin sandbox cannot anchor). 3Scapes only; needs GMCP.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.2 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "notifications.show",
+        "storage.private",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-viking-fx",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "b2bddbcc80a5726b170dfc638823eb2fd11c6ce2665c8ec3a1d0b4c9842f6730",
+          "size": 11396
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "03f21cac2634f35fd55129e7a491160a5a7905fc3dcb7c5797de9de0fe5c1a14",
+          "size": 951
+        }
+      ],
+      "totalSize": 12347
+    },
+    {
+      "id": "3s-viking-kingdom",
+      "name": "3S Viking Kingdom",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "The dynasty half of the Viking split - content the old status panel never showed, fed by the Guild.Roster / Guild.Kingdom / Guild.War GMCP packages (3Scapes only). Tabs: Hird (the roster grid - level, age, atk/def, loyalty, status, champions, the bond matrix), Recruit (what each post wants in a hire, hiring hall, training, spymaster, varangians), Thralls (per-building counts + the follower), Grudges (per-town raid cooldowns, soonest first - the other half of auto-raid's targeting; 'vgrudge' prints it), Kingdom (lineage standings, trade reputation progress, diplomacy), Dynasty (house, spouse, children, schooling, heir), War (army, campaign, prison, the war ledger - the battle BOARD waits for a real war's payloads, which the capture never carried).",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.7 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "storage.private",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-viking-kingdom",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "b3f3550d1b13d015e4ee5609f64c71b6f1469b89fc353047f141824bd76cbe85",
+          "size": 20889
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "92a0cde4468479f46fd7c189c57008888f3e9190904cf614ed33b170e0cd2e76",
+          "size": 1163
+        }
+      ],
+      "totalSize": 22052
+    },
+    {
+      "id": "3s-viking-status-gmcp",
+      "name": "3S Viking Status (GMCP)",
+      "version": "2.27.2",
+      "author": "Joakim",
+      "description": "The settlement half of the Viking HUD, fed by the Guild.* GMCP packages (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). Tabs: Stats / Skills / City / Builds / Production / People / Settlers / Holds / Livestock / Trade / Trade Auto / Trade Log / Feeds - everywhere you travel TO lives in 3s-viking-world, and the travel engine, vgo/vhere and the mission runner went with it - this is the settlement half now. Livestock (2.23.0) reads Guild.Livestock: every herd with its stats, the breeding queue and its countdowns, feed per tick, and each lineage market you have looked at with every stat marked against your own best herd of that species. The city plan is still computed here (Guild.City feeds it, `vplan` edits it); only its picture is drawn there. Includes the build planner and the market scanner + auto-trader. Warehouse stock comes straight from the Guild.Warehouse feed (server-side since 28 Aug) with real per-grade freshness; the `vtrade stock` text scan - Refresh button, `vstock`, cart-event and staleness re-scans - remains only as the automatic fallback for a server without that package. An incoming raid (Guild.City raid) shows on the Stats tab's War section, damaged buildings (bdmg) on the Builds tab, and the four guild-xp tracks (buandi/drotta/viga/vitka off Guild.State.gxp - current, advance threshold, last gain) in the Stats tab's GXP section. Raw materials move in WHOLE CARTS both ways (2.24.0): Raw> and a per-good floor are minimums that TRIGGER a restock - under the line a full cart is bought, capped only by the town's supply, the budget and space, a partial cart still going - and a raw is sold only once a whole cart of surplus sits above the minimum, so the pile lives in [min, min+cart) and a restock is never shipped back out (under warehouse pressure the sell side relaxes to the dispatch minimum, space over yard time). Per-good stock floors ('atrade floor grain 500') keep a minimum of a good in the warehouse whatever the category reserve says - floored names show blue in the Trade tab, held (never-traded) names amber; the Trade tab's Floor box sets the value, and a right-click on a good's name opens a menu (host API 1.19) - hold/release, set the floor, clear it - with plain rclick=/click= fallbacks for older hosts. The auto-trader knows the cartyard's one-caravan-per-3-minutes rhythm: it holds after every dispatch, reads the yard's own 'Ready in' refusal to set the clock exactly, and never spams doomed carts into the cooldown ('atrade yard <sec>' tunes the hold). Market prices come straight from the Guild.TradeGoods feed (per-village, pushed; the 30 good codes solved mechanically and cross-validated), so the mkref scan burst is retired to a fallback. The trader treats a town's demand as an answer: zero demand gets no cart however good the price, and every dispatched cart provisionally debits the town's demand (or supply, for buys) locally, so quiet stretches between feed pushes can't stack a second caravan into demand the first already claimed - the next feed row restores the server's truth. Remaining GMCP feed gaps show honestly in their tabs. The Skills tab is the former lab-skillwatch, merged in: it scans the framed `vskills` listing for every skill's level, point cost and daler cost (there is no GMCP package for the listing - no skill field in any of the four captures), and prices each row against the live feed - daler from Guild.State.daler, and each pool from the Guild.State.gxp track it was PAIRED to by matching the listing's pool total against the four track values (exact equality, only when exactly one track carries it; an ambiguous pool stays unpaired and falls back to the scanned number). Before the merge that half read MIP-era vik.* keys this plugin never sets, so every row was costed against zero. Every row leads with a clickable INFO cell (as does the skill name): a left click sends `vhelp <skill>`, a right click opens an Info / Train menu (host API 1.19, with rclick=/click= fallbacks for older hosts) - `vtrain` lives only in that menu, since it spends points and daler and should not sit under a stray left click. A points gain now moves a row with no rescan; `vsk alert on` notifies when a skill crosses into affordable, `vsk feed` names the real source per pool, `vsk peek` shows the raw capture with per-line verdicts. The trade log records a sale when it is PAID, not when it is sent: a sell cart is paid on arrival, so it is held until the feed shows that cart back from the yard and only then logged and counted (cart_id rides the carts feed string as field 12 so one cart can be followed out and home). A buy still logs at dispatch, because that is when its daler leaves. Carts in flight persist across a restart - one still out is picked up again, one that docked while Scrye was closed is logged and marked - and the Trade Log shows what is still rolling and what it is worth, so nothing looks forgotten between dispatch and payday.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "storage.private",
+        "timers.manage",
+        "triggers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-viking-status-gmcp",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "f4c42e09284d3fd04d8cc7e4731d75ef3b48284c0d17d465958c50e8988d356d",
+          "size": 246916
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "b5ffe9ef04c00d212e7f9a0542065d0b4c27005215881b0f9b43519c48692d96",
+          "size": 5453
+        }
+      ],
+      "totalSize": 252369
+    },
+    {
+      "id": "3s-viking-world",
+      "name": "3S Viking World",
+      "version": "1.4.5",
+      "author": "Joakim",
+      "description": "The fleet's world, carved out of the Viking status panel per the three-way split: Sea (live voyage status, the chart with click-to-queue courses, resolve options, saga), Voyage (boons/aids/goods/curios), Map (the territory grid with click-to-travel and vikloc naming) and Travel (clickable settlement list). Fed by the Guild.Voyage / Guild.Map / Guild.Fleet / Guild.Settlement GMCP packages (3Scapes only). Includes the vnav auto sea-navigation: tours charted islands/wrecks/objectives nearest-first and auto-resolves nodes by your preference list with hull/supplies conditions. Town travel is owned here: vgo/vhere, the route planner and the mission runner all live in this plugin. What it still needs 3s-viking-status-gmcp for is the settlement feed behind two tabs - Mission reads the raw mission strings that plugin publishes, and Plan binds across to the grid it computes; without it those two tabs sit empty and everything else works. Map terrain and chart-row field shapes are marked VERIFY LIVE where the 27 Aug capture never carried them. The Travel list holds every named place rather than the fourteen with recorded routes - the engine plans by BFS over the Guild.Map grids now, so naming a spot with `vikloc` is all it takes to be able to walk there. The Plan grid shows here with the other maps; 3s-viking-status-gmcp still computes it and owns `vplan`, and the tab binds across to its state. The travel engine lives here now: the Guild.Map east/south edge grids as a graph, BFS over them, the 28 recorded routes kept as the oracle that vets the feed, vgo/vhere, and the mission runner - which walks every leg through travel_to and so belongs beside the walking. 3s-viking-status-gmcp publishes the raw mission strings for it to read. The Plan grid can wear hand-drawn image tiles (host API 1.17): PNGs in this plugin's tiles/ folder, declared per district character, riding the Icons toggle - name a file, drop the art in, it appears. A voyage node's resolve options depend on the encounter, and only one encounter has been captured, so `vnav` no longer assumes it knows them all: a node offering nothing in your preference list prints what it WAS offered and holds there, once per node rather than every burst, instead of stalling with no explanation. Ending the list with `*` is the opt-in last resort - answer an unrecognised node with its first offer.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.8 <2.0",
+      "permissions": [
+        "commands.send",
+        "state.read",
+        "state.write",
+        "storage.private",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-viking-world",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "cd9bf945ecdf71d9f05808504c7eae6c20f186d7c5d1dc84f47dd56fa2ff8e37",
+          "size": 78837
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "46cda3e1fa7352473c29b34dceb4cb88435c0481c0f611718087835f0e18cdb7",
+          "size": 2793
+        },
+        {
+          "path": "tiles/tower.png",
+          "sha256": "76d18b287cc51c3d6d7fa2ddcffefe50395d725832837b05b389e4ded3c422df",
+          "size": 413
+        }
+      ],
+      "totalSize": 82043
+    },
+    {
+      "id": "3s-vitals",
+      "name": "3S Vitals",
+      "version": "2.2.0",
+      "author": "Joakim",
+      "description": "Compact vitals HUD: stat gauges plus the current enemy and its health, now with a Settings tab. Works on both feeds: GMCP (3Scapes - Char.Vitals + Guild.State, enemy from Char.Combat, plus a Coffin gauge) and MIP (3K, or 3S with MIP on - the classic character./vik./enemy. paths). A Viking gets HP / Seid / Vig / Rad by their drift-proof named keys; every other guild gets HP / SP plus its two guild pools labelled with the server's own names for them (guild.info gp1_name/gp2_name), so any guild's bars come out right without the plugin knowing the guild. A Cyborg gets HP / Power / Heat, a Gentech HP / PU / CPC, a Mage HP / SP / Umbra / Conc (2.1.0), and a Juggernaut HP / SP / Heat / Stim (2.2.0). Settings pins Auto / Viking / Cyborg / Gentech / Mage / Juggernaut / Generic ('vitals guild ...' works too).",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.2 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "ui.panels",
+        "storage.private",
+        "aliases.manage"
+      ],
+      "folder": "3s-vitals",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "e87fb66e928cfc8af57f8eccfd9aa82ebc3365cc826fab1d3a720198adfeee42",
+          "size": 14238
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "ceb92bd0414d2ca26803b99af96c496226430405a4dee9ffbc142faf4005c7ac",
+          "size": 1180
+        }
+      ],
+      "totalSize": 15418
+    }
+  ]
+}

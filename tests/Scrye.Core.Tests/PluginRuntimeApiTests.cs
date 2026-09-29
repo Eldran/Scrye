@@ -583,4 +583,36 @@ public sealed class PluginRuntimeApiTests : IDisposable
         rt.ProcessLine("three");
         Assert.Equal("yes", host.State["span"]);
     }
+
+    // ---- rescan picks up a new version ----------------------------------------------
+
+    [Fact]
+    public void RescanReloadsARunningPluginWhoseVersionChangedOnDisk()
+    {
+        var host = new FakeHost();
+        var said = new List<string>();
+        string folder = Path.Combine(_dir, "upd");
+        void Write(string version)
+        {
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "plugin.json"),
+                "{ \"id\": \"upd\", \"version\": \"" + version + "\" }");
+            File.WriteAllText(Path.Combine(folder, "main.lua"), "scrye.setState(\"ran\", \"" + version + "\")");
+        }
+        Write("1.0.0");
+        using var mgr = new PluginManager(PluginCatalog.Discover(_dir), new[] { "upd" }, host, said.Add,
+                                          rediscover: () => PluginCatalog.Discover(_dir), userRoot: _dir);
+        Assert.Equal("1.0.0", host.State["ran"]);
+
+        Write("1.1.0");                                  // what a catalogue update does to the folder
+        mgr.Rescan();
+
+        Assert.Equal("1.1.0", host.State["ran"]);
+        Assert.Equal("1.1.0", Assert.Single(mgr.ListPlugins()).Version);
+        Assert.Contains(said, s => s.Contains("changed on disk"));
+
+        host.State.Remove("ran");
+        mgr.Rescan();                                    // nothing changed: no reload
+        Assert.False(host.State.ContainsKey("ran"));
+    }
 }

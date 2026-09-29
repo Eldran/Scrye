@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Scrye.Core.Plugins;
 using Scrye.Scripting.Plugins;
 
@@ -10,7 +12,9 @@ namespace Scrye.App.ViewModels;
 /// <summary>Backs the per-world plugins-manager panel: lists discovered plugins and their
 /// loaded/removable state, and offers reload / enable-disable / remove, plus add workflows
 /// (create a starter plugin, open the plugins folder, rescan disk). The mutating actions are
-/// routed (by the caller) onto the session loop; this VM refreshes from a snapshot afterward.</summary>
+/// routed (by the caller) onto the session loop; this VM refreshes from a snapshot afterward.
+/// A second page, the Catalogue, lists the plugins published in the Scrye repo for this MUD and
+/// installs or updates them.</summary>
 public sealed class PluginsViewModel : ViewModelBase
 {
     private readonly Func<IReadOnlyList<PluginInfo>> _list;
@@ -31,6 +35,11 @@ public sealed class PluginsViewModel : ViewModelBase
     /// <param name="health">Optional per-plugin cost/failure snapshot (from
     /// <see cref="PluginManager.Diagnostics"/>). When supplied, rows show why a plugin is slow or
     /// has been quarantined instead of leaving the user to infer it from scrollback.</param>
+    /// <param name="mudId">The world the catalogue is filtered for (a plugin's mudIds).</param>
+    /// <param name="loadCatalogue">Reads the catalogue index (off the UI thread); null hides the
+    /// Catalogue page. The Action collects entries the index had to skip.</param>
+    /// <param name="installFromCatalogue">Downloads, verifies and installs one entry into the user
+    /// folder (not onto the session loop - the rescan that follows is).</param>
     public PluginsViewModel(Func<IReadOnlyList<PluginInfo>> list,
                             Action<string, Action> reload,
                             Action<string, bool, Action> setEnabled,
@@ -38,8 +47,14 @@ public sealed class PluginsViewModel : ViewModelBase
                             Action<Action> rescan,
                             Action<Action> newPlugin,
                             Action openFolder,
-                            Func<IReadOnlyList<PluginHealth>>? health = null)
+                            Func<IReadOnlyList<PluginHealth>>? health = null,
+                            string? mudId = null,
+                            Func<Action<string>, CancellationToken, Task<CatalogIndex>>? loadCatalogue = null,
+                            Func<CatalogIndex, CatalogEntry, Task>? installFromCatalogue = null)
     {
+        _mudId = mudId ?? "*";
+        _loadCatalogue = loadCatalogue;
+        _install = installFromCatalogue;
         _health = health;
         _list = list;
         _reload = reload;
@@ -53,6 +68,9 @@ public sealed class PluginsViewModel : ViewModelBase
         NewCommand = new RelayCommand(() => _newPlugin(Refresh));
         OpenFolderCommand = new RelayCommand(() => _openFolder());
         CloseCommand = new RelayCommand(Close);
+        ShowInstalledCommand = new RelayCommand(() => ShowCatalogue = false);
+        ShowCatalogueCommand = new RelayCommand(() => ShowCatalogue = true);
+        RefreshCatalogueCommand = new RelayCommand(() => _ = LoadCatalogueAsync());
     }
 
     private bool _isOpen;
@@ -80,7 +98,172 @@ public sealed class PluginsViewModel : ViewModelBase
                 (id, enable) => _setEnabled(id, enable, Refresh),
                 id => _remove(id, Refresh)));
         }
+        if (_index is not null) RebuildCatalogue();   // what is installed moved: so do the buttons
     }
+
+    // ---- catalogue ------------------------------------------------------------------
+
+    private readonly string _mudId;
+    private readonly Func<Action<string>, CancellationToken, Task<CatalogIndex>>? _loadCatalogue;
+    private readonly Func<CatalogIndex, CatalogEntry, Task>? _install;
+    private CatalogIndex? _index;
+    private bool _catalogueLoading;
+
+    public ObservableCollection<CatalogRowViewModel> Catalogue { get; } = new();
+    public RelayCommand ShowInstalledCommand { get; }
+    public RelayCommand ShowCatalogueCommand { get; }
+    public RelayCommand RefreshCatalogueCommand { get; }
+
+    /// <summary>Whether this world offers the Catalogue page at all.</summary>
+    public bool HasCatalogue => _loadCatalogue is not null;
+
+    private bool _showCatalogue;
+    /// <summary>The Catalogue page is showing (else the installed list). Read on first show.</summary>
+    public bool ShowCatalogue
+    {
+        get => _showCatalogue;
+        set
+        {
+            if (!SetField(ref _showCatalogue, value)) return;
+            OnPropertyChanged(nameof(ShowInstalled));
+            if (value && _index is null) _ = LoadCatalogueAsync();
+        }
+    }
+    public bool ShowInstalled => !_showCatalogue;
+
+    private string? _catalogueStatus;
+    /// <summary>One line under the catalogue: what it is, how it went, or what failed.</summary>
+    public string? CatalogueStatus
+    {
+        get => _catalogueStatus;
+        private set => SetField(ref _catalogueStatus, value);
+    }
+
+    private async Task LoadCatalogueAsync()
+    {
+        if (_loadCatalogue is null || _catalogueLoading) return;
+        _catalogueLoading = true;
+        CatalogueStatus = "Reading the catalogue…";
+        var skipped = new List<string>();
+        try
+        {
+            _index = await _loadCatalogue(s => { lock (skipped) skipped.Add(s); }, CancellationToken.None);
+            RebuildCatalogue();
+            if (skipped.Count > 0) CatalogueStatus += $" · {skipped.Count} entr{(skipped.Count == 1 ? "y" : "ies")} skipped";
+        }
+        catch (Exception ex)
+        {
+            CatalogueStatus = ex.Message;
+        }
+        finally { _catalogueLoading = false; }
+    }
+
+    private void RebuildCatalogue()
+    {
+        Catalogue.Clear();
+        if (_index is null) return;
+        var have = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (PluginInfo p in _list()) have[p.Id] = p.Version;
+
+        int updates = 0;
+        foreach (CatalogEntry e in _index.Plugins.Where(e => e.AppliesTo(_mudId))
+                                                 .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var row = new CatalogRowViewModel(e, have.TryGetValue(e.Id, out string? v) ? v : null, InstallFromCatalogue);
+            if (row.Status == CatalogStatus.UpdateAvailable) updates++;
+            Catalogue.Add(row);
+        }
+        CatalogueStatus = $"{Catalogue.Count} plugin{(Catalogue.Count == 1 ? "" : "s")} from Scrye {_index.Ref}"
+                          + (updates > 0 ? $" · {updates} update{(updates == 1 ? "" : "s")}" : "");
+    }
+
+    private async void InstallFromCatalogue(CatalogRowViewModel row)
+    {
+        if (_install is null || _index is null || row.Busy) return;
+        row.Busy = true;
+        bool update = row.Status == CatalogStatus.UpdateAvailable;
+        try
+        {
+            await _install(_index, row.Entry);
+            string done = update
+                ? $"{row.Name} updated to v{row.Entry.Version}"
+                : $"{row.Name} v{row.Entry.Version} installed - turn it on under Installed";
+            // rescan (on the loop) picks the new copy up and reloads it if it was running
+            _rescan(() => { Refresh(); CatalogueStatus = done; });
+        }
+        catch (Exception ex)
+        {
+            row.Busy = false;
+            CatalogueStatus = ex.Message;
+        }
+    }
+}
+
+/// <summary>One plugin on the Catalogue page.</summary>
+public sealed class CatalogRowViewModel : ViewModelBase
+{
+    public CatalogEntry Entry { get; }
+    public CatalogStatus Status { get; }
+    public string Name { get; }
+    public string Detail { get; }
+    public string StateText { get; }
+    public string? Description { get; }
+    public bool HasDescription => !string.IsNullOrEmpty(Description);
+    public string? PermissionSummary { get; }
+    public bool HasPermissions => !string.IsNullOrEmpty(PermissionSummary);
+    public bool IsProblem => Status == CatalogStatus.Incompatible;
+    public bool HasAction => Status is CatalogStatus.NotInstalled or CatalogStatus.UpdateAvailable;
+    public RelayCommand ActCommand { get; }
+
+    private bool _busy;
+    public bool Busy
+    {
+        get => _busy;
+        set
+        {
+            if (!SetField(ref _busy, value)) return;
+            OnPropertyChanged(nameof(ActionLabel));
+            ActCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public string ActionLabel => _busy ? "…" : Status == CatalogStatus.UpdateAvailable ? "Update" : "Install";
+
+    public CatalogRowViewModel(CatalogEntry entry, string? installedVersion, Action<CatalogRowViewModel> act)
+    {
+        Entry = entry;
+        Status = CatalogIndex.StatusOfVersion(entry, installedVersion);
+        Name = string.IsNullOrWhiteSpace(entry.Name) ? entry.Id : entry.Name;
+
+        long kb = Math.Max(1, (entry.TotalSize + 1023) / 1024);
+        Detail = $"v{entry.Version}"
+                 + (string.IsNullOrWhiteSpace(entry.Author) ? "" : $" · {entry.Author}")
+                 + $" · {kb:N0} KB";
+
+        entry.IsApiCompatible(out string why);
+        StateText = Status switch
+        {
+            CatalogStatus.NotInstalled => "not installed",
+            CatalogStatus.UpToDate => "installed",
+            CatalogStatus.UpdateAvailable => $"installed v{installedVersion} → v{entry.Version}",
+            CatalogStatus.NewerInstalled => $"you have v{installedVersion}, newer than this",
+            _ => "cannot run on this Scrye: " + why,
+        };
+
+        // Long manifests (the viking HUD's runs to paragraphs) are cut for the row; the whole
+        // text is the tooltip.
+        string? d = entry.Description?.Trim();
+        Description = d;
+        ShortDescription = d is { Length: > 180 } ? d[..177].TrimEnd() + "…" : d;
+
+        if (entry.Permissions.Length > 0)
+            PermissionSummary = "Declares: " + string.Join(", ", entry.Permissions
+                .OrderByDescending(PluginPermissions.IsSensitive).ThenBy(p => p, StringComparer.Ordinal));
+
+        ActCommand = new RelayCommand(() => act(this), () => HasAction && !_busy);
+    }
+
+    public string? ShortDescription { get; }
 }
 
 /// <summary>One row in the plugins manager.</summary>

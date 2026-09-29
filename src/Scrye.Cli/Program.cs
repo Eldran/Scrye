@@ -35,6 +35,7 @@ if (args.Length >= 1 && args[0] == "--reconnect") { ReconnectTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--complete") { CompleteTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--plugintimers") { PluginTimersTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--pluginpack") { PluginPackTest(); return 0; }
+if (args.Length >= 1 && args[0] == "--catalog") return CatalogBuild(args);
 if (args.Length >= 1 && args[0] == "--login") { LoginTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mxp") { MxpTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--mccp") { MccpTest(); return 0; }
@@ -43,7 +44,7 @@ if (args.Length >= 1 && args[0] == "--routing") { RoutingTest(); return 0; }
 if (args.Length >= 1 && args[0] == "--notify") { NotifyTest(); return 0; }
 if (args.Length >= 2 && int.TryParse(args[1], out int port)) { await ConnectAsync(args[0], port); return 0; }
 
-Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --login | --mxp | --mccp | --export | --routing | --notify | <host> <port>");
+Console.WriteLine("usage: scrye-cli --selftest | --automation | --protocol | --mip | --profile | --worlds | --events | --replay | --state | --plugins | --sequence | --history | --logging | --reconnect | --complete | --plugintimers | --pluginpack | --catalog <tag> | --login | --mxp | --mccp | --export | --routing | --notify | <host> <port>");
 return 1;
 
 static void SelfTest()
@@ -915,6 +916,72 @@ static void PluginTimersTest()
     Console.WriteLine($"   self-cancelling timer fired {hits % 100} times (expect 2); nested one-shot ran = {(hits >= 100 ? "yes" : "no")}");
 
     Console.WriteLine("\nPlugin-timer self-test complete.");
+}
+
+// --catalog <tag> [--repo <dir>] [--out <file>]
+// Writes the plugin catalogue (catalog/index.json) for a release tag: every plugin folder under
+// src/Scrye.App/plugins AS COMMITTED AT THAT TAG, each file with its SHA-256 and size. Read from
+// git blobs, not the working tree, so a Windows checkout's CRLF never gets hashed - the bytes
+// are the ones raw.githubusercontent.com serves for the tag. Tag and push first, then run this,
+// then commit and push the index on main.
+static int CatalogBuild(string[] a)
+{
+    if (a.Length < 2 || a[1].StartsWith("--"))
+    {
+        Console.WriteLine("usage: scrye-cli --catalog <tag> [--repo <dir>] [--out <file>]");
+        return 1;
+    }
+    string tag = a[1], repo = ".";
+    string? outPath = null;
+    for (int i = 2; i + 1 < a.Length; i += 2)
+    {
+        if (a[i] == "--repo") repo = a[i + 1];
+        else if (a[i] == "--out") outPath = a[i + 1];
+        else { Console.WriteLine($"unknown option {a[i]}"); return 1; }
+    }
+    const string prefix = "src/Scrye.App/plugins/";
+
+    static byte[] Git(string repo, params string[] argv)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-C"); psi.ArgumentList.Add(repo);
+        foreach (string s in argv) psi.ArgumentList.Add(s);
+        using var p = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("git did not start");
+        using var ms = new MemoryStream();
+        Task<string> err = p.StandardError.ReadToEndAsync();
+        p.StandardOutput.BaseStream.CopyTo(ms);
+        p.WaitForExit();
+        if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', argv)}: {err.Result.Trim()}");
+        return ms.ToArray();
+    }
+
+    try
+    {
+        string listing = Encoding.UTF8.GetString(Git(repo, "ls-tree", "-r", "-z", "--name-only", tag, "--", prefix));
+        var files = new List<(string, byte[])>();
+        foreach (string path in listing.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            files.Add((path[prefix.Length..], Git(repo, "cat-file", "blob", $"{tag}:{path}")));
+        if (files.Count == 0) { Console.WriteLine($"no plugins under {prefix} at {tag}"); return 1; }
+
+        CatalogIndex idx = CatalogIndex.Build(files, tag, report: Console.WriteLine);
+        string target = outPath ?? Path.Combine(repo, "catalog", "index.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+        File.WriteAllText(target, idx.ToJson(), new UTF8Encoding(false));
+
+        foreach (CatalogEntry e in idx.Plugins)
+            Console.WriteLine($"  {e.Id,-26} {e.Version,-9} {e.Files.Length,2} file(s) {e.TotalSize,9:N0} bytes");
+        Console.WriteLine($"{idx.Plugins.Length} plugins from {tag} -> {target}");
+        Console.WriteLine("Check the tag is pushed, then commit and push this file on main.");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("catalog: " + ex.Message);
+        return 1;
+    }
 }
 
 static void PluginPackTest()

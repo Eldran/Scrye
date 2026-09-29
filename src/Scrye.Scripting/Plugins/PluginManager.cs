@@ -190,8 +190,28 @@ public sealed class PluginManager : IDisposable
         foreach (IPluginRuntime rt in _runtimes.Where(r => !foundIds.Contains(r.Id)).ToList())
             UnloadRuntime(rt.Id);   // vanished from disk
 
+        // A running plugin whose copy on disk changed - a new version (a catalogue update, a
+        // package dropped in) or another folder winning (the user copy overtaking the bundled
+        // one) - is reloaded from the new copy, or it would keep running the old code until
+        // the next connect while the manager already shows the new version.
+        var changed = new List<string>();
+        foreach (PluginDescriptor d in found)
+        {
+            PluginDescriptor? was = _descriptors.FirstOrDefault(x => x.Manifest.Id == d.Manifest.Id);
+            if (was is null || _runtimes.All(r => r.Id != d.Manifest.Id)) continue;
+            if (!string.Equals(Path.GetFullPath(was.FolderPath), Path.GetFullPath(d.FolderPath), StringComparison.OrdinalIgnoreCase)
+                || was.Manifest.Version != d.Manifest.Version)
+                changed.Add(d.Manifest.Id);
+        }
+
         _descriptors.Clear();
         _descriptors.AddRange(found);
+
+        foreach (string id in changed)
+        {
+            _report($"plugin '{id}' changed on disk - reloading");
+            Reload(id);
+        }
 
         // load any opted-in plugin that appeared on disk and isn't running yet
         foreach (PluginDescriptor d in found)

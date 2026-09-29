@@ -650,7 +650,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         roots.Add(Path.Combine(AppContext.BaseDirectory, "plugins"));                           // bundled (next to exe)
         roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "Scrye", "plugins"));                                                               // user plugins
-        string[] pluginRoots = roots.ToArray();
+        // Past the extra folder, the NEWEST copy of an id loads (a tie goes to the bundled one):
+        // a catalogue update of a bundled plugin lands in the user folder and must win, and a
+        // later Scrye release whose bundled copy has overtaken it must win back.
+        string bundledPluginRoot = roots[^2];
+        string mudForPlugins = profile.Name;
+        CatalogInstaller.SweepLeftovers(roots[^1]);   // an install that died mid-swap
+        Func<IReadOnlyList<PluginDescriptor>> discoverPlugins = () =>
+            PluginCatalog.AvailableForMudNewest(mudForPlugins, extraRoot, bundledPluginRoot, roots[^1]);
         // persistent scrye.store data, scoped per world: %APPDATA%/Scrye/plugin-data/<world>/<pluginId>.json
         var pluginData = new PluginDataStore(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "plugin-data"),
@@ -683,11 +690,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // MUD but loads only what this character enabled (empty for quick-connect). Toggling in
         // the manager persists to the connected node's profile via PersistPluginEnable.
         _plugins = new PluginManager(
-            PluginCatalog.AvailableForMud(profile.Name, pluginRoots),
+            discoverPlugins(),
             enabledPlugins ?? Array.Empty<string>(),
             host, AppendSystem,
             id => Hud.RemovePanels(id),                                  // drop a plugin's HUD panels on unload
-            () => PluginCatalog.AvailableForMud(profile.Name, pluginRoots),   // rescan disk for add/remove
+            discoverPlugins,                                             // rescan disk for add/remove
             userPluginRoot,
             (id, enabled) => Dispatcher.UIThread.Post(() => PersistPluginEnable?.Invoke(id, enabled)));
         // Say what the extra folder did. A configured folder that finds nothing is the one
@@ -719,7 +726,24 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             done => _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(() => { EnsureDeclaredPanes(); done(); }); }),
             done => { ScaffoldNewPlugin(userPluginRoot); _session.Post(() => { _plugins.Rescan(); Dispatcher.UIThread.Post(done); }); },
             () => OpenPluginsFolder(userPluginRoot),
-            () => _plugins.Diagnostics.Snapshot());   // immutable snapshot — safe to read from the UI thread
+            () => _plugins.Diagnostics.Snapshot(),   // immutable snapshot — safe to read from the UI thread
+            mudForPlugins,
+            // the catalogue: read off the UI thread; an install downloads + verifies + swaps off
+            // it too, and the manager's rescan (on the loop) then loads or reloads the new copy
+            (skipped, ct) => Task.Run(() => Services.PluginCatalogClient.LoadAsync(
+                Services.PluginPreferences.CatalogUrl, skipped, ct), ct),
+            (index, entry) => Task.Run(async () =>
+            {
+                PluginDescriptor? have = discoverPlugins().FirstOrDefault(d =>
+                    string.Equals(d.Id, entry.Id, StringComparison.OrdinalIgnoreCase));
+                if (have is not null && extraRoot is not null
+                    && Path.GetFullPath(have.FolderPath).StartsWith(Path.GetFullPath(extraRoot), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"'{entry.Id}' is loaded from your extra plugin folder, which always wins - update it there");
+                string target = CatalogInstaller.TargetFolder(entry, have, userPluginRoot);
+                await CatalogInstaller.InstallAsync(index, entry, target, Services.PluginCatalogClient.FetchAsync);
+                _session.Post(() => AppendSystem($"plugin catalogue: {entry.Id} v{entry.Version} from Scrye {index.Ref} -> {target}"));
+            }));
 
         CompanionPanel = new CompanionViewModel(
             () => CompanionControl,
