@@ -377,8 +377,10 @@ scrye.onConnect(function()
 end)
 
 -- --------------------------------------------------------------- aliases
--- merc: the status page in the output window, for a glance without the panel
-scrye.addAlias{ pattern = "^merc$", regex = true, run = function()
+-- mhud: the status page in the output window, for a glance without the panel.
+-- Not 'merc': that is the game's own command for talking to your mercenary, and a
+-- plugin alias is matched first, so 'merc' here would swallow it (1.1.0).
+scrye.addAlias{ pattern = "^mhud$", regex = true, run = function()
   dirty.status = true; flush()
   for line in (scrye.getState(P .. "status") or ""):gmatch("[^\n]+") do
     scrye.print("@{#C08A3E,bold}[merc]@{} " .. line)

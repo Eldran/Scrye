@@ -779,7 +779,7 @@ doesn't exist on 3K, so nothing was left for them to read.)
 | `cyb` | 3S Cyborg |
 | `jug` | 3S Juggernaut |
 | `gt` · `gtsys` | 3S Gentech |
-| `merc` | 3S Mercenary |
+| `mhud` | 3S Mercenary |
 | `mage` | 3S Mage |
 | `vfx` | Viking Effects |
 | `araid` | Auto‑Raid |
@@ -1478,7 +1478,7 @@ can switch another implant on.
 
 ---
 
-### 3S Mercenary — `merc`
+### 3S Mercenary — `mhud`
 
 Your hired mercenary, any guild — a merc is an NPC anyone can hire, so this is its own plugin
 beside Vitals rather than a tab in a guild HUD. It reads the five `Merc.*` packages (3Scapes
@@ -1500,7 +1500,7 @@ sends them once the client asks for `"Merc 1"`, which Scrye does) and nothing el
 
 | Command | What it does |
 |---|---|
-| `merc` | Print the Status page into the output window. |
+| `mhud` | Print the Status page into the output window. (`merc` is the game's own command for your mercenary, so the plugin stays off it.) |
 
 The packages arrive as one snapshot and then deltas — a round sends only `stam` and
 `target_hp` — and the plugin merges them itself, so it shows the same bars on a client that
