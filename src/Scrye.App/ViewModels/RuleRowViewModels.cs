@@ -65,14 +65,36 @@ public abstract class RuleRowViewModel : ViewModelBase
 
     public RelayCommand TestCommand { get; }
 
+    /// <summary>How many lines the test matches over: 1 for an alias; a multi-line trigger's
+    /// window for a trigger (<see cref="TriggerDef.EffectiveLines"/>).</summary>
+    protected virtual int TestLines => 1;
+
     /// <summary>Match the sample line against this rule's (unsaved) pattern and show the
-    /// result — no engine registration, no side effects. Reuses the real matcher/template.</summary>
+    /// result — no engine registration, no side effects. Reuses the real matcher/template.
+    /// For a multi-line trigger the sample is several lines (the last is the newest) and the
+    /// match must reach into the last one, exactly as the engine requires.</summary>
     private void RunTest()
     {
         if (string.IsNullOrEmpty(Pattern)) { TestResult = "(enter a pattern first)"; return; }
         try
         {
-            MatchResult? m = new CompiledPattern(Pattern, IsRegex, IgnoreCase).Match(TestInput ?? "");
+            string input = (TestInput ?? "").Replace("\r\n", "\n");
+            int n = TestLines;
+            MatchResult? m;
+            if (n <= 1)
+            {
+                // a one-line rule sees one line: the last of a pasted block
+                int nl = input.LastIndexOf('\n');
+                m = new CompiledPattern(Pattern, IsRegex, IgnoreCase).Match(nl < 0 ? input : input[(nl + 1)..]);
+            }
+            else
+            {
+                string[] lines = input.Split('\n');
+                int take = Math.Min(n, lines.Length);
+                string joined = string.Join("\n", lines, lines.Length - take, take);
+                int newest = joined.Length - lines[^1].Length;
+                m = new CompiledPattern(Pattern, IsRegex, IgnoreCase, multiLine: true).MatchWindow(joined, newest);
+            }
             if (m is null) { TestResult = "✗ no match"; return; }
             string expanded = Template.Expand(Send, m, new VariableStore());
             string wilds = m.Wildcards.Count > 0 ? "   wildcards: [" + string.Join(", ", m.Wildcards) + "]" : "";
@@ -107,7 +129,17 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Notify = d.Notify; Sound = d.Sound ?? "";
         HighlightColor = d.HighlightFore ?? ""; HighlightBack = d.HighlightBack ?? "";
         HighlightWholeLine = d.HighlightWholeLine;
+        LinesText = d.Lines > 1 ? d.Lines.ToString() : "";
     }
+
+    private string _linesText = "";
+    /// <summary>Lines to match over (empty or 1 = the line that arrived). A pattern typed on
+    /// several lines needs nothing here - its own line count is used.</summary>
+    public string LinesText { get => _linesText; set => SetField(ref _linesText, value); }
+
+    private int LinesValue => int.TryParse(LinesText, out int v) && v > 1 ? Math.Min(v, TriggerDef.MaxLines) : 1;
+
+    protected override int TestLines => new TriggerDef { Pattern = Pattern, IsRegex = IsRegex, Lines = LinesValue }.EffectiveLines;
 
     private string _capturePane = "";
     /// <summary>Named output pane the matched line routes to (empty = none).</summary>
@@ -147,6 +179,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         Notify = Notify, Sound = OrNull(Sound),
         HighlightFore = OrNull(HighlightColor), HighlightBack = OrNull(HighlightBack),
         HighlightWholeLine = HighlightWholeLine,
+        Lines = LinesValue,
     };
 }
 

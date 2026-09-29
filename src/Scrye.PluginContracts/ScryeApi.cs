@@ -198,7 +198,16 @@ public static class ScryeApi
     //
     //      The Trade tab is why: a good's name wanted hold, set-floor and clear-floor at
     //      once, and 1.16 could offer exactly one of them.
-    public static readonly Version Current = new(1, 19);
+    // 1.20 scrye.addTrigger takes `lines = N`: the trigger matches over the last N lines of
+    //      output, newest last, and a pattern with a newline in it (or a regex with \n)
+    //      spans that many lines without being told. It fires once, as the block's last line
+    //      arrives - the same multi-line matching user triggers got in the same release.
+    //
+    //      A score screen or a two-line kill message is one fact spread over lines, and a
+    //      plugin had to stitch them itself with an onLine hook and a state machine.
+    //      Additive: a pre-1.20 host ignores the field and matches the pattern against one
+    //      line, so a plugin that needs the block should declare requires.scryeApi >= 1.20.
+    public static readonly Version Current = new(1, 20);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

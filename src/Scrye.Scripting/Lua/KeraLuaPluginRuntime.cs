@@ -30,6 +30,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         public CompiledPattern Pattern = null!;
         public string? Send;
         public int Run = NoRef;
+        public int Lines = 1;                          // >1: matches over that many lines, newest last
     }
 
     private readonly PluginDescriptor _descriptor;
@@ -48,6 +49,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     private readonly List<int> _commandHooks = new();                 // scrye.onCommand (1.6)
     private readonly List<(string name, int fn)> _eventHooks = new(); // scrye.on (1.6)
     private readonly List<PluginRule> _triggers = new();   // match output lines
+    private readonly RecentLines _recent = new();          // the lines multi-line triggers look back over
     private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly Dictionary<string, int> _actions = new();   // panel-button callbacks by id
     // Action ids created while building each panel, by panel title — same retirement scheme
@@ -98,10 +100,13 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             else if (l.Type(-1) == LuaType.String) current = l.ToString(-1, false); // return "text" -> rewrite
             l.Pop(1);
         }
+        // remembered BEFORE matching: a multi-line trigger's window ends with this line
+        _recent.Push(text);
         for (int i = 0; i < _triggers.Count; i++)
         {
-            MatchResult? m = _triggers[i].Pattern.Match(text);
-            if (m is not null) Apply(_triggers[i], m);
+            PluginRule t = _triggers[i];
+            MatchResult? m = _recent.Match(t.Pattern, t.Lines, text, out _);
+            if (m is not null) Apply(t, m);
         }
         return (gag, current != text ? current : null);
     }
@@ -225,6 +230,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         _commandHooks.Clear();
         _eventHooks.Clear();
         _triggers.Clear();
+        _recent.Clear();
         _aliases.Clear();
         _actions.Clear();
         _panelActions.Clear();
@@ -635,6 +641,17 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         bool isRegex = FieldBool(cl, 1, "regex", defaultValue: false);
         bool ignoreCase = FieldBool(cl, 1, "ignoreCase", defaultValue: true);
 
+        // lines = N (triggers only): match over the last N lines. A pattern with a newline in
+        // it spans that many on its own. An alias is one command line, always.
+        int lines = 1;
+        if (ReferenceEquals(into, _triggers))
+        {
+            cl.GetField(1, "lines");
+            int asked = cl.Type(-1) == LuaType.Number ? (int)Math.Clamp(cl.ToNumber(-1), 1, TriggerDef.MaxLines) : 1;
+            cl.Pop(1);
+            lines = TriggerDef.LinesFor(pattern, isRegex, asked);
+        }
+
         int run = NoRef;
         cl.GetField(1, "run");
         if (cl.IsFunction(-1)) run = cl.Ref(LuaRegistry.Index);
@@ -644,10 +661,12 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             into.Add(new PluginRule
             {
-                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase),
+                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1),
                 Send = Field(cl, 1, "send"),
                 Run = run,
+                Lines = lines,
             });
+            if (lines > _recent.Size) _recent.Resize(lines);
         }
         catch (Exception ex)
         {

@@ -11,13 +11,17 @@ namespace Scrye.Core.Automation;
 /// </summary>
 public sealed class AutomationEngine
 {
-    private sealed class Trig { public TriggerDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; }
+    private sealed class Trig { public TriggerDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public int Lines = 1; }
     private sealed class Als { public AliasDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; }
     private sealed class Tmr { public TimerDef Def = null!; public bool Enabled; public double Elapsed; }
 
     private readonly List<Trig> _triggers = new();
     private readonly List<Als> _aliases = new();
     private readonly List<Tmr> _timers = new();
+
+    // The lines a multi-line trigger looks back over: the newest last, as many as the
+    // widest enabled-or-not trigger needs (none are kept while every trigger is one line).
+    private readonly RecentLines _recent = new();
 
     /// <summary>A rule's Send parked at a <c>wait N</c>: the commands after the wait, and the
     /// seconds left before the next one goes. Several can be pending at once (two triggers
@@ -81,9 +85,28 @@ public sealed class AutomationEngine
     public void AddTrigger(TriggerDef def)
     {
         RemoveTrigger(def.Name);
-        _triggers.Add(new Trig { Def = def, Pattern = Compile(def.Pattern, def.IsRegex, def.IgnoreCase), Enabled = def.Enabled });
+        int lines = def.EffectiveLines;
+        _triggers.Add(new Trig
+        {
+            Def = def, Lines = lines, Enabled = def.Enabled,
+            Pattern = new CompiledPattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1),
+        });
         _triggers.Sort((a, b) => a.Def.Sequence.CompareTo(b.Def.Sequence));
+        Rewindow();
     }
+
+    /// <summary>How many recent lines to keep: the most any trigger looks back over.</summary>
+    private void Rewindow()
+    {
+        int w = 1;
+        foreach (Trig t in _triggers) if (t.Lines > w) w = t.Lines;
+        _recent.Resize(w);   // at 1 the buffer empties: nothing stale survives a gap
+    }
+
+    /// <summary>Match one trigger against the newest line - alone, or with the lines before it.
+    /// <paramref name="buffered"/> false: the line is not in the buffer (the simulator's).</summary>
+    private MatchResult? MatchTrigger(Trig t, string line, bool buffered, out int newestStart)
+        => _recent.Match(t.Pattern, t.Lines, line, out newestStart, pushed: buffered);
 
     public void AddAlias(AliasDef def)
     {
@@ -98,12 +121,17 @@ public sealed class AutomationEngine
         _timers.Add(new Tmr { Def = def, Enabled = def.Enabled });
     }
 
-    public bool RemoveTrigger(string name) => !string.IsNullOrEmpty(name) && _triggers.RemoveAll(t => t.Def.Name == name) > 0;
+    public bool RemoveTrigger(string name)
+    {
+        if (string.IsNullOrEmpty(name) || _triggers.RemoveAll(t => t.Def.Name == name) == 0) return false;
+        Rewindow();
+        return true;
+    }
     public bool RemoveAlias(string name) => !string.IsNullOrEmpty(name) && _aliases.RemoveAll(a => a.Def.Name == name) > 0;
     public bool RemoveTimer(string name) => !string.IsNullOrEmpty(name) && _timers.RemoveAll(t => t.Def.Name == name) > 0;
 
     /// <summary>Drop all triggers/aliases/timers (used when live-reloading a profile's rule set).</summary>
-    public void ClearTriggers() => _triggers.Clear();
+    public void ClearTriggers() { _triggers.Clear(); Rewindow(); }
     public void ClearAliases() => _aliases.Clear();
     public void ClearTimers() => _timers.Clear();
 
@@ -145,17 +173,19 @@ public sealed class AutomationEngine
     /// <summary>Run an incoming line through the triggers, firing matches in order.</summary>
     public void ProcessLine(string line, IWorldActions ctx)
     {
+        // remembered BEFORE matching: a multi-line trigger's window ends with this line
+        _recent.Push(line);
         for (int i = 0; i < _triggers.Count; i++)
         {
             Trig t = _triggers[i];
             if (!t.Enabled) continue;
 
-            MatchResult? m = t.Pattern.Match(line);
+            MatchResult? m = MatchTrigger(t, line, buffered: true, out int newestStart);
             if (m is null) continue;
 
             string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx,
                                  t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound);
-            ApplyHighlight(t.Def, m, line, ctx);
+            ApplyHighlight(t.Def, m, line, ctx, newestStart);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
             if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
@@ -176,7 +206,7 @@ public sealed class AutomationEngine
             Trig t = _triggers[i];
             if (!t.Enabled) continue;
 
-            MatchResult? m = t.Pattern.Match(line);
+            MatchResult? m = MatchTrigger(t, line, buffered: false, out _);
             if (m is null) continue;
 
             hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
@@ -393,15 +423,21 @@ public sealed class AutomationEngine
 
     /// <summary>Apply a trigger's highlight (if any) to the line being processed, via
     /// <see cref="IWorldActions.Highlight"/>. Whole-line highlights span the full text;
-    /// otherwise only the matched range is recoloured.</summary>
-    private static void ApplyHighlight(TriggerDef def, MatchResult m, string line, IWorldActions ctx)
+    /// otherwise only the matched range is recoloured. A multi-line match can only recolour
+    /// the line being processed - the earlier ones are already on screen - so its range is
+    /// cut to the part of the match that lies in the newest line (<paramref name="newestStart"/>
+    /// is where that line starts in the joined window; 0 for a one-line trigger).</summary>
+    private static void ApplyHighlight(TriggerDef def, MatchResult m, string line, IWorldActions ctx,
+                                       int newestStart = 0)
     {
         bool hasFore = Rgb.TryParseHex(def.HighlightFore, out Rgb fore);
         bool hasBack = Rgb.TryParseHex(def.HighlightBack, out Rgb back);
         if (!hasFore && !hasBack) return;
 
-        int start = def.HighlightWholeLine ? 0 : m.Index;
-        int length = def.HighlightWholeLine ? line.Length : m.Length;
+        int from = Math.Max(m.Index, newestStart) - newestStart;
+        int to = Math.Min(m.Index + m.Length, newestStart + line.Length) - newestStart;
+        int start = def.HighlightWholeLine ? 0 : from;
+        int length = def.HighlightWholeLine ? line.Length : to - from;
         if (length <= 0) return;
         ctx.Highlight(hasFore ? fore : null, hasBack ? back : null, start, length);
     }

@@ -188,13 +188,14 @@ What does **not** cross is listed, with the reason, rather than imported half-wo
 - **Script rules.** The XML only names the function; the Lua lives in the plugin's `<script>`
   block and has to be ported by hand. A trigger that fires and does nothing is worse than a
   trigger you know is missing.
-- **Multi-line triggers** — Scrye matches one line at a time.
 - **Time-of-day timers** — Scrye timers repeat on an interval.
 - **Notepad, status-line and log-file destinations**, which Scrye has no equivalent for. A
   speedwalk send is skipped too, pointing you at `.walk` and sequences instead.
 
-Two things are imported but flagged in the report: rules using `@variable` expansion (rewrite
-them as `${name}`), and regex rules with no `ignore_case` setting, which come across
+Three things are imported but flagged in the report: multi-line triggers (they come across
+with their line count; Scrye fires one once, when the block's last line arrives, where
+MUSHclient can fire it again while the block is still in its window), rules using `@variable`
+expansion (rewrite them as `${name}`), and regex rules with no `ignore_case` setting, which come across
 case-sensitive because in this format an absent flag is a real answer. Colour triggers print
 the colour they produced beside the number it came from, so you can check one against
 MUSHclient's own swatch before keeping the rest.
@@ -287,6 +288,28 @@ Deeper layers win for single values (theme, font), and collections (triggers, al
 - **Macros / keybindings** — bind a key (e.g. `F1`, `Ctrl+K`, `NumPad1`) to send a command or run an action.
 
 These are all editable in Settings (Global) or per world/character.
+
+### Triggers over several lines
+
+A trigger can match a block of lines instead of one: a score screen, a two-line kill message,
+a room description. Type the pattern on as many lines as the block has:
+
+```
+* dies.
+You receive * gold.
+```
+
+and it matches those two lines when they arrive one after the other, with `%1` and `%2` taken
+from either line. Wildcard patterns need nothing else. A **regex** can span lines with `\n`
+(`^HP: (\d+)\nSP: (\d+)$`), and the number of `\n`s says how many lines it covers; the
+**Lines** box beside *Regex* sets it by hand, for a pattern that should look further back than
+its own lines, up to 50. Over several lines `^` and `$` match at the start and end of every
+line, as they do in MUSHclient.
+
+The block has to end on the line that just arrived, so a multi-line trigger fires **once**, as
+the block's last line comes in, and not again while that block is still inside the window.
+Gag, highlight and capture act on that last line only — the earlier ones are already on screen.
+The **Test** box takes several lines for such a trigger; the last one is the newest.
 
 ### Finding things in a long list
 
@@ -1966,7 +1989,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.12.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.20.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -1994,7 +2017,9 @@ screen is too narrow for them. **1.9 adds `onRightClick`** as a second, distinct
 `scrye.onRelay`**, chat arriving from another open world; **1.11 adds the manifest `panes`
 field**, so a plugin's capture panes exist as soon as it loads instead of on first traffic;
 **1.12 adds the `barlist` stages field**, a seventh column of `qty,pct;…` rawest first, so a
-bar draws one segment per quality stage instead of a single amber/green split.
+bar draws one segment per quality stage instead of a single amber/green split. 1.13–1.19 are
+described in `ScryeApi.cs`; **1.20 adds `lines` on `scrye.addTrigger`**, triggers that match a
+block of lines (see [Rules](#rules)).
 
 ## Permissions
 
@@ -2147,10 +2172,19 @@ really want them.
 ### Rules
 | Call | Description |
 |---|---|
-| `scrye.addTrigger{ pattern=, regex=, ignoreCase=, send=, run= }` | Match output; `send` a command and/or `run` a function. |
+| `scrye.addTrigger{ pattern=, regex=, ignoreCase=, lines=, send=, run= }` | Match output; `send` a command and/or `run` a function. |
 | `scrye.addAlias{ ... }` | Match what the user types; a match consumes the input. |
 
-`pattern` is required. `regex=true` for regex (else plain substring). `ignoreCase` defaults to true. `run` receives regex capture groups as arguments.
+`pattern` is required. `regex=true` for regex; otherwise it is a wildcard pattern matched against the whole line, `*` standing for anything. `ignoreCase` defaults to true. `run` receives the capture groups (or the `*`s) as arguments.
+
+A trigger can match a block of lines, as a user trigger can ([Triggers over several lines](#triggers-over-several-lines)). Put a newline in the pattern and it spans that many lines on its own; `lines = N` makes it look further back, up to 50. It fires once, when the block's last line arrives, with captures from any of its lines. Aliases stay one line.
+
+```lua
+scrye.addTrigger{ pattern = "* dies.\nYou receive * gold.",
+                  run = function(mob, gold) scrye.print(mob .. " dropped " .. gold) end }
+scrye.addTrigger{ pattern = [[^Begin score$[\s\S]*^Level: (\d+)$]], regex = true, lines = 12,
+                  run = function(level) scrye.setState("level", level) end }
+```
 
 ### Persistent storage
 Survives restarts (`%APPDATA%/Scrye/plugin-data/<world>/<id>.json`), scoped to your plugin:

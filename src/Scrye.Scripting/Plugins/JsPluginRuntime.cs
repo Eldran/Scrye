@@ -21,6 +21,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         public CompiledPattern Pattern = null!;
         public string? Send;
         public JsValue? Run;
+        public int Lines = 1;                          // >1: matches over that many lines, newest last
     }
 
     private readonly PluginDescriptor _descriptor;
@@ -38,6 +39,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private readonly List<JsValue> _commandHooks = new();                 // scrye.onCommand (1.6)
     private readonly List<(string name, JsValue fn)> _eventHooks = new(); // scrye.on (1.6)
     private readonly List<PluginRule> _triggers = new();   // match output lines
+    private readonly RecentLines _recent = new();          // the lines multi-line triggers look back over
     private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly Dictionary<string, JsValue> _actions = new();   // panel-button callbacks by id
     private readonly List<IDisposable> _subscriptions = new();
@@ -84,10 +86,13 @@ public sealed class JsPluginRuntime : IPluginRuntime
             if (r.IsBoolean() && !r.AsBoolean()) gag = true;      // return false -> gag
             else if (r.IsString()) current = r.AsString();        // return "text" -> rewrite
         }
+        // remembered BEFORE matching: a multi-line trigger's window ends with this line
+        _recent.Push(text);
         for (int i = 0; i < _triggers.Count; i++)
         {
-            MatchResult? m = _triggers[i].Pattern.Match(text);
-            if (m is not null) Apply(_triggers[i], m);
+            PluginRule t = _triggers[i];
+            MatchResult? m = _recent.Match(t.Pattern, t.Lines, text, out _);
+            if (m is not null) Apply(t, m);
         }
         return (gag, current != text ? current : null);
     }
@@ -420,15 +425,25 @@ public sealed class JsPluginRuntime : IPluginRuntime
         bool isRegex = Bool(def, "regex", false);
         bool ignoreCase = Bool(def, "ignoreCase", true);   // default true
         JsValue run = Get(def, "run");
+        // lines: N (triggers only): match over the last N lines; an alias is one command line
+        int lines = 1;
+        if (ReferenceEquals(into, _triggers))
+        {
+            JsValue ln = Get(def, "lines");
+            int asked = ln.IsNumber() ? (int)Math.Clamp(ln.AsNumber(), 1, TriggerDef.MaxLines) : 1;
+            lines = TriggerDef.LinesFor(pattern, isRegex, asked);
+        }
 
         try
         {
             into.Add(new PluginRule
             {
-                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase),
+                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1),
                 Send = Str(def, "send"),
                 Run = IsFn(run) ? run : null,
+                Lines = lines,
             });
+            if (lines > _recent.Size) _recent.Resize(lines);
         }
         catch (Exception ex) { _host.Print(Id, "addRule: bad pattern — " + ex.Message); }
     }

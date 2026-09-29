@@ -205,10 +205,17 @@ rest</send>
     }
 
     [Fact]
-    public void A_multi_line_trigger_is_skipped()
+    public void A_multi_line_trigger_comes_across_with_its_lines()
     {
-        Assert.Null(T("tale"));
-        Assert.True(SkippedFor("one line at a time"));
+        // Scrye matches over several lines too (TriggerDef.Lines); what differs - it fires
+        // once, when the block's last line arrives - is said as a warning.
+        TriggerDef? t = T("tale");
+        Assert.NotNull(t);
+        Assert.Equal(3, t!.Lines);
+        Assert.True(t.IsRegex);
+        Assert.Equal("listen", t.Send);
+        Assert.False(SkippedFor("one line at a time"));
+        Assert.Contains(Imp.Warnings, w => w.Reason.Contains("over 3 lines", System.StringComparison.Ordinal));
     }
 
     [Fact]

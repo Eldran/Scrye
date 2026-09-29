@@ -524,4 +524,63 @@ public sealed class PluginRuntimeApiTests : IDisposable
         Assert.Equal("1", batch["a"]);
         Assert.Equal("[1,2]", host.State["jx"]);
     }
+
+    // ---- multi-line triggers ------------------------------------------------------
+
+    [Fact]
+    public void APluginTriggerOverTwoLinesFiresOnceAsTheSecondArrives()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("ml1", """
+            local n = 0
+            scrye.addTrigger{ pattern = "A * bars your way.\n* snarls.", run = function(who, again)
+                n = n + 1
+                scrye.setState("hit", n .. ":" .. who .. "/" .. again)
+            end }
+            """, host);
+
+        rt.ProcessLine("A wiremouth guard bars your way.");
+        Assert.False(host.State.ContainsKey("hit"));
+        rt.ProcessLine("The guard snarls.");
+        Assert.Equal("1:wiremouth guard/The guard", host.State["hit"]);
+        rt.ProcessLine("You wait.");                                     // the block is still in view
+        Assert.Equal("1:wiremouth guard/The guard", host.State["hit"]);  // ... and does not fire again
+    }
+
+    [Fact]
+    public void APluginTriggerLooksBackOnlyAsFarAsItsLines()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("ml2", """
+            scrye.addTrigger{ pattern = [[^Begin$[\s\S]*^End (\d+)$]], regex = true, lines = 4,
+                              run = function(n) scrye.setState("four", n) end }
+            scrye.addTrigger{ pattern = [[^Begin$[\s\S]*^End (\d+)$]], regex = true, lines = 3,
+                              run = function(n) scrye.setState("three", n) end }
+            scrye.addTrigger{ pattern = "End *", run = function(n) scrye.setState("one", n) end }
+            """, host);
+
+        foreach (string line in new[] { "Begin", "x", "y", "End 7" }) rt.ProcessLine(line);
+
+        Assert.Equal("7", host.State["four"]);        // Begin..End is four lines
+        Assert.False(host.State.ContainsKey("three")); // three lines back never reach Begin
+        Assert.Equal("7", host.State["one"]);         // a one-line trigger beside them is untouched
+    }
+
+    [Fact]
+    public void JsPluginTriggersTakeLinesToo()
+    {
+        var host = new FakeHost();
+        var rt = new JsPluginRuntime(WritePlugin("mljs", """
+            scrye.addTrigger({ pattern: "one\ntwo", run: function () { scrye.setState("pair", "yes"); } });
+            scrye.addTrigger({ pattern: "^one$[\\s\\S]*^three$", regex: true, lines: 3,
+                               run: function () { scrye.setState("span", "yes"); } });
+            """, lang: "js"), host);
+        rt.Load();
+
+        rt.ProcessLine("one");
+        rt.ProcessLine("two");
+        Assert.Equal("yes", host.State["pair"]);
+        rt.ProcessLine("three");
+        Assert.Equal("yes", host.State["span"]);
+    }
 }

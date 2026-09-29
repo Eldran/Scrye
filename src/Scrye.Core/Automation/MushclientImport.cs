@@ -23,8 +23,7 @@ public sealed record ImportNote(string Kind, string Name, string Reason);
 /// and <c>?</c>-singles that <see cref="CompiledPattern"/> already compiles, and <c>%1</c>..<c>%9</c>
 /// in send text needs no rewriting at all.</para>
 ///
-/// <para>What it will NOT do is guess. A rule whose action is a script function, a multi-line
-/// trigger, a timer that fires at a time of day rather than on an interval — each is left out
+/// <para>What it will NOT do is guess. A rule whose action is a script function, a timer that fires at a time of day rather than on an interval — each is left out
 /// and listed in <see cref="Skipped"/> with the reason, so the import is a thing you read
 /// before you keep it rather than a pile of rules that quietly do less than they used to.</para>
 /// </summary>
@@ -165,12 +164,14 @@ public sealed class MushclientImport
     {
         string label = Label(e);
 
-        if (Int(e, "lines_to_match", 1) > 1 || Flag(e, "multi_line"))
-        {
-            Skipped.Add(new ImportNote("trigger", label,
-                "matches across several lines; Scrye matches one line at a time"));
-            return;
-        }
+        // A multi-line trigger comes across as one (TriggerDef.Lines). MUSHclient matches its
+        // regex against the last lines_to_match lines whether or not the match touches the
+        // newest one - which is why its authors end such patterns with \z - while Scrye only
+        // counts a match that reaches the newest line, so the block fires once. Said, not hidden.
+        int lines = Flag(e, "multi_line") ? Math.Clamp(Int(e, "lines_to_match", 1), 1, TriggerDef.MaxLines) : 1;
+        if (lines > 1)
+            Warnings.Add(new ImportNote("trigger", label,
+                $"matches over {lines} lines; Scrye fires it once, when the block's last line arrives"));
 
         int sendTo = Int(e, "send_to", 0);
         (SendTo? to, string? why) = Destination(sendTo);
@@ -235,6 +236,7 @@ public sealed class MushclientImport
             HighlightBack = back,
             // A MUSHclient colour trigger recolours the text it MATCHED, not the whole line.
             HighlightWholeLine = false,
+            Lines = lines,
             Source = "mushclient",
         });
     }

@@ -50,6 +50,39 @@ public sealed record TriggerDef
     /// matched text (false). Only meaningful when <see cref="HighlightFore"/>/<see cref="HighlightBack"/> is set.</summary>
     public bool HighlightWholeLine { get; init; } = true;
 
+    /// <summary>
+    /// How many lines the pattern is matched against: 1 (the default) is the line that just
+    /// arrived; N is that line and the N-1 before it, joined with <c>\n</c>. A pattern typed on
+    /// several lines raises this on its own (<see cref="EffectiveLines"/>), so a two-line
+    /// pattern needs no setting. The match must reach into the NEWEST line, so a block fires
+    /// once, as its last line arrives - not again while it is still in the window.
+    /// </summary>
+    public int Lines { get; init; } = 1;
+
+    /// <summary>Most lines a trigger may look back over.</summary>
+    public const int MaxLines = 50;
+
+    /// <summary>The lines this trigger actually matches over: <see cref="Lines"/>, or the
+    /// number of lines its pattern spans when that is more - a pattern with a newline in it (or,
+    /// for a regex, a <c>\n</c>) cannot match inside one line. Capped at <see cref="MaxLines"/>.</summary>
+    public int EffectiveLines => LinesFor(Pattern, IsRegex, Lines);
+
+    /// <summary>The lines a pattern matches over, given the lines asked for: the same rule as
+    /// <see cref="EffectiveLines"/>, for callers without a TriggerDef (plugin triggers).</summary>
+    public static int LinesFor(string pattern, bool isRegex, int lines)
+    {
+        int spans = 1;
+        foreach (char c in pattern) if (c == '\n') spans++;
+        if (isRegex)
+        {
+            int escaped = 0;
+            for (int i = 0; i + 1 < pattern.Length; i++)
+                if (pattern[i] == '\\' && pattern[i + 1] == 'n') { escaped++; i++; }
+            spans = Math.Max(spans, escaped + 1);
+        }
+        return Math.Clamp(Math.Max(lines, spans), 1, MaxLines);
+    }
+
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }
 }

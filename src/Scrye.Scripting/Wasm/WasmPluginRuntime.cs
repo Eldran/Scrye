@@ -74,6 +74,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         public CompiledPattern Pattern = null!;
         public string? Send;
         public int Run;                                // hook id, 0 = none
+        public int Lines = 1;                          // >1: matches over that many lines, newest last
     }
 
     private readonly PluginDescriptor _descriptor;
@@ -102,6 +103,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
     private readonly List<int> _commandHooks = new();
     private readonly List<(string name, int fn)> _eventHooks = new();
     private readonly List<PluginRule> _triggers = new();
+    private readonly RecentLines _recent = new();      // the lines multi-line triggers look back over
     private readonly List<PluginRule> _aliases = new();
     private readonly Dictionary<int, int> _timerIds = new();       // hook id → TimerWheel id
     private readonly HashSet<int> _actionHooks = new();            // ids from register_action
@@ -192,10 +194,13 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             if (wantsGag) gag = true;
             if (rewrite is not null) current = rewrite;
         }
+        // remembered BEFORE matching: a multi-line trigger's window ends with this line
+        _recent.Push(text);
         for (int i = 0; i < _triggers.Count; i++)
         {
-            MatchResult? m = _triggers[i].Pattern.Match(text);
-            if (m is not null) Apply(_triggers[i], m);
+            PluginRule t = _triggers[i];
+            MatchResult? m = _recent.Match(t.Pattern, t.Lines, text, out _);
+            if (m is not null) Apply(t, m);
         }
         return (gag, current != text ? current : null);
     }
@@ -308,7 +313,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         _lineHooks.Clear(); _channelHooks.Clear(); _gmcpHooks.Clear();
         _connectHooks.Clear(); _disconnectHooks.Clear(); _promptHooks.Clear();
         _idleHooks.Clear(); _commandHooks.Clear(); _eventHooks.Clear();
-        _triggers.Clear(); _aliases.Clear(); _timerIds.Clear();
+        _triggers.Clear(); _recent.Clear(); _aliases.Clear(); _timerIds.Clear();
         _actionHooks.Clear(); _actions.Clear(); _panelActions.Clear();
         _store?.Dispose();     // frees the instance and every guest-side byte
     }
@@ -570,14 +575,25 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             bool ignoreCase = !root.TryGetProperty("ignoreCase", out JsonElement ic) || ic.ValueKind != JsonValueKind.False;
             string? send = root.TryGetProperty("send", out JsonElement se) && se.ValueKind == JsonValueKind.String
                 ? se.GetString() : null;
+            // "lines": N (triggers only): match over the last N lines; an alias is one command line
+            int lines = 1;
+            if (ReferenceEquals(into, _triggers))
+            {
+                int asked = root.TryGetProperty("lines", out JsonElement le) && le.ValueKind == JsonValueKind.Number
+                    ? (int)Math.Clamp(le.GetDouble(), 1, TriggerDef.MaxLines) : 1;
+                lines = TriggerDef.LinesFor(pattern, isRegex, asked);
+            }
+            var compiled = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1);
             bool wantsRun = root.TryGetProperty("run", out JsonElement ru) && ru.ValueKind == JsonValueKind.True;
             int runId = wantsRun ? NewHook(HookKind.RuleRun) : 0;
             into.Add(new PluginRule
             {
-                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase),
+                Pattern = compiled,
                 Send = send,
                 Run = runId,
+                Lines = lines,
             });
+            if (lines > _recent.Size) _recent.Resize(lines);
             return runId;
         }
         catch (Exception ex)

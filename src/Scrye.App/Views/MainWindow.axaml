@@ -1066,12 +1066,18 @@
                                         <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Name}" />
-                                            <TextBlock Text="Pattern (line to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
-                                            <TextBox Text="{Binding Pattern}" />
+                                            <TextBlock Text="Pattern (line to match - type several lines to match several)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" AcceptsReturn="True" TextWrapping="NoWrap" MaxHeight="100" VerticalContentAlignment="Top"
+                                                     ToolTip.Tip="One line: matches the line that arrived.&#10;Several lines: matches that many consecutive lines, the last one being the line that just arrived - it fires once, when the block's last line comes in.&#10;A regex can span lines with \n, and then says how many lines with the Lines box." />
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
                                                 <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
                                                 <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                                            ToolTip.Tip="How many lines to match over (empty = one, or as many as the pattern has). Set it for a regex that spans lines with \n or looks back further than its own lines, up to 50.">
+                                                    <TextBlock Text="Lines" VerticalAlignment="Center" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding LinesText}" Width="44" PlaceholderText="1" />
+                                                </StackPanel>
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
@@ -1140,7 +1146,7 @@
                                                     <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                                     <DockPanel>
                                                         <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
-                                                        <TextBox Text="{Binding TestInput}" PlaceholderText="sample line to match…" />
+                                                        <TextBox Text="{Binding TestInput}" PlaceholderText="sample line(s) to match… (several lines for a multi-line trigger)" AcceptsReturn="True" MaxHeight="90" />
                                                     </DockPanel>
                                                     <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
                                                 </StackPanel>
@@ -1546,12 +1552,18 @@
                                         <StackPanel Spacing="4" x:DataType="vm:TriggerRowViewModel" IsVisible="{Binding Converter={x:Static conv:ObjectConverters.IsNotNull}}">
                                             <TextBlock Text="Name" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Name}" />
-                                            <TextBlock Text="Pattern (line to match)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
-                                            <TextBox Text="{Binding Pattern}" />
+                                            <TextBlock Text="Pattern (line to match - type several lines to match several)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                            <TextBox Text="{Binding Pattern}" AcceptsReturn="True" TextWrapping="NoWrap" MaxHeight="100" VerticalContentAlignment="Top"
+                                                     ToolTip.Tip="One line: matches the line that arrived.&#10;Several lines: matches that many consecutive lines, the last one being the line that just arrived - it fires once, when the block's last line comes in.&#10;A regex can span lines with \n, and then says how many lines with the Lines box." />
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Regex" IsChecked="{Binding IsRegex}" />
                                                 <CheckBox Content="Ignore case" IsChecked="{Binding IgnoreCase}" />
                                                 <CheckBox Content="Enabled" IsChecked="{Binding Enabled}" />
+                                                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
+                                                            ToolTip.Tip="How many lines to match over (empty = one, or as many as the pattern has). Set it for a regex that spans lines with \n or looks back further than its own lines, up to 50.">
+                                                    <TextBlock Text="Lines" VerticalAlignment="Center" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
+                                                    <TextBox Text="{Binding LinesText}" Width="44" PlaceholderText="1" />
+                                                </StackPanel>
                                             </StackPanel>
                                             <TextBlock Text="Send to" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <ComboBox ItemsSource="{x:Static vm:RuleRowViewModel.SendToValues}" SelectedItem="{Binding SendTo}"
@@ -1620,7 +1632,7 @@
                                                     <TextBlock Text="Test pattern" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                                     <DockPanel>
                                                         <Button DockPanel.Dock="Right" Content="Test" Command="{Binding TestCommand}" Margin="4,0,0,0" />
-                                                        <TextBox Text="{Binding TestInput}" PlaceholderText="sample line to match…" />
+                                                        <TextBox Text="{Binding TestInput}" PlaceholderText="sample line(s) to match… (several lines for a multi-line trigger)" AcceptsReturn="True" MaxHeight="90" />
                                                     </DockPanel>
                                                     <TextBlock Text="{Binding TestResult}" Foreground="{DynamicResource ScryeText}" FontSize="11" TextWrapping="Wrap" />
                                                 </StackPanel>

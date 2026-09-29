@@ -244,4 +244,138 @@ public class AutomationEngineTests
 
         Assert.Equal(new[] { "look" }, rec.Sends);
     }
+
+    // ---- multi-line triggers -------------------------------------------------
+
+    private sealed class Painter : IWorldActions
+    {
+        public List<string> Sends { get; } = new();
+        public List<(int Start, int Length)> Painted { get; } = new();
+        public int Gags;
+        public void Send(string text) => Sends.Add(text);
+        public void Echo(string text) { }
+        public string? GetVariable(string name) => null;
+        public void SetVariable(string name, string value) { }
+        public void CallScript(string function, IReadOnlyList<string> wildcards) { }
+        public void GagLine() => Gags++;
+        public void Highlight(Scrye.Core.Text.Rgb? fore, Scrye.Core.Text.Rgb? back, int start, int length) =>
+            Painted.Add((start, length));
+    }
+
+    [Fact]
+    public void AWildcardPatternTypedOnTwoLinesMatchesTwoLines()
+    {
+        // No setting needed: the newline in the pattern makes it a two-line trigger.
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "loot", Pattern = "* dies.\nYou receive * gold.", Send = "say %1 paid %2" });
+
+        engine.ProcessLine("A goblin dies.", rec);
+        Assert.Empty(rec.Sends);
+        engine.ProcessLine("You receive 12 gold.", rec);
+        Assert.Equal(new[] { "say A goblin paid 12" }, rec.Sends);
+    }
+
+    [Fact]
+    public void AMultiLineTriggerFiresOnceAsItsLastLineArrives()
+    {
+        // The block is still in the window when the next line comes; it must not fire again.
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "tale", Pattern = @"^Once upon\nA time$", IsRegex = true, Lines = 3, Send = "listen" });
+
+        engine.ProcessLine("Once upon", rec);
+        engine.ProcessLine("A time", rec);
+        engine.ProcessLine("The end", rec);
+        engine.ProcessLine("Something else", rec);
+        Assert.Equal(new[] { "listen" }, rec.Sends);
+
+        engine.ProcessLine("Once upon", rec);
+        engine.ProcessLine("A time", rec);
+        Assert.Equal(new[] { "listen", "listen" }, rec.Sends);   // a second block is a second match
+    }
+
+    [Fact]
+    public void TheLinesMustBeConsecutive()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "pair", Pattern = "first\nsecond", Lines = 3, Send = "yes" });
+        engine.ProcessLine("first", rec);
+        engine.ProcessLine("in between", rec);
+        engine.ProcessLine("second", rec);
+        Assert.Empty(rec.Sends);
+    }
+
+    [Fact]
+    public void ARegexWithLinesSetLooksBackThatFarAndCaptures()
+    {
+        // Lines = 3 and a regex spanning the whole window: %1..%3 come from different lines.
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef
+        {
+            Name = "score", IsRegex = true, Lines = 3,
+            Pattern = @"^HP: (\d+)\nSP: (\d+)\nXP: (\d+)$", Send = "say %1/%2/%3",
+        });
+        engine.ProcessLine("HP: 900", rec);
+        engine.ProcessLine("SP: 400", rec);
+        engine.ProcessLine("XP: 12", rec);
+        Assert.Equal(new[] { "say 900/400/12" }, rec.Sends);
+    }
+
+    [Fact]
+    public void AOneLineTriggerStillSeesOnlyItsLine()
+    {
+        // A multi-line trigger elsewhere keeps a buffer; a one-line trigger must not see it.
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "wide", Pattern = "a\nb", Send = "wide", KeepEvaluating = true });
+        engine.AddTrigger(new TriggerDef { Name = "anchored", Pattern = "b", Send = "one" });
+        engine.ProcessLine("a", rec);
+        engine.ProcessLine("b", rec);
+        Assert.Equal(new[] { "wide", "one" }, rec.Sends);
+        Assert.Equal(2, new TriggerDef { Pattern = "a\nb" }.EffectiveLines);
+        Assert.Equal(3, new TriggerDef { Pattern = @"x\ny\nz", IsRegex = true }.EffectiveLines);
+        Assert.Equal(1, new TriggerDef { Pattern = @"x\ny", IsRegex = false }.EffectiveLines);
+        Assert.Equal(TriggerDef.MaxLines, new TriggerDef { Pattern = "x", Lines = 500 }.EffectiveLines);
+    }
+
+    [Fact]
+    public void GagAndHighlightActOnTheNewestLine()
+    {
+        var vars = new VariableStore();
+        var engine = new AutomationEngine(vars);
+        var paint = new Painter();
+        engine.AddTrigger(new TriggerDef
+        {
+            Name = "hl", Pattern = @"hit\nthe goblin", IsRegex = true, Gag = true,
+            HighlightFore = "#FF0000", HighlightWholeLine = false,
+        });
+        engine.ProcessLine("You hit", paint);
+        engine.ProcessLine("the goblin hard", paint);
+        Assert.Equal(1, paint.Gags);
+        // the match spans both lines; only its part in the newest line can be recoloured
+        Assert.Equal(new[] { (0, "the goblin".Length) }, paint.Painted);
+    }
+
+    [Fact]
+    public void RemovingTheLastMultiLineTriggerStopsTheBuffer()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "pair", Pattern = "a\nb", Send = "yes" });
+        engine.ProcessLine("a", rec);
+        engine.RemoveTrigger("pair");
+        engine.AddTrigger(new TriggerDef { Name = "pair", Pattern = "a\nb", Send = "yes" });
+        engine.ProcessLine("b", rec);
+        // the "a" seen before the remove was dropped with the window
+        Assert.Empty(rec.Sends);
+    }
+
+    [Fact]
+    public void SimulateSeesTheLinesBeforeWithoutRememberingItsOwn()
+    {
+        var (engine, rec, _) = NewEngine();
+        engine.AddTrigger(new TriggerDef { Name = "pair", Pattern = "a\nb", Send = "yes" });
+        engine.ProcessLine("a", rec);
+        Assert.Single(engine.Simulate("b"));
+        engine.ProcessLine("c", rec);                       // the simulated "b" was not kept
+        Assert.Empty(engine.Simulate("x"));
+        Assert.Empty(rec.Sends);
+    }
 }

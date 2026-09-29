@@ -49,10 +49,17 @@ public sealed class CompiledPattern
     private readonly Regex _regex;
     private readonly bool _never;
 
-    public CompiledPattern(string pattern, bool isRegex, bool ignoreCase)
+    /// <param name="multiLine">Matching over several lines joined with <c>\n</c> (a trigger's
+    /// <see cref="TriggerDef.Lines"/> &gt; 1): <c>^</c> and <c>$</c> then match at every line's start
+    /// and end, as they do in MUSHclient's multi-line triggers, so a wildcard pattern typed on two
+    /// lines matches two consecutive lines wherever they sit in the window.</param>
+    public CompiledPattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false)
     {
         RegexOptions opts = RegexOptions.CultureInvariant;
         if (ignoreCase) opts |= RegexOptions.IgnoreCase;
+        if (multiLine) opts |= RegexOptions.Multiline;
+        // a pattern typed in a text box on Windows may carry \r\n; the lines it matches do not
+        pattern = pattern.Replace("\r\n", "\n");
         // An EMPTY pattern matches nothing, ever. Left to the regex engine it would do the
         // opposite: "" as a regex matches every line and every command, and "" as a wildcard
         // matches an empty command - so an alias saved with its pattern box still blank (the
@@ -68,6 +75,27 @@ public sealed class CompiledPattern
         if (_never) return null;
         Match m = _regex.Match(input);
         return m.Success ? new MatchResult(m) : null;
+    }
+
+    /// <summary>
+    /// Match over a window of lines joined with <c>\n</c>, the last being the newest, and only
+    /// count a match that reaches into that newest line. Without that rule a block would fire on
+    /// its last line and then again on every line after it while it stayed in the window.
+    /// Every match in the window is tried, so a block that ends on the newest line is found even
+    /// when an earlier one also matches.
+    /// </summary>
+    public MatchResult? MatchWindow(string joined, int newestStart)
+    {
+        if (_never) return null;
+        for (Match m = _regex.Match(joined); m.Success; m = m.NextMatch())
+        {
+            int end = m.Index + m.Length;
+            bool reaches = end > newestStart
+                           || (end == newestStart && newestStart == joined.Length && m.Length > 0);
+            if (reaches) return new MatchResult(m);
+            if (m.Length == 0 && m.Index >= joined.Length) break;
+        }
+        return null;
     }
 
     private static string WildcardToRegex(string pattern)
