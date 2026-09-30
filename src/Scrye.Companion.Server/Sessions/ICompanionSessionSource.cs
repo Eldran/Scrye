@@ -29,6 +29,14 @@ public interface ICompanionSessionSource
     /// triggers, highlights and logging all stop applying (§4).</summary>
     ValueTask<CommandSubmitResult> SubmitCommandAsync(string sessionId, string command, CommandOrigin origin);
 
+    /// <summary>Submit a tapped MXP/Pueblo or HUD <c>click=</c> link <em>literally</em>, the
+    /// way a desktop click does (<c>WorldViewModel.HandleCommandLink</c>): the text was
+    /// authored by the MUD, so it must never reach the '.' client commands, the '/' console
+    /// or the ';' splitter. The default does nothing — refusing is the safe answer for a
+    /// source that has no literal path; it must never fall back to
+    /// <see cref="SubmitCommandAsync"/>.</summary>
+    ValueTask SubmitLinkAsync(string sessionId, string command) => ValueTask.CompletedTask;
+
     /// <summary>Fire a HUD panel button's plugin callback. Implementations must marshal
     /// onto the session loop before touching plugin script — the desktop already does this
     /// for local clicks. Returns false when the panel or plugin is unknown.</summary>

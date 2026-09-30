@@ -68,26 +68,42 @@ function styleOf(st) {
   return css;
 }
 
+// The URL as an absolute http(s) string, or null for anything else (javascript:, data:,
+// relative junk). Resolved against a fixed base so a relative string cannot sneak through.
+function safeUrl(s) {
+  try {
+    const u = new URL(String(s), 'http://invalid.invalid/');
+    if (u.hostname === 'invalid.invalid') return null;
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch { return null; }
+}
+
 function buildLine(line, table) {
   const div = document.createElement('div');
   for (const span of line.spans) {
     const st = table[span.s] || {};
     let el;
-    if (span.link) {
+    const url = span.link && span.link.isUrl ? safeUrl(span.link.action) : null;
+    if (span.link && span.link.isUrl && !url) {
+      // A MUD "URL" that is not http(s) — javascript:, data:, file: — is shown as plain
+      // text. As an href it would run script on this origin, where the token lives.
+      el = document.createElement('span');
+    } else if (span.link) {
       el = document.createElement('a');
       el.className = 'mxp';
       el.href = 'javascript:void 0';
-      if (span.link.isUrl) {
-        el.href = span.link.action;
+      if (url) {
+        el.href = url;
         el.target = '_blank';
         el.rel = 'noopener noreferrer';
       } else {
-        // MXP actions are authored by the MUD, so they are sent raw and never run
-        // through the client's own command handling (design §7.4).
+        // MXP actions are authored by the MUD, so they are sent as a LINK, which the desktop
+        // submits literally and never runs through its client commands (design §7.4).
+        // Like the desktop, a multi-command SEND ("a|b") fires its first command.
         el.addEventListener('click', ev => {
           ev.preventDefault();
           if (span.link.prompt) { $('cmd').value = span.link.action; $('cmd').focus(); }
-          else sendRaw(span.link.action);
+          else sendLink(span.link.action.split('|')[0]);
         });
       }
     } else {
@@ -107,7 +123,10 @@ function applyBatch(msg) {
   let promptLine = null;
 
   for (const line of msg.lines || []) {
-    if (line.sequence > lastSeq) lastSeq = line.sequence;
+    // Already shown: after a subscribe/resume the desktop replays live frames it held while
+    // building the answer, and some of those lines are also in the snapshot/replay itself.
+    if (line.sequence <= lastSeq) continue;
+    lastSeq = line.sequence;
     // Prompts are pinned below the output instead of appended, so the last one stays
     // visible rather than scrolling off — the single biggest readability win on a phone.
     if (line.prompt) { promptLine = line; continue; }
@@ -376,7 +395,8 @@ let themeCache = null;
 function colour(v) {
   if (!v) return '';
   const s = String(v).trim();
-  if (s[0] === '#') return s;
+  // Hex only: anything else after '#' would be pasted into cssText (CSS injection).
+  if (s[0] === '#') return /^#[0-9a-f]{3,8}$/i.test(s) ? s : '';
   if (!themeCache) themeCache = getComputedStyle(document.documentElement);
   const varName = THEME_VARS[s.toLowerCase()];
   if (!varName) return '';
@@ -463,11 +483,11 @@ function markupLine(line) {
       node.href = 'javascript:void 0';
       node.addEventListener('click', ev => {
         ev.preventDefault();
-        // click= runs the text the way typing it would — command.send goes through the
-        // desktop's input pipeline, so the plugin's own aliases get first refusal, same
-        // as clicking the run on the desktop HUD.
+        // click= goes out as a link, exactly like clicking the run on the desktop HUD
+        // (HandleCommandLink): submitted literally, because the text may come from MUD-fed
+        // state and must not reach the desktop's '.' client commands.
         if (link.prompt) { $('cmd').value = link.action; $('cmd').focus(); }
-        else sendCommand(link.action);
+        else sendLink(link.action);
       });
     } else {
       node = el('span');
@@ -959,9 +979,27 @@ function sendCommand(command) {
   send({ type:'command.send', sessionId, command });
 }
 
-// MXP link actions and pad presses both go out as plain commands; the desktop decides
-// what they mean. The client never interprets command text itself.
-const sendRaw = sendCommand;
+// Tapped MXP/markup links are MUD-authored, so they get their own frame type: the desktop
+// submits them literally, never as typed input (no '.' client commands, no '/' console).
+// Pad presses are the user's own and go through sendCommand like typing.
+function sendLink(command) {
+  if (!sessionId || !command) return;
+  send({ type:'command.link', sessionId, command });
+}
+
+// The desktop dropped frames for us (a slow link overflowed our queue) or restarted the
+// world's stream: re-subscribe for a fresh snapshot. At most one every few seconds, so a
+// connection that keeps overflowing cannot turn into a snapshot storm.
+let resyncTimer = 0, lastResync = 0;
+function requestResync() {
+  if (resyncTimer) return;
+  const wait = Math.max(0, lastResync + 3000 - Date.now());
+  resyncTimer = setTimeout(() => {
+    resyncTimer = 0;
+    lastResync = Date.now();
+    if (sessionId) subscribe(sessionId);
+  }, wait);
+}
 
 function submit() {
   const text = $('cmd').value;
@@ -1016,6 +1054,9 @@ function handle(msg) {
       break;
     case 'output.batch':
       applyBatch(msg);
+      break;
+    case 'session.resync':
+      if (msg.sessionId === sessionId) requestResync();
       break;
     case 'output.pane':
       addPaneLines(msg.pane, msg);

@@ -35,6 +35,28 @@ public sealed record SendCommandMessage(
     public string Type => MessageTypes.CommandSend;
 }
 
+/// <summary>A tapped MXP/Pueblo or HUD <c>click=</c> link. The text was authored by the MUD
+/// (or by whatever fed a plugin's state), not typed by the user, so the desktop submits it
+/// <em>literally</em> — exactly what a desktop click does via <c>HandleCommandLink</c> — and
+/// never runs it through the '.' client-command or '/' console prefixes.</summary>
+public sealed record SendLinkMessage(
+    [property: JsonPropertyName("sessionId")] string SessionId,
+    [property: JsonPropertyName("command")] string Command)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.CommandLink;
+}
+
+/// <summary>Desktop → client: this device's bounded queue overflowed and frames (possibly
+/// state or panel updates, which a sequence gap cannot reveal) were dropped. The client
+/// should re-subscribe to get a fresh snapshot. Sent once per overflow episode.</summary>
+public sealed record SessionResyncMessage(
+    [property: JsonPropertyName("sessionId")] string? SessionId)
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.SessionResync;
+}
+
 /// <summary>Client → desktop on reconnect: "I last saw this sequence." The desktop replays
 /// from scrollback when <c>CanReplayFrom</c> allows, and otherwise answers with a
 /// <see cref="SnapshotMessage"/> (§6).</summary>

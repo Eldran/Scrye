@@ -12,7 +12,8 @@ namespace Scrye.App.Companion;
 /// The desktop side of <see cref="ICompanionSessionSource"/> — the only place the companion
 /// server is allowed to touch app state.
 ///
-/// <para><b>Every member marshals to the UI thread.</b> These are called from Kestrel
+/// <para><b>Every member marshals to the thread that owns what it reads</b> — the UI thread,
+/// or (for the snapshot's state tree and panel specs) the session loop. These are called from Kestrel
 /// threads, while <c>ScrollbackBuffer</c>, <c>HudViewModel.Panels</c> and the view models are
 /// UI-thread-owned and <c>StateStore</c> belongs to the session loop (companion design §4.1).
 /// The marshalling lives here, once, so the server never has to think about it.</para>
@@ -52,6 +53,16 @@ public sealed class AppSessionSource : ICompanionSessionSource
             return w is null ? CommandSubmitResult.Accepted : w.SubmitText(command, origin);
         });
 
+    /// <summary>A tapped link from a device. Same entry point as a desktop click —
+    /// <c>HandleCommandLink</c> submits literally, so MUD-authored text can never reach the
+    /// '.' client commands, the '/' console or the ';' splitter.</summary>
+    public async ValueTask SubmitLinkAsync(string sessionId, string command) =>
+        await Dispatcher.UIThread.InvokeAsync<bool>(() =>
+        {
+            Find(sessionId)?.HandleCommandLink(command, prompt: false);
+            return true;
+        });
+
     public async ValueTask<bool> InvokeHudActionAsync(string sessionId, string pluginId, string actionId) =>
         await Dispatcher.UIThread.InvokeAsync<bool>(() =>
         {
@@ -87,8 +98,25 @@ public sealed class AppSessionSource : ICompanionSessionSource
             return builder.Build(sessionId);
         });
 
-    public async ValueTask<SnapshotMessage?> GetSnapshotAsync(string sessionId, int maxLines) =>
-        await Dispatcher.UIThread.InvokeAsync<SnapshotMessage?>(() =>
+    /// <summary>How long a snapshot waits for the session loop before reading its state
+    /// directly. The loop only runs while the world is connected; a world that never
+    /// connected would otherwise leave the device waiting forever.</summary>
+    private static readonly TimeSpan LoopTimeout = TimeSpan.FromSeconds(2);
+
+    public async ValueTask<SnapshotMessage?> GetSnapshotAsync(string sessionId, int maxLines)
+    {
+        WorldViewModel? world = await Dispatcher.UIThread.InvokeAsync<WorldViewModel?>(() => Find(sessionId));
+        if (world is null) return null;
+
+        // The state tree and the panel specs belong to the session loop (StateStore is
+        // single-threaded there, and plugins rebuild panels there), so they are copied ON the
+        // loop — enumerating them from the UI thread while a GMCP burst lands would throw or
+        // tear. Collected BEFORE the output tail: anything that changes in between is also
+        // in the live frames the hub holds for this device and replays after the snapshot.
+        (List<StateUpdateMessage> state, List<HudPanelMessage> panels) =
+            await CollectLoopOwnedAsync(world, sessionId).ConfigureAwait(false);
+
+        return await Dispatcher.UIThread.InvokeAsync<SnapshotMessage?>(() =>
         {
             WorldViewModel? w = Find(sessionId);
             if (w is null) return null;
@@ -98,14 +126,6 @@ public sealed class AppSessionSource : ICompanionSessionSource
             int start = w.Scrollback.Count - take;
             for (int i = start; i < w.Scrollback.Count; i++)
                 output.Add(w.Scrollback[i], w.Scrollback.SequenceAt(i));
-
-            var state = new List<StateUpdateMessage>();
-            foreach (KeyValuePair<string, StateValue> kv in w.GameState.Snapshot())
-                state.Add(new StateUpdateMessage(sessionId, kv.Key, kv.Value.Kind, kv.Value.Text));
-
-            var panels = new List<HudPanelMessage>();
-            foreach (KeyValuePair<string, PanelSpec> kv in w.Hud.PanelSpecs)
-                panels.Add(new HudPanelMessage(sessionId, kv.Key, kv.Value));
 
             // Pane tails, newest-first order preserved. Capped well below the main output
             // budget: chat is skimmed, not scrolled back through, on a phone.
@@ -124,6 +144,40 @@ public sealed class AppSessionSource : ICompanionSessionSource
 
             return new SnapshotMessage(sessionId, Describe(w), output.Build(sessionId), state, panels, panes);
         });
+    }
+
+    private static async Task<(List<StateUpdateMessage> State, List<HudPanelMessage> Panels)>
+        CollectLoopOwnedAsync(WorldViewModel w, string sessionId)
+    {
+        var tcs = new TaskCompletionSource<(List<StateUpdateMessage>, List<HudPanelMessage>)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);   // never continue ON the loop
+        w.PostToSession(() =>
+        {
+            try { tcs.TrySetResult(CopyLoopOwned(w, sessionId)); }
+            catch (Exception ex) { tcs.TrySetException(ex); }
+        });
+
+        if (await Task.WhenAny(tcs.Task, Task.Delay(LoopTimeout)).ConfigureAwait(false) == tcs.Task)
+            return await tcs.Task.ConfigureAwait(false);
+
+        // The loop is not running (never connected, or shutting down), so nothing is
+        // mutating these — read them here. Guarded anyway: if the loop was merely slow, a
+        // torn read costs this snapshot its state (live updates refill it), not the socket.
+        try { return CopyLoopOwned(w, sessionId); }
+        catch (InvalidOperationException) { return (new List<StateUpdateMessage>(), new List<HudPanelMessage>()); }
+    }
+
+    private static (List<StateUpdateMessage>, List<HudPanelMessage>) CopyLoopOwned(WorldViewModel w, string sessionId)
+    {
+        var state = new List<StateUpdateMessage>();
+        foreach (KeyValuePair<string, StateValue> kv in w.GameState.Snapshot())
+            state.Add(new StateUpdateMessage(sessionId, kv.Key, kv.Value.Kind, kv.Value.Text));
+
+        var panels = new List<HudPanelMessage>();
+        foreach (KeyValuePair<string, PanelSpec> kv in w.Hud.PanelSpecs)
+            panels.Add(new HudPanelMessage(sessionId, kv.Key, kv.Value));
+        return (state, panels);
+    }
 
     private WorldViewModel? Find(string sessionId)
     {

@@ -79,11 +79,22 @@ public sealed class CompanionHub
         foreach (CompanionSubscriber sub in _subscribers.Values) sub.TryPublish(state);
     }
 
+    /// <summary>Ask every device watching <paramref name="sessionId"/> to re-subscribe for a
+    /// fresh snapshot — for when that world's stream restarted (a closed world reopened
+    /// under the same id starts its sequences over, which a client would otherwise take for
+    /// lines it has already seen).</summary>
+    public void RequestResync(string sessionId)
+    {
+        foreach (CompanionSubscriber sub in _subscribers.Values)
+            if (sub.Watches(sessionId))
+                sub.TryPublish(new SessionResyncMessage(sessionId));
+    }
+
     private void Broadcast(string sessionId, object message)
     {
         foreach (CompanionSubscriber sub in _subscribers.Values)
             if (sub.Watches(sessionId))
-                sub.TryPublish(message);
+                sub.TryPublishLive(message);   // parked while a subscribe/resume reply is pending
     }
 
     // ---- devices → desktop ---------------------------------------------------
@@ -107,7 +118,10 @@ public sealed class CompanionHub
                 if (!KnownSession(m.SessionId))
                     return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
 
-                sub.Subscribe(m.SessionId);
+                // Hold live frames until the reply is queued (the socket reader calls
+                // PublishReply), so output published after the snapshot was captured cannot
+                // be queued ahead of it and then wiped by it.
+                sub.Subscribe(m.SessionId, holdLive: true);
                 return await _source.GetSnapshotAsync(m.SessionId, maxLines: 500).ConfigureAwait(false)
                        ?? (object)new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
             }
@@ -120,7 +134,7 @@ public sealed class CompanionHub
                 if (!KnownSession(m.SessionId))
                     return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
 
-                sub.Subscribe(m.SessionId);
+                sub.Subscribe(m.SessionId, holdLive: true);   // see SessionSubscribe
                 sub.SetResumePoint(m.LastReceivedSequence);
 
                 // Replay when scrollback still holds the gap; otherwise rebuild. Falling
@@ -144,6 +158,11 @@ public sealed class CompanionHub
 
                 // The device declares no privilege of its own: the origin is built here from
                 // what this connection was granted at authentication time.
+                //
+                // Only text the user TYPED (or a pad button) arrives here; tapped links use
+                // CommandLink below. Typed '.' client commands (.import, .companion, .all …)
+                // are deliberately still allowed from a paired device — they are the user's
+                // own input — and only the '/' console is gated by origin.
                 var origin = CommandOrigin.Companion(sub.MayRunScripts);
                 CommandSubmitResult result =
                     await _source.SubmitCommandAsync(m.SessionId, m.Command ?? "", origin).ConfigureAwait(false);
@@ -152,6 +171,23 @@ public sealed class CompanionHub
                     ? new ErrorMessage(CompanionErrorCode.PermissionDenied,
                         "this device may not run script console commands", m.SessionId)
                     : null;
+            }
+
+            case MessageTypes.CommandLink:
+            {
+                // A tapped link: MUD-authored text, so it is submitted literally and never
+                // through the typed-input pipeline above — a hostile link such as
+                // ".companion off" or ".import \\host\share\x.xml apply" must reach the
+                // MUD as text, not run as a client command (same rule as a desktop click).
+                var m = CompanionJson.Deserialize<SendLinkMessage>(json);
+                if (m is null || string.IsNullOrEmpty(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "missing sessionId");
+                if (!KnownSession(m.SessionId))
+                    return new ErrorMessage(CompanionErrorCode.UnknownSession, m.SessionId, m.SessionId);
+                if (string.IsNullOrWhiteSpace(m.Command)) return null;
+
+                await _source.SubmitLinkAsync(m.SessionId, m.Command).ConfigureAwait(false);
+                return null;
             }
 
             case MessageTypes.HudAction:
@@ -214,7 +250,18 @@ public sealed class CompanionHub
                 if (PushStore is null)
                     return new ErrorMessage(CompanionErrorCode.BadRequest, "push is not configured");
 
-                PushStore.Add(new PushSubscription(m.Endpoint, m.P256dh, m.Auth));
+                // The endpoint is client-supplied and we will POST to it with our VAPID
+                // Authorization header: only real push services, never LAN/loopback (SSRF).
+                if (!PushSender.IsAllowedEndpoint(m.Endpoint))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "push endpoint is not a known push service");
+                // Keys are base64url; bound them so a device cannot park arbitrary blobs in
+                // the file (real ones are 87 and 22 characters).
+                if (m.P256dh.Length > 256 || m.Auth.Length > 64)
+                    return new ErrorMessage(CompanionErrorCode.BadRequest, "push keys are too long");
+
+                if (!PushStore.TryAdd(new PushSubscription(m.Endpoint, m.P256dh, m.Auth)))
+                    return new ErrorMessage(CompanionErrorCode.BadRequest,
+                        $"too many devices registered for push (max {Scrye.Companion.Server.Push.PushStore.MaxSubscriptions})");
                 return null;
             }
 

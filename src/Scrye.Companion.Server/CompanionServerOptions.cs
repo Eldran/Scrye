@@ -47,6 +47,14 @@ public sealed class CompanionServerOptions
     /// a smaller hole than it sounds — a hostile process running as you could read the token,
     /// read Scrye's memory, or drive the client directly — but it is why this is an explicit
     /// allow-list rather than "trust any Tailscale header".</para>
+    ///
+    /// <para>Note the loopback port is reachable by <em>every</em> local account, not only
+    /// yours: on a shared machine another user's process can set this header and get in
+    /// without the token. The server only accepts the header on a same-origin browser
+    /// handshake (a non-browser client must present the token), but a local process can forge
+    /// Origin too, so on a multi-user machine leave this list empty and use the token.
+    /// Closing that gap properly needs the proxy to authenticate itself to us (e.g. a unix
+    /// socket or a shared secret header), which <c>tailscale serve</c> does not offer.</para>
     /// </summary>
     public IReadOnlyList<string> TrustedTailnetLogins { get; init; } = Array.Empty<string>();
 

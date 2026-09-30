@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.WebSockets;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Builder;
@@ -74,7 +75,14 @@ public sealed class CompanionServer : IAsyncDisposable
             k.Listen(IPAddress.Parse(_options.BindAddress), _options.Port));
 
         WebApplication app = builder.Build();
-        app.UseWebSockets();
+        // Keep-alive pings detect a phone that vanished without a close (sleep, network
+        // switch): without a timeout the dead socket and its queue linger until TCP gives up,
+        // which can be many minutes. KeepAliveTimeout is ASP.NET Core 9+.
+        app.UseWebSockets(new WebSocketOptions
+        {
+            KeepAliveInterval = TimeSpan.FromSeconds(20),
+            KeepAliveTimeout = TimeSpan.FromSeconds(20),
+        });
 
         // Client assets, served from the same origin as the socket so no page CSP is
         // involved (a chrome:// or third-party page restricts connect-src and blocks the
@@ -156,6 +164,14 @@ public sealed class CompanionServer : IAsyncDisposable
                 return;
             }
 
+            if (!IsSameOriginOrNonBrowser(ctx))
+            {
+                // Another site's page trying to ride the tailnet identity (or the token in
+                // a URL it learned). Refused before the upgrade, like a bad credential.
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
             if (!IsAuthorized(ctx))
             {
                 // Rejected before the upgrade, so an unauthenticated peer never gets a socket.
@@ -198,7 +214,52 @@ public sealed class CompanionServer : IAsyncDisposable
     /// which strips any client-supplied copy first.</summary>
     internal const string TailscaleLoginHeader = "Tailscale-User-Login";
 
-    private bool IsAuthorized(HttpContext ctx) => IsTrustedTailnetUser(ctx) || HasValidToken(ctx);
+    /// <summary>
+    /// Tailnet identity is ambient — the proxy attaches it to EVERY request the browser
+    /// makes, including a WebSocket opened by some other site's page (WebSockets are not
+    /// covered by CORS). So identity alone is only accepted from a browser page served by
+    /// this server; a request without an Origin (not a browser) must present the token.
+    /// </summary>
+    private bool IsAuthorized(HttpContext ctx) =>
+        (HasOrigin(ctx) && IsTrustedTailnetUser(ctx)) || HasValidToken(ctx);
+
+    private static bool HasOrigin(HttpContext ctx) => ctx.Request.Headers.Origin.Count > 0;
+
+    /// <summary>
+    /// Cross-site WebSocket hijacking guard. A browser always sends Origin on a WebSocket
+    /// handshake and a page cannot forge it, so a present Origin must name this server —
+    /// the host the request was addressed to. The scheme is deliberately not compared:
+    /// <c>tailscale serve</c> terminates TLS, so the page is https while Kestrel sees http.
+    /// No Origin at all means a non-browser client, which <see cref="IsAuthorized"/> then
+    /// holds to the token.
+    /// </summary>
+    private static bool IsSameOriginOrNonBrowser(HttpContext ctx)
+    {
+        if (!HasOrigin(ctx)) return true;
+
+        // "null" (sandboxed frame, file://) and anything non-http fails to parse here.
+        if (!Uri.TryCreate(ctx.Request.Headers.Origin.ToString(), UriKind.Absolute, out Uri? origin)
+            || (origin.Scheme != Uri.UriSchemeHttp && origin.Scheme != Uri.UriSchemeHttps))
+            return false;
+
+        if (AuthorityMatches(origin, ctx.Request.Host)) return true;
+
+        // In case a proxy rewrote Host, accept the host it says the browser addressed.
+        // A browser page cannot set this header, so it gives a cross-site page nothing.
+        string forwarded = ctx.Request.Headers["X-Forwarded-Host"].ToString();
+        return forwarded.Length > 0 && AuthorityMatches(origin, HostString.FromUriComponent(forwarded.Split(',')[0].Trim()));
+    }
+
+    private static bool AuthorityMatches(Uri origin, HostString host)
+    {
+        if (!host.HasValue) return false;
+        // Brackets trimmed on both sides so an IPv6 literal compares the same either way.
+        if (!string.Equals(origin.Host.Trim('[', ']'), host.Host.Trim('[', ']'), StringComparison.OrdinalIgnoreCase))
+            return false;
+        // No port in Host means the default port of whatever scheme the browser used —
+        // the same scheme as the page, so it matches exactly when the Origin's port is default.
+        return host.Port is int port ? port == origin.Port : origin.IsDefaultPort;
+    }
 
     /// <summary>Whether the proxy vouched for a login we allow. This is what lets a phone
     /// open the tailnet URL and simply work, with no credential to type.</summary>
@@ -256,7 +317,7 @@ public sealed class CompanionServer : IAsyncDisposable
             // Tell the client what worlds exist before it subscribes to one.
             sub.TryPublish(new SessionListMessage(_source.GetSessions()));
 
-            Task reader = ReadLoopAsync(socket, sub, cts.Token);
+            Task<bool> reader = ReadLoopAsync(socket, sub, cts.Token);
             Task writer = WriteLoopAsync(socket, sub, cts.Token);
 
             // Either side finishing ends the connection; cancel the other so neither leaks.
@@ -274,8 +335,18 @@ public sealed class CompanionServer : IAsyncDisposable
             {
                 try
                 {
-                    await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None)
-                                .ConfigureAwait(false);
+                    if (reader.IsCompletedSuccessfully && reader.Result)
+                    {
+                        // Oversized message: say so (1009) but do not wait for the peer's
+                        // close — CloseAsync would keep reading whatever it is still sending.
+                        await socket.CloseOutputAsync(WebSocketCloseStatus.MessageTooBig, "message too large",
+                                                      CancellationToken.None).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, CancellationToken.None)
+                                    .ConfigureAwait(false);
+                    }
                 }
                 catch (WebSocketException) { /* peer already gone */ }
                 catch (OperationCanceledException) { }
@@ -289,7 +360,14 @@ public sealed class CompanionServer : IAsyncDisposable
         }
     }
 
-    private async Task ReadLoopAsync(WebSocket socket, CompanionSubscriber sub, CancellationToken ct)
+    /// <summary>Largest client message accepted, reassembled across frames. Client frames
+    /// are commands and small control messages; without a cap one peer could make the
+    /// desktop buffer an endless message.</summary>
+    internal const int MaxInboundMessageBytes = 64 * 1024;
+
+    /// <summary>Returns true when it stopped because a message exceeded
+    /// <see cref="MaxInboundMessageBytes"/>; the caller then closes with 1009.</summary>
+    private async Task<bool> ReadLoopAsync(WebSocket socket, CompanionSubscriber sub, CancellationToken ct)
     {
         var buffer = new byte[16 * 1024];
         var accumulated = new List<byte>(capacity: 16 * 1024);
@@ -301,10 +379,18 @@ public sealed class CompanionServer : IAsyncDisposable
             {
                 result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { return; }
-            catch (WebSocketException) { return; }
+            catch (OperationCanceledException) { return false; }
+            catch (WebSocketException) { return false; }
 
-            if (result.MessageType == WebSocketMessageType.Close) return;
+            if (result.MessageType == WebSocketMessageType.Close) return false;
+
+            // Checked before appending, so the buffer never grows past the cap.
+            if (accumulated.Count + result.Count > MaxInboundMessageBytes)
+            {
+                _logger?.LogWarning("Companion device {Id} sent a message over {Max} bytes; closing",
+                    sub.Id, MaxInboundMessageBytes);
+                return true;
+            }
 
             accumulated.AddRange(new ArraySegment<byte>(buffer, 0, result.Count));
             if (!result.EndOfMessage) continue;   // a frame may arrive in pieces
@@ -324,9 +410,20 @@ public sealed class CompanionServer : IAsyncDisposable
                 reply = new ErrorMessage(CompanionErrorCode.BadRequest, "could not process frame");
             }
 
-            if (reply is not null) sub.TryPublish(reply);
+            // Always called, reply or not: it also releases live frames held while a
+            // subscribe/resume answer was built, strictly AFTER that answer.
+            sub.PublishReply(reply);
         }
+        return false;
     }
+
+    /// <summary>Wire bytes per message instance. A broadcast hands the SAME object to every
+    /// subscriber, so with this it is serialised once rather than once per device. Keyed by
+    /// reference and weak, so entries vanish with the message.</summary>
+    private static readonly ConditionalWeakTable<object, byte[]> WireCache = new();
+
+    private static byte[] ToWire(object message) =>
+        WireCache.GetValue(message, m => Encoding.UTF8.GetBytes(CompanionJson.Serialize(m)));
 
     private static async Task WriteLoopAsync(WebSocket socket, CompanionSubscriber sub, CancellationToken ct)
     {
@@ -335,7 +432,7 @@ public sealed class CompanionServer : IAsyncDisposable
             await foreach (object message in sub.Outbound.ReadAllAsync(ct).ConfigureAwait(false))
             {
                 if (socket.State != WebSocketState.Open) return;
-                byte[] payload = Encoding.UTF8.GetBytes(CompanionJson.Serialize(message));
+                byte[] payload = ToWire(message);
                 await socket.SendAsync(payload, WebSocketMessageType.Text, endOfMessage: true, ct)
                             .ConfigureAwait(false);
             }

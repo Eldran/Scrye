@@ -98,10 +98,22 @@ public sealed class CompanionController : IAsyncDisposable
         world.Hud.PanelRemoved = key =>
             _server?.Hub.PublishHudPanelRemoved(new HudPanelRemovedMessage(world.SessionId, key));
 
-        foreach (KeyValuePair<string, PanelSpec> kv in world.Hud.PanelSpecs)
-            _server.Hub.PublishHudPanel(new HudPanelMessage(world.SessionId, kv.Key, kv.Value));
+        // The spec dictionary is mutated on the session loop (plugins build panels there), so
+        // it is walked there too; the hub is safe to publish into from any thread. If the
+        // loop is not running yet this runs when it starts — a device subscribing sooner
+        // gets the panels from its snapshot instead.
+        Scrye.Companion.Server.Hub.CompanionHub hub = _server.Hub;
+        string sessionId = world.SessionId;
+        world.PostToSession(() =>
+        {
+            foreach (KeyValuePair<string, PanelSpec> kv in world.Hud.PanelSpecs)
+                hub.PublishHudPanel(new HudPanelMessage(sessionId, kv.Key, kv.Value));
+        });
 
         _server.Hub.PublishSessionState(AppSessionSource.Describe(world));
+        // A device still watching this id from a previous open has a sequence cursor from
+        // the old stream; make it start over rather than discard the new lines as seen.
+        _server.Hub.RequestResync(world.SessionId);
     }
 
     /// <summary>Unhook a world — on close, or when the server stops.</summary>

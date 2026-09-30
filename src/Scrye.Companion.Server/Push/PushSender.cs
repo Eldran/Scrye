@@ -71,9 +71,23 @@ public sealed class PushSender : IDisposable
         try
         {
             if (!Uri.TryCreate(sub.Endpoint, UriKind.Absolute, out Uri? endpoint)) return PushResult.Failed;
+            // Re-checked here as well as at subscribe time: subscriptions also come back from
+            // disk, and this POST carries our VAPID Authorization header.
+            if (!IsAllowedEndpoint(endpoint))
+            {
+                LastError = $"refusing push endpoint host {endpoint.Host}: not a known push service";
+                return PushResult.Failed;
+            }
 
             byte[] plaintext = Encoding.UTF8.GetBytes(payload);
-            if (plaintext.Length > MaxPayloadBytes) plaintext = plaintext[..MaxPayloadBytes];
+            // Cutting the bytes would leave invalid JSON (and possibly half a UTF-8 sequence)
+            // that the service worker cannot parse. BuildPayload already trims the body to
+            // fit, so an oversized payload here is a caller bug: fail loudly instead.
+            if (plaintext.Length > MaxPayloadBytes)
+            {
+                LastError = $"payload is {plaintext.Length} bytes, over the {MaxPayloadBytes}-byte limit";
+                return PushResult.Failed;
+            }
 
             byte[] body = WebPushCrypto.Encrypt(
                 plaintext,
@@ -111,8 +125,57 @@ public sealed class PushSender : IDisposable
 
     /// <summary>The JSON a service worker receives. Kept deliberately small — the payload is
     /// size-limited and everything here crosses an encrypted channel to a locked phone.</summary>
-    public static string BuildPayload(string title, string body, string? sessionId = null) =>
-        JsonSerializer.Serialize(new { title, body, sessionId });
+    public static string BuildPayload(string title, string body, string? sessionId = null)
+    {
+        // Trim the BODY until the serialised JSON fits, rather than cutting the finished
+        // bytes (which breaks the JSON). Escaping can inflate text, so measure the real
+        // output and shrink by the overshoot; each pass strictly shortens the body.
+        body ??= "";
+        string json = JsonSerializer.Serialize(new { title, body, sessionId });
+        while (Encoding.UTF8.GetByteCount(json) > MaxPayloadBytes && body.Length > 0)
+        {
+            int over = Encoding.UTF8.GetByteCount(json) - MaxPayloadBytes;
+            int keep = Math.Max(0, body.Length - Math.Max(over, 16) - 1);
+            if (keep > 0 && char.IsHighSurrogate(body[keep - 1])) keep--;   // never split a pair
+            body = keep > 0 ? body[..keep] + "\u2026" : "";
+            json = JsonSerializer.Serialize(new { title, body, sessionId });
+        }
+        return json;
+    }
+
+    /// <summary>Hosts of the browser vendors' push services. A subscription endpoint is
+    /// client-supplied, and we POST to it with our VAPID Authorization header, so an open
+    /// endpoint would let any device make the desktop send requests to LAN or loopback
+    /// services (SSRF). Entries starting with '.' match any subdomain.</summary>
+    private static readonly string[] PushHosts =
+    {
+        "fcm.googleapis.com",                 // Chrome, Edge on Android, Opera, Samsung
+        ".push.apple.com",                    // Safari / iOS (web.push.apple.com)
+        "updates.push.services.mozilla.com",  // Firefox
+        ".push.services.mozilla.com",
+        ".notify.windows.com",                // Edge on Windows (WNS)
+    };
+
+    /// <summary>Whether <paramref name="endpoint"/> is an https URL on a known push service's
+    /// host name, on the default port. IP literals and localhost are never allowed.</summary>
+    public static bool IsAllowedEndpoint(string? endpoint) =>
+        Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? uri) && IsAllowedEndpoint(uri);
+
+    public static bool IsAllowedEndpoint(Uri endpoint)
+    {
+        if (endpoint.Scheme != Uri.UriSchemeHttps || !endpoint.IsDefaultPort) return false;
+        if (endpoint.HostNameType != UriHostNameType.Dns || endpoint.IsLoopback) return false;
+        if (endpoint.UserInfo.Length > 0) return false;
+
+        string host = endpoint.IdnHost.TrimEnd('.').ToLowerInvariant();
+        foreach (string allowed in PushHosts)
+        {
+            if (allowed[0] == '.' ? host.EndsWith(allowed, StringComparison.Ordinal)
+                                  : host == allowed)
+                return true;
+        }
+        return false;
+    }
 
     public void Dispose() => _http.Dispose();
 }

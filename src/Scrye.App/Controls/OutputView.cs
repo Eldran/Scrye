@@ -385,10 +385,16 @@ public class OutputView : Control
     {
         if (link.IsUrl)
         {
+            // The URL is MUD-authored and shell-executed, so only web links may pass: a
+            // file:// path, a UNC share or a bare executable name would otherwise be opened
+            // (or run) by the OS on a single click.
+            if (!Uri.TryCreate(link.Action, UriKind.Absolute, out Uri? uri)
+                || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                return;
             try
             {
                 System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo(link.Action) { UseShellExecute = true });
+                    new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
             }
             catch { /* no browser / malformed url — ignore */ }
             return;

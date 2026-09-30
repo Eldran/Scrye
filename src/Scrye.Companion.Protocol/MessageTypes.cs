@@ -18,9 +18,15 @@ public static class MessageTypes
     public const string HudPanelRemoved = "hud.panel.removed";
     public const string Snapshot = "session.snapshot";
     public const string Error = "error";
+    // "You fell behind and frames were dropped — re-subscribe for a fresh snapshot."
+    public const string SessionResync = "session.resync";
 
     // client → desktop
     public const string CommandSend = "command.send";
+    // A tapped MUD/plugin link. Separate from command.send so the desktop submits it
+    // literally (no '.' client commands, no '/' console, no ';' splitting) — the text was
+    // authored by the MUD, not typed by the user.
+    public const string CommandLink = "command.link";
     public const string HudAction = "hud.action";
     public const string HudSubmit = "hud.submit";
     public const string HudCell = "hud.cell";
