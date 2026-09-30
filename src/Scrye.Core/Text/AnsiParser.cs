@@ -24,6 +24,7 @@ public sealed class AnsiParser
     private enum State { Normal, Esc, Csi, MxpTag, MxpEntity }
 
     private const int MaxTagLength = 512;
+    private const int MaxCsiParams = 64;   // longer parameter strings are abandoned, not buffered
     private const int MaxEntityLength = 32;
 
     // Custom <!ELEMENT>/<!ENTITY> definitions are a small template language driven by a
@@ -39,12 +40,18 @@ public sealed class AnsiParser
     private readonly Func<DateTimeOffset> _clock;
     private State _state = State.Normal;
     private readonly StringBuilder _params = new();
+    private bool _csiPrivate;      // a '<' '=' '>' '?' parameter byte: a private sequence, never SGR
+    private bool _csiIntermediate; // an intermediate byte (0x20-0x2F) was seen
+    private bool _csiOverflow;     // params ran past MaxCsiParams: consume to the final byte, apply nothing
     private readonly StringBuilder _text = new();
     private readonly List<StyledRun> _runs = new();
 
     private Rgb _fore = Rgb.DefaultFore;
     private Rgb _back = Rgb.DefaultBack;
     private RunFlags _flags = RunFlags.None;
+    // The basic 30-37 foreground index, or -1 when _fore came from anywhere else. Kept so
+    // the bright/normal choice follows bold wherever in the SGR stream bold changes.
+    private int _basicFore = -1;
 
     // ---- MXP state -----------------------------------------------------------
     private readonly StringBuilder _tag = new();
@@ -149,22 +156,38 @@ public sealed class AnsiParser
                 break;
 
             case State.Esc:
-                if (c == '[') { _state = State.Csi; _params.Clear(); }
+                if (c == '[') { _state = State.Csi; _params.Clear(); _csiPrivate = _csiIntermediate = _csiOverflow = false; }
                 else _state = State.Normal;   // other escapes: ignore the introducer
                 break;
 
             case State.Csi:
-                if ((c >= '0' && c <= '9') || c == ';')
-                    _params.Append(c);
-                else
+                // ECMA-48 shape: parameter bytes 0x30-0x3F, then intermediates 0x20-0x2F, then
+                // one final byte 0x40-0x7E. Following it means ESC[?25l or ESC[>c is consumed
+                // whole instead of leaking "25l" into the text.
+                if (c >= 0x30 && c <= 0x3F && !_csiIntermediate)
                 {
-                    if (c == 'm') ApplySgr(_params.ToString());
+                    if (c is '<' or '=' or '>' or '?') _csiPrivate = true;
+                    if (_params.Length >= MaxCsiParams) _csiOverflow = true;
+                    else _params.Append(c);
+                }
+                else if (c >= 0x20 && c <= 0x2F) _csiIntermediate = true;
+                else if (c >= 0x40 && c <= 0x7E)
+                {
+                    bool plain = !_csiPrivate && !_csiIntermediate && !_csiOverflow;
+                    if (c == 'm' && plain) ApplySgr(_params.ToString());
                     // Pueblo has no line modes: its contract is the tags themselves, and a
                     // lock code from a server that also speaks MXP would silence every
                     // Pueblo tag after it. Honoured only outside Pueblo mode.
-                    else if (c == 'z' && MxpEnabled && !PuebloMode) ApplyMxpMode(_params.ToString());
+                    else if (c == 'z' && plain && MxpEnabled && !PuebloMode) ApplyMxpMode(_params.ToString());
                     // any other final byte (H, J, K, ...) is consumed and ignored for now
                     _state = State.Normal;
+                }
+                else
+                {
+                    // not part of a control sequence (a newline, another ESC, text): abandon
+                    // the sequence and let the character be read normally
+                    _state = State.Normal;
+                    FeedChar(c);
                 }
                 break;
 
@@ -263,7 +286,7 @@ public sealed class AnsiParser
             case 2: _mxpMode = 2; break;                    // locked line
             case 3:                                          // reset: close open tags
                 if (_mxpLink is not null) CloseLink();
-                if (_mxpColorStack.Count > 0) { FlushRun(); (_fore, _back) = _mxpColorStack.ToArray()[^1]; _mxpColorStack.Clear(); }
+                if (_mxpColorStack.Count > 0) { FlushRun(); (_fore, _back) = _mxpColorStack.ToArray()[^1]; _mxpColorStack.Clear(); _basicFore = -1; }
                 break;
             case 4: _mxpTempSecure = true; break;           // secure for the NEXT tag only
             case 5: _mxpDefaultMode = 0; _mxpMode = 0; break;   // lock open
@@ -615,6 +638,7 @@ public sealed class AnsiParser
     {
         FlushRun();
         _mxpColorStack.Push((_fore, _back));
+        _basicFore = -1;   // an MXP colour is exact: bold must not re-brighten it
         // <COLOR fore [back]> or <COLOR FORE=x BACK=y>
         int positional = 0;
         foreach ((string key, string val) in attrs)
@@ -630,6 +654,7 @@ public sealed class AnsiParser
     private void ApplyFontColor(List<(string key, string val)> attrs)
     {
         FlushRun();
+        _basicFore = -1;
         foreach ((string key, string val) in attrs)
         {
             string k = key.ToUpperInvariant();
@@ -644,6 +669,7 @@ public sealed class AnsiParser
         if (_mxpColorStack.Count == 0) return;
         FlushRun();
         (_fore, _back) = _mxpColorStack.Pop();
+        _basicFore = -1;
     }
 
     private static bool TryParseColor(string value, out Rgb color)
@@ -815,8 +841,9 @@ public sealed class AnsiParser
             case "apos": AppendText('\''); break;
             case "nbsp": AppendText(' '); break;
             default:
+                // Rune.IsValid also rejects the surrogate range, where ConvertFromUtf32 throws
                 if (name.Length > 1 && name[0] == '#' && int.TryParse(name[1..], out int code) &&
-                    code > 0 && code <= 0x10FFFF)
+                    code > 0 && Rune.IsValid(code))
                 {
                     foreach (char c in char.ConvertFromUtf32(code)) AppendText(c);
                 }
@@ -852,7 +879,7 @@ public sealed class AnsiParser
             int code = codes[i];
             switch (code)
             {
-                case 0: _fore = Rgb.DefaultFore; _back = Rgb.DefaultBack; _flags = RunFlags.None; break;
+                case 0: _fore = Rgb.DefaultFore; _back = Rgb.DefaultBack; _flags = RunFlags.None; _basicFore = -1; break;
                 case 1: _flags |= RunFlags.Bold; break;
                 case 3: _flags |= RunFlags.Italic; break;
                 case 4: _flags |= RunFlags.Underline; break;
@@ -863,16 +890,22 @@ public sealed class AnsiParser
                 case 24: _flags &= ~RunFlags.Underline; break;
                 case 25: _flags &= ~RunFlags.Blink; break;
                 case 27: _flags &= ~RunFlags.Inverse; break;
-                case >= 30 and <= 37: _fore = Rgb.Ansi16(code - 30, (_flags & RunFlags.Bold) != 0); break;
-                case 38: _fore = ReadExtended(codes, ref i) ?? _fore; break;
-                case 39: _fore = Rgb.DefaultFore; break;
+                case >= 30 and <= 37: _basicFore = code - 30; break;   // resolved against bold below
+                case 38:
+                    Rgb? ext = ReadExtended(codes, ref i);
+                    if (ext is not null) { _fore = ext.Value; _basicFore = -1; }
+                    break;
+                case 39: _fore = Rgb.DefaultFore; _basicFore = -1; break;
                 case >= 40 and <= 47: _back = Rgb.Ansi16(code - 40, false); break;
                 case 48: _back = ReadExtended(codes, ref i) ?? _back; break;
                 case 49: _back = Rgb.DefaultBack; break;
-                case >= 90 and <= 97: _fore = Rgb.Ansi16(code - 90, true); break;
+                case >= 90 and <= 97: _fore = Rgb.Ansi16(code - 90, true); _basicFore = -1; break;
                 case >= 100 and <= 107: _back = Rgb.Ansi16(code - 100, true); break;
             }
         }
+        // Bold-as-bright, independent of order: ESC[31;1m, ESC[1;31m and ESC[31m then ESC[1m
+        // all give bright red, and ESC[22m takes it back to normal red.
+        if (_basicFore >= 0) _fore = Rgb.Ansi16(_basicFore, (_flags & RunFlags.Bold) != 0);
     }
 
     /// <summary>Consumes a 38/48 extended-colour subsequence: 5;n (256) or 2;r;g;b (truecolour).</summary>
@@ -901,9 +934,29 @@ public sealed class AnsiParser
     {
         if (paramText.Length == 0) return new[] { 0 };
         string[] parts = paramText.Split(';');
-        var codes = new int[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-            codes[i] = int.TryParse(parts[i], out int v) ? v : 0;
-        return codes;
+        var codes = new List<int>(parts.Length);
+        foreach (string part in parts)
+        {
+            if (!part.Contains(':'))
+            {
+                codes.Add(int.TryParse(part, out int v) ? v : 0);
+                continue;
+            }
+            // ITU T.416 colon sub-parameters: 38:5:n, 38:2:r:g:b, or 38:2:<colourspace>:r:g:b
+            // (the colourspace id is usually empty: 38:2::255:0:0). Flattened into the same
+            // shape the ';' form uses so ReadExtended handles both.
+            string[] sub = part.Split(':');
+            int first = int.TryParse(sub[0], out int f) ? f : 0;
+            if (first is 38 or 48)
+            {
+                for (int k = 0; k < sub.Length; k++)
+                {
+                    if (k == 2 && sub.Length >= 6 && sub[1] == "2") continue;   // skip colourspace id
+                    codes.Add(int.TryParse(sub[k], out int v) ? v : 0);
+                }
+            }
+            else codes.Add(first);   // e.g. 4:3 (curly underline): keep the main code only
+        }
+        return codes.ToArray();
     }
 }

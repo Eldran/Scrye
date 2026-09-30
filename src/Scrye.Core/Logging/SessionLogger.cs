@@ -104,6 +104,17 @@ public sealed class SessionLogger : IDisposable
     /// <summary>Append a plain-text line (system notice, echoed input, …) in the given colour.</summary>
     public void Log(string text, Rgb? colour = null) => Log(Line.FromText(text, colour));
 
+    /// <summary>Push buffered lines to the file. Lines are not flushed one by one (a busy
+    /// world logs hundreds a second); the session calls this on its one-second tick, and
+    /// <see cref="Close"/> flushes whatever is left.</summary>
+    public void Flush()
+    {
+        lock (_gate)
+        {
+            if (!_closed) _writer.Flush();
+        }
+    }
+
     /// <summary>Flush and finalize the transcript. Idempotent.</summary>
     public void Close()
     {
@@ -160,7 +171,6 @@ public sealed class SessionLogger : IDisposable
     {
         if (_timestamps) _writer.Write($"[{_clock():HH:mm:ss}] ");
         _writer.WriteLine(line.PlainText);
-        _writer.Flush();
     }
 
     private void WriteHtmlLine(Line line)
@@ -186,7 +196,6 @@ public sealed class SessionLogger : IDisposable
             _writer.Write("</span>");
         }
         _writer.Write('\n');
-        _writer.Flush();
     }
 
     private static string Hex(Rgb c) => $"#{c.R:X2}{c.G:X2}{c.B:X2}";

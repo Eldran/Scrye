@@ -52,6 +52,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private bool _everConnected;      // reconnect only after a live connection has dropped
     private Task? _reconnectTask;
     private CancellationTokenSource? _reconnectCts;
+    // Set by a retry series that ran out of attempts. Each failed attempt still raises Failed
+    // through the mailbox, and without this the last one would start a fresh series at attempt
+    // 0 - MaxAttempts would never be reached. Cleared by a successful connect or ConnectAsync.
+    private volatile bool _reconnectGaveUp;
 
     private readonly MipParser _mip = new();
     private readonly MipProcessor _mipProc;
@@ -61,6 +65,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private AutoLogin? _autoLogin;    // armed on connect when the profile has a username; loop-only
     private MccpDecompressor? _mccp;  // active MCCP2 inflater (loop-managed; pump emits via mailbox)
+    // Tags the pump's messages so output inflated for an earlier connection (or an earlier
+    // compression stream) is dropped rather than fed into the new one. Loop-only.
+    private int _mccpGeneration;
 
     // per-line routing state, valid only while triggers process the current line (loop-only)
     private readonly List<string> _lineCaptures = new();
@@ -374,6 +381,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     public async Task ConnectAsync(CancellationToken ct = default)
     {
         if (Profile.EnableMip) ResetMipForConnect();
+        _reconnectGaveUp = false;   // an explicit connect starts a fresh reconnect budget
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
@@ -474,7 +482,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private void MaybeReconnect()
     {
-        if (!ReconnectEnabled || _userClosing || !_everConnected) return;
+        if (!ReconnectEnabled || _userClosing || !_everConnected || _reconnectGaveUp) return;
         if (_reconnectTask is { IsCompleted: false }) return;   // a retry loop is already running
         _reconnectCts = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
         _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCts.Token));
@@ -489,6 +497,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         {
             if (!_reconnect.ShouldRetry(attempt))
             {
+                _reconnectGaveUp = true;   // before returning, so the last Failed can't restart us
                 _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice(
                     $"[reconnect] gave up after {attempt} attempt(s)"));
                 return;
@@ -694,13 +703,17 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         {
             await foreach (SessionMessage msg in _mailbox.Reader.ReadAllAsync(ct).ConfigureAwait(false))
             {
+              // One bad message (a throwing subscriber, a logger IO error, a send racing a
+              // drop) must not end the loop: nothing else drains the mailbox or reconnects.
+              try
+              {
                 switch (msg)
                 {
                     case SessionMessage.DataArrived d:
                         await HandleDataAsync(d.Bytes, ct).ConfigureAwait(false);
                         break;
                     case SessionMessage.DataInflated di:
-                        ProcessTelnetChunk(di.Bytes);
+                        if (di.Generation == _mccpGeneration) ProcessTelnetChunk(di.Bytes);
                         break;
                     case SessionMessage.UserInput u:
                         HandleInput(u.Text, u.Split);
@@ -732,6 +745,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                             GmcpTick();
                             MipTick();
                             RebootTick(advance: true);
+                            _logger?.Flush();   // the logger buffers lines; this bounds the loss to ~1s
                         }
                         Ticked?.Invoke(TickIntervalSeconds);
                         break;
@@ -772,9 +786,23 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         }
                         break;
                 }
+              }
+              catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+              catch (Exception ex) { ReportLoopError(msg, ex); }
             }
         }
         catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Say that handling one mailbox message failed, then carry on. Reporting goes
+    /// through the same notice path as everything else; if that throws too (the subscriber
+    /// that failed is the one that would display it), the error is dropped rather than
+    /// allowed to take the loop down.</summary>
+    private void ReportLoopError(SessionMessage msg, Exception ex)
+    {
+        string text = $"[scrye] error handling {msg.GetType().Name}: {ex.GetType().Name}: {ex.Message}";
+        try { _events.Emit(SessionEventKind.Notice, text); } catch { }
+        try { RaiseLine(Line.FromText(text, SysColour)); } catch { }
     }
 
     /// <summary>Scheduler tick length. 250 ms is the plugin-timer resolution (API 1.6);
@@ -803,9 +831,13 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
         if (_telnet.CompressionActive && _mccp is null)
         {
+            int gen = ++_mccpGeneration;
             _mccp = new MccpDecompressor(
-                inflated => _mailbox.Writer.TryWrite(new SessionMessage.DataInflated(inflated)),
-                onEnded: () => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(EndCompression)));
+                inflated => _mailbox.Writer.TryWrite(new SessionMessage.DataInflated(inflated, gen)),
+                onEnded: () => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(() =>
+                {
+                    if (gen == _mccpGeneration) EndCompression();   // not a newer stream's
+                })));
             _events.Emit(SessionEventKind.Notice, "MCCP2 compression enabled");
             RaiseLine(Line.FromText("[MCCP2] compression enabled", SysColour));
             byte[]? tail = _telnet.TakePendingCompressed();
@@ -1144,9 +1176,12 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 break;
             case ConnectionState.Connected:
                 _everConnected = true;
+                _reconnectGaveUp = false;        // a live connection earns a fresh retry budget
                 CancelReconnect();               // a successful connect ends any retry loop
                 _mccp?.Dispose(); _mccp = null;  // compression renegotiates per connection
-                _telnet.ResetCompression();
+                _mccpGeneration++;               // ...and nothing the old pump still posts applies
+                _telnet.ResetForNewConnection(); // TTYPE cycle, half-read SB, compression
+                _decoder.Reset();                // no half a UTF-8 sequence carried across sockets
                 ResetGmcpForConnect();                        // GMCP re-negotiates per connection
                 MxpAudit.Reset();                             // ...and so does MXP
                 MxpAudit.Enabled = Profile.EnableMxp;
@@ -1436,8 +1471,17 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         }
     }
 
-    private async Task SendRawAsync(byte[] bytes, CancellationToken ct) =>
-        await _connection.SendAsync(bytes, ct).ConfigureAwait(false);
+    private async Task SendRawAsync(byte[] bytes, CancellationToken ct)
+    {
+        // Nothing to send to: drop it. A command typed (or a timer firing) while disconnected
+        // or mid-reconnect is not an error worth stopping for.
+        if (_connection.State != ConnectionState.Connected) return;
+        try { await _connection.SendAsync(bytes, ct).ConfigureAwait(false); }
+        // The socket went away between the check and the write; the read loop reports the drop.
+        catch (IOException) { }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
 
     private string Decode(byte[] data)
     {
@@ -1455,6 +1499,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _mailbox.Writer.TryComplete();
         foreach (Task? t in new[] { _loop, _ticker, _reconnectTask })
             if (t is not null) { try { await t.ConfigureAwait(false); } catch { /* ignore */ } }
+        _mccp?.Dispose();         // the Disconnected handler never runs once the loop has stopped
+        _mccp = null;
         _logger?.Close();         // finalize the transcript (loop has stopped, no more Log calls)
         await _connection.DisposeAsync().ConfigureAwait(false);
         _reconnectCts?.Dispose();

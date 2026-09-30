@@ -24,7 +24,9 @@ public sealed class MccpDecompressor : IDisposable
     public MccpDecompressor(Action<byte[]> onInflated, Action? onEnded = null)
     {
         _zlib = new ZLibStream(_feed, CompressionMode.Decompress);
-        _pump = Task.Run(() =>
+        // LongRunning: the pump blocks in Monitor.Wait for the whole connection, which would
+        // otherwise pin a thread-pool thread per compressed world.
+        _pump = Task.Factory.StartNew(() =>
         {
             byte[] buf = new byte[16384];
             try
@@ -40,7 +42,7 @@ public sealed class MccpDecompressor : IDisposable
                 // can fall back to the plain path rather than hanging
                 if (!_disposed) onEnded?.Invoke();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     /// <summary>Queue a chunk of compressed bytes for inflation (any thread; non-blocking).</summary>

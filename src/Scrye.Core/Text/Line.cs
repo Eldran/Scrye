@@ -46,8 +46,22 @@ public sealed class Line
         new(new[] { new StyledRun(text, fore ?? Rgb.DefaultFore, Rgb.DefaultBack, RunFlags.None) },
             isPrompt, DateTimeOffset.UtcNow);
 
-    /// <summary>The line's text with styling stripped (for logging, triggers, search).</summary>
-    public string PlainText => string.Concat(Runs.Select(r => r.Text));
+    /// <summary>The line's text with styling stripped (for logging, triggers, search).
+    /// Cached: the session reads it many times per line and the runs never change after
+    /// construction (same benign-race reasoning as <see cref="Links"/>).</summary>
+    public string PlainText => _plain ??= ComputePlainText();
+
+    private string? _plain;
+
+    private string ComputePlainText()
+    {
+        IReadOnlyList<StyledRun> runs = Runs;
+        if (runs.Count == 0) return "";
+        if (runs.Count == 1) return runs[0].Text ?? "";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < runs.Count; i++) sb.Append(runs[i].Text);
+        return sb.ToString();
+    }
 
     /// <summary>Return a copy of this line with the plain-text range
     /// [<paramref name="start"/>, start+<paramref name="length"/>) recoloured — used by

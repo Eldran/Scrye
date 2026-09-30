@@ -10,8 +10,10 @@ public abstract record SessionMessage
     public sealed record DataArrived(byte[] Bytes) : SessionMessage;
 
     /// <summary>Bytes inflated by the MCCP2 decompressor pump — the decompressed
-    /// continuation of the telnet stream, processed exactly like plain arrivals.</summary>
-    public sealed record DataInflated(byte[] Bytes) : SessionMessage;
+    /// continuation of the telnet stream, processed exactly like plain arrivals.
+    /// <paramref name="Generation"/> identifies the decompressor that produced it, so a pump
+    /// left over from an earlier connection cannot feed the current one.</summary>
+    public sealed record DataInflated(byte[] Bytes, int Generation = 0) : SessionMessage;
 
     /// <summary>The user submitted a line of input (runs through aliases).
     /// <paramref name="Split"/> is false for text the MUD authored rather than the user --

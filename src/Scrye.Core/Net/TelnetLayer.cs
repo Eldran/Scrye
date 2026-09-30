@@ -33,6 +33,10 @@ public sealed class TelnetLayer
     private P _state = P.Data;
     private byte _sbOption;
     private readonly List<byte> _sb = new();
+    /// <summary>Cap on one subnegotiation payload. GMCP room/inventory dumps can run to tens of
+    /// KB, so this is generous; it exists because an IAC SB that never sees IAC SE would
+    /// otherwise buffer forever and swallow every byte of output after it.</summary>
+    public const int MaxSubnegotiationBytes = 1024 * 1024;
     private int _ttypeIndex;
     private bool _compressionJustActivated;
     private byte[]? _pendingCompressed;
@@ -89,6 +93,17 @@ public sealed class TelnetLayer
         _state = P.Data;
     }
 
+    /// <summary>Forget everything learned on the previous connection: compression, a
+    /// half-read command or subnegotiation, and where the TTYPE cycle had got to (a server
+    /// asking again after a reconnect must hear the client name first, not "MTTS").</summary>
+    public void ResetForNewConnection()
+    {
+        ResetCompression();
+        _sb.Clear();
+        _sbOption = 0;
+        _ttypeIndex = 0;
+    }
+
     /// <summary>Supplies the current terminal size for NAWS.</summary>
     public Func<(int cols, int rows)>? WindowSize { get; set; }
 
@@ -107,6 +122,9 @@ public sealed class TelnetLayer
     /// Any replies are raised via <see cref="SendData"/>.</summary>
     public byte[] Process(ReadOnlySpan<byte> input)
     {
+        // Fast path: plain text with no IAC anywhere is returned as-is (the common case).
+        if (_state == P.Data && input.IndexOf(IAC) < 0) return input.ToArray();
+
         var data = new List<byte>(input.Length);
         for (int i = 0; i < input.Length; i++)
         {
@@ -164,13 +182,27 @@ public sealed class TelnetLayer
             case P.Sb: _sbOption = b; _sb.Clear(); _state = P.SbData; break;
             case P.SbData:
                 if (b == IAC) _state = P.SbIac;
-                else _sb.Add(b);
+                else AddSb(b);
                 break;
             case P.SbIac:
                 if (b == SE) { OnSubnegotiation(_sbOption, _sb); _state = P.Data; }
-                else { _sb.Add(b); _state = P.SbData; }                 // IAC IAC inside SB -> literal
+                else { _state = P.SbData; AddSb(b); }                  // IAC IAC inside SB -> literal
                 break;
         }
+    }
+
+    /// <summary>Append to the subnegotiation buffer; past the cap the whole subnegotiation is
+    /// discarded and the layer drops back to data, so a missing IAC SE costs one message, not
+    /// the rest of the session.</summary>
+    private void AddSb(byte b)
+    {
+        if (_sb.Count >= MaxSubnegotiationBytes)
+        {
+            _sb.Clear();
+            _state = P.Data;
+            return;
+        }
+        _sb.Add(b);
     }
 
     // ---- server offers to enable an option on ITS side (WILL) ----------------
