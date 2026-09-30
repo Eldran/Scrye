@@ -633,6 +633,7 @@ scrye.addPanel{
   title = "Chat",
   width = 320,
   accent = "#4BE4FF",
+  solo = true,          -- (1.1.3) never a page of a book: chat you type into stays in view
   widgets = {
     { type = "label", bind = "plugin.3s-chat.picked", color = "dim" },
     { type = "row", widgets = {
