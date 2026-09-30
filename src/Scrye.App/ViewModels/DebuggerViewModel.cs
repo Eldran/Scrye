@@ -19,11 +19,19 @@ namespace Scrye.App.ViewModels;
 public sealed class DebuggerViewModel : ViewModelBase
 {
     private const int Cap = 3000;   // max rows retained / shown
+    // Trimming happens in batches: the lists may run this far past Cap before being cut back,
+    // so a busy session pays one bulk trim every Slack events instead of an O(n) RemoveAt(0)
+    // (plus a collection notification) on every one.
+    private const int Slack = Cap / 4;
 
     private readonly MudSession _session;
     private readonly Action<string> _notify;                 // push a system line to the world output
     private readonly ConcurrentQueue<SessionEvent> _incoming = new();
     private readonly List<EventRowViewModel> _all = new();    // backing store (all kinds)
+    // Raw events that arrived while the panel was hidden. No row view models are built for
+    // them until the panel is shown, and then only for the newest Cap.
+    private readonly List<SessionEvent> _backlog = new();
+    private bool _recording;   // UI-side mirror of the recorder, which the session loop owns
 
     /// <summary>The filtered rows currently shown in the timeline.</summary>
     public ObservableCollection<EventRowViewModel> Rows { get; } = new();
@@ -75,17 +83,57 @@ public sealed class DebuggerViewModel : ViewModelBase
     /// <summary>Session-loop thread: just hand the event off; the UI drains it.</summary>
     public void Enqueue(SessionEvent ev) => _incoming.Enqueue(ev);
 
+    private bool _visible;
+    /// <summary>Whether the debugger panel is on screen (set by the world with ShowDebugger).
+    /// While hidden, <see cref="Drain"/> only parks raw events; showing it folds them in and
+    /// rebuilds the list once.</summary>
+    public bool Visible
+    {
+        get => _visible;
+        set
+        {
+            if (_visible == value) return;
+            _visible = value;
+            if (!value) return;
+            FoldBacklog();
+            if (!_paused) Rebuild();   // paused keeps its frozen list, as it always has
+        }
+    }
+
     /// <summary>UI thread: fold queued events into the backing store and the visible list.</summary>
     public void Drain()
     {
+        if (!_visible)
+        {
+            // Hidden: no row view models, no collection notifications. Keep the newest only.
+            while (_incoming.TryDequeue(out SessionEvent? hidden)) _backlog.Add(hidden);
+            if (_backlog.Count > Cap + Slack) _backlog.RemoveRange(0, _backlog.Count - Cap);
+            return;
+        }
         while (_incoming.TryDequeue(out SessionEvent? ev))
         {
             var row = new EventRowViewModel(ev);
             _all.Add(row);
-            if (_all.Count > Cap) _all.RemoveAt(0);
             if (!_paused && Passes(row)) Rows.Add(row);
         }
-        while (Rows.Count > Cap) Rows.RemoveAt(0);
+        if (_all.Count > Cap + Slack) _all.RemoveRange(0, _all.Count - Cap);
+        if (Rows.Count > Cap + Slack)
+        {
+            // One reset + re-add from the (already trimmed) backing store, rather than
+            // hundreds of front removals; the selected row survives if it is still kept.
+            EventRowViewModel? selected = SelectedRow;
+            Rebuild();
+            if (selected is not null && Rows.Contains(selected)) SelectedRow = selected;
+        }
+    }
+
+    /// <summary>Turn events parked while hidden into rows (the newest Cap at most).</summary>
+    private void FoldBacklog()
+    {
+        for (int i = Math.Max(0, _backlog.Count - Cap); i < _backlog.Count; i++)
+            _all.Add(new EventRowViewModel(_backlog[i]));
+        _backlog.Clear();
+        if (_all.Count > Cap) _all.RemoveRange(0, _all.Count - Cap);
     }
 
     private bool Passes(EventRowViewModel r) => r.Category switch
@@ -108,26 +156,39 @@ public sealed class DebuggerViewModel : ViewModelBase
     private void Clear()
     {
         _all.Clear();
+        _backlog.Clear();
         Rows.Clear();
     }
 
     // ---- record --------------------------------------------------------------
 
+    // The recorder subscribes to the event bus and appends on the session loop, so starting,
+    // counting, saving and stopping all run there too; the label flips on the UI thread at
+    // once. _notify (the world's AppendSystem) only enqueues, so it is safe from the loop.
     private void ToggleRecord()
     {
-        if (_session.IsRecording)
+        if (_recording)
         {
-            string path = RecordingPath();
-            int count = _session.Recorder?.Events.Count ?? 0;
-            _session.SaveRecording(path);   // save while the recorder is still alive
-            _session.StopRecording();
+            _recording = false;
             RecordLabel = "Record";
-            _notify($"recording saved: {path} ({count} events)");
+            string path = RecordingPath();
+            _session.Post(() =>
+            {
+                int count = _session.Recorder?.Events.Count ?? 0;
+                string? error = null;
+                try { _session.SaveRecording(path); }   // save while the recorder is still alive
+                catch (Exception ex) { error = ex.Message; }
+                _session.StopRecording();
+                _notify(error is null
+                    ? $"recording saved: {path} ({count} events)"
+                    : $"could not save the recording: {error}");
+            });
         }
         else
         {
-            _session.StartRecording();
+            _recording = true;
             RecordLabel = "Stop";
+            _session.Post(() => _session.StartRecording());
             _notify("recording started");
         }
     }
@@ -152,13 +213,18 @@ public sealed class DebuggerViewModel : ViewModelBase
         string line = SimulateInput ?? "";
         if (line.Length == 0) return;
 
-        IReadOnlyList<AutomationHit> hits = _session.Automation.Simulate(line);
-        if (hits.Count == 0)
+        // The live engine is loop-owned (its rule lists are replaced there on reload), so the
+        // dry run happens on the loop; the results are only enqueued as system lines.
+        _session.Post(() =>
         {
-            _notify($"simulate \"{line}\": no triggers would match");
-            return;
-        }
-        foreach (AutomationHit h in hits)
-            _notify($"simulate \"{line}\": {h.Name} would {h.Action}");
+            IReadOnlyList<AutomationHit> hits = _session.Automation.Simulate(line);
+            if (hits.Count == 0)
+            {
+                _notify($"simulate \"{line}\": no triggers would match");
+                return;
+            }
+            foreach (AutomationHit h in hits)
+                _notify($"simulate \"{line}\": {h.Name} would {h.Action}");
+        });
     }
 }

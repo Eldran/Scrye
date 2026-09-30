@@ -50,8 +50,11 @@ public static class UiStateStore
         {
             string path = PathFor();
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path,
+            // temp file + swap: an interrupted write never leaves a truncated ui-state.json
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp,
                 JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, path, overwrite: true);
         }
         catch { /* losing a chrome preference must never break the session */ }
     }

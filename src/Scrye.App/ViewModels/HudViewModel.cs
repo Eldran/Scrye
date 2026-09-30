@@ -579,7 +579,50 @@ public sealed class HudViewModel : IDisposable
     {
         if (string.IsNullOrEmpty(path)) return;
         set(_state.Get(path).Text);                          // seed the current value
-        subs.Add(_state.Watch(path, (_, v) => Post(() => set(v.Text))));
+        string key = NormalizePath(path);
+        var slot = new Coalesced<string>(set);
+        // Watch fires for the path AND its descendants. Only an exact hit carries this
+        // widget's own value; a child change (".raw" under "character.gline1") re-reads the
+        // bound path instead of showing the child's text. Still on the session loop here.
+        subs.Add(_state.Watch(path, (changed, v) =>
+            slot.Push(changed == key ? v.Text : _state.Get(key).Text)));
+    }
+
+    /// <summary>StateStore's own path normalisation (it passes watchers the normalised key).</summary>
+    private static string NormalizePath(string path) => path.Trim().ToLowerInvariant();
+
+    /// <summary>
+    /// One widget's latest-value slot. A GMCP burst can change a bound path many times per
+    /// frame; each change overwrites the slot, and only the first since the last drain posts
+    /// to the UI thread, so a widget costs at most one queued UI operation at a time instead
+    /// of one per change. Pushed from the session loop, drained on the UI thread.
+    /// </summary>
+    private sealed class Coalesced<T>
+    {
+        private readonly object _gate = new();
+        private readonly Action<T> _set;
+        private T _latest = default!;
+        private bool _pending;
+
+        public Coalesced(Action<T> set) => _set = set;
+
+        public void Push(T value)
+        {
+            lock (_gate)
+            {
+                _latest = value;
+                if (_pending) return;   // a drain is already queued; it will take this value
+                _pending = true;
+            }
+            Post(Drain);
+        }
+
+        private void Drain()
+        {
+            T value;
+            lock (_gate) { value = _latest; _pending = false; }
+            _set(value);
+        }
     }
 
     private void BindNumber(string? pathOrLiteral, Action<double> set, List<IDisposable> subs)
@@ -593,7 +636,11 @@ public sealed class HudViewModel : IDisposable
             return;
         }
         set(ParseNum(_state.Get(pathOrLiteral).Text));
-        subs.Add(_state.Watch(pathOrLiteral, (_, v) => Post(() => set(ParseNum(v.Text)))));
+        string key = NormalizePath(pathOrLiteral);
+        var slot = new Coalesced<double>(set);
+        // Same exact-path rule and coalescing as BindText.
+        subs.Add(_state.Watch(pathOrLiteral, (changed, v) =>
+            slot.Push(ParseNum(changed == key ? v.Text : _state.Get(key).Text))));
     }
 
     private static double ParseNum(string s) =>

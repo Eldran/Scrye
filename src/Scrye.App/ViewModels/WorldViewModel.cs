@@ -257,6 +257,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         win.Closed += (_, _) =>
         {
             pane.PropertyChanged -= SyncTimestamps;
+            // Detach the output views from the pane's buffer: they subscribe to it, and the
+            // buffer outlives this window, so leaving Source set would keep them alive.
+            terminal.Source = null;
             // user closed the window: bring the pane home to the bottom zone
             if (_floatWindows.Remove(pane) && _allPanes.Contains(pane))
             {
@@ -275,20 +278,34 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         layout.ClosedPanes.AddRange(_closedPanes);
         foreach (CapturePaneViewModel p in _allPanes)
             layout.Panes.Add(new Services.PaneLayoutEntry { Name = p.Name, Dock = p.Dock.ToString() });
+        // HUD panels: fold the loaded panels into the remembered set, then write the whole set.
+        // A panel whose plugin is disabled right now is not in Hud.Panels, and writing only the
+        // loaded ones would erase its place for good; keeping the remembered set current also
+        // means re-enabling a plugin mid-session puts its panel back where it was last left,
+        // not where it was when the session started. The lock: LoadPosition/LoadCollapsed are
+        // read from the session loop when a plugin is enabled or reloaded there.
         if (Hud is not null)
-            foreach (HudPanelViewModel hp in Hud.Panels)
-                if (!double.IsNaN(hp.X) && !double.IsNaN(hp.Y))
+            lock (_savedHud)
+            {
+                foreach (HudPanelViewModel hp in Hud.Panels)
+                {
+                    if (!double.IsNaN(hp.X) && !double.IsNaN(hp.Y))
+                        _savedHud[hp.Key] = (hp.X, hp.Y,
+                            double.IsNaN(hp.UserWidth) ? 0 : hp.UserWidth,
+                            double.IsNaN(hp.UserHeight) ? 0 : hp.UserHeight);
+                    else _savedHud.Remove(hp.Key);   // loaded but never placed: as before, nothing to keep
+                    if (hp.IsCollapsed) _savedCollapsed.Add(hp.Key);
+                    else _savedCollapsed.Remove(hp.Key);
+                }
+                foreach (KeyValuePair<string, (double X, double Y, double W, double H)> kv in _savedHud)
                     layout.HudPanels.Add(new Services.HudPanelLayout
                     {
-                        Name = hp.Key, X = hp.X, Y = hp.Y,
-                        W = double.IsNaN(hp.UserWidth) ? 0 : hp.UserWidth,
-                        H = double.IsNaN(hp.UserHeight) ? 0 : hp.UserHeight,
+                        Name = kv.Key, X = kv.Value.X, Y = kv.Value.Y, W = kv.Value.W, H = kv.Value.H,
                     });
-        // Collapsed panels go in their own list: a panel can be rolled up before it has ever
-        // been dragged, and the entries above are only written once it has a real position.
-        if (Hud is not null)
-            foreach (HudPanelViewModel hp in Hud.Panels)
-                if (hp.IsCollapsed) layout.CollapsedHudPanels.Add(hp.Key);
+                // Collapsed panels go in their own list: a panel can be rolled up before it has
+                // ever been dragged, and the entries above are only written once it has a position.
+                layout.CollapsedHudPanels.AddRange(_savedCollapsed);
+            }
         // Books keep every page, loaded or not, so a disabled plugin's page goes back into its
         // book when it is turned on again. NaN (not placed / auto size) is written as 0:
         // System.Text.Json refuses NaN.
@@ -304,10 +321,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         Services.PaneLayoutStore.Save(Title, layout);
     }
 
-    /// <summary>Recreate the saved pane setup (docks + timestamp toggle) for this world.</summary>
-    private void RestoreLayout()
+    /// <summary>HUD panel places and roll-ups, by panel key: seeded from the saved layout,
+    /// updated on every save, and written whole — including panels not loaded right now.
+    /// Guarded by locking <see cref="_savedHud"/> (read from the loop, written on the UI).</summary>
+    private readonly Dictionary<string, (double X, double Y, double W, double H)> _savedHud = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _savedCollapsed = new(StringComparer.Ordinal);
+
+    /// <summary>Recreate the saved pane setup (docks + timestamp toggle) for this world.
+    /// Takes the layout the constructor already read, rather than reading the file twice.</summary>
+    private void RestoreLayout(Services.WorldLayout? layout)
     {
-        Services.WorldLayout? layout = Services.PaneLayoutStore.Load(Title);
         if (layout is null) return;
         _restoringLayout = true;
         try
@@ -493,7 +516,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         set
         {
             if (SetField(ref _showDebugger, value))
+            {
                 DebuggerColWidth = value ? new GridLength(400) : new GridLength(0);
+                Debugger.Visible = value;   // hidden: events are parked raw, no row work per flush
+            }
         }
     }
 
@@ -592,7 +618,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _session.Events.Emitted += Debugger.Enqueue;
 
         // replay: analysis re-runs recordings against this session's current rule set.
-        Replay = new ReplayViewModel(() => _session.Automation, AppendSystem);
+        // The engine is loop-owned, so the analysis callback is run there.
+        Replay = new ReplayViewModel(run => _session.Post(() => run(_session.Automation)), AppendSystem);
 
         // command sequences: status strip driven by the session; controls route back to it.
         Sequence = new SequenceViewModel(_session.PauseSequence, _session.ResumeSequence,
@@ -629,13 +656,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.
-        var savedHud = new System.Collections.Generic.Dictionary<string, (double, double, double, double)>(StringComparer.Ordinal);
-        var savedCollapsed = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
-        if (Services.PaneLayoutStore.Load(profile.Name) is { } savedLayout)
+        Services.WorldLayout? savedLayout = Services.PaneLayoutStore.Load(profile.Name);   // also feeds RestoreLayout
+        if (savedLayout is not null)
         {
             foreach (Services.HudPanelLayout h in savedLayout.HudPanels)
-                if (!string.IsNullOrEmpty(h.Name)) savedHud[h.Name] = (h.X, h.Y, h.W, h.H);
-            foreach (string c in savedLayout.CollapsedHudPanels) savedCollapsed.Add(c);
+                if (!string.IsNullOrEmpty(h.Name)) _savedHud[h.Name] = (h.X, h.Y, h.W, h.H);
+            foreach (string c in savedLayout.CollapsedHudPanels) _savedCollapsed.Add(c);
             // books: each page joins its book as its plugin adds the panel
             var books = new System.Collections.Generic.List<HudBookViewModel>();
             foreach (Services.HudBookLayout hb in savedLayout.HudBooks ?? new())
@@ -652,8 +678,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             }
             Hud.LoadBooks(books);
         }
-        Hud.LoadPosition = key => savedHud.TryGetValue(key, out (double, double, double, double) p) ? p : null;
-        Hud.LoadCollapsed = key => savedCollapsed.Contains(key);
+        Hud.LoadPosition = key =>
+        {
+            lock (_savedHud) return _savedHud.TryGetValue(key, out (double, double, double, double) p) ? p : null;
+        };
+        Hud.LoadCollapsed = key => { lock (_savedHud) return _savedCollapsed.Contains(key); };
         Hud.PanelMoved = SaveLayout;
 
         // find-in-scrollback: searches the rendered output buffer.
@@ -776,7 +805,13 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         CompanionPanel = new CompanionViewModel(
             () => CompanionControl,
             () => SessionId,
-            () => _session.Automation.AllTriggers,
+            // The rule list is loop-owned: copy it there (AllTriggers builds a fresh list) and
+            // hand it back on the UI thread.
+            deliver => _session.Post(() =>
+            {
+                var all = _session.Automation.AllTriggers;
+                Dispatcher.UIThread.Post(() => deliver(all));
+            }),
             CopyToClipboard,
             // Collect plugin.<id>.notify rows ON the session loop (the state store is
             // single-threaded there) and deliver back on the UI thread.
@@ -873,7 +908,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // bring back this world's saved pane setup (docks + timestamp toggle), then add any
         // pane a loaded plugin declares but the saved layout does not have yet — the fresh-
         // machine case, where there is no layout at all.
-        RestoreLayout();
+        RestoreLayout(savedLayout);
         EnsureDeclaredPanes();
 
         _flushTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(33) };
@@ -917,11 +952,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (gesture is null || !_macros.TryGetValue(gesture, out Scrye.Core.Automation.MacroDef? m) || !m.Enabled)
             return false;
 
-        string expanded = Scrye.Core.Automation.Template.Expand(m.Send, null, _session.Variables);
-        Scrye.Core.Automation.AutomationEngine.ForEachLine(expanded, line =>
+        // The expansion reads @variables, which the session loop owns and mutates (a plain
+        // Dictionary), so the whole fire runs on the loop. The echo queue is concurrent and
+        // Submit only queues a mailbox message, so both are fine from there; the order they
+        // happen in is unchanged.
+        string send = m.Send;
+        _session.Post(() =>
         {
-            _pending.Enqueue(Line.FromText("> " + line, EchoColour));   // local echo, like typing
-            _session.Submit(line);
+            string expanded = Scrye.Core.Automation.Template.Expand(send, null, _session.Variables);
+            Scrye.Core.Automation.AutomationEngine.ForEachLine(expanded, line =>
+            {
+                _pending.Enqueue(Line.FromText("> " + line, EchoColour));   // local echo, like typing
+                _session.Submit(line);
+            });
         });
         return true;
     }
@@ -1239,6 +1282,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _pending.Enqueue(Line.FromText("> " + command, EchoColour));
         _session.SubmitLiteral(command);   // one command, whatever separators the MUD put in it
     }
+
+    /// <summary>Send MUD-authored text exactly as a desktop MXP link click does: local echo,
+    /// then ONE literal command — no '.'/'/' prefix dispatch, no ';' splitting. For a companion
+    /// device relaying a link tap (see <see cref="HandleCommandLink"/> for why). Safe from any
+    /// thread: the echo queue is concurrent and the session call only queues a message.</summary>
+    public void SubmitLiteral(string text) => HandleCommandLink(text, prompt: false);
+
+    /// <summary>Run <paramref name="action"/> on this world's session loop — the only thread
+    /// that may touch the state store, automation engine or plugin runtimes. Hop back with
+    /// <c>Dispatcher.UIThread.Post</c> for anything UI-owned. Queued in FIFO order with the
+    /// session's own work; silently dropped once the world has been disposed.</summary>
+    public void PostToSession(Action action) => _session.Post(action);
 
     /// <summary>The command line's Enter handler: take what is in the input box, record it
     /// for recall, and run it through the pipeline as local input.</summary>
@@ -1844,9 +1899,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// answered in one place, not by clicking through every rule.</para></summary>
     private void ReportNotifySources(CompanionController c)
     {
-        IReadOnlyList<(Scrye.Core.Automation.TriggerDef Def, bool Enabled)> notifying =
-            _session.Automation.NotifyingTriggers;
+        // The trigger list is loop-owned (a reload replaces it there): copy it on the loop,
+        // report on the UI thread, the same hop the .mip/.gmcp reports make.
+        _session.Post(() =>
+        {
+            IReadOnlyList<(Scrye.Core.Automation.TriggerDef Def, bool Enabled)> notifying =
+                _session.Automation.NotifyingTriggers;   // a fresh list: safe to hand over
+            Dispatcher.UIThread.Post(() => ReportNotifySources(c, notifying));
+        });
+    }
 
+    private void ReportNotifySources(CompanionController c,
+        IReadOnlyList<(Scrye.Core.Automation.TriggerDef Def, bool Enabled)> notifying)
+    {
         if (notifying.Count == 0)
         {
             AppendSystem("no triggers in this world are set to Notify");
@@ -2026,11 +2091,17 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _floatWindows.Clear();   // cleared first so Closed handlers don't re-dock during teardown
         foreach (Window w in floats) { try { w.Close(); } catch { } }
         Replay.Stop();
+        _session.Events.Emitted -= Debugger.Enqueue;
+        // Stop the session loop FIRST. Plugins, the script host and the HUD's state watchers
+        // are all entered from the loop; freeing them while it may still be mid-callback
+        // (closing a tab during a burst of output) would free a native Lua state under a
+        // running call, or change collections the loop is iterating. Once this returns the
+        // loop has exited, so the teardown below is single-threaded again. The await resumes
+        // on the caller's (UI) thread, which Hud.Dispose and plugin panel removal need.
+        await _session.DisposeAsync();
         _plugins.Dispose();
         _scriptHost.Dispose();   // frees the world-script Lua state (native since Phase 5)
         Hud.Dispose();
-        _session.Events.Emitted -= Debugger.Enqueue;
-        await _session.DisposeAsync();
         _session.GmcpAudit.SaveShape();   // the loop has stopped: nothing else touches it now
     }
 }

@@ -23,7 +23,18 @@ public sealed class StateViewModel : ViewModelBase
     public RelayCommand CloseCommand { get; }
 
     private bool _isOpen;
-    public bool IsOpen { get => _isOpen; set => SetField(ref _isOpen, value); }
+    public bool IsOpen
+    {
+        get => _isOpen;
+        set
+        {
+            // A structural change while closed only marks the list dirty; opening pays for
+            // one rebuild instead of every GMCP burst paying for one while nobody looks.
+            if (SetField(ref _isOpen, value) && value && _dirty) Rebuild();
+        }
+    }
+
+    private bool _dirty;   // _byPath gained/lost paths since the last Rebuild
 
     private string _filter = "";
     public string Filter
@@ -73,12 +84,17 @@ public sealed class StateViewModel : ViewModelBase
                 structural = true;
             }
         }
-        if (structural) Rebuild();
+        if (structural)
+        {
+            if (_isOpen) Rebuild();
+            else _dirty = true;
+        }
         if (SelectedRow is not null) OnPropertyChanged(nameof(Detail));
     }
 
     private void Rebuild()
     {
+        _dirty = false;
         string f = Filter.Trim();
         Rows.Clear();
         foreach (StateRowViewModel row in _byPath.Values

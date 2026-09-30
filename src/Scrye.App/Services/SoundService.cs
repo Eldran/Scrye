@@ -32,10 +32,19 @@ public static class SoundService
     public static string SoundsDirectory() =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Scrye", "sounds");
 
-    /// <summary>Play a sound reference for a world. Never throws; unknown files are silent.</summary>
+    /// <summary>Play a sound reference for a world. Never throws; unknown files are silent.
+    ///
+    /// <para>Returns at once: the file probes and the player launch run on the thread pool.
+    /// Callers include the session loop (trigger sounds), where a slow disk or a
+    /// Process.Start would otherwise stall line processing.</para></summary>
     public static void Play(string sound, string? mudName = null)
     {
         if (string.IsNullOrWhiteSpace(sound)) return;
+        _ = Task.Run(() => PlayNow(sound, mudName));   // PlayNow swallows everything itself
+    }
+
+    private static void PlayNow(string sound, string? mudName)
+    {
         try
         {
             bool beep = sound.Equals("beep", StringComparison.OrdinalIgnoreCase);

@@ -97,8 +97,13 @@ public static class PaneLayoutStore
         try
         {
             Directory.CreateDirectory(Dir());
-            File.WriteAllText(PathFor(world),
+            // Write beside the target and swap it in, so a crash or full disk mid-write leaves
+            // the previous layout intact rather than a truncated file that Load turns into null.
+            string path = PathFor(world);
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp,
                 JsonSerializer.Serialize(layout, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(tmp, path, overwrite: true);
         }
         catch { /* a failed layout save must never break the session */ }
     }

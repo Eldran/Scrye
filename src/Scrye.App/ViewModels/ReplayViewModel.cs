@@ -18,7 +18,9 @@ namespace Scrye.App.ViewModels;
 /// </summary>
 public sealed class ReplayViewModel : ViewModelBase
 {
-    private readonly Func<AutomationEngine> _currentEngine;
+    /// <summary>Runs a callback with the live engine ON the session loop, which owns it (its
+    /// rule lists are replaced there on reload); results come back via the UI dispatcher.</summary>
+    private readonly Action<Action<AutomationEngine>> _withEngine;
     private readonly Action<string> _notify;
     private readonly DispatcherTimer _playTimer;
 
@@ -36,9 +38,9 @@ public sealed class ReplayViewModel : ViewModelBase
     public RelayCommand RestartCommand { get; }
     public RelayCommand AnalyzeCommand { get; }
 
-    public ReplayViewModel(Func<AutomationEngine> currentEngine, Action<string> notify)
+    public ReplayViewModel(Action<Action<AutomationEngine>> withEngine, Action<string> notify)
     {
-        _currentEngine = currentEngine;
+        _withEngine = withEngine;
         _notify = notify;
 
         RefreshCommand = new RelayCommand(Refresh);
@@ -176,8 +178,22 @@ public sealed class ReplayViewModel : ViewModelBase
     {
         if (_recording is null) { _notify("replay: load a recording first"); return; }
         DiffLines.Clear();
-        AutomationEngine engine = _currentEngine();
-        var diffs = ReplayAnalyzer.Diffs(_recording, engine);
+        SessionRecording rec = _recording;
+        // The dry run reads the live rule set, so it runs on the session loop; the list is
+        // filled back on the UI thread (dropped if another recording was loaded meanwhile).
+        _withEngine(engine =>
+        {
+            IReadOnlyList<ReplayLineAnalysis> diffs = ReplayAnalyzer.Diffs(rec, engine);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (ReferenceEquals(rec, _recording)) ShowDiffs(diffs);
+            });
+        });
+    }
+
+    private void ShowDiffs(IReadOnlyList<ReplayLineAnalysis> diffs)
+    {
+        DiffLines.Clear();
         if (diffs.Count == 0)
         {
             DiffLines.Add($"No differences — current triggers behave identically across {Total} recorded events.");

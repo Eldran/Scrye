@@ -108,7 +108,10 @@ public sealed class CompanionViewModel : ViewModelBase
 {
     private readonly Func<CompanionController?> _controller;
     private readonly Func<string> _sessionId;
-    private readonly Func<IReadOnlyList<(TriggerDef Def, bool Enabled)>> _notifyingTriggers;
+    /// <summary>Session-loop courier for the trigger list: the automation engine is loop-owned
+    /// (a reload replaces its rules there), so the list is copied on the loop and delivered
+    /// back on the UI thread, like <see cref="_collectPluginSources"/>.</summary>
+    private readonly Action<Action<IReadOnlyList<(TriggerDef Def, bool Enabled)>>> _notifyingTriggers;
     /// <summary>Persist a trigger's Notify flag and re-apply it live.</summary>
     private readonly Action<TriggerDef, bool>? _setTriggerNotify;
     /// <summary>Whether a change would actually be saved. Asked each refresh rather than once at
@@ -136,7 +139,7 @@ public sealed class CompanionViewModel : ViewModelBase
 
     public CompanionViewModel(Func<CompanionController?> controller,
                               Func<string> sessionId,
-                              Func<IReadOnlyList<(TriggerDef, bool)>> notifyingTriggers,
+                              Action<Action<IReadOnlyList<(TriggerDef Def, bool Enabled)>>> notifyingTriggers,
                               Action<string> copyToClipboard,
                               Action<Action<IReadOnlyList<(string PluginId, string Rows)>>>? collectPluginSources = null,
                               Action<TriggerDef, bool>? setTriggerNotify = null,
@@ -390,12 +393,17 @@ public sealed class CompanionViewModel : ViewModelBase
 
     public bool HasPluginSources => PluginSources.Count > 0;
 
-    private void RefreshNotifySources()
+    /// <summary>Ask the session loop for the trigger list; the reply lands back on the UI
+    /// thread via <see cref="ApplyNotifySources"/>. The mailbox is FIFO, so a refresh queued
+    /// after a Notify toggle sees the toggle already applied.</summary>
+    private void RefreshNotifySources() => _notifyingTriggers(ApplyNotifySources);
+
+    private void ApplyNotifySources(IReadOnlyList<(TriggerDef Def, bool Enabled)> triggers)
     {
         NotifySources.Clear();
         // Notifying first: the list answers "what will buzz my phone", and the rest are here
         // so you can switch one ON without leaving for the world editor.
-        var all = new List<(TriggerDef Def, bool Enabled)>(_notifyingTriggers());
+        var all = new List<(TriggerDef Def, bool Enabled)>(triggers);
         all.Sort((a, b) =>
         {
             if (a.Def.Notify != b.Def.Notify) return a.Def.Notify ? -1 : 1;

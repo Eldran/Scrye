@@ -38,6 +38,29 @@ public partial class MainWindow : Window
         // drag-selection in the output while it was still being made.
         AddHandler(InputElement.PointerReleasedEvent, OnWindowPointerReleased,
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
+        // Orderly exit. The first close is cancelled, the worlds are torn down asynchronously
+        // (session logs flushed, GMCP shape saved, companion stopped), then the window closes
+        // again for real. Awaited, never blocked on: a .Wait() here would deadlock, because
+        // world teardown resumes on this very (UI) thread.
+        Closing += (_, e) =>
+        {
+            if (_shutdown == ShutdownState.Done || DataContext is not MainWindowViewModel vm) return;
+            e.Cancel = true;                                           // not yet
+            if (_shutdown == ShutdownState.TearingDown) return;        // a second click waits too
+            _shutdown = ShutdownState.TearingDown;
+            _ = ShutdownThenCloseAsync(vm);
+        };
+    }
+
+    private enum ShutdownState { Running, TearingDown, Done }
+    private ShutdownState _shutdown;
+
+    private async System.Threading.Tasks.Task ShutdownThenCloseAsync(MainWindowViewModel vm)
+    {
+        try { await vm.ShutdownAsync(TimeSpan.FromSeconds(3)); }   // bounded: a wedged plugin cannot hold exit
+        catch (Exception ex) { Services.CrashLog.Write("shutdown", ex); }
+        _shutdown = ShutdownState.Done;
+        Close();
     }
 
     /// <summary>

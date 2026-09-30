@@ -254,7 +254,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         _store = new ProfileStore(dir);
 
         // Restore the saved color scheme + ANSI palette before the window is shown.
-        ProfileLayer startupGlobal = _store.LoadGlobal();
+        ProfileLayer startupGlobal;
+        string? globalProblem = null;
+        try { startupGlobal = _store.LoadGlobal(); }
+        catch (System.Exception ex) when (ex is System.IO.InvalidDataException or System.IO.IOException)
+        {
+            // A damaged global.json must not stop the client starting: run on defaults and say
+            // so (the toast is raised once the commands below exist).
+            startupGlobal = new ProfileLayer { Kind = LayerKind.Global, Name = "global" };
+            globalProblem = ex.Message;
+            Services.CrashLog.Write("load global profile", ex);
+        }
         Services.ThemeService.Apply(startupGlobal.Theme);
         Services.ThemeService.ApplyAnsiPalette(startupGlobal.AnsiPalette);
         Services.InputPreferences.KeepAfterSend = startupGlobal.KeepInputAfterSend ?? false;
@@ -283,6 +293,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         InitUpdateCheck();
 
         RefreshTree();
+        if (globalProblem is not null)
+            RaiseToast("Global settings not loaded", globalProblem + " — running on defaults until you save Settings.");
     }
 
     // ---- sidebar tree --------------------------------------------------------
@@ -365,6 +377,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             _ => "New MUD",
         };
         string name = string.IsNullOrWhiteSpace(Editor.Name) ? fallback : Editor.Name.Trim();
+        // The name becomes a folder: "." or "a/b" would write outside the profile tree (and
+        // deleting a character called "." deleted its whole MUD). ProfileStore refuses such
+        // names; say why here, before anything is written, rather than crash on the throw.
+        if (!ProfileStore.IsValidName(name, out string? why))
+        {
+            RaiseToast("Not saved", $"'{name}' can't be used as a name: {why}");
+            return;
+        }
         ProfileLayer layer = Editor.ToLayer();
         bool renamed = !Editor.IsNew && !string.Equals(Editor.OriginalName, name, System.StringComparison.Ordinal);
 
@@ -391,20 +411,30 @@ public sealed class MainWindowViewModel : ViewModelBase
                         + "(is your keyring unlocked?). You'll be asked for the password at login.");
         }
 
-        switch (Editor.TargetKind)
+        try
         {
-            case LayerKind.Mud:
-                if (renamed) _store.RenameMud(Editor.OriginalName, name);   // accounts/chars move with it
-                _store.SaveMud(name, layer);
-                break;
-            case LayerKind.Account:
-                if (renamed) _store.RenameAccount(Editor.ParentMud!, Editor.OriginalName, name);
-                _store.SaveAccount(Editor.ParentMud!, name, layer);
-                break;
-            default:
-                if (renamed) _store.RenameCharacter(Editor.ParentMud!, Editor.ParentAccount, Editor.OriginalName, name);
-                _store.SaveCharacter(Editor.ParentMud!, Editor.ParentAccount, name, layer);
-                break;
+            switch (Editor.TargetKind)
+            {
+                case LayerKind.Mud:
+                    if (renamed) _store.RenameMud(Editor.OriginalName, name);   // accounts/chars move with it
+                    _store.SaveMud(name, layer);
+                    break;
+                case LayerKind.Account:
+                    if (renamed) _store.RenameAccount(Editor.ParentMud!, Editor.OriginalName, name);
+                    _store.SaveAccount(Editor.ParentMud!, name, layer);
+                    break;
+                default:
+                    if (renamed) _store.RenameCharacter(Editor.ParentMud!, Editor.ParentAccount, Editor.OriginalName, name);
+                    _store.SaveCharacter(Editor.ParentMud!, Editor.ParentAccount, name, layer);
+                    break;
+            }
+        }
+        catch (System.Exception ex) when (ex is System.ArgumentException or System.IO.IOException
+                                              or System.UnauthorizedAccessException)
+        {
+            // a rename onto an existing folder, a locked file, a disk that said no
+            RaiseToast("Not saved", ex.Message);
+            return;
         }
 
         // Before anything can close: the form is still open on Save, and it must now describe
@@ -590,18 +620,32 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         if (SelectedNode is not ProfileNodeViewModel n) return;
         ProfileRef r = n.ToRef();
-        EffectiveProfile eff = Resolve(r);
-        if (eff.PasswordRef is not null)   // inject the auto-login secret at runtime only
-            eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
-        var vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
-        vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
-        vm.PersistTriggerNotify = (def, notify) => PersistTriggerNotify(r, def, notify);
-        vm.ImportRules = import => ImportRules(r, import);
-        vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
-        Worlds.Add(vm);
-        Companion.Attach(vm);
-        AttachRelay(vm);
-        Active = vm;
+        EffectiveProfile eff;
+        WorldViewModel vm;
+        // async void: anything thrown here would take the whole app down. Resolving a corrupt
+        // profile, reading the credential store or building the world (plugins load in its
+        // constructor) can all throw, so the setup is guarded and a failure becomes a toast.
+        try
+        {
+            eff = Resolve(r);
+            if (eff.PasswordRef is not null)   // inject the auto-login secret at runtime only
+                eff.World.Password = CredentialStore.Load(eff.PasswordRef) ?? "";
+            vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
+            vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
+            vm.PersistTriggerNotify = (def, notify) => PersistTriggerNotify(r, def, notify);
+            vm.ImportRules = import => ImportRules(r, import);
+            vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
+            Worlds.Add(vm);
+            Companion.Attach(vm);
+            AttachRelay(vm);
+            Active = vm;
+        }
+        catch (System.Exception ex)
+        {
+            Services.CrashLog.Write("ConnectNode", ex);
+            RaiseToast("Connect", $"Couldn't open {r.Character ?? r.Account ?? r.Mud}: {ex.Message}");
+            return;
+        }
         if (string.IsNullOrEmpty(eff.World.Host))
         {
             vm.AppendSystem("no host set — add one on the MUD layer (Edit the MUD).");
@@ -635,6 +679,27 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         try { await world.DisposeAsync(); }
         catch { /* teardown is best-effort; the tab is already gone */ }
+    }
+
+    /// <summary>App exit: stop the companion server and dispose every open world, the same
+    /// teardown closing a tab does — which is what flushes the session log's buffered tail,
+    /// saves the GMCP shape memory and frees the plugin runtimes. Bounded by
+    /// <paramref name="timeout"/> so a wedged plugin or socket cannot hold the app open; the
+    /// window awaits this (never blocks on it) and then closes for real.</summary>
+    public async System.Threading.Tasks.Task ShutdownAsync(TimeSpan timeout)
+    {
+        var work = new List<System.Threading.Tasks.Task>();
+        // Companion first: StopAsync detaches every world (telling devices they are gone)
+        // before the worlds themselves start coming down.
+        try { work.Add(Companion.StopAsync()); }
+        catch (Exception ex) { Services.CrashLog.Write("shutdown/companion", ex); }
+        foreach (WorldViewModel w in new List<WorldViewModel>(Worlds))
+        {
+            DetachRelay(w);
+            work.Add(DisposeWorldAsync(w));
+        }
+        System.Threading.Tasks.Task all = System.Threading.Tasks.Task.WhenAll(work);
+        await System.Threading.Tasks.Task.WhenAny(all, System.Threading.Tasks.Task.Delay(timeout));
     }
 
     private async void QuickConnect()
