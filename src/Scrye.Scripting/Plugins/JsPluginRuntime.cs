@@ -42,10 +42,31 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private readonly RecentLines _recent = new();          // the lines multi-line triggers look back over
     private readonly List<PluginRule> _aliases = new();    // match user input
     private readonly Dictionary<string, JsValue> _actions = new();   // panel-button callbacks by id
+    // Action ids created while building each panel, by panel title — the Lua runtime's
+    // retirement scheme: a rebuilt panel retires its previous build's callbacks, or a panel
+    // redrawn every tick would grow _actions (and keep every old closure alive) forever.
+    private readonly Dictionary<string, List<string>> _panelActions = new(StringComparer.Ordinal);
+    private List<string>? _buildingActions;   // non-null only while ToPanelSpec is running
     private readonly List<IDisposable> _subscriptions = new();
     private readonly TimerWheel _timers = new();
     private readonly VariableStore _vars = new();          // for %-expansion in rule 'send'
     private int _nextActionId = 1;
+    // The engine's own JSON functions, looked up once rather than re-evaluated per call (and
+    // immune to a script reassigning the global JSON object).
+    private readonly JsValue _jsonStringify;
+    private readonly JsValue _jsonParse;
+
+    // Per-call resource limits (see the constructor). Jint checks them as script runs and
+    // throws, which Safe/SafeCall report like any script error — so a runaway hook costs
+    // one bounded stall and a counted failure instead of the session loop.
+    private static readonly TimeSpan CallTimeout = TimeSpan.FromSeconds(1);
+    private const long MemoryLimitBytes = 256L * 1024 * 1024;   // generous: big scrye.data files parse under it
+    private const int RecursionLimit = 256;
+    // Panel parsing caps: nesting depth (a cyclic `w.buttons = [w]` would otherwise recurse
+    // until the process dies of StackOverflow, which no catch can stop) and array length
+    // (a script-supplied `length` of 2e9 would otherwise loop two billion times).
+    private const int MaxPanelDepth = 16;
+    private const int MaxArrayItems = 10_000;
 
     public string Id => _descriptor.Manifest.Id;
 
@@ -61,7 +82,12 @@ public sealed class JsPluginRuntime : IPluginRuntime
         _diagnostics = diagnostics;
         // Default Jint Engine is sandboxed: no CLR access, no file/network, and we never
         // call AllowClr(). Only the scrye API object is reachable from script.
-        _engine = new Engine();
+        _engine = new Engine(o => o
+            .TimeoutInterval(CallTimeout)       // while(true){} in a hook
+            .LimitMemory(MemoryLimitBytes)      // runaway allocation
+            .LimitRecursion(RecursionLimit));   // runaway recursion, before the CLR stack goes
+        _jsonStringify = _engine.Evaluate("JSON.stringify");
+        _jsonParse = _engine.Evaluate("JSON.parse");
         _engine.SetValue("scrye", BuildApi());
     }
 
@@ -249,6 +275,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         _triggers.Clear();
         _aliases.Clear();
         _actions.Clear();
+        _panelActions.Clear();
         // Jint's Engine holds no unmanaged resources we must release; letting it be
         // collected is sufficient (and avoids a hard dependency on Engine being IDisposable).
     }
@@ -314,12 +341,12 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             encode = (Func<JsValue, JsValue>)(v =>
             {
-                try { return _engine.Invoke(_engine.Evaluate("JSON.stringify"), v); }
+                try { return _engine.Invoke(_jsonStringify, v); }
                 catch { return JsValue.Null; }
             }),
             decode = (Func<string, JsValue>)(s =>
             {
-                try { return _engine.Invoke(_engine.Evaluate("JSON.parse"), s ?? ""); }
+                try { return _engine.Invoke(_jsonParse, s ?? ""); }
                 catch { return JsValue.Null; }
             }),
         },
@@ -350,7 +377,31 @@ public sealed class JsPluginRuntime : IPluginRuntime
         // scrye.addPanel({ title, widgets: [ { type, ... }, ... ] })
         addPanel = (Action<JsValue>)(def =>
         {
-            if (def.IsObject()) _host.AddPanel(Id, ToPanelSpec(def));
+            if (!def.IsObject()) return;
+            var created = new List<string>();
+            _buildingActions = created;
+            PanelSpec spec;
+            bool built = false;
+            try { spec = ToPanelSpec(def); built = true; }
+            catch (PanelTooDeepException ex)
+            {
+                // Reported, not thrown: the rest of the script (often the entry script) runs on.
+                _host.Print(Id, "addPanel error: " + ex.Message);
+                _diagnostics?.RecordFailure(Id, "addPanel", ex.Message);
+                return;
+            }
+            finally
+            {
+                _buildingActions = null;
+                if (!built) foreach (string id in created) _actions.Remove(id);   // half-built: drop its callbacks
+            }
+
+            string title = string.IsNullOrWhiteSpace(spec.Title) ? Id : spec.Title;
+            if (_panelActions.TryGetValue(title, out List<string>? old))
+                foreach (string id in old) _actions.Remove(id);   // ids are never reused here
+            _panelActions[title] = created;
+
+            _host.AddPanel(Id, spec);
         }),
 
         // persistent per-plugin storage (survives sessions and restarts):
@@ -368,8 +419,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
                 if (obj is null || !obj.IsObject()) return;
                 try
                 {
-                    JsValue stringify = _engine.Evaluate("JSON.stringify");
-                    JsValue json = _engine.Invoke(stringify, obj);
+                    JsValue json = _engine.Invoke(_jsonStringify, obj);
                     if (!json.IsString()) return;
                     var raw = System.Text.Json.JsonSerializer
                         .Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json.AsString());
@@ -397,8 +447,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
                 if (obj is null || !obj.IsObject()) return;
                 try
                 {
-                    JsValue stringify = _engine.Evaluate("JSON.stringify");
-                    JsValue json = _engine.Invoke(stringify, obj);
+                    JsValue json = _engine.Invoke(_jsonStringify, obj);
                     if (!json.IsString()) return;
                     var raw = System.Text.Json.JsonSerializer
                         .Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(json.AsString());
@@ -457,7 +506,8 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             into.Add(new PluginRule
             {
-                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1),
+                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1,
+                                              matchTimeout: CompiledPattern.PluginMatchTimeout),
                 Send = Str(def, "send"),
                 Run = IsFn(run) ? run : null,
                 Lines = lines,
@@ -479,16 +529,30 @@ public sealed class JsPluginRuntime : IPluginRuntime
         if (IsFn(fn)) hooks.Add(fn);
     }
 
+    private sealed class PanelTooDeepException : Exception
+    {
+        public PanelTooDeepException()
+            : base($"widgets nested deeper than {MaxPanelDepth} levels (a widget containing itself?)") { }
+    }
+
+    /// <summary>A script-supplied array length, clamped to [0, <see cref="MaxArrayItems"/>]
+    /// (NaN and negatives are 0).</summary>
+    private static int Len(JsValue arr)
+    {
+        double n = ToNum(Get(arr, "length"));
+        return double.IsNaN(n) ? 0 : (int)Math.Clamp(n, 0, MaxArrayItems);
+    }
+
     private PanelSpec ToPanelSpec(JsValue tbl)
     {
-        var widgets = ToWidgetList(Get(tbl, "widgets"));
+        var widgets = ToWidgetList(Get(tbl, "widgets"), 0);
 
         // tabbed panel: tabs: [ { title, widgets: [...] }, ... ]
         var tabs = new List<PanelTabSpec>();
         JsValue tv = Get(tbl, "tabs");
         if (tv.IsObject())
         {
-            int len = (int)ToNum(Get(tv, "length"));
+            int len = Len(tv);
             for (int i = 0; i < len; i++)
             {
                 JsValue item = tv.AsObject().Get(i.ToString());
@@ -496,7 +560,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
                     tabs.Add(new PanelTabSpec
                     {
                         Title = Str(item, "title") ?? $"Tab {i + 1}",
-                        Widgets = ToWidgetList(Get(item, "widgets")),
+                        Widgets = ToWidgetList(Get(item, "widgets"), 0),
                     });
             }
         }
@@ -514,16 +578,17 @@ public sealed class JsPluginRuntime : IPluginRuntime
         };
     }
 
-    private List<WidgetSpec> ToWidgetList(JsValue w)
+    private List<WidgetSpec> ToWidgetList(JsValue w, int depth)
     {
+        if (depth > MaxPanelDepth) throw new PanelTooDeepException();
         var widgets = new List<WidgetSpec>();
         if (w.IsObject())
         {
-            int len = (int)ToNum(Get(w, "length"));
+            int len = Len(w);
             for (int i = 0; i < len; i++)
             {
                 JsValue item = w.AsObject().Get(i.ToString());
-                if (item.IsObject()) widgets.Add(ToWidgetSpec(item));
+                if (item.IsObject()) widgets.Add(ToWidgetSpec(item, depth));
             }
         }
         return widgets;
@@ -539,8 +604,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             string json = System.Text.Json.JsonSerializer.Serialize(PluginAssets.Load(
                 _descriptor.FolderPath, _descriptor.Manifest.Data, msg => _host.Print(Id, msg)));
-            JsValue parse = _engine.Evaluate("JSON.parse");
-            return _engine.Invoke(parse, json);
+            return _engine.Invoke(_jsonParse, json);
         }
         catch
         {
@@ -555,15 +619,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
         if (!pal.IsObject()) return null;
         try
         {
-            JsValue stringify = _engine.Evaluate("JSON.stringify");
-            JsValue json = _engine.Invoke(stringify, pal);
+            JsValue json = _engine.Invoke(_jsonStringify, pal);
             if (!json.IsString()) return null;
             return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(json.AsString());
         }
         catch { return null; }
     }
 
-    private WidgetSpec ToWidgetSpec(JsValue w)
+    private WidgetSpec ToWidgetSpec(JsValue w, int depth)
     {
         // 'action' (button) / 'onClick' (colorgrid) / 'onSubmit' (input) / 'onRowClick'
         // (list/table row, 1.15) — a function stored under an id. One slot: a widget has at
@@ -577,6 +640,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             actionId = "a" + _nextActionId++;
             _actions[actionId] = action;
+            _buildingActions?.Add(actionId);
         }
         // 'onHover' (colorgrid, 1.6): a second callback on the same widget, own id — a grid
         // can be both clickable and hoverable. Same (col, row, char) invoke path as onClick.
@@ -586,6 +650,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             hoverId = "a" + _nextActionId++;
             _actions[hoverId] = hover;
+            _buildingActions?.Add(hoverId);
         }
         // 'onRightClick' (colorgrid / button / buttonrow, 1.9): the secondary activation.
         // 'onRowMenu' (list/table, 1.18): the same slot in row clothing — fired through the
@@ -597,10 +662,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             contextId = "a" + _nextActionId++;
             _actions[contextId] = context;
+            _buildingActions?.Add(contextId);
         }
         // buttonrow children: buttons = [ {text, action}, ... ]
         JsValue btns = Get(w, "buttons");
-        List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns) : null;
+        List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns, depth + 1) : null;
         return new WidgetSpec
         {
             Type = Str(w, "type") ?? "label",
@@ -629,7 +695,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private List<string>? ToStringList(JsValue v)
     {
         if (v is null || !v.IsObject()) return null;
-        int len = (int)ToNum(Get(v, "length"));
+        int len = Len(v);
         if (len <= 0) return null;
         var result = new List<string>(len);
         for (int i = 0; i < len; i++)

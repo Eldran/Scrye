@@ -93,9 +93,10 @@ public sealed class PluginManager : IDisposable
             return;
         }
 
+        IPluginRuntime? runtime = null;
         try
         {
-            IPluginRuntime runtime = PluginRuntimeFactory.Create(d, _host, _diagnostics);
+            runtime = PluginRuntimeFactory.Create(d, _host, _diagnostics);
             runtime.Load();
             _runtimes.Add(runtime);
             _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
@@ -103,6 +104,15 @@ public sealed class PluginManager : IDisposable
         catch (Exception ex)
         {
             _report($"plugin '{d.Manifest.Id}' failed to load: {ex.Message}");
+            // The entry script may have registered watches/timers/panels before it failed.
+            // Nothing will ever unload a runtime that never joined _runtimes, so release it
+            // here: its state watches would otherwise keep calling into it, its native state
+            // would leak, and its half-built panels would stay on screen.
+            if (runtime is not null)
+            {
+                try { runtime.Dispose(); } catch (Exception dex) { _report($"plugin '{d.Manifest.Id}' cleanup failed: {dex.Message}"); }
+                _dropPanels?.Invoke(d.Manifest.Id);
+            }
         }
         Republish();
     }
@@ -258,21 +268,28 @@ public sealed class PluginManager : IDisposable
 
         string text = line.PlainText;
         bool gag = false;
-        string? rewrite = null;
+        // Rewrites CHAIN, like ProcessInput: each plugin sees the line as the plugins before
+        // it left it, so two rewriting plugins compose instead of the last one silently
+        // discarding the others' work. A gag from any plugin still gags.
+        string current = text;
         for (int i = 0; i < _runtimes.Count; i++)
         {
             // This is the hot path — every plugin, every line, on the session loop. Timing is a
             // Stopwatch timestamp pair (no allocation, no syscall on the platforms we ship), and
             // the accounting itself only does real work on the rare slow/failed call.
+            IPluginRuntime rt = _runtimes[i];
             long t0 = Stopwatch.GetTimestamp();
-            (bool g, string? rw) = _runtimes[i].ProcessLine(text);
-            _diagnostics.RecordCall(_runtimes[i].Id, Stopwatch.GetTimestamp() - t0);
+            bool g;
+            string? rw;
+            try { (g, rw) = rt.ProcessLine(current); }
+            catch (Exception ex) { RuntimeFailed(rt, "onLine", ex); (g, rw) = (false, null); }
+            _diagnostics.RecordCall(rt.Id, Stopwatch.GetTimestamp() - t0);
             if (g) gag = true;
-            if (rw is not null) rewrite = rw;
+            if (rw is not null) current = rw;
         }
         DrainQuarantine();
         if (gag) return null;
-        return rewrite is not null ? Line.FromText(rewrite) : line;
+        return current != text ? Line.FromText(current) : line;
     }
 
     /// <summary>
@@ -287,6 +304,35 @@ public sealed class PluginManager : IDisposable
         for (int i = 0; i < ids.Count; i++) UnloadRuntime(ids[i]);
     }
 
+    /// <summary>
+    /// An exception ESCAPED a runtime (the runtimes catch script errors themselves; what gets
+    /// here is host-side, e.g. a plugin regex hitting its match timeout). Reported and counted
+    /// like any callback failure, so it can quarantine — never allowed to unwind the session
+    /// loop, which would take every other plugin and the world down with it.
+    /// </summary>
+    private void RuntimeFailed(IPluginRuntime rt, string what, Exception ex)
+    {
+        string msg = ex is System.Text.RegularExpressions.RegexMatchTimeoutException
+            ? "a trigger/alias pattern took too long to match (catastrophic backtracking?) and was abandoned"
+            : ex.Message;
+        _report($"plugin '{rt.Id}' {what} error: {msg}");
+        _diagnostics.RecordFailure(rt.Id, what, msg);
+    }
+
+    /// <summary>Run one runtime call under <see cref="RuntimeFailed"/>'s guard.</summary>
+    private void Guard(IPluginRuntime rt, string what, Action<IPluginRuntime> call)
+    {
+        try { call(rt); }
+        catch (Exception ex) { RuntimeFailed(rt, what, ex); }
+    }
+
+    /// <summary>Guarded call with a result; <paramref name="fallback"/> on failure.</summary>
+    private T Guard<T>(IPluginRuntime rt, string what, Func<IPluginRuntime, T> call, T fallback)
+    {
+        try { return call(rt); }
+        catch (Exception ex) { RuntimeFailed(rt, what, ex); return fallback; }
+    }
+
     /// <summary>Run user input through every plugin's aliases: returns the command to
     /// process (possibly rewritten), or null if a plugin consumed it. Set this as the
     /// session's <c>InputFilter</c>.</summary>
@@ -296,9 +342,13 @@ public sealed class PluginManager : IDisposable
         bool consumedByPlugin = false;
         for (int i = 0; i < _runtimes.Count; i++)
         {
+            IPluginRuntime rt = _runtimes[i];
             long t0 = Stopwatch.GetTimestamp();
-            (bool consumed, string? rewrite) = _runtimes[i].ProcessInput(current);
-            _diagnostics.RecordCall(_runtimes[i].Id, Stopwatch.GetTimestamp() - t0);
+            bool consumed;
+            string? rewrite;
+            try { (consumed, rewrite) = rt.ProcessInput(current); }
+            catch (Exception ex) { RuntimeFailed(rt, "alias", ex); (consumed, rewrite) = (false, null); }
+            _diagnostics.RecordCall(rt.Id, Stopwatch.GetTimestamp() - t0);
             if (consumed) { consumedByPlugin = true; break; }
             if (rewrite is not null) current = rewrite;
         }
@@ -308,7 +358,7 @@ public sealed class PluginManager : IDisposable
 
     public void DispatchChannel(string channel, string message)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchChannel(channel, message);
+        for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onChannel", r => r.DispatchChannel(channel, message));
         DrainQuarantine();
     }
 
@@ -316,34 +366,34 @@ public sealed class PluginManager : IDisposable
     /// <c>scrye.onRelay</c>; nothing here reaches <c>onChannel</c>, on purpose.</summary>
     public void DispatchRelay(string sourceWorld, string channel, string message)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchRelay(sourceWorld, channel, message);
+        for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onRelay", r => r.DispatchRelay(sourceWorld, channel, message));
         DrainQuarantine();
     }
 
     public void DispatchGmcp(string package, string json)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchGmcp(package, json);
+        for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onGmcp", r => r.DispatchGmcp(package, json));
         DrainQuarantine();
     }
 
     /// <summary>Advance every plugin's timers (fed from the session's per-second tick).</summary>
     public void Tick(double dtSeconds)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].Tick(dtSeconds);
+        for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "timer", r => r.Tick(dtSeconds));
         DrainQuarantine();
     }
 
-    public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchConnect(); DrainQuarantine(); }
-    public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchDisconnect(); DrainQuarantine(); }
-    public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPrompt(); DrainQuarantine(); }
-    public void DispatchIdle()       { for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchIdle(); DrainQuarantine(); }
+    public void DispatchConnect()    { for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onConnect", r => r.DispatchConnect()); DrainQuarantine(); }
+    public void DispatchDisconnect() { for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onDisconnect", r => r.DispatchDisconnect()); DrainQuarantine(); }
+    public void DispatchPrompt()     { for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onPrompt", r => r.DispatchPrompt()); DrainQuarantine(); }
+    public void DispatchIdle()       { for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onIdle", r => r.DispatchIdle()); DrainQuarantine(); }
 
     /// <summary>A command went to the MUD (any origin): fire every plugin's <c>scrye.onCommand</c>
     /// hooks. Observe-only by construction — the send has already happened. Wire the session's
     /// <c>CommandSent</c> event here (API 1.6).</summary>
     public void DispatchCommand(string text)
     {
-        for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchCommand(text);
+        for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "onCommand", r => r.DispatchCommand(text));
         DrainQuarantine();
     }
 
@@ -376,7 +426,7 @@ public sealed class PluginManager : IDisposable
         _eventDepth++;
         try
         {
-            for (int i = 0; i < _runtimes.Count; i++) _runtimes[i].DispatchPluginEvent(name, data, sourceId);
+            for (int i = 0; i < _runtimes.Count; i++) Guard(_runtimes[i], "on:" + name, r => r.DispatchPluginEvent(name, data, sourceId));
         }
         finally { _eventDepth--; }
     }
@@ -388,20 +438,20 @@ public sealed class PluginManager : IDisposable
     public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeCellAction(string pluginId, string actionId, int col, int row, string ch)
     {
         IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
-        return rt?.InvokeCellAction(actionId, col, row, ch);
+        return rt is null ? null : Guard(rt, "cellAction", r => r.InvokeCellAction(actionId, col, row, ch), null);
     }
 
     public void InvokeAction(string pluginId, string actionId)
     {
         for (int i = 0; i < _runtimes.Count; i++)
-            if (_runtimes[i].Id == pluginId) { _runtimes[i].InvokeAction(actionId); return; }
+            if (_runtimes[i].Id == pluginId) { Guard(_runtimes[i], "action", r => r.InvokeAction(actionId)); return; }
     }
 
     /// <summary>Fire an input widget's submit callback with the entered text. Loop-thread only.</summary>
     public void InvokeSubmit(string pluginId, string actionId, string text)
     {
         IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
-        rt?.InvokeSubmit(actionId, text);
+        if (rt is not null) Guard(rt, "submit", r => r.InvokeSubmit(actionId, text));
     }
 
     /// <summary>Fire a choice-shaped callback (buttonrow, row click, or a row's onRowMenu)
@@ -410,7 +460,7 @@ public sealed class PluginManager : IDisposable
     public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? InvokeChoice(string pluginId, string actionId, string label, int index)
     {
         IPluginRuntime? rt = _runtimes.FirstOrDefault(r => r.Id == pluginId);
-        return rt?.InvokeChoice(actionId, label, index);
+        return rt is null ? null : Guard(rt, "choice", r => r.InvokeChoice(actionId, label, index), null);
     }
 
     public void Dispose()

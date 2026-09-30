@@ -1158,7 +1158,7 @@ static void PluginsTest()
 
     Console.WriteLine("-- discover all --");
     foreach (var d in PluginCatalog.Discover(root))
-        Console.WriteLine($"    {d.Manifest.Id,-14} v{d.Manifest.Version,-7} mudIds=[{string.Join(",", d.Manifest.MudIds)}] enabled={d.Manifest.Enabled} entry={Path.GetFileName(d.EntryPath)}");
+        Console.WriteLine($"    {d.Manifest.Id,-14} v{d.Manifest.Version,-7} mudIds=[{string.Join(",", d.Manifest.MudIds)}] enabled={d.Manifest.Enabled} entry={d.Manifest.Entry}");
 
     Console.WriteLine("\n-- for mud '3Scapes' (enabled + applicable) --");
     foreach (var d in PluginCatalog.ForMud("3Scapes", root)) Console.WriteLine($"    {d.Manifest.Id}");

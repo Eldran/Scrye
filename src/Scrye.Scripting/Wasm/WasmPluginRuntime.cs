@@ -159,7 +159,11 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             throw new InvalidOperationException($"module speaks scrye-wasm-abi v{version}; this build speaks v1");
 
         _store.SetEpochDeadline(DeadlineTicks * 4);    // init gets a little longer than a dispatch
-        init();
+        // Counted as a host→guest call, so a hook init triggers re-entrantly (an emit reaching
+        // its own on_event) shares init's deadline instead of re-arming it (see CallHook).
+        _callDepth++;
+        try { init(); }
+        finally { _callDepth--; }
         _store.SetEpochDeadline(DeadlineTicks);
     }
 
@@ -278,18 +282,24 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         if (_actions.TryGetValue(actionId, out int fn)) CallHook("action", fn, "{}")?.Dispose();
     }
 
-    public void InvokeCellAction(string actionId, int col, int row, string ch)
+    // Return types MUST match IPluginRuntime's (a void method of the same name does not
+    // implement the interface member, so the interface's null default ran instead and every
+    // wasm cell click / choice was silently dropped). The wasm ABI has no context-menu
+    // return yet, so both always answer "no menu".
+    public IReadOnlyList<MenuEntry>? InvokeCellAction(string actionId, int col, int row, string ch)
     {
         if (_actions.TryGetValue(actionId, out int fn))
             CallHook("cellAction", fn, JsonSerializer.Serialize(new Dictionary<string, object>
                 { ["col"] = col, ["row"] = row, ["ch"] = ch }))?.Dispose();
+        return null;
     }
 
-    public void InvokeChoice(string actionId, string label, int index)
+    public IReadOnlyList<MenuEntry>? InvokeChoice(string actionId, string label, int index)
     {
         if (_actions.TryGetValue(actionId, out int fn))
             CallHook("choice", fn, JsonSerializer.Serialize(new Dictionary<string, object>
                 { ["label"] = label, ["index"] = index }))?.Dispose();
+        return null;
     }
 
     public void InvokeSubmit(string actionId, string text)
@@ -326,9 +336,14 @@ public sealed class WasmPluginRuntime : IPluginRuntime
     /// must never take down line processing.</summary>
     private JsonDocument? CallHook(string what, int hookId, string payloadJson)
     {
+        // Only the OUTERMOST call arms the deadline. A guest can re-enter itself (emit → its
+        // own on_event, send → its own on_command, …); re-arming there would hand it a fresh
+        // ~100 ms every time and defeat the freeze guard. Nested calls share the outer budget.
+        bool outermost = _callDepth == 0;
+        _callDepth++;
         try
         {
-            _store.SetEpochDeadline(DeadlineTicks);
+            if (outermost) _store.SetEpochDeadline(DeadlineTicks);
             byte[] bytes = Encoding.UTF8.GetBytes(payloadJson);
             int ptr = 0;
             if (bytes.Length > 0)
@@ -357,7 +372,12 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             _diagnostics?.RecordFailure(Id, what, ex.Message);
             return null;
         }
+        finally
+        {
+            _callDepth--;
+        }
     }
+    private int _callDepth;   // host→guest nesting (see CallHook)
 
     private static string FirstLine(string message)
     {
@@ -541,7 +561,10 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Function.FromCallback(s, (Caller _, double _) => true
                 ? throw Missing("every", PluginPermissions.TimersManage) : 0));
         Gate("cancel", PluginPermissions.TimersManage, Function.FromCallback(s,
-            (Caller _, int hookId) => { if (_timerIds.Remove(hookId, out int t)) _timers.Cancel(t); }),
+            (Caller _, int hookId) =>
+            {
+                if (_timerIds.Remove(hookId, out int t)) { _timers.Cancel(t); _hookKinds.Remove(hookId); }
+            }),
             Function.FromCallback(s, (Caller _, int _) =>
             { throw Missing("cancel", PluginPermissions.TimersManage); }));
 
@@ -558,7 +581,13 @@ public sealed class WasmPluginRuntime : IPluginRuntime
     private int AddTimer(double seconds, bool repeat)
     {
         int id = NewHook(HookKind.Timer);
-        _timerIds[id] = _timers.Add(seconds, repeat, () => CallHook(repeat ? "every" : "after", id, "{}")?.Dispose());
+        _timerIds[id] = _timers.Add(seconds, repeat, () =>
+        {
+            // A one-shot is spent once it fires: forget its bookkeeping (before the call, so a
+            // guest cancel of its own id inside the callback is a harmless no-op).
+            if (!repeat) { _timerIds.Remove(id); _hookKinds.Remove(id); }
+            CallHook(repeat ? "every" : "after", id, "{}")?.Dispose();
+        });
         return id;
     }
 
@@ -583,7 +612,8 @@ public sealed class WasmPluginRuntime : IPluginRuntime
                     ? (int)Math.Clamp(le.GetDouble(), 1, TriggerDef.MaxLines) : 1;
                 lines = TriggerDef.LinesFor(pattern, isRegex, asked);
             }
-            var compiled = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1);
+            var compiled = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1,
+                                              matchTimeout: CompiledPattern.PluginMatchTimeout);
             bool wantsRun = root.TryGetProperty("run", out JsonElement ru) && ru.ValueKind == JsonValueKind.True;
             int runId = wantsRun ? NewHook(HookKind.RuleRun) : 0;
             into.Add(new PluginRule
@@ -615,8 +645,11 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             PanelSpec spec = ToPanelSpec(doc.RootElement, created);
 
             string title = string.IsNullOrWhiteSpace(spec.Title) ? Id : spec.Title;
+            // Retire the previous build's ids — but only those the new build did not map again:
+            // wasm action ids are STABLE ("w" + hook id), so a rebuild reuses them, and
+            // removing them all would delete the mappings just made and kill every button.
             if (_panelActions.TryGetValue(title, out List<string>? old))
-                foreach (string id in old) _actions.Remove(id);     // retire the previous build
+                foreach (string id in old.Except(created)) _actions.Remove(id);
             _panelActions[title] = created;
 
             _host.AddPanel(Id, spec);

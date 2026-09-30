@@ -49,11 +49,20 @@ public sealed class CompiledPattern
     private readonly Regex _regex;
     private readonly bool _never;
 
+    /// <summary>The match limit plugin runtimes compile their rules with (see the
+    /// <c>matchTimeout</c> constructor parameter).</summary>
+    public static readonly TimeSpan PluginMatchTimeout = TimeSpan.FromMilliseconds(100);
+
     /// <param name="multiLine">Matching over several lines joined with <c>\n</c> (a trigger's
     /// <see cref="TriggerDef.Lines"/> &gt; 1): <c>^</c> and <c>$</c> then match at every line's start
     /// and end, as they do in MUSHclient's multi-line triggers, so a wildcard pattern typed on two
     /// lines matches two consecutive lines wherever they sit in the window.</param>
-    public CompiledPattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false)
+    /// <param name="matchTimeout">Per-match time limit. Null (the default) keeps the process-wide
+    /// default, which is what the user's own triggers/aliases use. Plugin runtimes pass a short
+    /// limit so a catastrophically backtracking plugin regex throws
+    /// <see cref="RegexMatchTimeoutException"/> instead of freezing the session loop.</param>
+    public CompiledPattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false,
+                           TimeSpan? matchTimeout = null)
     {
         RegexOptions opts = RegexOptions.CultureInvariant;
         if (ignoreCase) opts |= RegexOptions.IgnoreCase;
@@ -67,7 +76,8 @@ public sealed class CompiledPattern
         // which reads from the outside as "the alias name triggers it". A rule with no
         // pattern has nothing to say yet; it stays quiet until it has one.
         _never = pattern.Length == 0;
-        _regex = new Regex(isRegex ? pattern : WildcardToRegex(pattern), opts);
+        string source = isRegex ? pattern : WildcardToRegex(pattern);
+        _regex = matchTimeout is { } timeout ? new Regex(source, opts, timeout) : new Regex(source, opts);
     }
 
     public MatchResult? Match(string input)

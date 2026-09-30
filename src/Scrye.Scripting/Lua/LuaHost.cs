@@ -103,11 +103,14 @@ public sealed class LuaHost : IDisposable
     /// <c>while true do end</c> aborts into the normal error/reporting/quarantine path
     /// instead of freezing the session loop. The budget resets at every outermost call.
     ///
-    /// <para>Two honest limitations. The abort is an ordinary Lua error, so a script that
-    /// deliberately wraps its spin in <c>pcall</c> can swallow it and keep spinning —
-    /// this is a seatbelt against accidents, not an adversarial sandbox (wasm's epoch
-    /// traps are the uncatchable version). And Lua hooks are per-thread: code running
-    /// inside a coroutine the plugin resumes is not counted.</para>
+    /// <para>The budget is STICKY once spent: the abort is an ordinary Lua error, so a script
+    /// could catch it with <c>pcall</c> and spin on (<c>while true do pcall(f) end</c>). To
+    /// stop that, the trip re-arms the count hook at ONE instruction, so the error is raised
+    /// again at the very next instruction after any pcall swallows it and unwinds all the way
+    /// out; the next outermost <see cref="PCall"/> restores normal granularity. Lua hooks are
+    /// per-thread (a coroutine inherits its creator's hook), so a coroutine the plugin resumes
+    /// is counted only if it was created after this was armed. Memory is NOT capped here: a
+    /// real cap needs a custom allocator (<c>lua_setallocf</c>), not a count-hook check.</para>
     ///
     /// <para>Boundary note: <c>luaL_error</c> longjmps from inside the managed hook frame
     /// back to the enclosing pcall. This is the one sanctioned exception to the
@@ -121,17 +124,31 @@ public sealed class LuaHost : IDisposable
         _budgetRemaining = instructions;
         KeraLua.LuaHookFunction hook = (ptr, _) =>
         {
-            _budgetRemaining -= HookGranularity;
-            if (_budgetRemaining > 0) return;
-            // Not reset here: if the script swallows the error and keeps spinning, every
-            // subsequent fire raises again. The reset lives in the outermost PCall entry.
-            NativeLua.FromIntPtr(ptr).Error(
-                "script exceeded its execution budget (infinite loop?)");
+            NativeLua l = NativeLua.FromIntPtr(ptr);   // the running thread (may be a coroutine)
+            if (!_budgetTripped)
+            {
+                _budgetRemaining -= HookGranularity;
+                if (_budgetRemaining > 0)
+                {
+                    // Normal granularity for this thread — a coroutine left at 1 by an
+                    // earlier dispatch's trip must not be charged 100k per instruction.
+                    l.SetHook(_budgetHook!, KeraLua.LuaHookMask.Count, HookGranularity);
+                    return;
+                }
+                // Spent. From here on raise at EVERY instruction (see remarks): a pcall that
+                // swallows the error gets exactly one instruction before it is raised again.
+                // Not reset here — the reset lives in the outermost PCall entry.
+                _budgetTripped = true;
+                State.SetHook(_budgetHook!, KeraLua.LuaHookMask.Count, 1);
+            }
+            l.SetHook(_budgetHook!, KeraLua.LuaHookMask.Count, 1);
+            l.Error("script exceeded its execution budget (infinite loop?)");
         };
         _budgetHook = hook;                               // root it: native holds a raw pointer
         State.SetHook(hook, KeraLua.LuaHookMask.Count, HookGranularity);
     }
     private KeraLua.LuaHookFunction? _budgetHook;
+    private bool _budgetTripped;   // budget spent this dispatch: the hook fires every instruction
 
     // ---- chunks + calls ------------------------------------------------------
 
@@ -165,7 +182,17 @@ public sealed class LuaHost : IDisposable
     {
         // Outermost call = a fresh dispatch = a fresh instruction allowance. Nested
         // pcalls (an emit chain re-entering Lua) share the outer dispatch's budget.
-        if (_callDepth == 0 && _budgetLimit > 0) _budgetRemaining = _budgetLimit;
+        if (_callDepth == 0 && _budgetLimit > 0)
+        {
+            _budgetRemaining = _budgetLimit;
+            if (_budgetTripped)
+            {
+                // The previous dispatch tripped the budget and left the hook firing every
+                // instruction; a fresh dispatch gets normal granularity back.
+                _budgetTripped = false;
+                State.SetHook(_budgetHook!, KeraLua.LuaHookMask.Count, HookGranularity);
+            }
+        }
         _callDepth++;
         try
         {

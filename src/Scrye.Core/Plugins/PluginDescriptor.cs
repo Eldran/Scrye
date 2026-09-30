@@ -14,8 +14,28 @@ public sealed class PluginDescriptor
 
     public string Id => Manifest.Id;
 
-    /// <summary>Absolute path to the entry script.</summary>
-    public string EntryPath => Path.Combine(FolderPath, Manifest.Entry);
+    /// <summary>Absolute path to the entry script. The manifest's <c>entry</c> is confined to
+    /// the plugin's own folder: an absolute path or a <c>..</c> climb would load code from
+    /// elsewhere on disk, so it throws instead — the runtimes read this inside
+    /// <c>Load()</c>, where the manager reports it as a load failure.</summary>
+    public string EntryPath
+    {
+        get
+        {
+            string root = Path.GetFullPath(FolderPath);
+            string entry = Manifest.Entry ?? "";
+            string full;
+            try { full = Path.GetFullPath(Path.Combine(root, entry)); }
+            catch (ArgumentException) { full = ""; }   // hostile characters: not a path
+            string rootWithSep = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+            // Case-insensitive on Windows, where the file system is too.
+            StringComparison cmp = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (entry.Length == 0 || !full.StartsWith(rootWithSep, cmp))
+                throw new InvalidOperationException(
+                    $"manifest 'entry' ('{entry}') must name a file inside the plugin folder");
+            return full;
+        }
+    }
 
     /// <summary>Can this build load the plugin? Convenience wrapper over
     /// <see cref="ScryeApi.IsCompatible"/>; see that for the rule and the wording of

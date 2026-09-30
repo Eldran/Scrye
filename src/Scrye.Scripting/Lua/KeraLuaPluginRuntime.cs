@@ -59,8 +59,16 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     private List<string>? _buildingActions;   // non-null only while ToPanelSpec is running
     private readonly List<IDisposable> _subscriptions = new();
     private readonly TimerWheel _timers = new();
+    // Timer id → registry ref of its function, so the ref is released when the timer is done
+    // (a one-shot after it fires, any timer on cancel) instead of leaking one registry slot
+    // (and the closure it pins) per scrye.after.
+    private readonly Dictionary<int, int> _timerRefs = new();
     private readonly VariableStore _vars = new();          // for %-expansion in rule 'send'
     private int _nextActionId = 1;
+
+    // Panel nesting cap: a table that contains itself (w.buttons = { w }) would otherwise
+    // recurse, pushing stack slots, until it wrote past the Lua stack (native heap corruption).
+    private const int MaxPanelDepth = 16;
 
     public string Id => _descriptor.Manifest.Id;
 
@@ -129,9 +137,17 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             AutomationEngine.ForEachLine(Template.Expand(rule.Send, m, _vars), _host.Send);
         if (rule.Run != NoRef)
         {
+            IReadOnlyList<string> wildcards = m.Wildcards;
+            // One slot per wildcard (a regex can have hundreds of groups) + the function +
+            // pcall's message handler: grow the stack first, never push past its end.
+            if (!_lua.State.CheckStack(wildcards.Count + 2))
+            {
+                BindError("rule", $"too many wildcards ({wildcards.Count}) to pass to the callback");
+                return;
+            }
             _lua.PushRef(rule.Run);
-            foreach (string w in m.Wildcards) _lua.State.PushString(w);
-            PCallReporting("rule", m.Wildcards.Count, 0);
+            foreach (string w in wildcards) _lua.State.PushString(w);
+            PCallReporting("rule", wildcards.Count, 0);
         }
     }
 
@@ -219,6 +235,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         foreach (IDisposable sub in _subscriptions) sub.Dispose();
         _subscriptions.Clear();
         _timers.Clear();
+        _timerRefs.Clear();
         _lineHooks.Clear();
         _channelHooks.Clear();
         _relayHooks.Clear();
@@ -396,7 +413,13 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         // timers: scrye.after(seconds, fn) -> id (one-shot);  scrye.every(seconds, fn) -> id
         Bind("after",  cl => AddTimer(cl, repeat: false));
         Bind("every",  cl => AddTimer(cl, repeat: true));
-        Bind("cancel", cl => { _timers.Cancel((int)LuaHost.ArgNumber(cl, 1)); return 0; });
+        Bind("cancel", cl =>
+        {
+            int timerId = (int)LuaHost.ArgNumber(cl, 1);
+            _timers.Cancel(timerId);
+            ReleaseTimer(timerId);
+            return 0;
+        });
 
         // lifecycle hooks
         Bind("onConnect",    cl => AddHook(cl, _connectHooks));
@@ -591,8 +614,17 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
                 var created = new List<string>();
                 _buildingActions = created;
                 PanelSpec spec;
-                try { spec = ToPanelSpec(cl, 1); }
-                finally { _buildingActions = null; }
+                bool built = false;
+                try { spec = ToPanelSpec(cl, 1); built = true; }
+                finally
+                {
+                    _buildingActions = null;
+                    // A failed build (too deep, stack exhausted) never reaches the retirement
+                    // below, so release the callbacks it had already registered here.
+                    if (!built)
+                        foreach (string id in created)
+                            if (_actions.Remove(id, out int fn)) _lua.Unref(fn);
+                }
 
                 string title = string.IsNullOrWhiteSpace(spec.Title) ? Id : spec.Title;
                 if (_panelActions.TryGetValue(title, out List<string>? old))
@@ -657,12 +689,25 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             cl.PushCopy(2);
             int fn = cl.Ref(LuaRegistry.Index);
-            int id = _timers.Add(LuaHost.ArgNumber(cl, 1), repeat,
-                                 () => CallRef(repeat ? "every" : "after", fn));
+            int id = 0;
+            id = _timers.Add(LuaHost.ArgNumber(cl, 1), repeat, () =>
+            {
+                CallRef(repeat ? "every" : "after", fn);
+                if (!repeat) ReleaseTimer(id);   // spent (no-op if it cancelled itself meanwhile)
+            });
+            _timerRefs[id] = fn;
             cl.PushInteger(id);
             return 1;
         }
         return 0;
+    }
+
+    /// <summary>Release a timer's function ref. Idempotent — the dictionary entry is the
+    /// proof the ref is still ours, so a cancel inside the timer's own callback followed by
+    /// the one-shot cleanup never unrefs twice (a double luaL_unref corrupts the free list).</summary>
+    private void ReleaseTimer(int timerId)
+    {
+        if (_timerRefs.Remove(timerId, out int fn)) _lua.Unref(fn);
     }
 
     private int AddRule(NativeLua cl, List<PluginRule> into)
@@ -679,14 +724,14 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         int lines = 1;
         if (ReferenceEquals(into, _triggers))
         {
-            cl.GetField(1, "lines");
+            RawField(cl, 1, "lines");
             int asked = cl.Type(-1) == LuaType.Number ? (int)Math.Clamp(cl.ToNumber(-1), 1, TriggerDef.MaxLines) : 1;
             cl.Pop(1);
             lines = TriggerDef.LinesFor(pattern, isRegex, asked);
         }
 
         int run = NoRef;
-        cl.GetField(1, "run");
+        RawField(cl, 1, "run");
         if (cl.IsFunction(-1)) run = cl.Ref(LuaRegistry.Index);
         else cl.Pop(1);
 
@@ -694,7 +739,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             into.Add(new PluginRule
             {
-                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1),
+                Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1,
+                                              matchTimeout: CompiledPattern.PluginMatchTimeout),
                 Send = Field(cl, 1, "send"),
                 Run = run,
                 Lines = lines,
@@ -713,13 +759,14 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
     private PanelSpec ToPanelSpec(NativeLua cl, int tblIndex)
     {
-        cl.GetField(tblIndex, "widgets");
-        List<WidgetSpec> widgets = ToWidgetList(cl, cl.GetTop());
+        if (!cl.CheckStack(8)) throw new InvalidOperationException("Lua stack exhausted");
+        RawField(cl, tblIndex, "widgets");
+        List<WidgetSpec> widgets = ToWidgetList(cl, cl.GetTop(), 0);
         cl.Pop(1);
 
         // tabbed panel: tabs = { { title=..., widgets={...} }, ... }
         var tabs = new List<PanelTabSpec>();
-        cl.GetField(tblIndex, "tabs");
+        RawField(cl, tblIndex, "tabs");
         if (cl.IsTable(-1))
         {
             int arr = cl.GetTop();
@@ -730,11 +777,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
                 if (cl.IsTable(-1))
                 {
                     int item = cl.GetTop();
-                    cl.GetField(item, "widgets");
+                    RawField(cl, item, "widgets");
                     tabs.Add(new PanelTabSpec
                     {
                         Title = Field(cl, item, "title") ?? $"Tab {i}",
-                        Widgets = ToWidgetList(cl, cl.GetTop()),
+                        Widgets = ToWidgetList(cl, cl.GetTop(), 0),
                     });
                     cl.Pop(1);   // widgets value
                 }
@@ -743,7 +790,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
         cl.Pop(1);               // tabs value
 
-        cl.GetField(tblIndex, "width");
+        RawField(cl, tblIndex, "width");
         double width = cl.Type(-1) == LuaType.Number ? cl.ToNumber(-1) : 0;
         cl.Pop(1);
 
@@ -762,8 +809,10 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
     /// <summary>Widgets from the ARRAY at <paramref name="index"/> (absolute; any non-table
     /// value yields the empty list, matching the MoonSharp runtime).</summary>
-    private List<WidgetSpec> ToWidgetList(NativeLua cl, int index)
+    private List<WidgetSpec> ToWidgetList(NativeLua cl, int index, int depth)
     {
+        if (depth > MaxPanelDepth)
+            throw new InvalidOperationException($"widgets nested deeper than {MaxPanelDepth} levels (a widget containing itself?)");
         var widgets = new List<WidgetSpec>();
         if (cl.IsTable(index))
         {
@@ -771,15 +820,19 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             for (long i = 1; i <= n; i++)
             {
                 cl.RawGetInteger(index, i);
-                if (cl.IsTable(-1)) widgets.Add(ToWidgetSpec(cl, cl.GetTop()));
+                if (cl.IsTable(-1)) widgets.Add(ToWidgetSpec(cl, cl.GetTop(), depth));
                 cl.Pop(1);
             }
         }
         return widgets;
     }
 
-    private WidgetSpec ToWidgetSpec(NativeLua cl, int w)
+    private WidgetSpec ToWidgetSpec(NativeLua cl, int w, int depth)
     {
+        // Each nesting level holds a couple of slots (the list item, the children table) and
+        // the parsing below needs up to ~4 more transiently (table, key, value, pushed key).
+        // A binding is only promised LUA_MINSTACK (20) slots, so grow before every level.
+        if (!cl.CheckStack(8)) throw new InvalidOperationException("Lua stack exhausted while reading the panel");
         // 'action' (button) / 'onClick' (colorgrid cell) / 'onSubmit' (input) /
         // 'onRowClick' (list/table row, 1.15) — first function found is registered under an
         // opaque id the host calls back with. One slot, because a widget has at most one of
@@ -787,7 +840,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         string? actionId = null;
         foreach (string key in ActionKeys)
         {
-            cl.GetField(w, key);
+            RawField(cl, w, key);
             if (cl.IsFunction(-1))
             {
                 actionId = "a" + _nextActionId++;
@@ -799,7 +852,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         }
         // 'onHover' (colorgrid, 1.6) is a SECOND callback on the same widget.
         string? hoverId = null;
-        cl.GetField(w, "onHover");
+        RawField(cl, w, "onHover");
         if (cl.IsFunction(-1))
         {
             hoverId = "a" + _nextActionId++;
@@ -815,7 +868,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         string? contextId = null;
         foreach (string key in new[] { "onRightClick", "onRowMenu" })
         {
-            cl.GetField(w, key);
+            RawField(cl, w, key);
             if (cl.IsFunction(-1))
             {
                 contextId = "a" + _nextActionId++;
@@ -828,7 +881,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // colorgrid palette: { ["char"] = "#RRGGBB", ... }
         Dictionary<string, string>? palette = null;
-        cl.GetField(w, "palette");
+        RawField(cl, w, "palette");
         if (cl.IsTable(-1))
         {
             palette = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -846,7 +899,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // colorgrid micro-icons (API 1.8): { ["char"] = "glyph-name", ... }
         Dictionary<string, string>? iconMap = null;
-        cl.GetField(w, "icons");
+        RawField(cl, w, "icons");
         if (cl.IsTable(-1))
         {
             iconMap = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -868,7 +921,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         // (an absolute path, a ".." climb) is dropped on the floor — the cell then falls back
         // to its palette tile, which is also what an honest typo gets.
         Dictionary<string, string>? imageMap = null;
-        cl.GetField(w, "images");
+        RawField(cl, w, "images");
         if (cl.IsTable(-1))
         {
             string root = System.IO.Path.GetFullPath(_descriptor.FolderPath);
@@ -896,21 +949,21 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // buttonrow children: buttons = { {text=, action=fn}, ... }
         List<WidgetSpec>? children = null;
-        cl.GetField(w, "buttons");
-        if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop());
+        RawField(cl, w, "buttons");
+        if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop(), depth + 1);
         cl.Pop(1);
 
         // row-container children (API 1.8): widgets = { <any widget specs> }
         if (children is null)
         {
-            cl.GetField(w, "widgets");
-            if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop());
+            RawField(cl, w, "widgets");
+            if (cl.IsTable(-1)) children = ToWidgetList(cl, cl.GetTop(), depth + 1);
             cl.Pop(1);
         }
 
         // table columns: columns = { "Item", "Qty", "Price" }
         List<string>? columns = null;
-        cl.GetField(w, "columns");
+        RawField(cl, w, "columns");
         if (cl.IsTable(-1))
         {
             columns = new List<string>();
@@ -926,7 +979,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         cl.Pop(1);
 
         // colorgrid cell-size ceiling (API 1.8): cell = 24 doubles the compact default
-        cl.GetField(w, "cell");
+        RawField(cl, w, "cell");
         double cellMax = cl.Type(-1) == LuaType.Number ? cl.ToNumber(-1) : 0;
         cl.Pop(1);
 
@@ -961,7 +1014,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// <paramref name="tblIndex"/> must be absolute.</summary>
     private static string? Field(NativeLua cl, int tblIndex, string key)
     {
-        cl.GetField(tblIndex, key);
+        RawField(cl, tblIndex, key);
         string? v = LuaHost.ToStringLoose(cl, cl.GetTop());
         cl.Pop(1);
         return v;
@@ -972,10 +1025,21 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// does not count).</summary>
     private static bool FieldBool(NativeLua cl, int tblIndex, string key, bool defaultValue)
     {
-        cl.GetField(tblIndex, key);
+        RawField(cl, tblIndex, key);
         bool result = cl.Type(-1) == LuaType.Boolean ? cl.ToBoolean(-1) : defaultValue;
         cl.Pop(1);
         return result;
+    }
+
+    /// <summary>Push <c>t[key]</c> WITHOUT metamethods (<c>lua_rawget</c>). <c>lua_getfield</c>
+    /// would run a script's <c>__index</c> inside this managed binding, and a Lua error there
+    /// longjmps straight through the managed frames — undefined behaviour. API arguments are
+    /// plain data tables; a metatable on one is ignored. <paramref name="tblIndex"/> must be
+    /// absolute (the key is pushed first). Needs one free slot beyond the result.</summary>
+    private static void RawField(NativeLua cl, int tblIndex, string key)
+    {
+        cl.PushString(key);
+        cl.RawGet(tblIndex);   // pops the key, pushes the value
     }
 
     // ---- scrye.data ----------------------------------------------------------
@@ -1002,6 +1066,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// and what an author expects to feed <c>string.format("%d", …)</c>.</summary>
     private static void PushClrValue(NativeLua l, object? v)
     {
+        // One level of nesting holds a table plus the value being built: make sure both fit.
+        if (!l.CheckStack(3)) throw new InvalidOperationException("scrye.data nested too deeply for the Lua stack");
         switch (v)
         {
             case null: l.PushNil(); break;
