@@ -659,6 +659,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Background = Str(e, "background"),
             Accent = Str(e, "accent"),
             Foreground = Str(e, "color"),
+            Solo = e.TryGetProperty("solo", out JsonElement so) && so.ValueKind == JsonValueKind.True,
         };
     }
 

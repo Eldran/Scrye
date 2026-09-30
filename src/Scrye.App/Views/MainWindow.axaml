@@ -315,11 +315,14 @@
                                         <DataTemplate x:DataType="vm:HudPanelViewModel">
                                             <!-- Width: the spec width until the user resizes (EffectiveWidth). Height: NaN
                                                  (auto) until the user resizes; fixed after, with scrolling inside. -->
-                                            <Border behaviors:HudDrag.Enabled="True"
+                                            <!-- IsShown: a page of a book that is not the one on show is not drawn
+                                                 (it keeps running); drop: another panel is being dragged onto this title -->
+                                            <Border behaviors:HudDrag.Enabled="True" IsVisible="{Binding IsShown}"
                                                     Background="{DynamicResource ScryePanelGlass}" BorderBrush="{DynamicResource ScryeLine}"
                                                     BorderThickness="1" CornerRadius="6" Padding="10"
                                                     Width="{Binding EffectiveWidth}" Height="{Binding EffectiveHeight}"
-                                                    Classes.hasbg="{Binding HasBackground}" Classes.hasac="{Binding HasAccent}">
+                                                    Classes.hasbg="{Binding HasBackground}" Classes.hasac="{Binding HasAccent}"
+                                                    Classes.drop="{Binding IsDropTarget}">
                                                 <!-- Plugin colour overrides. Each style only applies when the plugin set that
                                                      colour (via a toggled class), so panels without custom colours keep
                                                      following the active theme. Per-widget overrides target descendant
@@ -355,6 +358,27 @@
                                                     </Style>
                                                     <Style Selector="Border:pointerover Path.grip">
                                                         <Setter Property="Opacity" Value="0.55" />
+                                                    </Style>
+                                                    <!-- a panel dragged over this title will join it in a book: say so -->
+                                                    <Style Selector="Border.drop">
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource ScryeAccent}" />
+                                                        <Setter Property="BorderThickness" Value="2" />
+                                                    </Style>
+                                                    <!-- the book's page tabs: dim, the page on show underlined in the accent -->
+                                                    <Style Selector="Button.booktab">
+                                                        <Setter Property="Background" Value="Transparent" />
+                                                        <Setter Property="Foreground" Value="{DynamicResource ScryeTextDim}" />
+                                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                                        <Setter Property="BorderThickness" Value="0,0,0,2" />
+                                                        <Setter Property="CornerRadius" Value="0" />
+                                                        <Setter Property="Padding" Value="6,1" />
+                                                        <Setter Property="Margin" Value="0,0,2,2" />
+                                                        <Setter Property="FontSize" Value="10.5" />
+                                                    </Style>
+                                                    <Style Selector="Button.booktab.front">
+                                                        <Setter Property="Foreground" Value="{DynamicResource ScryeAccent}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource ScryeAccent}" />
+                                                        <Setter Property="FontWeight" Value="SemiBold" />
                                                     </Style>
                                                 </Border.Styles>
                                                 <!-- widget templates live on the Border so both the flat list and tab contents share them -->
@@ -476,10 +500,18 @@
                                                     <!-- The title strip doubles as the collapse control. The chevron is a
                                                          Button, which HudDrag treats as interactive, so clicking it toggles
                                                          instead of starting a drag on the panel. -->
-                                                    <DockPanel Grid.Row="0" Margin="0,0,0,4">
+                                                    <StackPanel Grid.Row="0" Margin="0,0,0,4">
+                                                    <DockPanel>
                                                         <Button DockPanel.Dock="Right" Content="{Binding CollapseGlyph}"
                                                                 Command="{Binding ToggleCollapseCommand}"
                                                                 ToolTip.Tip="{Binding CollapseTip}"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                Padding="4,0" FontSize="10" VerticalAlignment="Center"
+                                                                Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <!-- a page of a book: take it out and set it down beside the book -->
+                                                        <Button DockPanel.Dock="Right" Content="⤴"
+                                                                Command="{Binding LeaveBookCommand}" IsVisible="{Binding InBook}"
+                                                                ToolTip.Tip="Take this page out of the book"
                                                                 Background="Transparent" BorderThickness="0"
                                                                 Padding="4,0" FontSize="10" VerticalAlignment="Center"
                                                                 Foreground="{DynamicResource ScryeTextDim}" />
@@ -488,6 +520,23 @@
                                                                    Foreground="{DynamicResource ScryeAccent}"
                                                                    Classes.hasac="{Binding HasAccent}" />
                                                     </DockPanel>
+                                                    <!-- a book's pages: one tab per plugin panel in it; click to flip -->
+                                                    <ItemsControl ItemsSource="{Binding BookTabs}" IsVisible="{Binding ShowBookStrip}"
+                                                                  Margin="0,4,0,0">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <WrapPanel />
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate x:DataType="vm:HudBookTabViewModel">
+                                                                <Button Classes="booktab" Classes.front="{Binding IsFront}"
+                                                                        Content="{Binding Title}" Command="{Binding FlipCommand}"
+                                                                        ToolTip.Tip="{Binding Tip}" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                    </StackPanel>
                                                     <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowFlat}"
                                                                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                                         <ItemsControl ItemsSource="{Binding Widgets}" />

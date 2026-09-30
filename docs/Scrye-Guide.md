@@ -344,6 +344,29 @@ Scrye also lifts any near‑black text the MUD sends so it stays legible on the 
 
 Plugins can contribute **HUD panels** — small floating widgets (status bars, gauges, maps, buttons) that sit over the output and stay in sync with game state. You can **drag panels** by their title to reposition them so they don't overlap, and **resize** them by dragging the grip in the bottom-right corner — a panel smaller than its content scrolls, and **double-clicking the grip** snaps it back to auto-size. Both dragging and resizing **snap to alignment** — the edges of the output area and the edges of the other panels — so stacks line up without pixel-hunting; **hold Alt** while dragging for free, pixel-exact placement. Positions and sizes are remembered per world.
 
+### Books — several panels in one place
+
+On a smaller screen the panels crowd each other. A **book** stacks several of them in one
+place and shows one at a time, with a row of **tabs** under the title to flip between them —
+the Viking panels in one book, the Farmer, Map and Vitals in another, say.
+
+- **Make a book** by dragging a panel by its title and dropping it onto **another panel's
+  title**: that panel's border lights up while the drop will take it. The two become a book,
+  with the one you dropped on show. Drop more panels onto the book's title to add pages.
+  Dropping anywhere else just moves the panel, as before.
+- **Flip** by clicking a tab. The page opens where the book is, the size the book is.
+- **Move, resize or roll up** the page on show and the whole book follows.
+- **Take a page out** with the **⤴** next to its title; it's set down beside the book. A book
+  left with one page goes back to being a single panel.
+- **The pages keep running.** A page that isn't on show is only not drawn — the plugin, its
+  values and its timers carry on, so it's up to date the moment you flip to it. A page whose
+  plugin you turn off leaves the tabs and comes back into its book when you turn it on again.
+- A panel that has tabs of its own (Viking Status, the Farmer) keeps them inside its page.
+- The **Chat** panel stays out of books — it is the one you type into, so it stays in view.
+  (Any plugin can ask for that with `solo = true` on its panel.)
+
+Books are saved per world with the rest of the layout.
+
 ## Chat from your other worlds
 
 With several worlds open, a tell to a character on one MUD is easy to miss while you're
@@ -2033,7 +2056,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.21.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.22.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -2064,7 +2087,8 @@ field**, so a plugin's capture panes exist as soon as it loads instead of on fir
 bar draws one segment per quality stage instead of a single amber/green split. 1.13–1.19 are
 described in `ScryeApi.cs`; **1.20 adds `lines` on `scrye.addTrigger`**, triggers that match a
 block of lines (see [Rules](#rules)); **1.21 adds `scrye.exports`**, a file a plugin may write
-and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-keeps--scryeexports-121)).
+and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-keeps--scryeexports-121));
+**1.22 adds `solo` on `scrye.addPanel`**, a panel that stays out of books.
 
 ## Permissions
 
@@ -2323,6 +2347,10 @@ scrye.addPanel{
 ```
 
 Content is either a flat `widgets` list **or** a set of `tabs`.
+
+`solo = true` *(1.22)* keeps the panel out of [books](#books--several-panels-in-one-place): the
+user cannot stack it with others. Use it for a panel that must stay in view, like the chat
+panel's channel list and input; most panels should leave it off, so the user can decide.
 
 ## HUD widget reference
 

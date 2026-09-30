@@ -236,4 +236,10 @@ public sealed record PanelSpec
     /// text-bearing widgets in this panel that don't set their own <see cref="WidgetSpec.Color"/>.
     /// Null = theme text colour.</summary>
     public string? Foreground { get; init; }
+
+    /// <summary>Keep this panel out of books (API 1.22). A book shows one page at a time, which
+    /// is the point for most panels and wrong for one that must stay in view - a chat window
+    /// you type into. The host will not let a solo panel be dropped into a book, nor a book be
+    /// dropped onto it. A host that predates books ignores the field.</summary>
+    public bool Solo { get; init; }
 }

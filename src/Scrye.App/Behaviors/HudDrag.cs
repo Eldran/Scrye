@@ -21,6 +21,12 @@ namespace Scrye.App.Behaviors;
 /// children of the ItemsControl, so the logical Parent chain never reaches the
 /// Canvas). Panels with no saved position are auto-placed on first layout: stacked
 /// down the right edge — the old fixed-stack look, but every panel is movable.
+///
+/// <para><b>Books.</b> Dropping a panel's title onto another panel's title makes the two a
+/// book (or adds the panel to the other's book): while the drag is over a title that will
+/// take it, that panel lights up, and the drop hands both to <see cref="HudPanelViewModel.DropOn"/>
+/// instead of moving anything. And when a book flips to another page, the page asks to be
+/// placed (<see cref="HudPanelViewModel.PlaceRequested"/>) and this puts it where the book is.</para>
 /// </summary>
 public static class HudDrag
 {
@@ -54,6 +60,36 @@ public static class HudDrag
         bool resizing = false;
         Point resizeAnchor = default;         // pointer position (canvas coords) at grab
         Size resizeStart = default;           // panel size at grab
+        HudPanelViewModel? dropTarget = null; // the panel whose title the drag is over, if it takes it
+
+        // ---- placing on request (a book flipped to this page) ----
+        HudPanelViewModel? watched = null;
+        void OnPlaceRequested()
+        {
+            if (control.DataContext is not HudPanelViewModel vm) return;
+            if (Find(control) is not (Control item, Canvas canvas)) return;   // not laid out yet: first layout places it
+            if (double.IsNaN(vm.X) || double.IsNaN(vm.Y)) return;
+            (double x, double y) = Clamp(vm.X, vm.Y, control, canvas);
+            Canvas.SetLeft(item, x);
+            Canvas.SetTop(item, y);
+            item.ZIndex = ++_topZ;
+        }
+        void Watch()
+        {
+            if (watched is not null) watched.PlaceRequested -= OnPlaceRequested;
+            watched = control.DataContext as HudPanelViewModel;
+            if (watched is not null) watched.PlaceRequested += OnPlaceRequested;
+        }
+        control.DataContextChanged += (_, _) => Watch();
+        Watch();
+
+        void SetDropTarget(HudPanelViewModel? t)
+        {
+            if (ReferenceEquals(t, dropTarget)) return;
+            if (dropTarget is not null) dropTarget.IsDropTarget = false;
+            dropTarget = t;
+            if (dropTarget is not null) dropTarget.IsDropTarget = true;
+        }
 
         bool InGrip(Point p) => p.X >= control.Bounds.Width - GripSize &&
                                 p.Y >= control.Bounds.Height - GripSize;
@@ -175,6 +211,10 @@ public static class HudDrag
                     : Cursor.Default;
                 return;
             }
+            // over another panel's title strip? then this drag is a drop into a book
+            if (control.DataContext is HudPanelViewModel dvm)
+                SetDropTarget(TitleUnder(e.GetPosition(canvas), canvas, item, dvm));
+
             Point pos = e.GetPosition(canvas) - grabOffset;
             double px = pos.X, py = pos.Y;
             if (!Freehand(e.KeyModifiers))
@@ -201,6 +241,14 @@ public static class HudDrag
             if (!dragging) return;
             dragging = false;
             e.Pointer.Capture(null);
+            if (dropTarget is { } target)
+            {
+                // dropped on a title: the book takes it (JoinBook places it where the book is)
+                SetDropTarget(null);
+                if (control.DataContext is HudPanelViewModel dragged) dragged.DropOn(target);
+                e.Handled = true;
+                return;
+            }
             if (Find(control) is not (Control item, _)) return;
             if (control.DataContext is HudPanelViewModel vm)
             {
@@ -225,6 +273,27 @@ public static class HudDrag
             node = parent;
         }
         return null;
+    }
+
+    /// <summary>The panel whose title strip is under <paramref name="p"/> (canvas coordinates)
+    /// and would take <paramref name="dragged"/> into a book, or null. Only the title strip
+    /// counts, not the whole panel: dragging a panel ACROSS another to rearrange them must not
+    /// swallow it into a book.</summary>
+    private static HudPanelViewModel? TitleUnder(Point p, Canvas canvas, Control self, HudPanelViewModel dragged)
+    {
+        HudPanelViewModel? best = null;
+        int bestZ = int.MinValue;
+        foreach (Control child in canvas.Children)
+        {
+            if (ReferenceEquals(child, self) || !child.IsVisible || child.Bounds.Width <= 0) continue;
+            if (child.DataContext is not HudPanelViewModel vm || !vm.IsShown) continue;
+            double left = Canvas.GetLeft(child), top = Canvas.GetTop(child);
+            if (double.IsNaN(left) || double.IsNaN(top)) continue;
+            if (p.X < left || p.X > left + child.Bounds.Width || p.Y < top || p.Y > top + HandleHeight + 6) continue;
+            if (!dragged.CanDropOn(vm)) continue;
+            if (child.ZIndex >= bestZ) { best = vm; bestZ = child.ZIndex; }
+        }
+        return best;
     }
 
     // ---- snapping -------------------------------------------------------------

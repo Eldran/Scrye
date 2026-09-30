@@ -23,6 +23,20 @@ public sealed class HudPanelLayout
     public double H { get; set; }
 }
 
+/// <summary>A book of HUD panels (pages shown one at a time): its pages by panel key in tab
+/// order, the page on show, and the place and size every page takes. W/H 0 = auto-size.</summary>
+public sealed class HudBookLayout
+{
+    public string Id { get; set; } = "";
+    public List<string> Pages { get; set; } = new();
+    public string? Front { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double W { get; set; }
+    public double H { get; set; }
+    public bool Collapsed { get; set; }
+}
+
 /// <summary>A world's saved pane setup (plus the timestamp toggle).</summary>
 public sealed class WorldLayout
 {
@@ -43,6 +57,9 @@ public sealed class WorldLayout
     /// when a panel HAS a position, since X/Y are NaN until it is placed and System.Text.Json
     /// refuses to serialise NaN. Keeping the two apart means neither has to know that.</para></summary>
     public List<string> CollapsedHudPanels { get; set; } = new();
+
+    /// <summary>Books of HUD panels (absent in older layout files, which simply have none).</summary>
+    public List<HudBookLayout> HudBooks { get; set; } = new();
 }
 
 /// <summary>

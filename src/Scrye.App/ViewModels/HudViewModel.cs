@@ -156,7 +156,12 @@ public sealed class HudViewModel : IDisposable
             // Restore the collapse BEFORE wiring Moved, or applying the saved state would
             // immediately write the layout back out as if the user had just done it.
             if (LoadCollapsed?.Invoke(key) == true) panel.IsCollapsed = true;
-            panel.Moved = _ => PanelMoved?.Invoke();
+            // a book moving its own pages is not the user moving a panel: the book operation
+            // saves once when it is done, and saving mid-load would drop panels not loaded yet
+            panel.Moved = p => { if (_bookSync) return; SyncBook(p); PanelMoved?.Invoke(); };
+            panel.CanDropOnto = target => CanJoin(panel, target);
+            panel.DroppedOnto = target => JoinBook(panel, target);
+            panel.LeaveBook = p => LeaveBook(p);
         }
 
         // Brushes are built here (immutable, so they cross threads safely) but ASSIGNED on the UI
@@ -210,7 +215,13 @@ public sealed class HudViewModel : IDisposable
             panel.Tabs.Clear();
             foreach (HudTabViewModel t in tabs) panel.Tabs.Add(t);
             panel.RaiseHasTabsChanged();
-            if (!rebuild) Panels.Add(panel);
+            panel.Solo = spec.Solo;
+            if (!rebuild)
+            {
+                Panels.Add(panel);
+                AttachToSavedBook(panel);
+            }
+            else if (panel.Solo && panel.Book is not null) LeaveBook(panel);   // it opted out since
         });
     }
 
@@ -244,8 +255,120 @@ public sealed class HudViewModel : IDisposable
         Post(() =>
         {
             for (int i = Panels.Count - 1; i >= 0; i--)
-                if (Panels[i].PluginId == pluginId) Panels.RemoveAt(i);
+                if (Panels[i].PluginId == pluginId)
+                {
+                    // out of the tabs, not out of the book: turning the plugin back on
+                    // puts its page back where it was
+                    if (Panels[i].Book is { } book) Guarded(() => book.Unload(Panels[i]));
+                    Panels.RemoveAt(i);
+                }
         });
+    }
+
+    // ---- books ---------------------------------------------------------------------
+    // All on the UI thread: books are drawing, and drawing lives there. Opening one is a drag
+    // (HudDrag drops a panel's title onto another's), flipping is a tab, leaving is the ⤴.
+
+    private readonly List<HudBookViewModel> _books = new();
+    private bool _bookSync;   // while a book moves its pages, their own "moved" reports are its doing
+
+    /// <summary>The world's books, for saving the layout.</summary>
+    public IReadOnlyList<HudBookViewModel> Books => _books;
+
+    /// <summary>Books saved with the layout, set by the world before plugins add their panels:
+    /// each panel that arrives joins its book then.</summary>
+    public void LoadBooks(IEnumerable<HudBookViewModel> books)
+    {
+        foreach (HudBookViewModel b in books)
+            if (b.PageKeys.Count >= 2) { b.Flipped = () => PanelMoved?.Invoke(); _books.Add(b); }
+    }
+
+    private void Guarded(Action a)
+    {
+        bool was = _bookSync;
+        _bookSync = true;
+        try { a(); } finally { _bookSync = was; }
+    }
+
+    private void AttachToSavedBook(HudPanelViewModel panel)
+    {
+        if (panel.Solo) return;
+        foreach (HudBookViewModel b in _books)
+            if (b.PageKeys.Contains(panel.Key)) { Guarded(() => b.Attach(panel)); return; }
+    }
+
+    /// <summary>The page on show moved, resized or rolled up: the book, and every other page
+    /// in it, follow - so a flip opens the next page in the same place and size.</summary>
+    private void SyncBook(HudPanelViewModel panel)
+    {
+        if (_bookSync || panel.Book is not { } book || !panel.IsShown) return;
+        Guarded(() => book.TakeFrom(panel));
+    }
+
+    private static bool CanJoin(HudPanelViewModel dragged, HudPanelViewModel target) =>
+        !ReferenceEquals(dragged, target) && !dragged.Solo && !target.Solo && target.IsShown
+        && (dragged.Book is null || !ReferenceEquals(dragged.Book, target.Book));
+
+    /// <summary>A panel was dropped on another's title: they become a book (or the panel joins
+    /// the target's book), with the dropped panel on show, where the target was.</summary>
+    public void JoinBook(HudPanelViewModel dragged, HudPanelViewModel target)
+    {
+        if (!CanJoin(dragged, target)) return;
+        Guarded(() =>
+        {
+            if (dragged.Book is not null) LeaveBookCore(dragged, place: false);
+            HudBookViewModel? book = target.Book;
+            if (book is null)
+            {
+                book = new HudBookViewModel(Guid.NewGuid().ToString("N")[..12])
+                {
+                    X = target.X, Y = target.Y,
+                    // one width for every page, so flipping does not jump sideways
+                    W = Math.Max(target.EffectiveWidth, dragged.EffectiveWidth),
+                    H = target.UserHeight,
+                    Collapsed = false,
+                };
+                book.Flipped = () => PanelMoved?.Invoke();
+                book.PageKeys.Add(target.Key);
+                _books.Add(book);
+                book.Attach(target);
+            }
+            book.PageKeys.Add(dragged.Key);
+            book.FrontKey = dragged.Key;
+            book.Attach(dragged);
+            dragged.RequestPlace();          // Attach moved it to the book's place
+        });
+        PanelMoved?.Invoke();
+    }
+
+    /// <summary>Take a page out of its book and set it down beside the book.</summary>
+    public void LeaveBook(HudPanelViewModel panel)
+    {
+        if (panel.Book is null) return;
+        Guarded(() => LeaveBookCore(panel, place: true));
+        PanelMoved?.Invoke();
+    }
+
+    private void LeaveBookCore(HudPanelViewModel panel, bool place)
+    {
+        HudBookViewModel book = panel.Book!;
+        book.Remove(panel);
+        if (place)
+        {
+            if (!double.IsNaN(book.X)) panel.X = book.X + 28;
+            if (!double.IsNaN(book.Y)) panel.Y = book.Y + 28;
+            panel.RequestPlace();
+        }
+        if (book.PageKeys.Count <= 1)
+        {
+            // one page is not a book: what is left stands on its own, where the book was
+            foreach (HudPanelViewModel rest in book.Loaded.ToList())
+            {
+                book.Unload(rest);
+                rest.RequestPlace();
+            }
+            _books.Remove(book);
+        }
     }
 
     private object BuildWidget(string pluginId, WidgetSpec w, List<IDisposable> subs, string? panelFg = null)
@@ -540,6 +663,7 @@ public sealed class HudPanelViewModel : ViewModelBase
             OnPropertyChanged(nameof(ShowFlat));
             OnPropertyChanged(nameof(ShowTabs));
             OnPropertyChanged(nameof(EffectiveHeight));
+            OnPropertyChanged(nameof(ShowBookStrip));
             Moved?.Invoke(this);          // the layout changed: persist it
         }
     }
@@ -646,11 +770,74 @@ public sealed class HudPanelViewModel : ViewModelBase
     internal Action<HudPanelViewModel>? Moved;
     public void ReportMoved() => Moved?.Invoke(this);
 
+    // ---- books (pages shown one at a time; see HudBookViewModel) ----------------------
+
+    private HudBookViewModel? _book;
+    /// <summary>The book this panel is a page of, or null when it stands on its own.</summary>
+    public HudBookViewModel? Book
+    {
+        get => _book;
+        internal set { if (SetField(ref _book, value)) RaiseBookChanged(); }
+    }
+
+    public bool InBook => _book is not null;
+
+    /// <summary>The book's tabs, drawn under the title of the page on show.</summary>
+    public ObservableCollection<HudBookTabViewModel>? BookTabs => _book?.Tabs;
+
+    /// <summary>Tabs only when there is something to flip to, and not while rolled up.</summary>
+    public bool ShowBookStrip => _book is { LoadedCount: >= 2 } && !_collapsed;
+
+    internal void RaiseBookChanged()
+    {
+        OnPropertyChanged(nameof(InBook));
+        OnPropertyChanged(nameof(BookTabs));
+        OnPropertyChanged(nameof(ShowBookStrip));
+    }
+
+    private bool _shown = true;
+    /// <summary>Drawn on the HUD. Always true on its own; in a book, only the page on show.
+    /// A hidden page is still fully alive - bound, watched, updating - just not drawn.</summary>
+    public bool IsShown
+    {
+        get => _shown;
+        internal set => SetField(ref _shown, value);
+    }
+
+    /// <summary>The plugin asked for this panel never to go into a book (<c>solo = true</c>,
+    /// API 1.22): a chat window that must stay in view.</summary>
+    public bool Solo { get; internal set; }
+
+    private bool _dropTarget;
+    /// <summary>Another panel is being dragged over this one's title: dropping it here makes a book.</summary>
+    public bool IsDropTarget
+    {
+        get => _dropTarget;
+        set => SetField(ref _dropTarget, value);
+    }
+
+    /// <summary>Raised when this panel must be put (back) at <see cref="X"/>/<see cref="Y"/> and
+    /// brought to the front - a book flipped to it. The drag behavior does the placing.</summary>
+    public event Action? PlaceRequested;
+    internal void RequestPlace() => PlaceRequested?.Invoke();
+
+    /// <summary>Set by <see cref="HudViewModel"/>: may this panel be dropped onto that one?</summary>
+    internal Func<HudPanelViewModel, bool>? CanDropOnto;
+    /// <summary>Set by <see cref="HudViewModel"/>: this panel was dropped onto that one's title.</summary>
+    internal Action<HudPanelViewModel>? DroppedOnto;
+    public bool CanDropOn(HudPanelViewModel target) => CanDropOnto?.Invoke(target) ?? false;
+    public void DropOn(HudPanelViewModel target) => DroppedOnto?.Invoke(target);
+
+    /// <summary>The ⤴ on a page's title: take it out of its book and set it down beside it.</summary>
+    public RelayCommand LeaveBookCommand { get; }
+    internal Action<HudPanelViewModel>? LeaveBook;
+
     public HudPanelViewModel(string title, string pluginId)
     {
         Title = title;
         PluginId = pluginId;
         ToggleCollapseCommand = new RelayCommand(() => IsCollapsed = !IsCollapsed);
+        LeaveBookCommand = new RelayCommand(() => LeaveBook?.Invoke(this));
     }
 }
 

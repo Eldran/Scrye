@@ -756,6 +756,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Background = Field(cl, tblIndex, "background"),
             Accent = Field(cl, tblIndex, "accent"),
             Foreground = Field(cl, tblIndex, "color"),
+            Solo = FieldBool(cl, tblIndex, "solo", defaultValue: false),
         };
     }
 

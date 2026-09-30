@@ -510,6 +510,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Background = Str(tbl, "background"),
             Accent = Str(tbl, "accent"),
             Foreground = Str(tbl, "color"),
+            Solo = Bool(tbl, "solo", false),
         };
     }
 

@@ -289,6 +289,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (Hud is not null)
             foreach (HudPanelViewModel hp in Hud.Panels)
                 if (hp.IsCollapsed) layout.CollapsedHudPanels.Add(hp.Key);
+        // Books keep every page, loaded or not, so a disabled plugin's page goes back into its
+        // book when it is turned on again. NaN (not placed / auto size) is written as 0:
+        // System.Text.Json refuses NaN.
+        if (Hud is not null)
+            foreach (HudBookViewModel b in Hud.Books)
+                layout.HudBooks.Add(new Services.HudBookLayout
+                {
+                    Id = b.Id, Pages = new System.Collections.Generic.List<string>(b.PageKeys), Front = b.FrontKey,
+                    X = double.IsNaN(b.X) ? 0 : b.X, Y = double.IsNaN(b.Y) ? 0 : b.Y,
+                    W = double.IsNaN(b.W) ? 0 : b.W, H = double.IsNaN(b.H) ? 0 : b.H,
+                    Collapsed = b.Collapsed,
+                });
         Services.PaneLayoutStore.Save(Title, layout);
     }
 
@@ -624,6 +636,21 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             foreach (Services.HudPanelLayout h in savedLayout.HudPanels)
                 if (!string.IsNullOrEmpty(h.Name)) savedHud[h.Name] = (h.X, h.Y, h.W, h.H);
             foreach (string c in savedLayout.CollapsedHudPanels) savedCollapsed.Add(c);
+            // books: each page joins its book as its plugin adds the panel
+            var books = new System.Collections.Generic.List<HudBookViewModel>();
+            foreach (Services.HudBookLayout hb in savedLayout.HudBooks ?? new())
+            {
+                if (hb.Pages is null || hb.Pages.Count < 2) continue;
+                var book = new HudBookViewModel(string.IsNullOrEmpty(hb.Id) ? Guid.NewGuid().ToString("N")[..12] : hb.Id)
+                {
+                    FrontKey = hb.Front, X = hb.X, Y = hb.Y,
+                    W = hb.W > 0 ? hb.W : double.NaN, H = hb.H > 0 ? hb.H : double.NaN,
+                    Collapsed = hb.Collapsed,
+                };
+                book.PageKeys.AddRange(hb.Pages);
+                books.Add(book);
+            }
+            Hud.LoadBooks(books);
         }
         Hud.LoadPosition = key => savedHud.TryGetValue(key, out (double, double, double, double) p) ? p : null;
         Hud.LoadCollapsed = key => savedCollapsed.Contains(key);

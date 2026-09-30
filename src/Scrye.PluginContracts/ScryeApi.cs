@@ -216,7 +216,13 @@ public static class ScryeApi
     //      was walked on, nor be looked at outside the HUD. Plugins stay without a
     //      filesystem; this is one door, and nothing written through it can run.
     //      Additive: on an older host scrye.exports is absent, and a plugin checks for it.
-    public static readonly Version Current = new(1, 21);
+    // 1.22 Books: the user can stack HUD panels into a book that shows one at a time, with a
+    //      tab per page (dragging a panel's title onto another's). A panel may say `solo = true`
+    //      to stay out of books - a chat window you type into must stay in view.
+    //
+    //      Nothing else changes for a plugin: a page that is not on show is still bound and
+    //      updating, it is only not drawn. Additive: an older host ignores `solo`.
+    public static readonly Version Current = new(1, 22);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";
