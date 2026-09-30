@@ -30,17 +30,66 @@ public sealed class ProfileStore
     public static ProfileLayer Deserialize(string json) =>
         JsonSerializer.Deserialize<ProfileLayer>(json, Options) ?? new ProfileLayer();
 
-    public ProfileLayer LoadFile(string path) => Deserialize(File.ReadAllText(path));
+    /// <summary>Read one layer. A file that is not valid JSON throws <see cref="InvalidDataException"/>
+    /// naming the file (the JsonException is kept as InnerException), so the caller can tell the
+    /// user WHICH profile is broken instead of surfacing a bare parser error.</summary>
+    public ProfileLayer LoadFile(string path)
+    {
+        string json = File.ReadAllText(path);
+        try { return Deserialize(json); }
+        catch (JsonException ex)
+        {
+            throw new InvalidDataException($"profile file '{path}' is corrupt and could not be read: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>Write one layer atomically: to a temp file beside it, then moved over the old one,
+    /// so a crash or full disk mid-write never leaves a truncated profile that will not open.</summary>
     public void SaveFile(string path, ProfileLayer layer)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, Serialize(layer));
+        string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(tmp, Serialize(layer));
+            File.Move(tmp, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) try { File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>
+    /// Is <paramref name="name"/> usable as a MUD / account / character / world folder name?
+    /// Names go straight into Path.Combine, so "", ".", "..", a rooted path, a separator or an
+    /// invalid file-name char would address a DIFFERENT folder — a character named "." is the
+    /// MUD folder itself, and deleting it deleted the whole MUD. <paramref name="reason"/> says
+    /// why not, for the UI. Every name-taking method below enforces this (ArgumentException).
+    /// </summary>
+    public static bool IsValidName(string? name, out string? reason)
+    {
+        reason = null;
+        if (string.IsNullOrWhiteSpace(name)) reason = "the name is empty";
+        else if (name.Trim() is "." or "..") reason = $"'{name}' is not allowed as a name";
+        else if (Path.IsPathRooted(name)) reason = $"'{name}' looks like a path";
+        else if (name.IndexOfAny(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '/', '\\' }) >= 0)
+            reason = $"'{name}' contains a path separator";
+        else if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) reason = $"'{name}' contains a character that is not allowed in a file name";
+        return reason is null;
+    }
+
+    private static string Checked(string name, string what)
+    {
+        if (!IsValidName(name, out string? reason))
+            throw new ArgumentException($"invalid {what} name: {reason}", what);
+        return name;
     }
 
     // ---- flat "world" model (used by the world-manager UI) -------------------
 
     private string GlobalPath => Path.Combine(_root, "global.json");
-    private string WorldPath(string name) => Path.Combine(_root, name, "world.json");
+    private string WorldPath(string name) => Path.Combine(_root, Checked(name, "world"), "world.json");
 
     public ProfileLayer LoadGlobal() =>
         File.Exists(GlobalPath) ? LoadFile(GlobalPath) : new ProfileLayer { Kind = LayerKind.Global, Name = "global" };
@@ -71,7 +120,7 @@ public sealed class ProfileStore
 
     public void DeleteWorld(string name)
     {
-        string dir = Path.Combine(_root, name);
+        string dir = Path.Combine(_root, Checked(name, "world"));
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }
 
@@ -97,12 +146,14 @@ public sealed class ProfileStore
     // A subfolder's identity is the json file inside it, so accounts and
     // account-less characters coexist under the same MUD folder.
 
-    private string MudDir(string mud) => Path.Combine(_root, mud);
+    // Every name is validated here (see IsValidName) before it reaches the file system.
+    private string MudDir(string mud) => Path.Combine(_root, Checked(mud, "mud"));
     private string MudFile(string mud) => Path.Combine(MudDir(mud), "mud.json");
-    private string AccountDir(string mud, string account) => Path.Combine(_root, mud, account);
+    private string AccountDir(string mud, string account) => Path.Combine(MudDir(mud), Checked(account, "account"));
     private string AccountFile(string mud, string account) => Path.Combine(AccountDir(mud, account), "account.json");
     private string CharacterDir(string mud, string? account, string character) =>
-        string.IsNullOrEmpty(account) ? Path.Combine(_root, mud, character) : Path.Combine(_root, mud, account, character);
+        string.IsNullOrEmpty(account) ? Path.Combine(MudDir(mud), Checked(character, "character"))
+                                      : Path.Combine(AccountDir(mud, account), Checked(character, "character"));
     private string CharacterFile(string mud, string? account, string character) =>
         Path.Combine(CharacterDir(mud, account, character), "character.json");
 
@@ -193,15 +244,10 @@ public sealed class ProfileStore
     {
         var chain = new List<ProfileLayer>();
         AddIfExists(chain, GlobalPath);
-        AddIfExists(chain, Path.Combine(_root, mud, "mud.json"));
-
-        string baseDir = Path.Combine(_root, mud);
+        AddIfExists(chain, MudFile(mud));
         if (!string.IsNullOrEmpty(account))
-        {
-            AddIfExists(chain, Path.Combine(_root, mud, account, "account.json"));
-            baseDir = Path.Combine(_root, mud, account);
-        }
-        AddIfExists(chain, Path.Combine(baseDir, character, "character.json"));
+            AddIfExists(chain, AccountFile(mud, account));
+        AddIfExists(chain, CharacterFile(mud, account, character));
         return ProfileResolver.Resolve(chain);
     }
 

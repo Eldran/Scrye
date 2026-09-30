@@ -268,7 +268,14 @@ public static class SequenceParser
         return w.Success;
     }
 
-    private static readonly Regex RepeatRe = new(@"^(.*?)\s*[x*]\s*(\d+)$", RegexOptions.IgnoreCase);
+    // The repeat marker must stand apart from the command: "north x3" / "north x 3" (x as its
+    // own word) or "north*3". An 'x' glued to the word before it is part of that word, so
+    // "sell box 2" / "tax 5" are sent as written rather than as "sell bo" twice.
+    private static readonly Regex RepeatRe = new(@"^(.*?)(?:\s+x\s*(\d+)|\s*\*\s*(\d+))$", RegexOptions.IgnoreCase);
+
+    /// <summary>Most repeats one step may ask for: a typo like "n x100000000" must not build
+    /// (or overflow parsing into) an enormous plan.</summary>
+    public const int MaxRepeat = 1000;
 
     public static SequenceDef Parse(string name, string text, bool promptGated = true)
     {
@@ -307,7 +314,8 @@ public static class SequenceParser
             if (r.Success && r.Groups[1].Value.Trim().Length > 0)
             {
                 string body = r.Groups[1].Value.Trim();
-                int n = int.Parse(r.Groups[2].Value);
+                string digits = r.Groups[2].Success ? r.Groups[2].Value : r.Groups[3].Value;
+                int n = int.TryParse(digits, out int parsed) ? Math.Min(parsed, MaxRepeat) : MaxRepeat;   // only digits: failure = overflow
                 steps.Add(client ? SequenceStep.Client(body, n) : SequenceStep.Send(body, n));
                 continue;
             }

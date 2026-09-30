@@ -171,16 +171,23 @@ public static class CredentialStore
             using Process? p = Process.Start(psi);
             if (p is null) return false;
 
+            // Both pipes are read ASYNC, started before anything else: a synchronous ReadToEnd
+            // blocks until the child exits, so the timeout below would never apply and a hung
+            // secret-tool / keyring would hang the UI. Draining stderr too means a chatty failure
+            // cannot deadlock on a full pipe.
+            Task<string> outTask = p.StandardOutput.ReadToEndAsync();
+            Task<string> errTask = p.StandardError.ReadToEndAsync();
             if (stdin is not null)
             {
                 p.StandardInput.Write(stdin);       // Write, not WriteLine: no stray newline in the secret
                 p.StandardInput.Close();
             }
-            stdout = p.StandardOutput.ReadToEnd();
-            p.StandardError.ReadToEnd();            // drained so a chatty failure cannot deadlock the pipe
             // A keyring prompt can block; without one this returns immediately. The cap stops a
             // headless or broken session hanging the profile save forever.
             if (!p.WaitForExit(15_000)) { try { p.Kill(entireProcessTree: true); } catch { } return false; }
+            // Exited: the pipes close with it (a grandchild holding them open gets a short grace).
+            if (!Task.WaitAll(new Task[] { outTask, errTask }, 2_000)) return false;
+            stdout = outTask.Result;
             return p.ExitCode == 0;
         }
         catch { return false; }                     // not installed, or refused to launch

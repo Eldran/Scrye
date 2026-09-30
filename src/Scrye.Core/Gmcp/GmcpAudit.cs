@@ -40,8 +40,23 @@ public sealed class GmcpAudit
         // so a walk through three areas showed one. What the feed looked like is a different
         // question from what the feed DID, and the second is the one worth capturing.
         public readonly List<string> Distinct = new();
-        public readonly HashSet<string> DistinctSeen = new(StringComparer.Ordinal);
+        // Fingerprints (64-bit FNV-1a) of every payload seen, not the payloads themselves:
+        // Char.Vitals differs almost every round, and keeping each one verbatim for the whole
+        // session grew without bound. Capped too; past the cap the count is a floor ("N+").
+        public readonly HashSet<ulong> DistinctSeen = new();
+        public bool DistinctCapped;
         public bool Truncated;
+    }
+
+    /// <summary>Most payload fingerprints tracked per package (~a megabyte at worst). Past it
+    /// the distinct count stops growing and the report says "at least".</summary>
+    public const int MaxDistinctTracked = 50_000;
+
+    private static ulong Fingerprint(string s)
+    {
+        ulong h = 14695981039346656037UL;              // FNV-1a 64 offset basis
+        foreach (char c in s) { h ^= c; h *= 1099511628211UL; }
+        return h ^ (ulong)s.Length;
     }
 
     /// <summary>Distinct payloads kept per package. Two hundred is far more rooms than a
@@ -123,8 +138,15 @@ public sealed class GmcpAudit
         e.Last = json;
         e.LastAt = DateTime.Now;
 
-        if (e.DistinctSeen.Add(json))
+        if (e.DistinctCapped)
         {
+            // No longer able to tell new from repeated: observe every payload, which is only
+            // slower, never wrong.
+            Shape.Observe(package, json);
+        }
+        else if (e.DistinctSeen.Add(Fingerprint(json)))
+        {
+            if (e.DistinctSeen.Count >= MaxDistinctTracked) e.DistinctCapped = true;
             if (e.Distinct.Count < MaxDistinct) e.Distinct.Add(json);
             else e.Truncated = true;
             Shape.Observe(package, json);   // a payload never seen before may carry a field never seen before
@@ -136,8 +158,13 @@ public sealed class GmcpAudit
         Find2(package) is { } e ? e.Distinct : Array.Empty<string>();
 
     /// <summary>How many different payloads a package has sent — the count of rooms walked
-    /// through, as against the count of times the room was announced.</summary>
+    /// through, as against the count of times the room was announced. A floor once
+    /// <see cref="MaxDistinctTracked"/> is reached (see <see cref="DistinctText"/>).</summary>
     public int DistinctCount(string package) => Find2(package)?.DistinctSeen.Count ?? 0;
+
+    /// <summary><see cref="DistinctCount"/> for a report: "N", or "N+" once the cap was hit.</summary>
+    private string DistinctText(string package) =>
+        DistinctCount(package) + (Find2(package)?.DistinctCapped == true ? "+" : "");
 
     private Entry? Find2(string package)
     {
@@ -269,7 +296,7 @@ public sealed class GmcpAudit
         {
             string mode = mergeModeOf?.Invoke(p.Package) ?? "";
             mode = mode == "" || mode == "whole" ? "" : $" [{mode}]";
-            lines.Add($"    {p.Package,-22} x{p.Count,-5} ({DistinctCount(p.Package)} distinct) "
+            lines.Add($"    {p.Package,-22} x{p.Count,-5} ({DistinctText(p.Package)} distinct) "
                       + $"{p.LastAt:HH:mm:ss}  {Truncate(p.Last, 70)}{mode}");
         }
 
@@ -532,7 +559,7 @@ public sealed class GmcpAudit
         {
             lines.Add($"## {p.Package}");
             lines.Add("");
-            int distinct = DistinctCount(p.Package);
+            string distinct = DistinctText(p.Package);
             lines.Add($"{p.Count} message(s), {distinct} of them different, last at {p.LastAt:HH:mm:ss}.");
             lines.Add("");
             lines.Add("| field | state path | value |");

@@ -11,13 +11,23 @@ namespace Scrye.Core.Automation;
 /// </summary>
 public sealed class AutomationEngine
 {
-    private sealed class Trig { public TriggerDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public int Lines = 1; }
-    private sealed class Als { public AliasDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; }
-    private sealed class Tmr { public TimerDef Def = null!; public bool Enabled; public double Elapsed; }
+    // Order: insertion stamp, the tie-break that keeps equal-Sequence rules in the order they
+    // were added (List.Sort is unstable past 16 items). Retired: removed from the live list,
+    // so a pass over a snapshot skips it.
+    private sealed class Trig { public TriggerDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public int Lines = 1; public long Order; public bool Retired; }
+    private sealed class Als { public AliasDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public long Order; }
+    private sealed class Tmr { public TimerDef Def = null!; public bool Enabled; public double Elapsed; public bool Retired; }
 
     private readonly List<Trig> _triggers = new();
     private readonly List<Als> _aliases = new();
     private readonly List<Tmr> _timers = new();
+    private long _nextOrder;
+
+    // Snapshots ProcessLine / Tick iterate: a fired rule can run a script that adds or removes
+    // rules (re-sorting the live list), so indexing the live list across Fire is unsafe. Cached
+    // and dropped on any change, so the per-line / per-tick path does not allocate.
+    private Trig[]? _trigPass;
+    private Tmr[]? _tmrPass;
 
     // The lines a multi-line trigger looks back over: the newest last, as many as the
     // widest enabled-or-not trigger needs (none are kept while every trigger is one line).
@@ -88,10 +98,12 @@ public sealed class AutomationEngine
         int lines = def.EffectiveLines;
         _triggers.Add(new Trig
         {
-            Def = def, Lines = lines, Enabled = def.Enabled,
+            Def = def, Lines = lines, Enabled = def.Enabled, Order = _nextOrder++,
             Pattern = new CompiledPattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1),
         });
-        _triggers.Sort((a, b) => a.Def.Sequence.CompareTo(b.Def.Sequence));
+        // Stable: Sequence, then insertion order - which equal-Sequence rule wins must not be random.
+        _triggers.Sort((a, b) => a.Def.Sequence != b.Def.Sequence ? a.Def.Sequence.CompareTo(b.Def.Sequence) : a.Order.CompareTo(b.Order));
+        _trigPass = null;
         Rewindow();
     }
 
@@ -111,29 +123,36 @@ public sealed class AutomationEngine
     public void AddAlias(AliasDef def)
     {
         RemoveAlias(def.Name);
-        _aliases.Add(new Als { Def = def, Pattern = Compile(def.Pattern, def.IsRegex, def.IgnoreCase), Enabled = def.Enabled });
-        _aliases.Sort((a, b) => a.Def.Sequence.CompareTo(b.Def.Sequence));
+        _aliases.Add(new Als { Def = def, Pattern = Compile(def.Pattern, def.IsRegex, def.IgnoreCase), Enabled = def.Enabled, Order = _nextOrder++ });
+        _aliases.Sort((a, b) => a.Def.Sequence != b.Def.Sequence ? a.Def.Sequence.CompareTo(b.Def.Sequence) : a.Order.CompareTo(b.Order));   // stable, as triggers
     }
 
     public void AddTimer(TimerDef def)
     {
         RemoveTimer(def.Name);
         _timers.Add(new Tmr { Def = def, Enabled = def.Enabled });
+        _tmrPass = null;
     }
 
     public bool RemoveTrigger(string name)
     {
-        if (string.IsNullOrEmpty(name) || _triggers.RemoveAll(t => t.Def.Name == name) == 0) return false;
+        if (string.IsNullOrEmpty(name) || _triggers.RemoveAll(t => t.Def.Name == name && (t.Retired = true)) == 0) return false;
+        _trigPass = null;
         Rewindow();
         return true;
     }
     public bool RemoveAlias(string name) => !string.IsNullOrEmpty(name) && _aliases.RemoveAll(a => a.Def.Name == name) > 0;
-    public bool RemoveTimer(string name) => !string.IsNullOrEmpty(name) && _timers.RemoveAll(t => t.Def.Name == name) > 0;
+    public bool RemoveTimer(string name)
+    {
+        if (string.IsNullOrEmpty(name) || _timers.RemoveAll(t => t.Def.Name == name && (t.Retired = true)) == 0) return false;
+        _tmrPass = null;
+        return true;
+    }
 
     /// <summary>Drop all triggers/aliases/timers (used when live-reloading a profile's rule set).</summary>
-    public void ClearTriggers() { _triggers.Clear(); Rewindow(); }
+    public void ClearTriggers() { foreach (Trig t in _triggers) t.Retired = true; _triggers.Clear(); _trigPass = null; Rewindow(); }
     public void ClearAliases() => _aliases.Clear();
-    public void ClearTimers() => _timers.Clear();
+    public void ClearTimers() { foreach (Tmr t in _timers) t.Retired = true; _timers.Clear(); _tmrPass = null; }
 
     /// <summary>Flip a trigger's Notify flag on the live rule set, so a change made in the
     /// companion panel takes effect without a reconnect. Matched by reference first (the panel
@@ -175,10 +194,13 @@ public sealed class AutomationEngine
     {
         // remembered BEFORE matching: a multi-line trigger's window ends with this line
         _recent.Push(line);
-        for (int i = 0; i < _triggers.Count; i++)
+        // Snapshot + removal by identity (as ProcessInput): Fire can run a script that adds or
+        // removes triggers, and RemoveAt(i) on the re-sorted live list would drop the wrong one.
+        Trig[] pass = _trigPass ??= _triggers.ToArray();
+        for (int i = 0; i < pass.Length; i++)
         {
-            Trig t = _triggers[i];
-            if (!t.Enabled) continue;
+            Trig t = pass[i];
+            if (!t.Enabled || t.Retired) continue;   // disabled, or removed by an earlier rule's script
 
             MatchResult? m = MatchTrigger(t, line, buffered: true, out int newestStart);
             if (m is null) continue;
@@ -188,7 +210,7 @@ public sealed class AutomationEngine
             ApplyHighlight(t.Def, m, line, ctx, newestStart);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
-            if (t.Def.OneShot) { _triggers.RemoveAt(i); i--; }
+            if (t.Def.OneShot && !t.Retired) { _triggers.Remove(t); t.Retired = true; _trigPass = null; }
             if (!t.Def.KeepEvaluating) break;
         }
     }
@@ -276,10 +298,12 @@ public sealed class AutomationEngine
 
         if (TimersSuspended) return;
 
-        for (int i = 0; i < _timers.Count; i++)
+        // Snapshot for the same reason as ProcessLine: a timer's script may add/remove timers.
+        Tmr[] pass = _tmrPass ??= _timers.ToArray();
+        for (int i = 0; i < pass.Length; i++)
         {
-            Tmr t = _timers[i];
-            if (!t.Enabled) continue;
+            Tmr t = pass[i];
+            if (!t.Enabled || t.Retired) continue;
 
             t.Elapsed += dtSeconds;
             if (t.Elapsed < t.Def.IntervalSeconds) continue;
@@ -288,7 +312,7 @@ public sealed class AutomationEngine
             string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, null, ctx);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Timer, t.Def.Name, t.Def.Group, "", action));
 
-            if (t.Def.OneShot) { _timers.RemoveAt(i); i--; }
+            if (t.Def.OneShot && !t.Retired) { _timers.Remove(t); t.Retired = true; _tmrPass = null; }
         }
     }
 
@@ -349,7 +373,9 @@ public sealed class AutomationEngine
         if (!string.IsNullOrEmpty(script))
             ctx.CallScript(script!, m?.Wildcards ?? Array.Empty<string>());
 
-        return Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
+        // The summary is only for the Hit listener (timeline/debugger): skip the second template
+        // expansion and its allocations when nobody is listening.
+        return Hit is null ? "" : Describe(sendTo, send, variable, script, m, capturePane, gag, notify, sound);
     }
 
     // ---- waits inside a Send ----------------------------------------------

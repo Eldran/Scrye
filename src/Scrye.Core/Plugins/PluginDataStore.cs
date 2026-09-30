@@ -11,14 +11,36 @@ namespace Scrye.Core.Plugins;
 /// Values are strings, matching the rest of the <see cref="IPluginHost"/> surface.
 /// Writes are write-through with an atomic replace (tmp + move), so a crash never
 /// leaves a half-written file. A missing or corrupt file simply starts empty — a
-/// broken store must never take the session down. All calls are expected on the
-/// session loop thread (like every other host call), so there is no locking.
+/// broken store must never take the session down.
+///
+/// The in-memory copy of each file is PROCESS-WIDE (keyed by full file path), not per
+/// instance: <c>scrye.shared</c> is scoped by MUD host, so two characters on the same MUD
+/// connected at once each construct their own store over the SAME file. With a private
+/// cache per instance each would write back its own stale map and silently drop the
+/// other's data (the mapper's rooms). Sessions run on different threads, so every access
+/// to a shared map is locked, and each save uses a unique temp file name.
 /// </summary>
 public sealed class PluginDataStore
 {
     private readonly string _root;
     private readonly Action<string>? _report;
-    private readonly Dictionary<string, Dictionary<string, string>> _cache = new(StringComparer.OrdinalIgnoreCase);
+    // Entries this INSTANCE has already resolved and checked against disk (see Entry).
+    private readonly Dictionary<string, Entry> _mine = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// One loaded file, shared by every store instance in the process that maps to it.
+    /// <see cref="Stamp"/> is the file's (mtime, length) as last read or written by us: a NEW
+    /// instance touching the file for the first time reloads it when disk no longer matches
+    /// (edited or replaced outside this process), so a fresh store still sees the disk truth.
+    /// </summary>
+    private sealed class Entry
+    {
+        public Dictionary<string, string>? Map;
+        public (DateTime, long) Stamp;
+    }
+
+    private static readonly Dictionary<string, Entry> Registry = new(
+        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
@@ -32,15 +54,22 @@ public sealed class PluginDataStore
     }
 
     /// <summary>The stored value, or null if the key is unset.</summary>
-    public string? Get(string pluginId, string key) =>
-        Map(pluginId).TryGetValue(key, out string? v) ? v : null;
+    public string? Get(string pluginId, string key)
+    {
+        Entry e = Load(pluginId);
+        lock (e) return e.Map!.TryGetValue(key, out string? v) ? v : null;
+    }
 
     public void Set(string pluginId, string key, string value)
     {
-        Dictionary<string, string> map = Map(pluginId);
-        if (map.TryGetValue(key, out string? existing) && existing == value) return;   // no-op write
-        map[key] = value;
-        Save(pluginId, map);
+        Entry e = Load(pluginId);
+        lock (e)
+        {
+            Dictionary<string, string> map = e.Map!;
+            if (map.TryGetValue(key, out string? existing) && existing == value) return;   // no-op write
+            map[key] = value;
+            Save(pluginId, e);
+        }
     }
 
     /// <summary>
@@ -51,37 +80,67 @@ public sealed class PluginDataStore
     /// </summary>
     public void SetMany(string pluginId, IReadOnlyDictionary<string, string> values)
     {
-        Dictionary<string, string> map = Map(pluginId);
-        bool dirty = false;
-        foreach (KeyValuePair<string, string> kv in values)
+        Entry e = Load(pluginId);
+        lock (e)
         {
-            if (map.TryGetValue(kv.Key, out string? existing) && existing == kv.Value) continue;
-            map[kv.Key] = kv.Value;
-            dirty = true;
+            Dictionary<string, string> map = e.Map!;
+            bool dirty = false;
+            foreach (KeyValuePair<string, string> kv in values)
+            {
+                if (map.TryGetValue(kv.Key, out string? existing) && existing == kv.Value) continue;
+                map[kv.Key] = kv.Value;
+                dirty = true;
+            }
+            if (dirty) Save(pluginId, e);
         }
-        if (dirty) Save(pluginId, map);
     }
 
     /// <summary>Remove a key; true if it existed.</summary>
     public bool Delete(string pluginId, string key)
     {
-        Dictionary<string, string> map = Map(pluginId);
-        if (!map.Remove(key)) return false;
-        Save(pluginId, map);
-        return true;
+        Entry e = Load(pluginId);
+        lock (e)
+        {
+            if (!e.Map!.Remove(key)) return false;
+            Save(pluginId, e);
+            return true;
+        }
     }
 
     /// <summary>All keys currently stored for the plugin (unordered).</summary>
-    public string[] Keys(string pluginId) => Map(pluginId).Keys.ToArray();
+    public string[] Keys(string pluginId)
+    {
+        Entry e = Load(pluginId);
+        lock (e) return e.Map!.Keys.ToArray();
+    }
 
     // ---- files ---------------------------------------------------------------
 
-    private Dictionary<string, string> Map(string pluginId)
+    /// <summary>The process-wide entry for the plugin's file, loaded (or re-validated) as needed.</summary>
+    private Entry Load(string pluginId)
     {
-        if (_cache.TryGetValue(pluginId, out Dictionary<string, string>? map)) return map;
+        Entry? e;
+        lock (_mine)
+        {
+            if (_mine.TryGetValue(pluginId, out e)) return e;   // hot path: no path building, no stat
+        }
+        string path = Path.GetFullPath(FileFor(pluginId));
+        lock (Registry)
+        {
+            if (!Registry.TryGetValue(path, out e)) Registry[path] = e = new Entry();
+        }
+        lock (e)
+        {
+            // Loaded once per process; re-checked against disk once per new instance.
+            if (e.Map is null || StampOf(path) != e.Stamp) Reload(pluginId, path, e);
+        }
+        lock (_mine) _mine[pluginId] = e;
+        return e;
+    }
 
-        map = new Dictionary<string, string>(StringComparer.Ordinal);
-        string path = FileFor(pluginId);
+    private void Reload(string pluginId, string path, Entry e)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
         try
         {
             if (File.Exists(path))
@@ -94,25 +153,45 @@ public sealed class PluginDataStore
         {
             _report?.Invoke($"plugin store for '{pluginId}' could not be read ({ex.Message}) — starting empty");
         }
-        _cache[pluginId] = map;
-        return map;
+        e.Map = map;
+        e.Stamp = StampOf(path);
     }
 
-    private void Save(string pluginId, Dictionary<string, string> map)
+    /// <summary>Write the entry's map to disk. Caller holds the entry's lock.</summary>
+    private void Save(string pluginId, Entry e)
     {
         string path = FileFor(pluginId);
         try
         {
             Directory.CreateDirectory(_root);
-            string tmp = path + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(map, Options));
-            File.Move(tmp, path, overwrite: true);
+            // Unique temp name: another process (a second Scrye) must not collide on one ".tmp".
+            string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(tmp, JsonSerializer.Serialize(e.Map, Options));
+                File.Move(tmp, path, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(tmp)) try { File.Delete(tmp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            }
+            e.Stamp = StampOf(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // keep the in-memory value; the next successful save persists it
             _report?.Invoke($"plugin store for '{pluginId}' could not be saved: {ex.Message}");
         }
+    }
+
+    private static (DateTime, long) StampOf(string path)
+    {
+        try
+        {
+            var fi = new FileInfo(path);
+            return fi.Exists ? (fi.LastWriteTimeUtc, fi.Length) : default;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return default; }
     }
 
     private string FileFor(string pluginId) => Path.Combine(_root, Sanitize(pluginId) + ".json");

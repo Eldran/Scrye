@@ -19,10 +19,19 @@ public readonly record struct StateChange(string Path, StateValue Value, bool Re
 /// </summary>
 public sealed class StateStore
 {
-    private sealed record Watcher(string Path, Action<string, StateValue> Callback);
+    // Prefix is Path + "." precomputed, so matching a change allocates nothing. Removed marks a
+    // disposed watch that may still sit in a Notify snapshot.
+    private sealed class Watcher(string path, Action<string, StateValue> callback)
+    {
+        public readonly string Path = path;
+        public readonly string Prefix = path + ".";
+        public readonly Action<string, StateValue> Callback = callback;
+        public bool Removed;
+    }
 
     private readonly Dictionary<string, StateValue> _values = new(StringComparer.Ordinal);
     private readonly List<Watcher> _watchers = new();
+    private Watcher[]? _watcherPass;   // Notify's snapshot of _watchers, rebuilt only after a change
 
     /// <summary>Packages that have been seen to arrive PAGED, and so are never pruned again.
     /// See <see cref="SetJson"/> for why. Keyed by normalised prefix.</summary>
@@ -155,8 +164,9 @@ public sealed class StateStore
         if (prune)
         {
             var doomed = new List<string>();
+            string pDot = p + ".";   // once, not per stored key
             foreach (string key in _values.Keys)
-                if ((key == p || key.StartsWith(p + ".", StringComparison.Ordinal)) && !incoming.ContainsKey(key))
+                if ((key == p || key.StartsWith(pDot, StringComparison.Ordinal)) && !incoming.ContainsKey(key))
                     doomed.Add(key);
             foreach (string key in doomed)
             {
@@ -191,6 +201,7 @@ public sealed class StateStore
     {
         var w = new Watcher(Normalize(path), onChange);
         _watchers.Add(w);
+        _watcherPass = null;
         return new Subscription(this, w);
     }
 
@@ -228,18 +239,18 @@ public sealed class StateStore
     private void Notify(string key, StateValue value, bool removed)
     {
         Changed?.Invoke(new StateChange(key, value, removed));
-        // Index-based: a watcher callback might add/remove watchers; snapshot the count.
-        for (int i = 0; i < _watchers.Count; i++)
-        {
-            Watcher w = _watchers[i];
-            if (Matches(w.Path, key)) w.Callback(key, value);
-        }
+        // Iterate a snapshot: a callback may dispose its own (or another) watch or add one, and
+        // indexing the live list across that would skip the next watcher. The array is cached
+        // and rebuilt only when the watcher list changes, so a change allocates nothing here.
+        Watcher[] pass = _watcherPass ??= _watchers.ToArray();
+        foreach (Watcher w in pass)
+            if (!w.Removed && Matches(w, key)) w.Callback(key, value);
     }
 
-    private static bool Matches(string watchPath, string changedKey) =>
-        watchPath.Length == 0
-        || changedKey == watchPath
-        || changedKey.StartsWith(watchPath + ".", StringComparison.Ordinal);
+    private static bool Matches(Watcher w, string changedKey) =>
+        w.Path.Length == 0
+        || changedKey == w.Path
+        || changedKey.StartsWith(w.Prefix, StringComparison.Ordinal);
 
     private static string Normalize(string path) => (path ?? "").Trim().ToLowerInvariant();
 
@@ -253,7 +264,9 @@ public sealed class StateStore
         {
             if (_disposed) return;
             _disposed = true;
+            _watcher.Removed = true;
             _store._watchers.Remove(_watcher);
+            _store._watcherPass = null;
         }
     }
 }

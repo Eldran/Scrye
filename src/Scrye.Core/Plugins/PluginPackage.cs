@@ -46,7 +46,9 @@ public static class PluginPackage
             throw new InvalidDataException("package manifest is missing an 'id'");
 
         string dest = Path.Combine(userRoot, Sanitize(manifest.Id));
-        string destFull = Path.GetFullPath(dest);
+        // Trailing separator so the zip-slip guard below rejects a SIBLING that merely shares the
+        // prefix ("../foobar/x" for plugin "foo" resolves to ".../foobar/x", which starts with ".../foo").
+        string destFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dest)) + Path.DirectorySeparatorChar;
         Directory.CreateDirectory(dest);
 
         foreach (ZipArchiveEntry e in zip.Entries)
