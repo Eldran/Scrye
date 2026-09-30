@@ -26,6 +26,7 @@ public class GmcpShapeTests
         foreach ((string p, string j) in payloads) first.Observe(p, j);
         var audit = new GmcpAudit();
         audit.Shape.LoadJson(first.Shape.ToJson());
+        audit.Shape.Watch = true;                               // '.gmcp watch on': these tests are about the notices
         var said = new List<string>();
         audit.Shape.Announce = said.Add;
         return (audit, said);
@@ -139,6 +140,26 @@ public class GmcpShapeTests
     }
 
     [Fact]
+    public void WatchIsOffUntilItIsTurnedOn()
+    {
+        // GMCP is for plugins: a player who never asked sees no notices about it
+        var first = new GmcpAudit();
+        first.Observe("Guild.City", City);
+        var audit = new GmcpAudit();
+        audit.Shape.LoadJson(first.Shape.ToJson());
+        Assert.False(audit.Shape.Watch);
+        var said = new List<string>();
+        audit.Shape.Announce = said.Add;
+        audit.SubscriptionSent = "[\"Guild 1\"]";
+        audit.Observe("Core.Supported", "{ \"Guild.City\": 1, \"Quest.Log\": 1 }");
+        audit.Observe("Guild.City", CityWithProduction);
+        audit.Observe("Char.XP", "{ \"xp\": 1 }");
+        Assert.Empty(said);
+        Assert.Contains("Guild.City|production.grain", audit.Shape.NewThisSession);   // still learned
+        Assert.False(new GmcpShapeMemory().Watch);
+    }
+
+    [Fact]
     public void WatchOffLearnsWithoutSaying()
     {
         (GmcpAudit audit, List<string> said) = Remembering(("Guild.City", City));
@@ -156,6 +177,7 @@ public class GmcpShapeTests
         {
             var a = new GmcpAudit();
             a.UseShapeFile(file);
+            a.Shape.Watch = true;
             a.Observe("Guild.City", City);                      // baseline session
             a.Reset();                                          // reconnect: saved, and now known
             Assert.True(File.Exists(file));
@@ -209,6 +231,7 @@ public class GmcpShapeTests
         string report = string.Join("\n", earlier.FieldReport("Goran"));
 
         var audit = new GmcpAudit();
+        audit.Shape.Watch = true;
         var said = new List<string>();
         audit.Shape.Announce = said.Add;
         audit.Observe("Guild.City", CityWithProduction);        // this session saw it before the learn
@@ -225,5 +248,60 @@ public class GmcpShapeTests
         audit.Observe("Guild.City", """{ "weather": { "season": "autumn" } }""");
         Assert.Equal(new[] { "GMCP: new field in Guild.City: weather.season" }, said);
         Assert.Equal(0, audit.Shape.LearnFromReport(report));   // learning twice learns nothing
+    }
+
+    // Craft.Statedata while crafting was being built on the live server (30 Sep 2026): one
+    // generated field per material group, and each group announced as new.
+    private static string Group(int g, int c) =>
+        $$"""{ "materials_chunks_g{{g}}": 8, "materials_g{{g}}c{{c}}": [ { "name": "oak", "qty": 3, "quality": 2, "realm": "wood", "category": "log", "best": 1 } ] }""";
+
+    [Fact]
+    public void NumbersInsideANameAreFolded()
+    {
+        Assert.Equal("Craft.Statedata|materials_g#c#[].name", GmcpShapeMemory.FieldKey("Craft.Statedata", "materials_g211c0[0].name"));
+        Assert.Equal("Craft.Statedata|materials_chunks_g#", GmcpShapeMemory.FieldKey("Craft.Statedata", "materials_chunks_g210"));
+
+        (GmcpAudit audit, List<string> said) = Remembering(("Craft.Statedata", Group(210, 0)));
+        for (int g = 210; g < 214; g++)
+            for (int c = 0; c < 8; c++)
+                audit.Observe("Craft.Statedata", Group(g, c));
+        Assert.Empty(said);                                     // the same shape every time
+    }
+
+    [Fact]
+    public void AMemoryFromBeforeFoldingStillKnowsItsFields()
+    {
+        var shape = new GmcpShapeMemory();
+        shape.LoadJson("""{ "version": 1, "shapes": [ "Craft.Statedata", "Craft.Statedata|materials_chunks_g210", "Craft.Statedata|materials_g210c0[].name" ] }""");
+        var said = new List<string>();
+        shape.Announce = said.Add;
+        shape.Observe("Craft.Statedata", """{ "materials_chunks_g211": 1, "materials_g211c3": [ { "name": "x" } ] }""");
+        Assert.Empty(said);
+    }
+
+    [Fact]
+    public void AMutedPackageLearnsQuietlyAndTheMuteIsKept()
+    {
+        (GmcpAudit audit, List<string> said) = Remembering(("Guild.City", City), ("Craft.Statedata", "{ \"a\": 1 }"));
+        Assert.True(audit.Shape.Mute("Craft.*"));
+        Assert.False(audit.Shape.Mute("Craft.*"));
+        Assert.True(audit.Shape.IsMuted("craft.statedata"));
+        Assert.False(audit.Shape.IsMuted("Guild.City"));
+
+        audit.Observe("Craft.Statedata", "{ \"a\": 1, \"b\": 2 }");
+        audit.Observe("Craft.Recipes", "{ \"r\": 1 }");
+        Assert.Empty(said);
+        Assert.Contains("Craft.Statedata|b", audit.Shape.NewThisSession);   // still learned
+
+        audit.Observe("Guild.City", CityWithProduction);
+        Assert.Single(said);                                                // others still speak
+
+        audit.Shape.Watch = false;
+        var again = new GmcpShapeMemory();
+        again.LoadJson(audit.Shape.ToJson());
+        Assert.Equal(new[] { "Craft.*" }, again.Muted);
+        Assert.False(again.Watch);
+        Assert.True(again.Unmute("*"));
+        Assert.Empty(again.Muted);
     }
 }

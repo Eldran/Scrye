@@ -821,6 +821,7 @@ public class GmcpTests
         var earlier = new GmcpAudit();
         earlier.Observe("Guild.City", "{\"nexttick\":5140}");
         s.GmcpAudit.Shape.LoadJson(earlier.Shape.ToJson());
+        s.GmcpAudit.Shape.Watch = true;                         // '.gmcp watch on' (off by default)
         var lines = new List<string>();
         s.LineReady += l => lines.Add(l.PlainText);
 

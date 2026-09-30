@@ -1457,7 +1457,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// actually arrived. <c>.gmcp &lt;package&gt;</c> prints the whole of that package's last
     /// payload; <c>.gmcp raw on</c> echoes every message as it lands; <c>.gmcp new</c> lists what
     /// is new since earlier sessions (and <c>.gmcp watch on|off</c> turns the live notice of it
-    /// on and off); <c>.gmcp fields</c>
+    /// on and off; <c>.gmcp mute &lt;package&gt;</c> quiets one package); <c>.gmcp fields</c>
     /// writes a markdown report of every package and every field seen.
     ///
     /// <para>The first evening of a protocol going live is when this is worth the most, and it
@@ -1483,10 +1483,43 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (lower is "watch on" or "watch off")
         {
             bool on = lower.EndsWith("on");
-            _session.Post(() => _session.GmcpAudit.Shape.Watch = on);
+            _session.Post(() => { _session.GmcpAudit.Shape.Watch = on; _session.GmcpAudit.SaveShape(); });
             AppendSystem(on
-                ? "GMCP watch ON - a package or field never sent on this MUD before is announced as it arrives"
-                : "GMCP watch off - new packages and fields are still remembered; '.gmcp new' lists them");
+                ? "GMCP watch ON - GMCP notices are shown: the handshake, and a package or field never sent on this MUD before as it arrives"
+                : "GMCP watch off (the default) - no GMCP notices in the output; new packages and fields are still remembered and '.gmcp new' lists them");
+            return;
+        }
+
+        if (lower is "mute" or "muted" or "unmute"
+            || lower.StartsWith("mute ", StringComparison.Ordinal) || lower.StartsWith("unmute ", StringComparison.Ordinal))
+        {
+            // Quiet one package (or 'Craft.*' for a family) that is changing too fast to be
+            // news - a system being built on the live server. Its new fields are still learned
+            // and it still reaches plugins and state; only the notices and the raw echo skip it.
+            bool unmute = lower.StartsWith("unmute", StringComparison.Ordinal);
+            string pattern = lower is "mute" or "muted" or "unmute" ? "" : a[(unmute ? 7 : 5)..].Trim();
+            _session.Post(() =>
+            {
+                Scrye.Core.Gmcp.GmcpShapeMemory shape = _session.GmcpAudit.Shape;
+                bool changed = pattern.Length > 0 && (unmute ? shape.Unmute(pattern) : shape.Mute(pattern));
+                string? saveError = changed ? _session.GmcpAudit.SaveShape() : null;
+                string list = shape.Muted.Count == 0 ? "none" : string.Join(", ", shape.Muted);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (pattern.Length == 0)
+                    {
+                        AppendSystem("GMCP muted packages: " + list);
+                        AppendSystem("usage: .gmcp mute <package> | .gmcp mute Craft.* | .gmcp unmute <package> | .gmcp unmute *");
+                    }
+                    else if (!changed)
+                        AppendSystem(unmute ? $"'{pattern}' is not muted (muted: {list})" : $"'{pattern}' is already muted");
+                    else
+                        AppendSystem((unmute
+                            ? $"GMCP {pattern} unmuted - new fields in it are announced again"
+                            : $"GMCP {pattern} muted - its new fields are still remembered but not announced, and raw echo skips it")
+                            + (saveError is not null ? " (could not save: " + saveError + ")" : ""));
+                });
+            });
             return;
         }
 
@@ -1594,7 +1627,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 if (p is null)
                 {
                     AppendSystem($"no GMCP package '{a}' has arrived on this connection");
-                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields | .gmcp new | .gmcp watch on|off | .gmcp learn [all|<file>]");
+                    AppendSystem("usage: .gmcp | .gmcp <package> | .gmcp raw on|off | .gmcp fields | .gmcp new | .gmcp watch on|off | .gmcp mute|unmute <package> | .gmcp learn [all|<file>]");
                     return;
                 }
                 AppendSystem($"-- {p.Package} -- {p.Count} message(s), last {p.LastAt:HH:mm:ss}");

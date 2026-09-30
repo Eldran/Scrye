@@ -387,7 +387,7 @@ public sealed class GmcpAudit
     // subscription is not a "maybe it will come" - it cannot come.
     private void WarnUnsubscribed()
     {
-        if (_unsubscribedWarned) return;
+        if (_unsubscribedWarned || !Shape.Watch) return;
         IReadOnlyList<string> missing = OfferedNotSubscribed();
         if (missing.Count == 0) return;
         _unsubscribedWarned = true;

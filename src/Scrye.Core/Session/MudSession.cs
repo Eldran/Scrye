@@ -204,7 +204,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.GmcpEnabled += () =>
             _mailbox.Writer.TryWrite(new SessionMessage.Invoke(OnGmcpNegotiated));
         // A package or field this MUD has never sent before is said once, as it arrives
-        // (GmcpShapeMemory; '.gmcp watch off' quiets it, '.gmcp new' lists them).
+        // (GmcpShapeMemory) - when '.gmcp watch on' asks for GMCP notices at all; they are off
+        // by default. '.gmcp mute <package>' quiets one package, '.gmcp new' lists them.
         GmcpAudit.Shape.Announce = text => RaiseLine(Line.FromText(text, SysColour));
         _telnet.GmcpReceived += (pkg, json) =>
         {
@@ -212,7 +213,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             GmcpAudit.Observe(pkg, json);
             if (!string.IsNullOrWhiteSpace(json)) _state.SetJson(pkg, json);   // GMCP → structured state
             MapGmcpState(pkg);
-            if (GmcpAudit.Raw) RaiseLine(Line.FromText($"[GMCP] {pkg} {json}", SysColour));
+            if (GmcpAudit.Raw && !GmcpAudit.Shape.IsMuted(pkg)) RaiseLine(Line.FromText($"[GMCP] {pkg} {json}", SysColour));
             if (pkg.Equals("Comm.Channel.Text", StringComparison.OrdinalIgnoreCase))
                 RaiseGmcpChannel(json);
             if (pkg.Equals("Mud.Status", StringComparison.OrdinalIgnoreCase))
@@ -1273,8 +1274,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _telnet.SendGmcp("Core.Hello",
             $"{{\"client\":\"Scrye\",\"version\":\"{ClientVersion}\"}}");
         SendGmcpSubscription("Core.Supports.Set");
-        RaiseLine(Line.FromText("[GMCP] negotiated - subscribed to "
-                                + string.Join(", ", GmcpPackages), SysColour));
+        // GMCP is for plugins: the handshake is only worth a line to someone watching the feed
+        if (GmcpAudit.Shape.Watch)
+            RaiseLine(Line.FromText("[GMCP] negotiated - subscribed to "
+                                    + string.Join(", ", GmcpPackages), SysColour));
     }
 
     private void SendGmcpSubscription(string verb)
@@ -1303,9 +1306,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         if (_gmcpSecondsSinceSubscribe < 5 || _gmcpRetriedVerb) return;
 
         _gmcpRetriedVerb = true;
-        RaiseLine(Line.FromText(
-            "[GMCP] no reply to Core.Supports.Set - trying the bare 'Core.Supports' spelling",
-            SysColour));
+        if (GmcpAudit.Shape.Watch)
+            RaiseLine(Line.FromText(
+                "[GMCP] no reply to Core.Supports.Set - trying the bare 'Core.Supports' spelling",
+                SysColour));
         SendGmcpSubscription("Core.Supports");
     }
 

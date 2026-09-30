@@ -15,9 +15,14 @@ namespace Scrye.Core.Gmcp;
 /// announced once in the output as it arrives, and the field report opens with what changed.</para>
 ///
 /// <para>A shape, not a value: paths only, with array indices folded (<c>items[3].name</c> is
-/// <c>items[].name</c>), numbered slices folded (<c>hird_0</c>, <c>hird_1</c> are
-/// <c>hird_#</c>), and the few maps whose KEYS are data (a room's exits, the map legend)
+/// <c>items[].name</c>), every number inside a name folded (<c>hird_0</c>, <c>hird_1</c> are
+/// <c>hird_#</c>; <c>materials_g211c0</c> is <c>materials_g#c#</c>), and the few maps whose KEYS are data (a room's exits, the map legend)
 /// folded to <c>*</c> - otherwise every new exit name would be a "new field".</para>
+///
+/// <para>A package can be muted (<c>.gmcp mute Craft.*</c>): its new fields are still learned
+/// but never announced, and the raw echo skips it - for a system being built on the live
+/// server, whose shape changes by the minute and is nobody's news yet. Mutes and the watch
+/// switch are kept in the same file as the shapes, so they hold across sessions.</para>
 ///
 /// <para>The first session with no memory is the baseline: it learns quietly and announces
 /// nothing, because on that evening everything is new and nothing is news.</para>
@@ -44,9 +49,49 @@ public sealed class GmcpShapeMemory
     /// <summary>Called with a line to show when something never seen before arrives.</summary>
     public Action<string>? Announce { get; set; }
 
-    /// <summary>Whether new shapes are announced as they arrive (<c>.gmcp watch on|off</c>).
-    /// The memory learns either way.</summary>
-    public bool Watch { get; set; } = true;
+    /// <summary>Whether GMCP notices are shown in the output (<c>.gmcp watch on|off</c>):
+    /// new packages and fields as they arrive, and what the session says about the feed. Off
+    /// by default - GMCP is for plugins, and a player has no use for news about it; the memory
+    /// learns either way and <c>.gmcp new</c> lists it. Saved with the shapes.</summary>
+    public bool Watch { get; set; }
+
+    // Muted packages: exact names, or a prefix ending in '*' ("Craft.*", "Craft*").
+    private readonly SortedSet<string> _muted = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The muted packages and patterns, sorted.</summary>
+    public IReadOnlyCollection<string> Muted => _muted;
+
+    /// <summary>Mute a package, or every package a pattern ending in <c>*</c> matches.
+    /// False when it was muted already.</summary>
+    public bool Mute(string pattern)
+    {
+        pattern = pattern.Trim();
+        return pattern.Length > 0 && _muted.Add(pattern);
+    }
+
+    /// <summary>Unmute a package or pattern exactly as it was muted; <c>*</c> alone unmutes
+    /// everything. False when there was nothing to remove.</summary>
+    public bool Unmute(string pattern)
+    {
+        pattern = pattern.Trim();
+        if (pattern == "*" && !_muted.Contains("*")) { bool any = _muted.Count > 0; _muted.Clear(); return any; }
+        return _muted.Remove(pattern);
+    }
+
+    /// <summary>Is this package muted? Case-insensitive, like package names on the wire.</summary>
+    public bool IsMuted(string package)
+    {
+        if (_muted.Count == 0) return false;
+        foreach (string m in _muted)
+        {
+            if (m.EndsWith('*'))
+            {
+                if (package.StartsWith(m[..^1], StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            else if (string.Equals(package, m, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
 
     /// <summary>True while there was nothing remembered: the session that builds the baseline.</summary>
     public bool Baseline => _known.Count == 0;
@@ -64,8 +109,10 @@ public sealed class GmcpShapeMemory
         for (int i = 0; i < parts.Length; i++)
         {
             string seg = parts[i];
-            if (Regex.IsMatch(seg, @"^\d+$")) parts[i] = "#";                       // a numbered key
-            else parts[i] = Regex.Replace(seg, @"_\d+(?=(\[\])?$)", "_#");          // hird_0, market_1
+            // A number inside a name is data, not a new field: a numbered key (7), a slice
+            // (hird_0, market_1) or a generated name (materials_g211c0, materials_chunks_g210 -
+            // Craft.Statedata sends one per material group, and each was announced as new).
+            parts[i] = Regex.Replace(seg, @"\d+", "#");
         }
         // a keyed map: everything past it is one wildcard
         for (int i = 0; i < parts.Length; i++)
@@ -89,7 +136,7 @@ public sealed class GmcpShapeMemory
         // Core.Supported's keys are package names, not fields; it is compared on its own.
         if (string.Equals(package, "Core.Supported", StringComparison.OrdinalIgnoreCase)) return;
 
-        bool quiet = Baseline || !Watch;
+        bool quiet = Baseline || !Watch || IsMuted(package);
         if (_seen.Add(package) && !_known.Contains(package))
         {
             _newInOrder.Add(package);
@@ -128,7 +175,7 @@ public sealed class GmcpShapeMemory
     {
         var all = new SortedSet<string>(_known, StringComparer.Ordinal);
         all.UnionWith(_seen);
-        return JsonSerializer.Serialize(new { version = 1, shapes = all });
+        return JsonSerializer.Serialize(new { version = 1, watch = Watch, muted = _muted, shapes = all });
     }
 
     /// <summary>Load a memory written by <see cref="ToJson"/>. Garbage loads as nothing - the
@@ -136,17 +183,33 @@ public sealed class GmcpShapeMemory
     public void LoadJson(string? json)
     {
         _known.Clear();
+        _muted.Clear();
+        Watch = false;
         if (string.IsNullOrWhiteSpace(json)) return;
         try
         {
             using JsonDocument doc = JsonDocument.Parse(json);
-            if (doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("shapes", out JsonElement s)
-                && s.ValueKind == JsonValueKind.Array)
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return;
+            if (root.TryGetProperty("shapes", out JsonElement s) && s.ValueKind == JsonValueKind.Array)
                 foreach (JsonElement e in s.EnumerateArray())
-                    if (e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } k) _known.Add(k);
+                    if (e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } k) _known.Add(Refold(k));
+            if (root.TryGetProperty("muted", out JsonElement m) && m.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement e in m.EnumerateArray())
+                    if (e.ValueKind == JsonValueKind.String && e.GetString() is { Length: > 0 } k) Mute(k);
+            if (root.TryGetProperty("watch", out JsonElement w) && w.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                Watch = w.GetBoolean();
         }
-        catch (JsonException) { _known.Clear(); }
+        catch (JsonException) { _known.Clear(); _muted.Clear(); Watch = false; }
+    }
+
+    // A key saved by an older Scrye, folded the way FieldKey folds now - so a memory written
+    // before numbers inside names were folded still knows those fields (and folding an
+    // already-folded key changes nothing).
+    private static string Refold(string key)
+    {
+        int bar = key.IndexOf('|');
+        return bar < 0 ? key : FieldKey(key[..bar], key[(bar + 1)..]);
     }
 
     /// <summary>
