@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "v1.10.0",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.0/src/Scrye.App/plugins/",
-  "generated": "2026-09-29T17:04:37Z",
+  "ref": "v1.10.3",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.3/src/Scrye.App/plugins/",
+  "generated": "2026-10-01T14:14:00Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -85,9 +85,9 @@
     {
       "id": "3s-chat",
       "name": "3S Chat",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "author": "Joakim",
-      "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep). 1.1.0: the pane is yours to shape - a Chat panel lists every channel that has spoken; click a channel to pick it, then a colour in the column beside it to paint it (sixteen named colours, the theme tokens, or default); each channel line carries its own hide/show link (hidden = out of the pane, still logged, a notify subscription still fires); 'chat channels', 'chat show|hide <channel>', 'chat color <channel> <name|#hex|->' do the same by command. Both persist.",
+      "description": "Captures all chat channels and tells into a Chats capture pane, with name watching (notify + beep). 1.1.0: the pane is yours to shape - a Chat panel lists every channel that has spoken; click a channel to pick it, then a colour in the column beside it to paint it (sixteen named colours, the theme tokens, or default); each channel line carries its own hide/show link (hidden = out of the pane, still logged, a notify subscription still fires); 'chat channels', 'chat show|hide <channel>', 'chat color <channel> <name|#hex|->' do the same by command. Both persist. 1.1.3: the Chat panel stays out of books (it is always in view).",
       "mudIds": [
         "*"
       ],
@@ -109,16 +109,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "31ebc5a26db7cd5e62dc03ffa332ef997152dded6ad6cbaa50ccb35c4a442fd2",
-          "size": 30046
+          "sha256": "f7f0052c8e25fbbdb7e421293086729912e74d3611f4b5ed22850cde0c005f84",
+          "size": 30138
         },
         {
           "path": "plugin.json",
-          "sha256": "e72940362c95d1c3895c4fbcaeb9d591bdbc085a37d25516484f05e4bb04b0b3",
-          "size": 1065
+          "sha256": "bd89db0a2dc9f4beaaa145b88b6d881917a4ac8552d4da6a11ebb76fdee82976",
+          "size": 1130
         }
       ],
-      "totalSize": 31111
+      "totalSize": 31268
     },
     {
       "id": "3s-cyborg",

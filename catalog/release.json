@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "version": "1.10.0",
-  "tag": "v1.10.0",
-  "notes": "v1.10.0 - Triggers over several lines: type a pattern on several lines (or use \\n in a regex, or the Lines box) and it matches a block such as a score screen or a two-line kill message, firing once as the block's last line arrives; MUSHclient multi-line triggers now import; plugins get the same with scrye.addTrigger{ lines = N } (plugin API 1.20). Plugin catalogue: the Plugins panel's Catalogue page lists the plugins published with each release and installs or updates them, checksum-verified; an update of a bundled plugin wins until a newer Scrye bundles a newer one. Update check: Scrye shows its version at the bottom of the MUD list and says when a newer release is out, with a link to it. Map 1.12.0: 'mapg export' saves the map to share and an SVG picture of it, 'mapg import' adds someone else's map to yours without overwriting anything (plugins can now save files in Scrye's exports folder, plugin API 1.21). Mercenary 1.1.0: the status command is 'mhud', so 'merc' goes to the game again.",
-  "published": "2026-09-29"
+  "version": "1.10.3",
+  "tag": "v1.10.3",
+  "notes": "v1.10.3 - A plugin turned on mid-session now fills straight away: enabling, reloading or updating a plugin while connected used to leave its panels empty until the next login, because most of the 3Scapes GMCP feed (Guild.Kingdom, Guild.Roster, Merc.* ...) is sent as a full report at login and only changes after that. Scrye now keeps what each package's current picture is built from and replays it to the plugin as it loads; chat and kill messages are never replayed.",
+  "published": "2026-10-01"
 }
