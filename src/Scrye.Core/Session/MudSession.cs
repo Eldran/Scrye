@@ -221,6 +221,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 Reboot.Observe(json);
                 RebootTick(advance: false);
             }
+            GmcpReplay.Record(pkg, json);
             GmcpReceived?.Invoke(pkg, json);
         };
         _telnet.MsspReceived += vars => MsspReceived?.Invoke(vars);
@@ -1217,6 +1218,10 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// <summary>What the audit and <c>.gmcp</c> read.</summary>
     public Gmcp.GmcpAudit GmcpAudit { get; } = new();
 
+    /// <summary>The messages that rebuild each package's current picture, replayed to a plugin
+    /// loaded mid-session (it missed the login's full report). Loop thread.</summary>
+    public Gmcp.GmcpReplayBuffer GmcpReplay { get; } = new();
+
     /// <summary>
     /// The roots we subscribe to. Roots rather than exact packages, so a server that adds
     /// <c>Char.Something</c> later starts sending it without a client release — GMCP's own
@@ -1338,6 +1343,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         Reboot.Reset();
         RebootTick(advance: false);
         GmcpAudit.Reset();
+        GmcpReplay.Clear();
         _gmcpHandshakeSent = false;
         _gmcpRetriedVerb = false;
         _gmcpSecondsSinceSubscribe = -1;

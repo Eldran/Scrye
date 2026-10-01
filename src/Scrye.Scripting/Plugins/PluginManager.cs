@@ -25,6 +25,7 @@ public sealed class PluginManager : IDisposable
     private readonly Func<IReadOnlyList<PluginDescriptor>>? _rediscover;   // re-scan disk (for add/remove)
     private readonly string? _userRoot;                     // plugins under here are removable (deletable)
     private readonly Action<string, bool>? _persistEnable;  // (pluginId, enabled) → save the choice to the profile
+    private readonly Func<IReadOnlyList<(string Package, string Json)>>? _gmcpBacklog;   // GMCP so far, for a late load
     private readonly List<IPluginRuntime> _runtimes = new();
     private readonly PluginDiagnostics _diagnostics;
     // Authoritative opt-in set: the plugins this world should load. Seeded from the
@@ -54,12 +55,18 @@ public sealed class PluginManager : IDisposable
     /// <param name="enabledIds">Ids the character has opted into — only these load at startup.</param>
     /// <param name="persistEnable">Called (id, enabled) when the user toggles a plugin, so the
     /// choice can be saved to the connected character's profile. Null = session-only (quick-connect).</param>
+    /// <param name="gmcpBacklog">The GMCP messages this connection has sent that still describe
+    /// the present (<see cref="Scrye.Core.Gmcp.GmcpReplayBuffer"/>), replayed to a plugin as it
+    /// loads - so one enabled, reloaded or updated mid-session gets the login's full report it
+    /// missed, instead of waiting for the next login.</param>
     public PluginManager(IReadOnlyList<PluginDescriptor> plugins, IEnumerable<string> enabledIds,
                          IPluginHost host, Action<string> report,
                          Action<string>? dropPanels = null,
                          Func<IReadOnlyList<PluginDescriptor>>? rediscover = null, string? userRoot = null,
-                         Action<string, bool>? persistEnable = null)
+                         Action<string, bool>? persistEnable = null,
+                         Func<IReadOnlyList<(string Package, string Json)>>? gmcpBacklog = null)
     {
+        _gmcpBacklog = gmcpBacklog;
         _descriptors = plugins.ToList();
         _enabled = new HashSet<string>(enabledIds, StringComparer.Ordinal);
         _host = host;
@@ -100,6 +107,7 @@ public sealed class PluginManager : IDisposable
             runtime.Load();
             _runtimes.Add(runtime);
             _report($"loaded plugin '{d.Manifest.Id}' v{d.Manifest.Version}");
+            ReplayGmcp(runtime);
         }
         catch (Exception ex)
         {
@@ -115,6 +123,23 @@ public sealed class PluginManager : IDisposable
             }
         }
         Republish();
+    }
+
+    /// <summary>Catch a freshly loaded plugin up on the GMCP feed: the messages that rebuild
+    /// every package's current picture, through its ordinary onGmcp hooks, in arrival order.
+    /// Empty before the first login, so a plugin loaded at startup gets nothing twice.</summary>
+    private void ReplayGmcp(IPluginRuntime rt)
+    {
+        if (_gmcpBacklog is null) return;
+        IReadOnlyList<(string Package, string Json)> backlog;
+        try { backlog = _gmcpBacklog(); }
+        catch (Exception ex) { _report($"could not replay GMCP to '{rt.Id}': {ex.Message}"); return; }
+        foreach ((string package, string json) in backlog)
+        {
+            if (_diagnostics.IsQuarantined(rt.Id)) break;   // it failed enough: stop feeding it
+            Guard(rt, "onGmcp", r => r.DispatchGmcp(package, json));
+        }
+        DrainQuarantine();
     }
 
     private void UnloadRuntime(string id)

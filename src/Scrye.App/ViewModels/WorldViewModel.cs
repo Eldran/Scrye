@@ -753,7 +753,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             id => Hud.RemovePanels(id),                                  // drop a plugin's HUD panels on unload
             discoverPlugins,                                             // rescan disk for add/remove
             userPluginRoot,
-            (id, enabled) => Dispatcher.UIThread.Post(() => PersistPluginEnable?.Invoke(id, enabled)));
+            (id, enabled) => Dispatcher.UIThread.Post(() => PersistPluginEnable?.Invoke(id, enabled)),
+            () => _session.GmcpReplay.Snapshot());                       // catch a late-loaded plugin up on GMCP
         // Say what the extra folder did. A configured folder that finds nothing is the one
         // failure mode with no symptom -- the plugin simply is not in the list, which looks
         // identical to never having set it. Name the folder and the count either way.
