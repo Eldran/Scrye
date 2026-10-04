@@ -136,6 +136,9 @@ local B = {               -- the current room's population and the fight (never 
 local KL = {}             -- the kill log, per place: place -> name -> { kills, secs, timed, xp }
                           -- (a place is the area, and its floor when the room names one - 1.5.0)
                           -- (persisted in the private store; 'farm log clear' empties it)
+local SKL = {}            -- the same log for THIS session only (since Scrye loaded the plugin,
+                          -- like the tally) - never persisted (1.6.0)
+local KLV = "all"         -- which log the panel shows: "all" (all time) or "session" (persisted)
 local kl_rows = {}        -- panel row index -> name, for the log table
 local T = {               -- travel ('farm go', phase 4 - never persisted)
   going = nil,            -- the area we asked the mapper to walk us to
@@ -195,6 +198,7 @@ local function save()
     end
     scrye.store.set("killlog", scrye.json.encode(log))
   end
+  scrye.store.set("klview", KLV)
 end
 
 local function load()
@@ -248,6 +252,7 @@ local function load()
   if hs then C.hp_start, C.hp_panic, C.hp_resume = tonumber(hs), tonumber(hpn), tonumber(hpr) or 0 end
   local ss, sr = tostring(scrye.store.get("sp") or ""):match("^(%d+) (%d+)$")
   if ss then C.sp_start, C.sp_resume = tonumber(ss), tonumber(sr) end
+  if scrye.store.get("klview") == "session" then KLV = "session" end
   local ok6, log = pcall(scrye.json.decode, scrye.store.get("killlog") or "")
   if ok6 and type(log) == "table" then
     for _, e in ipairs(log) do
@@ -1450,18 +1455,29 @@ farm_cmd = function(args)
       end
     elseif verb == "log" then
       local low = rest:lower()
-      if low == "clear" then
-        KL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; dirty = true ; save() ; draw()
+      -- 'farm log session ...' reads this session's log instead of the all-time one
+      local LOG, which = KL, "kill log"
+      local sl = low:match("^session%s*(.-)$")
+      if sl then LOG, which, low = SKL, "kill log this session", sl ; rest = rest:gsub("^%S+%s*", "") end
+      if low == "clear" and not sl then
+        KL = {} ; SKL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; dirty = true ; save() ; draw()
         note("kill log (every place) and tally cleared")
-      elseif low == "clear here" then
+      elseif low == "clear here" and not sl then
         local place = place_of(here)
-        KL[place] = nil ; dirty = true ; save() ; draw()
+        KL[place] = nil ; SKL[place] = nil ; dirty = true ; save() ; draw()
         note("kill log for " .. place .. " cleared")
+      elseif low == "clear" or low == "clear session" then   -- 'farm log clear session' / 'farm log session clear'
+        SKL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; draw()
+        note("this session's kill log and tally cleared (the all-time log is kept)")
+      elseif low == "view" or low == "view all" or low == "view session" then
+        if low ~= "view" then KLV = low == "view session" and "session" or "all" ; dirty = true ; save() ; draw() end
+        note("the panel shows the kill log " .. (KLV == "session" and "for this session" or "for all time")
+             .. " ('farm log view all|session')")
       else
         -- 'farm log' = the place you stand in, 'farm log all' = every place, 'farm log <text>'
         -- = the places whose name contains it ("floor 40")
         local places = {}
-        for place in pairs(KL) do
+        for place in pairs(LOG) do
           if (low == "all") or (low == "" and place == place_of(here))
              or (low ~= "" and low ~= "all" and place:lower():find(low, 1, true)) then
             places[#places + 1] = place
@@ -1469,17 +1485,17 @@ farm_cmd = function(args)
         end
         table.sort(places)
         if #places == 0 then
-          local others = 0 ; for _ in pairs(KL) do others = others + 1 end
-          note("kill log: nothing for " .. (low == "" and place_of(here) or ("'" .. rest .. "'"))
-               .. (others > 0 and (" - " .. others .. " other place(s), 'farm log all'") or ""))
+          local others = 0 ; for _ in pairs(LOG) do others = others + 1 end
+          note(which .. ": nothing for " .. (low == "" and place_of(here) or ("'" .. rest .. "'"))
+               .. (others > 0 and (" - " .. others .. " other place(s), 'farm log " .. (sl and "session " or "") .. "all'") or ""))
           return
         end
         for _, place in ipairs(places) do
-          local t = KL[place]
+          local t = LOG[place]
           local names = {}
           for name in pairs(t) do names[#names + 1] = name end
           table.sort(names, function(a, b) return t[a].kills > t[b].kills end)
-          note("kill log, " .. place .. " (" .. #names .. " mob(s)):")
+          note(which .. ", " .. place .. " (" .. #names .. " mob(s)):")
           for _, name in ipairs(names) do
             local e = t[name]
             local timed = e.timed or e.kills
@@ -1677,7 +1693,9 @@ farm_cmd = function(args)
       note("farm prefer <name> | -<name>   fought first in this area (in the order added)")
       note("farm always <name> | -<name>   attacked even with a stranger in the room")
       note("farm rota add|del <area> | on|off | idle <s>   farm areas in turn once one is farmed out")
-      note("farm after add|del|-  farm noloot <name>  farm limit 45m|50k  farm sp <floor>  farm log")
+      note("farm log [all|<place>]   the kill log, all time; 'farm log session [all|<place>]' this session only")
+      note("farm log view all|session   which of the two the panel shows; 'farm log clear [here|session]'")
+      note("farm after add|del|-  farm noloot <name>  farm limit 45m|50k  farm sp <floor>")
       note("farm wipe yes   forget the graph")
     else
       note("don't know 'farm " .. args .. "' - 'farm help' lists what there is")
@@ -1777,6 +1795,13 @@ local function tally(killer, kl)
   local e = KL[place][kl] or { kills = 0, secs = 0, timed = 0 }
   e.kills = e.kills + 1
   KL[place][kl] = e
+  -- and the session's own entry, which the all-time one carries along (e.sess) so a fight's
+  -- time and XP land in both; save() writes only the fields it names, so it is never stored
+  SKL[place] = SKL[place] or {}
+  local se = SKL[place][kl] or { kills = 0, secs = 0, timed = 0 }
+  se.kills = se.kills + 1
+  SKL[place][kl] = se
+  e.sess = se
   dirty = true
   -- The XP this kill was worth: Char.XP's xp now, a breath after the blow (the kill's
   -- own award lands just after it), minus xp when the fight began - every hit pays, so
@@ -1787,6 +1812,7 @@ local function tally(killer, kl)
     XP.fight0 = nil
     scrye.after(1, function()
       e.xp = XP.xp - base
+      se.xp = e.xp
       if not XP.fight0 then XP.fight0 = XP.xp end
       dirty = true
       draw()
@@ -1800,8 +1826,11 @@ end
 -- recognised it as yours first.
 local function own_kill(e, victim)
   if e then
-    e.secs = e.secs + math.max(0, now - (B.hunt_at or now))
-    e.timed = (e.timed or 0) + 1
+    local secs = math.max(0, now - (B.hunt_at or now))
+    for _, x in ipairs({ e, e.sess }) do
+      x.secs = x.secs + secs
+      x.timed = (x.timed or 0) + 1
+    end
   end
   B.kills = B.kills + 1
   last_kill_at = now
@@ -2133,7 +2162,8 @@ draw = function()
   -- the kill log, most killed first: row index -> kl_rows[index]
   -- ...for the place you stand in (1.5.0: one log per area and floor)
   local place = place_of(here)
-  local t = KL[place] or {}
+  local LOG = KLV == "session" and SKL or KL
+  local t = LOG[place] or {}
   kl_rows = {}
   for name in pairs(t) do kl_rows[#kl_rows + 1] = name end
   table.sort(kl_rows, function(a, b)
@@ -2149,11 +2179,14 @@ draw = function()
         timed > 0 and ((e.secs // timed) .. "s") or "-",
         e.xp and big(e.xp) or "-")
     end
-    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n") or "(no kills logged here yet)\t\t\t")
+    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n")
+      or (KLV == "session" and "(no kills here this session)\t\t\t" or "(no kills logged here yet)\t\t\t"))
     local others = 0
-    for p2, t2 in pairs(KL) do if p2 ~= place and next(t2) then others = others + 1 end end
-    scrye.setState(P .. "klplace", "Kill log: " .. place
-      .. (others > 0 and string.format(" (%d other place%s - 'farm log all')", others, others == 1 and "" or "s") or ""))
+    for p2, t2 in pairs(LOG) do if p2 ~= place and next(t2) then others = others + 1 end end
+    scrye.setState(P .. "klplace", (KLV == "session" and "Kill log, this session: " or "Kill log: ") .. place
+      .. (others > 0 and string.format(" (%d other place%s - 'farm log %sall')", others, others == 1 and "" or "s",
+                                       KLV == "session" and "session " or "") or ""))
+    scrye.setState(P .. "klview", KLV == "session" and "Showing: this session" or "Showing: all time")
   end
   -- the leg being walked, for the map to light: "num,num,..." (empty = nothing to light)
   scrye.setState(P .. "route", (S.on and S.route) and table.concat(S.route, ",") or "")
@@ -2273,6 +2306,13 @@ build_panel = function(m)
       -- (it persists), how many, how long a fight takes on average, and the XP the last one
       -- of its kind was worth (Char.XP, the fight's whole take).
       { type = "text", bind = P .. "klplace" },
+      -- this session or all time (1.6.0): the same columns, two logs - the all-time one is
+      -- what persists, the session one starts empty each time Scrye loads the plugin
+      { type = "buttonrow", buttons = {
+        { text = "This session", action = function() KLV = "session" ; dirty = true ; save() ; draw() end },
+        { text = "All time", action = function() KLV = "all" ; dirty = true ; save() ; draw() end },
+      } },
+      { type = "value", text = "", bind = P .. "klview" },
       { type = "table", bind = P .. "killlog", separator = "\t", columns = { "Mob", "Kills", "Avg", "XP" },
         align = "lrrr" },
     } },
