@@ -1095,51 +1095,54 @@
                     <TabControl>
                         <!-- CONNECTION -->
                         <TabItem Header="Connection">
-                            <StackPanel Spacing="6" Margin="0,8,0,0">
-                                <TextBlock Text="Name" />
-                                <TextBox Text="{Binding Editor.Name}" />
-                                <TextBlock Text="Host" />
-                                <TextBox Text="{Binding Editor.Host}" />
-                                <TextBlock Text="Port" />
-                                <TextBox Text="{Binding Editor.Port}" />
-                                <TextBlock Text="Username (auto-login, optional)" />
-                                <TextBox Text="{Binding Editor.Username}" />
-                                <TextBlock Text="Password (auto-login, optional)" />
-                                <TextBox Text="{Binding Editor.Password}" PasswordChar="●"
-                                         PlaceholderText="{Binding Editor.PasswordHint}" />
-                                <TextBlock Text="Encoding" />
-                                <TextBox Text="{Binding Editor.Encoding}" />
-                                <TextBlock Text="Terminal type (blank = Scrye / XTERM / MTTS)" />
-                                <TextBox Text="{Binding Editor.TerminalType}" PlaceholderText="e.g. MUSHclient"
-                                         ToolTip.Tip="What every telnet TTYPE request is answered with. Some MUDs decide what to send - MXP, colour depth - by the client name they recognise; naming a client they know is the experiment." />
-                                <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
-                                    <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
-                                    <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
-                                    <CheckBox Content="GMCP" IsChecked="{Binding Editor.EnableGmcp}"
-                                              ToolTip.Tip="Out-of-band JSON: vitals, room, combat, chat. Negotiated automatically; turn it off to see what a HUD or plugin is getting from MIP alone." />
-                                    <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
-                                              ToolTip.Tip="Clickable links + inline markup when the server supports it" />
-                                    <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
-                                              ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
+                            <!-- scrolls when the window is too short to show it all, like the plugin manager -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel Spacing="6" Margin="0,8,14,0">
+                                    <TextBlock Text="Name" />
+                                    <TextBox Text="{Binding Editor.Name}" />
+                                    <TextBlock Text="Host" />
+                                    <TextBox Text="{Binding Editor.Host}" />
+                                    <TextBlock Text="Port" />
+                                    <TextBox Text="{Binding Editor.Port}" />
+                                    <TextBlock Text="Username (auto-login, optional)" />
+                                    <TextBox Text="{Binding Editor.Username}" />
+                                    <TextBlock Text="Password (auto-login, optional)" />
+                                    <TextBox Text="{Binding Editor.Password}" PasswordChar="●"
+                                             PlaceholderText="{Binding Editor.PasswordHint}" />
+                                    <TextBlock Text="Encoding" />
+                                    <TextBox Text="{Binding Editor.Encoding}" />
+                                    <TextBlock Text="Terminal type (blank = Scrye / XTERM / MTTS)" />
+                                    <TextBox Text="{Binding Editor.TerminalType}" PlaceholderText="e.g. MUSHclient"
+                                             ToolTip.Tip="What every telnet TTYPE request is answered with. Some MUDs decide what to send - MXP, colour depth - by the client name they recognise; naming a client they know is the experiment." />
+                                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
+                                        <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
+                                        <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
+                                        <CheckBox Content="GMCP" IsChecked="{Binding Editor.EnableGmcp}"
+                                                  ToolTip.Tip="Out-of-band JSON: vitals, room, combat, chat. Negotiated automatically; turn it off to see what a HUD or plugin is getting from MIP alone." />
+                                        <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
+                                                  ToolTip.Tip="Clickable links + inline markup when the server supports it" />
+                                        <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
+                                                  ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
+                                    </StackPanel>
+                                    <TextBlock Text="Session log" Margin="0,10,0,0" />
+                                    <StackPanel Orientation="Horizontal" Spacing="16">
+                                        <CheckBox Content="Log every session"
+                                                  IsChecked="{Binding Editor.AutoLog}"
+                                                  ToolTip.Tip="Start a transcript automatically on connect. Set this on a Character to log that character only; the file is named &lt;date&gt;-&lt;character&gt;." />
+                                        <CheckBox Content="as HTML (keeps colours)"
+                                                  IsChecked="{Binding Editor.AutoLogHtml}"
+                                                  IsEnabled="{Binding Editor.AutoLog}"
+                                                  ToolTip.Tip="Off = plain text. HTML keeps the MUD's colours and opens in a browser." />
+                                    </StackPanel>
+                                    <TextBlock Text="Logs are written to the Scrye logs folder as &lt;date&gt;-&lt;name&gt;; a second session the same day gets -2, -3 and so on."
+                                               FontSize="10" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource ScryeTextDim}" />
+                                    <TextBlock Text="Relay chat to the front tab" Margin="0,8,0,0" />
+                                    <TextBox Text="{Binding Editor.RelayChannels}"
+                                             PlaceholderText="inherit (Tell)"
+                                             ToolTip.Tip="Comma-separated channels from this world to show in whichever world tab is in front, so a tell here is not missed while you play elsewhere. Blank inherits (tells only), * relays every channel, 'none' relays nothing." />
                                 </StackPanel>
-                                <TextBlock Text="Session log" Margin="0,10,0,0" />
-                                <StackPanel Orientation="Horizontal" Spacing="16">
-                                    <CheckBox Content="Log every session"
-                                              IsChecked="{Binding Editor.AutoLog}"
-                                              ToolTip.Tip="Start a transcript automatically on connect. Set this on a Character to log that character only; the file is named &lt;date&gt;-&lt;character&gt;." />
-                                    <CheckBox Content="as HTML (keeps colours)"
-                                              IsChecked="{Binding Editor.AutoLogHtml}"
-                                              IsEnabled="{Binding Editor.AutoLog}"
-                                              ToolTip.Tip="Off = plain text. HTML keeps the MUD's colours and opens in a browser." />
-                                </StackPanel>
-                                <TextBlock Text="Logs are written to the Scrye logs folder as &lt;date&gt;-&lt;name&gt;; a second session the same day gets -2, -3 and so on."
-                                           FontSize="10" TextWrapping="Wrap"
-                                           Foreground="{DynamicResource ScryeTextDim}" />
-                                <TextBlock Text="Relay chat to the front tab" Margin="0,8,0,0" />
-                                <TextBox Text="{Binding Editor.RelayChannels}"
-                                         PlaceholderText="inherit (Tell)"
-                                         ToolTip.Tip="Comma-separated channels from this world to show in whichever world tab is in front, so a tell here is not missed while you play elsewhere. Blank inherits (tells only), * relays every channel, 'none' relays nothing." />
-                            </StackPanel>
+                            </ScrollViewer>
                         </TabItem>
 
                         <!-- TRIGGERS -->
@@ -1570,64 +1573,70 @@
                     <TabControl>
                         <!-- APPEARANCE -->
                         <TabItem Header="Appearance">
-                            <StackPanel Spacing="6" Margin="0,8,0,0">
-                                <TextBlock Text="Theme" />
-                                <ComboBox ItemsSource="{Binding Settings.Themes}" SelectedItem="{Binding Settings.Theme}"
-                                          HorizontalAlignment="Left" MinWidth="220" />
-                                <TextBlock Text="MUD colors (ANSI palette)" Margin="0,6,0,0" />
-                                <ComboBox ItemsSource="{Binding Settings.PaletteChoices}" SelectedItem="{Binding Settings.AnsiPalette}"
-                                          HorizontalAlignment="Left" MinWidth="220" />
-                                <TextBlock Text="How the MUD's color codes are painted. 'MUSHclient (classic)' matches MUSHclient's palette (pure-primary bold colors, olive yellow); 'Modern' uses the softer xterm palette. Applies to new output."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
-                                <CheckBox IsChecked="{Binding Settings.KeepInputAfterSend}" Margin="0,10,0,0"
-                                          Content="Keep the last command in the input box" />
-                                <TextBlock Text="After Enter, leave the command in the box with the text selected, so Enter on its own repeats it and typing replaces it. Off clears the box, which is Scrye's normal behaviour."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
-                                <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
-                                <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
-                                          HorizontalAlignment="Left" MinWidth="260" />
-                                <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
-                                        CornerRadius="3" Padding="8,6" Margin="0,4,0,0">
-                                    <StackPanel Spacing="1">
-                                        <!-- The preview mimics the terminal, so it uses the MUD's own default colours rather than the app palette: #C0C0C0 is exactly Rgb.DefaultFore. Deliberately not themed. -->
-                                        <TextBlock Text="The quick brown fox jumps over the lazy dog" Foreground="#C0C0C0"
-                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
-                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
-                                        <TextBlock Text="Timber     22  413 avail  |  46  295 wants" Foreground="#C0C0C0"
-                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
-                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
-                                        <TextBlock Text="ilW1 O0 () {} []  #~*-=+  MMMMiiii" Foreground="#7E8894"
-                                                   FontFamily="{Binding Settings.PreviewFontFamily}"
-                                                   FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
-                                    </StackPanel>
-                                </Border>
-                                <TextBlock Text="Output font size" Margin="0,6,0,0" />
-                                <TextBox Text="{Binding Settings.FontSize}" PlaceholderText="14" HorizontalAlignment="Left" Width="120" />
-                                <Expander Header="Advanced: custom font / fallback list" Margin="0,6,0,0">
-                                    <StackPanel Spacing="4" Margin="0,4,0,0">
-                                        <TextBlock Text="Comma-separated families; the first one installed is used. Overrides the dropdown above. Use a monospaced font to keep columns aligned."
-                                                   Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
-                                        <TextBox Text="{Binding Settings.FontFamily}" PlaceholderText="Cascadia Mono, Consolas, monospace" />
-                                    </StackPanel>
-                                </Expander>
-                                <TextBlock Text="Font applies to connected worlds. The theme applies on Save. Game output panes stay dark in every theme so ANSI colors from the MUD remain readable."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
-                            </StackPanel>
+                            <!-- scrolls when the window is too short to show it all, like the plugin manager -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel Spacing="6" Margin="0,8,14,0">
+                                    <TextBlock Text="Theme" />
+                                    <ComboBox ItemsSource="{Binding Settings.Themes}" SelectedItem="{Binding Settings.Theme}"
+                                              HorizontalAlignment="Left" MinWidth="220" />
+                                    <TextBlock Text="MUD colors (ANSI palette)" Margin="0,6,0,0" />
+                                    <ComboBox ItemsSource="{Binding Settings.PaletteChoices}" SelectedItem="{Binding Settings.AnsiPalette}"
+                                              HorizontalAlignment="Left" MinWidth="220" />
+                                    <TextBlock Text="How the MUD's color codes are painted. 'MUSHclient (classic)' matches MUSHclient's palette (pure-primary bold colors, olive yellow); 'Modern' uses the softer xterm palette. Applies to new output."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                    <CheckBox IsChecked="{Binding Settings.KeepInputAfterSend}" Margin="0,10,0,0"
+                                              Content="Keep the last command in the input box" />
+                                    <TextBlock Text="After Enter, leave the command in the box with the text selected, so Enter on its own repeats it and typing replaces it. Off clears the box, which is Scrye's normal behaviour."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                    <TextBlock Text="Output font (monospaced fonts on this PC)" Margin="0,6,0,0" />
+                                    <ComboBox ItemsSource="{Binding Settings.FontChoices}" SelectedItem="{Binding Settings.SelectedFont}"
+                                              HorizontalAlignment="Left" MinWidth="260" />
+                                    <Border Background="{DynamicResource ScryeOutputBg}" BorderBrush="{DynamicResource ScryeLine}" BorderThickness="1"
+                                            CornerRadius="3" Padding="8,6" Margin="0,4,0,0">
+                                        <StackPanel Spacing="1">
+                                            <!-- The preview mimics the terminal, so it uses the MUD's own default colours rather than the app palette: #C0C0C0 is exactly Rgb.DefaultFore. Deliberately not themed. -->
+                                            <TextBlock Text="The quick brown fox jumps over the lazy dog" Foreground="#C0C0C0"
+                                                       FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                       FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                            <TextBlock Text="Timber     22  413 avail  |  46  295 wants" Foreground="#C0C0C0"
+                                                       FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                       FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                            <TextBlock Text="ilW1 O0 () {} []  #~*-=+  MMMMiiii" Foreground="#7E8894"
+                                                       FontFamily="{Binding Settings.PreviewFontFamily}"
+                                                       FontSize="{Binding Settings.FontSize, FallbackValue=14}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <TextBlock Text="Output font size" Margin="0,6,0,0" />
+                                    <TextBox Text="{Binding Settings.FontSize}" PlaceholderText="14" HorizontalAlignment="Left" Width="120" />
+                                    <Expander Header="Advanced: custom font / fallback list" Margin="0,6,0,0">
+                                        <StackPanel Spacing="4" Margin="0,4,0,0">
+                                            <TextBlock Text="Comma-separated families; the first one installed is used. Overrides the dropdown above. Use a monospaced font to keep columns aligned."
+                                                       Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                            <TextBox Text="{Binding Settings.FontFamily}" PlaceholderText="Cascadia Mono, Consolas, monospace" />
+                                        </StackPanel>
+                                    </Expander>
+                                    <TextBlock Text="Font applies to connected worlds. The theme applies on Save. Game output panes stay dark in every theme so ANSI colors from the MUD remain readable."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
+                                </StackPanel>
+                            </ScrollViewer>
                         </TabItem>
 
                         <!-- PLUGINS -->
                         <TabItem Header="Plugins">
-                            <StackPanel Spacing="6" Margin="0,8,0,0">
-                                <TextBlock Text="Extra plugin folder" />
-                                <TextBox Text="{Binding Settings.ExtraPluginRoot}"
-                                         PlaceholderText="e.g. C:\3ScapesMUD\Scrye\Scrye\_lab\plugins" />
-                                <TextBlock Text="A folder to look for plugins in, on top of the ones bundled with Scrye and your own under %APPDATA%\Scrye\plugins. Every immediate subfolder holding a plugin.json is a plugin, exactly as in the other two."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
-                                <TextBlock Text="For working on a plugin where it lives instead of copying it into place after every edit. It is searched FIRST, so a plugin here overrides a bundled one with the same id — which is the point of pointing Scrye at it. Applies to worlds you connect after saving."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
-                                <TextBlock Text="Leave it empty unless you are developing a plugin: anything you put here runs with the same reach as one you installed deliberately."
-                                           Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" />
-                            </StackPanel>
+                            <!-- scrolls when the window is too short to show it all, like the plugin manager -->
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                <StackPanel Spacing="6" Margin="0,8,14,0">
+                                    <TextBlock Text="Extra plugin folder" />
+                                    <TextBox Text="{Binding Settings.ExtraPluginRoot}"
+                                             PlaceholderText="e.g. C:\3ScapesMUD\Scrye\Scrye\_lab\plugins" />
+                                    <TextBlock Text="A folder to look for plugins in, on top of the ones bundled with Scrye and your own under %APPDATA%\Scrye\plugins. Every immediate subfolder holding a plugin.json is a plugin, exactly as in the other two."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                    <TextBlock Text="For working on a plugin where it lives instead of copying it into place after every edit. It is searched FIRST, so a plugin here overrides a bundled one with the same id — which is the point of pointing Scrye at it. Applies to worlds you connect after saving."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
+                                    <TextBlock Text="Leave it empty unless you are developing a plugin: anything you put here runs with the same reach as one you installed deliberately."
+                                               Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </ScrollViewer>
                         </TabItem>
 
                         <!-- GLOBAL TRIGGERS -->
