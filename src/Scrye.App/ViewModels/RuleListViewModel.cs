@@ -5,6 +5,7 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
+using Avalonia.Threading;
 
 namespace Scrye.App.ViewModels;
 
@@ -122,8 +123,24 @@ public sealed class RuleListViewModel : ViewModelBase
             // Moving off a rule is the moment its edits are finished, so this is where a rename
             // or a group change is allowed to re-sort the list. Doing it on every keystroke
             // would make the list jump under the cursor while you type a name.
-            if (previous is not null && NeedsRebuild(previous)) Rebuild();
+            //
+            // But NOT synchronously: this setter runs while the ListBox is still in the middle
+            // of handling the click that changed its selection, and rebuilding Rows under it
+            // (clear + refill) pulled the item list out from under that click - the crash a
+            // user hit putting a new trigger in a group and then clicking another trigger in
+            // that group (2 Oct 2026). Queued, the rebuild runs once the click is done, and
+            // re-selects the rule that was clicked.
+            if (previous is not null && NeedsRebuild(previous)) QueueRebuild();
         }
+    }
+
+    private bool _rebuildQueued;
+
+    private void QueueRebuild()
+    {
+        if (_rebuildQueued) return;
+        _rebuildQueued = true;
+        Dispatcher.UIThread.Post(() => { _rebuildQueued = false; Rebuild(); }, DispatcherPriority.Background);
     }
 
     /// <summary>Select a rule from code (Add, or the caller's typed property).</summary>
