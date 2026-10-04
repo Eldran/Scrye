@@ -1,0 +1,23 @@
+{
+  "id": "3s-changeling",
+  "name": "3S Changeling",
+  "version": "1.0.0",
+  "author": "Joakim",
+  "description": "The Changeling guild HUD, fed by the Guild.State and Guild.Info GMCP packages. Tabs: Status (protoplasm and stamina as bars, super counting down, bioplasts, the dissipate / thermotaxis / adrenalize / hyperproliferate toggles, the two instincts, and the form you are in), Form (form, group, form points, time in it, intimacy, perform, the next and last form's cost, complex, ingested, familiar) and Record (kills, relinquishes, best kill with its class, arch foe, guild age and the share of it spent in combat). 'clhud' prints the Status page into the output window. Built from one capture (Kuben, 3 Sep 2026); super, reset and the instinct fields are shown as the server's numbers until their meaning is confirmed. Another guild's same-named packages are ignored.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.3 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "state.write",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}
