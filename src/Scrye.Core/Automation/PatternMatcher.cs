@@ -87,6 +87,23 @@ public sealed class CompiledPattern
         return m.Success ? new MatchResult(m) : null;
     }
 
+    /// <summary>Every match in <paramref name="input"/>, left to right, at most
+    /// <paramref name="max"/> (a trigger's "repeat on same line"). An empty match counts only
+    /// when it is the first: a pattern that can match nothing (<c>x*</c>) would otherwise
+    /// "match" between every two characters.</summary>
+    public IReadOnlyList<MatchResult> Matches(string input, int max)
+    {
+        var all = new List<MatchResult>();
+        if (_never || max <= 0) return all;
+        for (Match m = _regex.Match(input); m.Success && all.Count < max; m = m.NextMatch())
+        {
+            if (m.Length == 0 && all.Count > 0) continue;
+            all.Add(new MatchResult(m));
+            if (m.Length == 0) break;
+        }
+        return all;
+    }
+
     /// <summary>
     /// Match over a window of lines joined with <c>\n</c>, the last being the newest, and only
     /// count a match that reaches into that newest line. Without that rule a block would fire on

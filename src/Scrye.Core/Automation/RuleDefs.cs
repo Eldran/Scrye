@@ -18,6 +18,19 @@ public sealed record TriggerDef
     public bool OneShot { get; init; }
     public bool Temporary { get; init; }
 
+    /// <summary>
+    /// Fire once for EVERY match on the line, not just the first (MUSHclient's "repeat on same
+    /// line"): "Bob hits you. Bob hits you." with the regex <c>(\w+) hits you</c> fires twice,
+    /// each time with that match's wildcards. Only the Send / variable / script runs per match -
+    /// the line itself is captured, gagged, notified and sounded once. A wildcard pattern always
+    /// spans the whole line, so it can match only once whatever this says; so does a trigger
+    /// over several lines (<see cref="Lines"/>). At most <see cref="MaxRepeats"/> per line.
+    /// </summary>
+    public bool RepeatOnLine { get; init; }
+
+    /// <summary>Most times one repeating trigger fires on one line.</summary>
+    public const int MaxRepeats = 50;
+
     /// <summary>Lower runs first.</summary>
     public int Sequence { get; init; } = 100;
     public string? Group { get; init; }

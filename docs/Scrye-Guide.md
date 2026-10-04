@@ -183,7 +183,7 @@ changing anything. Add `apply` to keep it:
 ```
 
 Most of a hand-written rule set crosses unchanged — `match`, `regexp`, `sequence`, `group`,
-`keep_evaluating`, `one_shot` and `omit_from_output` all mean the same thing in both clients,
+`keep_evaluating`, `one_shot`, `repeat` and `omit_from_output` all mean the same thing in both clients,
 MUSHclient's non-regex `*` and `?` wildcards are the ones Scrye already compiles, and `%1`–`%9`
 in send text needs no rewriting. Triggers, aliases, interval timers, macros and variables all
 come across, including MUSHclient's *Send to Execute* rules, which land on Scrye's **Client**
@@ -318,6 +318,17 @@ The block has to end on the line that just arrived, so a multi-line trigger fire
 the block's last line comes in, and not again while that block is still inside the window.
 Gag, highlight and capture act on that last line only — the earlier ones are already on screen.
 The **Test** box takes several lines for such a trigger; the last one is the newest.
+
+### Firing for every match on a line
+
+A trigger normally fires once per line, on its first match. Tick **Repeat on line** and it fires
+once for **every** match, each time with that match's own wildcards — `(\w+) hits you` on
+`Bob hits you. Ann hits you.` sends its command for Bob and then for Ann. Only the send (or the
+variable, or the script) repeats: the line is captured, gagged, notified and sounded once, and
+with highlighting each match is coloured. It is for **regex** triggers — a wildcard pattern
+always spans the whole line, so it can match just once — and for single-line ones; a one-shot
+fires on its first match only, and one line fires a trigger at most 50 times. MUSHclient's
+*Repeat on same line* (`repeat="y"`) imports as this setting.
 
 ### Finding things in a long list
 

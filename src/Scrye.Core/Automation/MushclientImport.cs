@@ -223,6 +223,7 @@ public sealed class MushclientImport
             IgnoreCase = Flag(e, "ignore_case"),
             Enabled = Flag(e, "enabled", whenAbsent: true),
             KeepEvaluating = Flag(e, "keep_evaluating"),
+            RepeatOnLine = Flag(e, "repeat"),
             OneShot = Flag(e, "one_shot"),
             Temporary = Flag(e, "temporary"),
             Sequence = Int(e, "sequence", 100),

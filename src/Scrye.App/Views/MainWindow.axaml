@@ -1258,6 +1258,8 @@
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                                <CheckBox Content="Repeat on line" IsChecked="{Binding RepeatOnLine}"
+                                                          ToolTip.Tip="Fire once for every match on the line, not just the first: &quot;Bob hits you. Bob hits you.&quot; fires a (\w+) hits you regex twice, each with its own wildcards.&#10;Regex triggers only - a wildcard pattern always spans the whole line, so it can match just once." />
                                             </StackPanel>
                                             <Border Background="{DynamicResource ScryeInsetBg}" BorderBrush="{DynamicResource ScryeLine}"
                                                     BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">
@@ -1744,6 +1746,8 @@
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
+                                                <CheckBox Content="Repeat on line" IsChecked="{Binding RepeatOnLine}"
+                                                          ToolTip.Tip="Fire once for every match on the line, not just the first: &quot;Bob hits you. Bob hits you.&quot; fires a (\w+) hits you regex twice, each with its own wildcards.&#10;Regex triggers only - a wildcard pattern always spans the whole line, so it can match just once." />
                                             </StackPanel>
                                             <Border Background="{DynamicResource ScryeInsetBg}" BorderBrush="{DynamicResource ScryeLine}"
                                                     BorderThickness="1" CornerRadius="4" Padding="6" Margin="0,6,0,0">

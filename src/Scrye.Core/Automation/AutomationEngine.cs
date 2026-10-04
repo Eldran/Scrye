@@ -117,6 +117,9 @@ public sealed class AutomationEngine
 
     /// <summary>Match one trigger against the newest line - alone, or with the lines before it.
     /// <paramref name="buffered"/> false: the line is not in the buffer (the simulator's).</summary>
+    // a repeating trigger: asked for, and on one line (a window spans lines; it fires once)
+    private static bool Repeats(Trig t) => t.Def.RepeatOnLine && t.Lines <= 1;
+
     private MatchResult? MatchTrigger(Trig t, string line, bool buffered, out int newestStart)
         => _recent.Match(t.Pattern, t.Lines, line, out newestStart, pushed: buffered);
 
@@ -210,6 +213,20 @@ public sealed class AutomationEngine
             ApplyHighlight(t.Def, m, line, ctx, newestStart);
             Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, action));
 
+            // Repeat on same line: every further match fires the send again with its own
+            // wildcards. The line-level effects (capture, gag, notify, sound) already happened.
+            // A one-shot is spent on its first match.
+            if (Repeats(t) && !t.Def.OneShot)
+            {
+                IReadOnlyList<MatchResult> more = t.Pattern.Matches(line, TriggerDef.MaxRepeats);
+                for (int k = 1; k < more.Count && !t.Retired; k++)
+                {
+                    string again = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, more[k], ctx);
+                    ApplyHighlight(t.Def, more[k], line, ctx);
+                    Hit?.Invoke(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line, again));
+                }
+            }
+
             if (t.Def.OneShot && !t.Retired) { _triggers.Remove(t); t.Retired = true; _trigPass = null; }
             if (!t.Def.KeepEvaluating) break;
         }
@@ -234,6 +251,13 @@ public sealed class AutomationEngine
             hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
                 Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m,
                          t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound)));
+            if (Repeats(t) && !t.Def.OneShot)
+            {
+                IReadOnlyList<MatchResult> more = t.Pattern.Matches(line, TriggerDef.MaxRepeats);
+                for (int k = 1; k < more.Count; k++)
+                    hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
+                        Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, more[k])));
+            }
 
             if (!t.Def.KeepEvaluating) break;
         }

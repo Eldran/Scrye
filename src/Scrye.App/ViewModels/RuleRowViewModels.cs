@@ -130,7 +130,12 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         HighlightColor = d.HighlightFore ?? ""; HighlightBack = d.HighlightBack ?? "";
         HighlightWholeLine = d.HighlightWholeLine;
         LinesText = d.Lines > 1 ? d.Lines.ToString() : "";
+        RepeatOnLine = d.RepeatOnLine;
     }
+
+    private bool _repeatOnLine;
+    /// <summary>Fire once for every match on the line (regex triggers).</summary>
+    public bool RepeatOnLine { get => _repeatOnLine; set => SetField(ref _repeatOnLine, value); }
 
     private string _linesText = "";
     /// <summary>Lines to match over (empty or 1 = the line that arrived). A pattern typed on
@@ -172,7 +177,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
     public TriggerDef ToDef() => new()
     {
         Name = Name.Trim(), Pattern = Pattern, IsRegex = IsRegex, IgnoreCase = IgnoreCase,
-        Enabled = Enabled, KeepEvaluating = KeepEvaluating, OneShot = OneShot,
+        Enabled = Enabled, KeepEvaluating = KeepEvaluating, OneShot = OneShot, RepeatOnLine = RepeatOnLine,
         Sequence = SequenceValue, Group = OrNull(Group),
         SendTo = SendTo, Send = OrNull(Send), Variable = OrNull(Variable), Script = OrNull(Script),
         CapturePane = OrNull(CapturePane), Gag = Gag,
