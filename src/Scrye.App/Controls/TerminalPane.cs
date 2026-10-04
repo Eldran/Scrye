@@ -19,6 +19,22 @@ namespace Scrye.App.Controls;
 /// </summary>
 public class TerminalPane : Grid
 {
+    /// <summary>
+    /// Raised (bubbling) when the "back to bottom" chip is clicked. The chip is a Button, and a
+    /// Button marks PointerReleased handled when it completes a click, so the window's
+    /// click-to-focus handler never sees that click at all; the window listens for this instead
+    /// and hands the keyboard back to the command line - "take me back to live" is exactly the
+    /// moment you want to type again.
+    /// </summary>
+    public static readonly RoutedEvent<RoutedEventArgs> CaughtUpEvent =
+        RoutedEvent.Register<TerminalPane, RoutedEventArgs>(nameof(CaughtUp), RoutingStrategies.Bubble);
+
+    public event EventHandler<RoutedEventArgs>? CaughtUp
+    {
+        add => AddHandler(CaughtUpEvent, value);
+        remove => RemoveHandler(CaughtUpEvent, value);
+    }
+
     public static readonly StyledProperty<ScrollbackBuffer?> SourceProperty =
         AvaloniaProperty.Register<TerminalPane, ScrollbackBuffer?>(nameof(Source));
 
@@ -92,12 +108,13 @@ public class TerminalPane : Grid
             Background = ChipBackground,
             IsVisible = false,
         };
-        // "refocus": the window-level click-to-focus handler denies Buttons by default,
-        // because a button you clicked usually wants the keyboard. This one is the
-        // opposite — its whole purpose is "take me back to live", which is the exact
-        // moment you want to be typing again.
-        _chip.Classes.Add("refocus");
-        _chip.Click += (_, _) => _history.ScrollToEnd();
+        // Back to live, and tell the window (CaughtUpEvent), which gives the command line the
+        // keyboard: the click itself never reaches the window's click-to-focus handler.
+        _chip.Click += (_, _) =>
+        {
+            _history.ScrollToEnd();
+            RaiseEvent(new RoutedEventArgs(CaughtUpEvent));
+        };
         SetRow(_chip, 0);
         Children.Add(_chip);
 

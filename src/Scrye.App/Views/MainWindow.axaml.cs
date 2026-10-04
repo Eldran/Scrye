@@ -38,6 +38,18 @@ public partial class MainWindow : Window
         // drag-selection in the output while it was still being made.
         AddHandler(InputElement.PointerReleasedEvent, OnWindowPointerReleased,
                    Avalonia.Interactivity.RoutingStrategies.Bubble);
+        // Raising the window by its title bar, the taskbar or alt-tab delivers no pointer event
+        // into the content (the title bar is non-client area), so without this a freshly
+        // launched or re-raised window ignores your typing until you click the command line.
+        Activated += OnWindowActivated;
+        // the "back to bottom" chip of the main output and every capture pane (see
+        // TerminalPane.CaughtUpEvent for why its click needs its own route)
+        AddHandler(Controls.TerminalPane.CaughtUpEvent, (_, _) =>
+        {
+            if (DataContext is MainWindowViewModel vm && vm.Active is WorldViewModel world
+                && vm.Settings is null && vm.Editor is null)
+                FocusCommandInput(world);
+        });
         // Orderly exit. The first close is cancelled, the worlds are torn down asynchronously
         // (session logs flushed, GMCP shape saved, companion stopped), then the window closes
         // again for real. Awaited, never blocked on: a .Wait() here would deadlock, because
@@ -82,10 +94,44 @@ public partial class MainWindow : Window
         if (vm.Settings is not null || vm.Editor is not null) return;   // an overlay owns the keyboard
         if (e.Source is not Avalonia.Visual source) return;
         if (!MayTakeFocus(source)) return;
+        FocusCommandInput(world);
+    }
 
-        // Once the click has finished settling. Background rather than Input because clicking
-        // a world TAB is one of the cases: the new world's content has to be realised before
-        // its command line can be found at all. Same reason FocusFindBox posts at Background.
+    /// <summary>
+    /// The window came to the front - by a click on its content, the title bar, the taskbar or
+    /// alt-tab. Restoring focus to whatever last held it is part of being activated, so the
+    /// question is asked once that has happened (posted, not in the handler body), and of the
+    /// control that HAS the keyboard rather than of something clicked: coming back to a
+    /// half-typed find box, or to a selection you alt-tabbed away to paste somewhere, leaves it
+    /// yours; coming back to nothing in particular hands the keyboard to the command line.
+    /// </summary>
+    private void OnWindowActivated(object? sender, EventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
+        if (vm.Settings is not null || vm.Editor is not null) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!MayTakeFocus(FocusManager?.GetFocusedElement() as Avalonia.Visual)) return;
+            FocusCommandInput(world);
+        }, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Give <paramref name="world"/>'s command line the keyboard, with its text selected.
+    ///
+    /// <para>Selected, not the caret parked at the end: with "keep the last command" on, Enter
+    /// leaves the sent command in the box selected (OnInputKeyDown), so the next keystroke
+    /// replaces it and a bare Enter repeats it - and setting the caret would collapse that
+    /// selection, making "arrived here by a click" behave differently from "never left". A
+    /// box that already has the focus is left alone (the IsFocused early-out), so clicking
+    /// around while typing never selects what you are in the middle of.</para>
+    ///
+    /// <para>Posted at Background rather than Input because clicking a world TAB is one of the
+    /// cases: the new world's content has to be realised before its command line can be found
+    /// at all. Same reason FocusFindBox posts at Background.</para>
+    /// </summary>
+    private void FocusCommandInput(WorldViewModel world)
+    {
         Dispatcher.UIThread.Post(() =>
         {
             TextBox? input = this.GetVisualDescendants().OfType<TextBox>()
@@ -94,7 +140,7 @@ public partial class MainWindow : Window
                                      && t.IsEffectivelyVisible);
             if (input is null || input.IsFocused) return;
             input.Focus();
-            input.CaretIndex = (input.Text ?? "").Length;
+            input.SelectAll();
         }, DispatcherPriority.Background);
     }
 
@@ -108,11 +154,6 @@ public partial class MainWindow : Window
         {
             switch (v)
             {
-                // A button that ASKS for the focus to go back to the command line: the
-                // "back to bottom" chip, whose whole purpose is "take me back to live".
-                case Button b when b.Classes.Contains("refocus"):
-                    return true;
-
                 // Controls that keep using the keyboard after you have clicked them.
                 case TextBox:
                 // Button, not a ButtonBase: Avalonia 12 has no ButtonBase, because Button IS
