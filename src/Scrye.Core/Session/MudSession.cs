@@ -531,7 +531,30 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// e.g. UI button handlers invoking plugin callbacks — single-threaded with the session).</summary>
     public void Post(Action action) => _mailbox.Writer.TryWrite(new SessionMessage.Invoke(action));
 
-    public void Submit(string text) => _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text));
+    /// <param name="source">What kind of activity this is, for the idle guard: typing by default;
+    /// a macro key, a broadcast from another world, the phone and so on say so, and the guard
+    /// counts only the kinds the user has chosen (<see cref="IdleGuard.Sources"/>).</param>
+    public void Submit(string text, IdleSource source = IdleSource.Keyboard) =>
+        _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text, Source: source));
+
+    /// <summary>
+    /// Activity that does not go through the input pipeline but is still you: a <c>.</c> client
+    /// command or a <c>/</c> console line, which are handled before the session sees them.
+    /// Posted to the loop, which owns the guard.
+    /// </summary>
+    public void NotePresence(IdleSource source, string detail) =>
+        _mailbox.Writer.TryWrite(new SessionMessage.Invoke(() => NoteActivity(source, detail)));
+
+    /// <summary>The idle guard took note of something you did (counted or not) - for a display
+    /// of what last reset it. Raised on the session loop.</summary>
+    public event Action? IdleActivityNoted;
+
+    private void NoteActivity(IdleSource source, string detail)
+    {
+        bool wasFired = IdleGuard.HasFired;
+        if (IdleGuard.NoteActivity(source, detail, DateTimeOffset.Now) && wasFired) ResumeAfterIdle();
+        IdleActivityNoted?.Invoke();
+    }
 
     /// <summary>
     /// Submit input that must be taken as ONE command however many separators it contains.
@@ -543,8 +566,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// run script. Same reasoning as <c>WorldViewModel.HandleCommandLink</c> keeping links
     /// away from the '/' console.</para>
     /// </summary>
-    public void SubmitLiteral(string text) =>
-        _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text, Split: false));
+    public void SubmitLiteral(string text, IdleSource source = IdleSource.OutputLink) =>
+        _mailbox.Writer.TryWrite(new SessionMessage.UserInput(text, Split: false, Source: source));
     public void RunScript(string code) => _mailbox.Writer.TryWrite(new SessionMessage.RunScript(code));
     public void SendGmcp(string package, string json) => _telnet.SendGmcp(package, json);
 
@@ -562,10 +585,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// </summary>
     private void TickIdleGuard()
     {
+        // The guard was switched off (or its limit changed) while it had fired: nothing will
+        // ever "come back" through the input path, so undo the suspension here.
+        if (_idleSuspended && !IdleGuard.HasFired) ResumeAfterIdle();
+
         IdleGuardSignal signal = IdleGuard.Tick(1.0);
         if (signal == IdleGuardSignal.None) return;
         if (signal == IdleGuardSignal.Fired)
         {
+            _idleSuspended = true;
             _automation.TimersSuspended = true;
             // Only pause a sequence that was actually running, and remember that we did, so
             // coming back does not silently un-pause one the user had paused on purpose.
@@ -574,6 +602,39 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             if (_idlePausedSequence) _sequences.Pause();
         }
         IdleSignal?.Invoke(signal);
+        // Plugins have now been told (scrye.onIdle ran inside IdleSignal, so one that sends a
+        // last "stop" still can). From here on, with the hard stop on, they are held.
+        if (signal == IdleGuardSignal.Fired && IdleGuard.HoldPlugins)
+        {
+            PluginsHeld = true;
+            _heldPluginSends = 0;
+        }
+    }
+
+    private bool _idleSuspended;
+    private int _heldPluginSends;
+
+    /// <summary>
+    /// The idle guard's hard stop is in force: plugin timers are not advanced (the host checks
+    /// this before ticking them) and <see cref="SendFromPlugin"/> drops what plugins send. Loop
+    /// thread. Cleared when you are back.
+    /// </summary>
+    public bool PluginsHeld { get; private set; }
+
+    /// <summary>
+    /// A plugin's command for the MUD. Goes out as any send does, unless the idle guard is
+    /// holding plugins - then it is dropped, and the first one is said in the output, so a bot
+    /// that tried to carry on is visible rather than silent.
+    /// </summary>
+    public void SendFromPlugin(string text)
+    {
+        if (!PluginsHeld)
+        {
+            ((IWorldActions)this).Send(text);
+            return;
+        }
+        if (_heldPluginSends++ == 0)
+            Echo($"[idle guard] holding plugin commands until you are back (first held: '{text}')");
     }
 
     /// <summary>
@@ -584,6 +645,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// </summary>
     private void ResumeAfterIdle()
     {
+        _idleSuspended = false;
+        if (PluginsHeld)
+        {
+            PluginsHeld = false;
+            if (_heldPluginSends > 0)
+                Echo($"[idle guard] you are back - {_heldPluginSends} plugin command(s) were held and not sent;"
+                     + " plugin bots stay stopped until you start them");
+            _heldPluginSends = 0;
+        }
         _automation.TimersSuspended = false;
         if (_idlePausedSequence)
         {
@@ -598,6 +668,8 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     {
         IdleGuard.Seconds = eff.IdleGuardSeconds;
         IdleGuard.Enabled = eff.IdleGuardEnabled;
+        IdleGuard.Sources = eff.IdleGuardSources;
+        IdleGuard.HoldPlugins = eff.IdleGuardHoldPlugins;
         foreach (var t in eff.Triggers) _automation.AddTrigger(t);
         foreach (var a in eff.Aliases) _automation.AddAlias(a);
         foreach (var tm in eff.Timers) _automation.AddTimer(tm);
@@ -718,7 +790,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         if (di.Generation == _mccpGeneration) ProcessTelnetChunk(di.Bytes);
                         break;
                     case SessionMessage.UserInput u:
-                        HandleInput(u.Text, u.Split);
+                        HandleInput(u.Text, u.Split, u.Source);
                         break;
                     case SessionMessage.SendText s:
                         _events.Emit(SessionEventKind.Sent, s.Text);
@@ -1131,15 +1203,17 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         finally { _clientDepth--; }
     }
 
-    private void HandleInput(string text, bool split = true)
+    private void HandleInput(string text, bool split = true, IdleSource source = IdleSource.Keyboard)
     {
         // Presence, and the only evidence of it. This is reached by typing, by a macro key and by
         // a click on a plugin's panel link, because all three arrive through Submit. What does NOT
         // reach it is anything a trigger, a timer or a plugin sends -- those go out through
         // IWorldActions.Send. That asymmetry is the whole point: a bot walking an area all night
         // must never look like someone at the keyboard.
-        if (IdleGuard.HasFired) ResumeAfterIdle();
-        IdleGuard.Poke();
+        // Only the kinds of activity the user chose count (IdleGuard.Sources): with just the
+        // keyboard ticked, a tap on the phone or a command broadcast from another world goes
+        // out as usual but leaves the clock running.
+        NoteActivity(source, text);
 
         _events.Emit(SessionEventKind.InputSubmitted, text);
         _logger?.Log("> " + text, InputColour);   // transcript records what the user typed, as typed

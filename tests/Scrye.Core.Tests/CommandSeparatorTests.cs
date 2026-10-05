@@ -71,7 +71,7 @@ public class CommandSeparatorTests
     private static List<string> Typed(MudSession s, string text, bool split = true)
     {
         typeof(MudSession).GetMethod("HandleInput", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(s, new object[] { text, split });
+            .Invoke(s, new object[] { text, split, IdleSource.Keyboard });
         return Outbox(s);
     }
 

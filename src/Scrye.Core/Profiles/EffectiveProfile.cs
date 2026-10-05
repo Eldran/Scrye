@@ -29,6 +29,12 @@ public sealed class EffectiveProfile
 
     /// <summary>Idle limit in seconds; the guard clamps it to its own bounds.</summary>
     public int IdleGuardSeconds { get; init; } = Scrye.Core.Session.IdleGuard.DefaultSeconds;
+
+    /// <summary>Which kinds of activity reset the idle guard.</summary>
+    public Scrye.Core.Session.IdleSource IdleGuardSources { get; init; } = Scrye.Core.Session.IdleSource.All;
+
+    /// <summary>Whether the idle guard's firing also holds every plugin.</summary>
+    public bool IdleGuardHoldPlugins { get; init; } = true;
     public string? Username { get; init; }
     public string? PasswordRef { get; init; }
 }

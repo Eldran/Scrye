@@ -506,7 +506,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     public void ReceiveBroadcast(string text)
     {
         _pending.Enqueue(Line.FromText("» " + text, EchoColour));
-        _session.Submit(text);
+        _session.Submit(text, _broadcastingFromHere ? IdleSource.Keyboard : IdleSource.Broadcast);
     }
 
     private bool _showDebugger;
@@ -536,6 +536,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// by the shell, which owns the profile store; null for a quick-connect world, and the
     /// companion panel greys the tick boxes out when it is.</summary>
     public Action<TriggerDef, bool>? PersistTriggerNotify { get; set; }
+
+    /// <summary>Persist the idle guard's settings (on, limit in seconds, what counts) to the
+    /// connected node's profile layer. Null for a quick-connect world: the settings then last
+    /// for the session.</summary>
+    public Action<bool, int, IdleSource, bool>? PersistIdleGuard { get; set; }
 
     /// <summary>Write a parsed MUSHclient import into this world's own profile layer.
     /// Set by the shell, which owns the profile store; null on a quick-connect tab, which has
@@ -652,7 +657,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                         Avalonia.Threading.Dispatcher.UIThread.Post(() => onMenu(menu));
                 }),
             // click= in widget text lands on the same handler as an MXP link from the MUD
-            (command, prompt) => HandleCommandLink(command, prompt));
+            (command, prompt) => HandleCommandLink(command, prompt, IdleSource.PanelLink));
 
         // Restore dragged HUD-panel positions (loaded up-front: plugins add their panels
         // during construction below, before RestoreLayout runs), and persist on drag.
@@ -844,7 +849,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             () => PersistTriggerNotify is not null,
             // Toggle commands run the way typing them would (plugin aliases first). This is
             // panel-authored text from a local plugin, not MUD-authored, so the echo is honest.
-            cmd => HandleCommandLink(cmd, prompt: false));
+            cmd => HandleCommandLink(cmd, prompt: false, IdleSource.PanelLink));
         // Plugins process each server line (onLine gag/rewrite + triggers) and user input
         // (aliases) via the session's filter hooks — so gagging actually suppresses display.
         _session.LineDisplayFilter = _plugins.ProcessLine;    // gag/rewrite + triggers + prompt hook
@@ -861,7 +866,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 return;                                               // your own outgoing tell
             ChannelRelayed?.Invoke(this, ch, msg);
         };
-        _session.Ticked += _plugins.Tick;                     // plugin timers (scrye.after/every)
+        // plugin timers (scrye.after/every) - frozen while the idle guard holds plugins
+        _session.Ticked += dt => { if (!_session.PluginsHeld) _plugins.Tick(dt); };
+        // the Idle menu's status line: what last reset the guard, and the time left (once a
+        // second while the guard is on - the tick itself is four a second)
+        _session.IdleActivityNoted += () => Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(IdleStatus)));
+        _session.Ticked += _ =>
+        {
+            if (++_idleStatusTicks % 4 != 0) return;
+            UpdateIdleBar();   // the movable countdown bar (loop thread, which owns state and panels)
+            if (_session.IdleGuard.Enabled)
+                Dispatcher.UIThread.Post(() => OnPropertyChanged(nameof(IdleStatus)));
+        };
         _session.CommandSent += _plugins.DispatchCommand;     // every outgoing command → scrye.onCommand (1.6)
         // scrye.emit lands back on the manager, which fans it out to every plugin's scrye.on
         // handlers (1.6). Set after the manager exists; both run on the session loop.
@@ -964,7 +980,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             Scrye.Core.Automation.AutomationEngine.ForEachLine(expanded, line =>
             {
                 _pending.Enqueue(Line.FromText("> " + line, EchoColour));   // local echo, like typing
-                _session.Submit(line);
+                _session.Submit(line, IdleSource.Macro);
             });
         });
         return true;
@@ -993,6 +1009,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             _session.IdleGuard.Enabled = value;
             OnPropertyChanged();
             OnPropertyChanged(nameof(IdleGuardTip));
+            OnPropertyChanged(nameof(IdleStatus));
+            PersistIdle();
             AppendSystem(value
                 ? $"idle guard on — automation stops after {IdleGuard.Describe(_session.IdleGuard.Seconds)} with nothing from you"
                 : "idle guard off");
@@ -1026,7 +1044,149 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Tooltip for that toggle: the limit is the part a checkbox cannot show.</summary>
     public string IdleGuardTip =>
         $"Idle guard: stop automation after {IdleGuard.Describe(_session.IdleGuard.Seconds)} "
-      + "with no input from you. Set the limit with .idle <seconds|Nm>.";
+      + "with no input from you. Click to switch it on or off; the arrow opens its settings - the"
+      + " limit, and what counts as you being here.";
+
+    // ---- the Idle menu -----------------------------------------------------------------
+    // The settings behind the Idle toggle's arrow: the limit and which kinds of activity reset
+    // the guard. Each change applies to the running session at once (on the loop, which owns
+    // the guard) and is saved to this world's own profile layer, like a plugin choice.
+
+    private int _idleStatusTicks;
+
+    /// <summary>The limit in minutes, 1 to 120 (the guard clamps to 60-7200 s).</summary>
+    public decimal? IdleGuardMinutes
+    {
+        get => Math.Round(_session.IdleGuard.Seconds / 60m, 1);
+        set
+        {
+            if (value is not { } m) return;
+            int secs = (int)Math.Round(m * 60m);
+            secs = Math.Clamp(secs, IdleGuard.MinSeconds, IdleGuard.MaxSeconds);
+            if (secs == _session.IdleGuard.Seconds) return;
+            _session.IdleGuard.Seconds = secs;   // as the toggle and .idle do: a plain value the loop reads each tick
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IdleStatus));
+            OnPropertyChanged(nameof(IdleGuardTip));
+            PersistIdle();
+        }
+    }
+
+    private bool Counts(IdleSource s) => (_session.IdleGuard.Sources & s) != 0;
+    private void SetCounts(IdleSource s, bool on, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        IdleSource now = _session.IdleGuard.Sources;
+        IdleSource next = on ? now | s : now & ~s;
+        if (next == now) return;
+        _session.IdleGuard.Sources = next;   // a plain value the loop reads on the next input
+        OnPropertyChanged(name);
+        OnPropertyChanged(nameof(IdleStatus));
+        PersistIdle();
+    }
+
+    public bool IdleCountsKeyboard   { get => Counts(IdleSource.Keyboard);   set => SetCounts(IdleSource.Keyboard, value); }
+    public bool IdleCountsMacro      { get => Counts(IdleSource.Macro);      set => SetCounts(IdleSource.Macro, value); }
+    public bool IdleCountsOutputLink { get => Counts(IdleSource.OutputLink); set => SetCounts(IdleSource.OutputLink, value); }
+    public bool IdleCountsPanelLink  { get => Counts(IdleSource.PanelLink);  set => SetCounts(IdleSource.PanelLink, value); }
+    public bool IdleCountsPhone      { get => Counts(IdleSource.Phone);      set => SetCounts(IdleSource.Phone, value); }
+    public bool IdleCountsBroadcast  { get => Counts(IdleSource.Broadcast);  set => SetCounts(IdleSource.Broadcast, value); }
+
+    /// <summary>The hard stop: when the guard fires, hold every plugin (timers frozen, sends
+    /// dropped) until you are back.</summary>
+    public bool IdleHoldPlugins
+    {
+        get => _session.IdleGuard.HoldPlugins;
+        set
+        {
+            if (_session.IdleGuard.HoldPlugins == value) return;
+            _session.IdleGuard.HoldPlugins = value;   // read when the guard next fires
+            OnPropertyChanged();
+            PersistIdle();
+        }
+    }
+
+    /// <summary>The menu's status: on/off, time left, what last reset it and what was last
+    /// ignored - so a guard that "reset by itself" names what reset it.</summary>
+    public string IdleStatus
+    {
+        get
+        {
+            IdleGuard g = _session.IdleGuard;
+            var sb = new System.Text.StringBuilder();
+            if (!g.Enabled) sb.Append("Off.");
+            else if (g.HasFired) sb.Append(_session.PluginsHeld
+                ? "Fired - automation is stopped and plugins are held until you do something that counts."
+                : "Fired - automation is stopped until you do something that counts.");
+            else sb.Append($"On: {IdleGuard.Describe(g.SecondsRemaining)} left of {IdleGuard.Describe(g.Seconds)}.");
+            if (g.LastCounted is { } c)
+                sb.Append($"\nLast reset: {IdleSources.Describe(c.Source)} '{c.Detail}' at {c.At:HH:mm:ss}");
+            if (g.LastIgnored is { } i)
+                sb.Append($"\nIgnored: {IdleSources.Describe(i.Source)} '{i.Detail}' at {i.At:HH:mm:ss}");
+            if ((g.Sources & IdleSource.All) == 0)
+                sb.Append("\nNothing counts: the guard will fire however much you do.");
+            return sb.ToString();
+        }
+    }
+
+    // ---- the countdown bar -------------------------------------------------------------
+    // While the guard is on, a small HUD panel shows the time left as a bar: an ordinary HUD
+    // panel, so it is dragged, rolled up, put in a book and remembered where you left it like any
+    // plugin's, and it reaches the phone with the rest of the HUD. Fed through the state store
+    // (scrye.idle.*), which plugins and the State inspector can read too.
+
+    private const string IdleBarOwner = "scrye-idle";
+    private bool _idleBarShown;
+
+    private static readonly PanelSpec IdleBarSpec = new()
+    {
+        Title = "Idle guard",
+        Width = 200,
+        Widgets = new[]
+        {
+            new WidgetSpec { Type = "gauge", Text = "Idle", Value = "scrye.idle.pct", Max = "100" },
+            new WidgetSpec { Type = "value", Text = "", Bind = "scrye.idle.text" },
+        },
+    };
+
+    /// <summary>Once a second on the session loop: publish the time left and show or hide the
+    /// bar with the guard.</summary>
+    private void UpdateIdleBar()
+    {
+        IdleGuard g = _session.IdleGuard;
+        if (!g.Enabled)
+        {
+            if (_idleBarShown) { Hud.RemovePanels(IdleBarOwner); _idleBarShown = false; }
+            return;
+        }
+        double left = g.SecondsRemaining;
+        _session.GameState.Set("scrye.idle.left", Scrye.Core.State.StateValue.Num(Math.Round(left)));
+        _session.GameState.Set("scrye.idle.pct", Scrye.Core.State.StateValue.Num(g.Seconds > 0 ? Math.Round(left * 100.0 / g.Seconds, 1) : 0));
+        _session.GameState.Set("scrye.idle.text", Scrye.Core.State.StateValue.Str(g.HasFired
+            ? "fired - automation stopped"
+            : $"{IdleGuard.Describe(left)} left of {IdleGuard.Describe(g.Seconds)}"));
+        if (!_idleBarShown) { Hud.AddPanel(IdleBarOwner, IdleBarSpec); _idleBarShown = true; }
+    }
+
+    private void PersistIdle()
+    {
+        IdleGuard g = _session.IdleGuard;
+        PersistIdleGuard?.Invoke(g.Enabled, g.Seconds, g.Sources, g.HoldPlugins);
+    }
+
+    /// <summary>What a submitted line counts as for the idle guard, by where it came from.</summary>
+    private static IdleSource SourceOf(CommandOrigin origin) =>
+        origin.Source == CommandSource.Local ? IdleSource.Keyboard : IdleSource.Phone;
+
+    // Set while THIS world sends a broadcast, so its own copy counts as typing here and every
+    // other world's copy counts as a broadcast.
+    private bool _broadcastingFromHere;
+
+    private void BroadcastFromHere(string text)
+    {
+        _broadcastingFromHere = true;
+        try { Broadcast?.Invoke(text); }
+        finally { _broadcastingFromHere = false; }
+    }
 
     public void AppendSystem(string text) => _pending.Enqueue(Line.FromText("* " + text, SystemColour));
 
@@ -1276,12 +1436,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <para>For the same reason it submits <em>literally</em>: the ';' command separator is
     /// something a person asks for by typing it, not something a link gets to claim on their
     /// behalf.</para></summary>
-    public void HandleCommandLink(string command, bool prompt)
+    public void HandleCommandLink(string command, bool prompt, IdleSource source = IdleSource.OutputLink)
     {
         if (string.IsNullOrWhiteSpace(command)) return;
         if (prompt) { Input = command; return; }
         _pending.Enqueue(Line.FromText("> " + command, EchoColour));
-        _session.SubmitLiteral(command);   // one command, whatever separators the MUD put in it
+        _session.SubmitLiteral(command, source);   // one command, whatever separators the MUD put in it
     }
 
     /// <summary>Send MUD-authored text exactly as a desktop MXP link click does: local echo,
@@ -1342,15 +1502,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         // client "." commands (sequences, logging, tts); unknown dot-input falls through to
         // the MUD. Deliberately NOT gated: a sequence is a command list this desktop already
         // authored, and firing a walk route from a phone is a core companion use case.
+        // '.' and '/' lines never reach the session's input pipeline, so they tell the idle
+        // guard themselves - they are you as surely as "look" is
         if (TryClientCommand(text))
         {
             _pending.Enqueue(Line.FromText(text, EchoColour));
+            _session.NotePresence(SourceOf(origin), text);
             return CommandSubmitResult.Accepted;
         }
 
         if (isScript)
         {
             _pending.Enqueue(Line.FromText(text, EchoColour));
+            _session.NotePresence(SourceOf(origin), text);
             _session.RunScript(text[1..]);
             return CommandSubmitResult.Accepted;
         }
@@ -1362,12 +1526,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         if (origin.Source == CommandSource.Local
             && IsBroadcast && Broadcast is not null && text.Length > 0)
         {
-            Broadcast(text);
+            BroadcastFromHere(text);
             return CommandSubmitResult.Accepted;
         }
 
         _pending.Enqueue(Line.FromText("> " + text, EchoColour));   // local echo
-        _session.Submit(text);
+        _session.Submit(text, SourceOf(origin));
         return CommandSubmitResult.Accepted;
     }
 
@@ -1395,7 +1559,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".all":
                 if (arg.Length == 0) { AppendSystem("usage: .all <command> — send to every connected world"); return true; }
                 if (Broadcast is null) { AppendSystem("broadcast unavailable"); return true; }
-                Broadcast(arg);
+                BroadcastFromHere(arg);
                 return true;
             case ".idle": HandleIdleCommand(arg); return true;
             case ".tts": HandleTtsCommand(arg); return true;
@@ -1709,6 +1873,13 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                       ? " — fired; automation is stopped until you send something"
                       : $", {IdleGuard.Describe(guard.SecondsRemaining)} left")
                 : $"idle guard off (limit would be {IdleGuard.Describe(guard.Seconds)})");
+            AppendSystem("counts: " + IdleSources.Format(guard.Sources)
+                + (guard.HoldPlugins ? "; firing also holds every plugin" : "; firing only tells plugins")
+                + " (choose in the Idle button's menu)");
+            if (guard.LastCounted is { } c)
+                AppendSystem($"last reset: {IdleSources.Describe(c.Source)} '{c.Detail}' at {c.At:HH:mm:ss}");
+            if (guard.LastIgnored is { } i)
+                AppendSystem($"last ignored: {IdleSources.Describe(i.Source)} '{i.Detail}' at {i.At:HH:mm:ss}");
             return;
         }
 
@@ -1716,6 +1887,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         {
             guard.Enabled = arg == "on";
             OnPropertyChanged(nameof(IdleGuardEnabled));
+            OnPropertyChanged(nameof(IdleStatus));
+            PersistIdle();
             AppendSystem(guard.Enabled
                 ? $"idle guard on — automation stops after {IdleGuard.Describe(guard.Seconds)} with nothing from you"
                 : "idle guard off");
@@ -1730,6 +1903,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             guard.Enabled = true;
             OnPropertyChanged(nameof(IdleGuardEnabled));
             OnPropertyChanged(nameof(IdleGuardTip));
+            OnPropertyChanged(nameof(IdleGuardMinutes));
+            OnPropertyChanged(nameof(IdleStatus));
+            PersistIdle();
             AppendSystem($"idle guard on, limit {IdleGuard.Describe(guard.Seconds)}"
                 + (n * mult != guard.Seconds
                     ? $" (clamped to {IdleGuard.MinSeconds}-{IdleGuard.MaxSeconds}s)" : ""));

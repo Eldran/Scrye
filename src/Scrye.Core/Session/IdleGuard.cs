@@ -12,6 +12,84 @@ public enum IdleGuardSignal
 }
 
 /// <summary>
+/// The ways you can show the idle guard you are still there. Which of them count is yours to
+/// choose (<see cref="IdleGuard.Sources"/>): someone who only trusts the keyboard can switch the
+/// rest off, so a tap on the phone or a command broadcast from another world no longer keeps a
+/// bot world awake.
+/// </summary>
+[Flags]
+public enum IdleSource
+{
+    None = 0,
+    /// <summary>A command typed in this world's command line (including <c>.</c> and <c>/</c> lines).</summary>
+    Keyboard = 1,
+    /// <summary>A macro key.</summary>
+    Macro = 2,
+    /// <summary>A click on a link in the output (MXP / Pueblo links the MUD sent).</summary>
+    OutputLink = 4,
+    /// <summary>A click on a link or toggle in a plugin's panel or the Companion panel.</summary>
+    PanelLink = 8,
+    /// <summary>Anything from the phone: a command, a tapped link, a panel button.</summary>
+    Phone = 16,
+    /// <summary>A command typed in ANOTHER world with "All" (broadcast) on.</summary>
+    Broadcast = 32,
+    All = Keyboard | Macro | OutputLink | PanelLink | Phone | Broadcast,
+}
+
+/// <summary>Reading and writing <see cref="IdleSource"/> as the profile stores it: a comma list
+/// of names ("keyboard, macro"), so a hand-edited profile reads naturally.</summary>
+public static class IdleSources
+{
+    public static readonly (IdleSource Source, string Name, string Label)[] Each =
+    {
+        (IdleSource.Keyboard,   "keyboard",   "Typing in this world's command line"),
+        (IdleSource.Macro,      "macro",      "Macro keys"),
+        (IdleSource.OutputLink, "outputlink", "Clicking links in the output"),
+        (IdleSource.PanelLink,  "panellink",  "Clicking links and toggles in plugin panels"),
+        (IdleSource.Phone,      "phone",      "The phone companion"),
+        (IdleSource.Broadcast,  "broadcast",  "Commands broadcast from another world (All)"),
+    };
+
+    /// <summary>"keyboard, macro". All sources is "all"; none is "none".</summary>
+    public static string Format(IdleSource s)
+    {
+        if ((s & IdleSource.All) == IdleSource.All) return "all";
+        var names = new List<string>();
+        foreach (var e in Each) if ((s & e.Source) != 0) names.Add(e.Name);
+        return names.Count == 0 ? "none" : string.Join(", ", names);
+    }
+
+    /// <summary>The flags a stored list names; unknown words are ignored, and nothing usable at
+    /// all (null, blank, only unknown words) is null so the cascade falls through.</summary>
+    public static IdleSource? Parse(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        IdleSource s = IdleSource.None;
+        bool any = false;
+        foreach (string raw in text.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string w = raw.Trim().ToLowerInvariant();
+            if (w == "all") { s = IdleSource.All; any = true; continue; }
+            if (w == "none") { any = true; continue; }
+            foreach (var e in Each) if (e.Name == w) { s |= e.Source; any = true; }
+        }
+        return any ? s : null;
+    }
+
+    /// <summary>What a source is called in the status line.</summary>
+    public static string Describe(IdleSource s)
+    {
+        foreach (var e in Each) if (e.Source == s) return e.Name switch
+        {
+            "keyboard" => "typed", "macro" => "macro key", "outputlink" => "output link",
+            "panellink" => "panel click", "phone" => "phone", "broadcast" => "broadcast",
+            _ => e.Name,
+        };
+        return s.ToString();
+    }
+}
+
+/// <summary>
 /// A dead-man's switch for unattended automation. It answers one question — "is anyone still
 /// here?" — and the only evidence it accepts is the user doing something. Output from the MUD
 /// never counts, because a bot walking an area produces output all night; that is precisely the
@@ -93,6 +171,49 @@ public sealed class IdleGuard
     /// <summary>True between firing and the next <see cref="Poke"/> — i.e. "automation is stopped
     /// and we are waiting for a sign of life". The status line reads this.</summary>
     public bool HasFired => _fired;
+
+    /// <summary>
+    /// The hard stop: when the guard fires, also hold every plugin - their timers stop and
+    /// nothing they send reaches the MUD - until you are back. On by default. Without it a
+    /// plugin that ignores <c>scrye.onIdle</c> (or one somebody wrote without it) keeps its bot
+    /// running; with it nothing a plugin does can slip through. Plugins are still TOLD first, so
+    /// one that stops itself cleanly does.
+    /// </summary>
+    public bool HoldPlugins { get; set; } = true;
+
+    /// <summary>Which kinds of activity count as you being here (all of them unless narrowed).</summary>
+    public IdleSource Sources { get; set; } = IdleSource.All;
+
+    /// <summary>Whether <paramref name="source"/> counts.</summary>
+    public bool Counts(IdleSource source) => (Sources & source) != 0;
+
+    /// <summary>The last activity that counted: what it was, a short detail (the command, the
+    /// key), and when. Null until something has. <c>.idle</c> and the Idle menu show it, so a
+    /// guard that "reset by itself" names what reset it.</summary>
+    public (IdleSource Source, string Detail, DateTimeOffset At)? LastCounted { get; private set; }
+
+    /// <summary>The last activity that did NOT count (its source is switched off), for the same
+    /// display: "ignored: phone 'north' 12:04".</summary>
+    public (IdleSource Source, string Detail, DateTimeOffset At)? LastIgnored { get; private set; }
+
+    /// <summary>
+    /// Something you did, of kind <paramref name="source"/>. When that kind counts this is a
+    /// <see cref="Poke"/> and returns true; when it does not, the clock runs on and it returns
+    /// false. Either way it is remembered for the display.
+    /// </summary>
+    public bool NoteActivity(IdleSource source, string? detail, DateTimeOffset now)
+    {
+        string d = detail ?? "";
+        if (d.Length > 40) d = d[..39] + "…";
+        if (!Counts(source))
+        {
+            LastIgnored = (source, d, now);
+            return false;
+        }
+        LastCounted = (source, d, now);
+        Poke();
+        return true;
+    }
 
     /// <summary>The user did something. Resets the clock and re-arms both the warning and the
     /// firing, so the next idle stretch is judged on its own.</summary>

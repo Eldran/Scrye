@@ -556,6 +556,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         else _store.SaveMud(r.Mud, layer);
     }
 
+    /// <summary>Write the idle guard's settings into the connected node's own layer, so the
+    /// Idle menu's choices hold next time. On a character this overrides what the MUD or
+    /// account layer says, which is what choosing it for this character means.</summary>
+    private void PersistIdleGuard(ProfileRef r, bool on, int seconds, Scrye.Core.Session.IdleSource sources, bool hold)
+    {
+        if (!Services.CrashLog.Guard("PersistIdleGuard", () =>
+            {
+                ProfileLayer layer = OwnLayer(r);
+                string src = Scrye.Core.Session.IdleSources.Format(sources);
+                if (layer.IdleGuard == on && layer.IdleGuardSeconds == seconds && layer.IdleGuardSources == src
+                    && layer.IdleGuardHoldPlugins == hold) return;
+                layer.IdleGuard = on;
+                layer.IdleGuardHoldPlugins = hold;
+                layer.IdleGuardSeconds = seconds;
+                layer.IdleGuardSources = src;
+                SaveOwnLayer(r, layer);
+            }))
+            RaiseToast("Idle guard", "Couldn't save the idle guard settings (see logs).");
+    }
+
     private void PersistTriggerNotify(ProfileRef r, TriggerDef def, bool notify)
     {
         if (!Services.CrashLog.Guard("PersistTriggerNotify", () => SaveTriggerNotify(r, def, notify)))
@@ -633,6 +653,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             vm = new WorldViewModel(eff) { Ref = r, Broadcast = SendBroadcast, Toast = RaiseToast };
             vm.PersistPluginEnable = (id, enabled) => PersistPluginEnable(r, id, enabled);
             vm.PersistTriggerNotify = (def, notify) => PersistTriggerNotify(r, def, notify);
+            vm.PersistIdleGuard = (on, secs, sources, hold) => PersistIdleGuard(r, on, secs, sources, hold);
             vm.ImportRules = import => ImportRules(r, import);
             vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
             Worlds.Add(vm);

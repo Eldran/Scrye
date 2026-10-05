@@ -19,6 +19,8 @@ public static class ProfileResolver
         double? fontSize = null;
         bool idleGuard = false;                                       // off unless a layer asks
         int idleSeconds = Scrye.Core.Session.IdleGuard.DefaultSeconds;
+        Scrye.Core.Session.IdleSource idleSources = Scrye.Core.Session.IdleSource.All;
+        bool idleHold = true;
         string displayName = "";
 
         var triggers = new Dictionary<string, TriggerDef>(StringComparer.Ordinal);
@@ -52,6 +54,8 @@ public static class ProfileResolver
 
             if (layer.IdleGuard is not null) idleGuard = layer.IdleGuard.Value;
             if (layer.IdleGuardSeconds is not null) idleSeconds = layer.IdleGuardSeconds.Value;
+            if (Scrye.Core.Session.IdleSources.Parse(layer.IdleGuardSources) is { } src) idleSources = src;
+            if (layer.IdleGuardHoldPlugins is not null) idleHold = layer.IdleGuardHoldPlugins.Value;
             if (layer.RelayChannels is not null) world.RelayChannels = layer.RelayChannels;
             if (layer.AutoLog is not null) world.AutoLog = layer.AutoLog.Value;
             if (layer.AutoLogFormat is not null) world.AutoLogFormat = layer.AutoLogFormat;
@@ -95,6 +99,8 @@ public static class ProfileResolver
             Variables = variables,
             IdleGuardEnabled = idleGuard,
             IdleGuardSeconds = idleSeconds,
+            IdleGuardSources = idleSources,
+            IdleGuardHoldPlugins = idleHold,
             FontFamily = font,
             FontSize = fontSize,
             Theme = theme,

@@ -50,7 +50,8 @@ public sealed class SessionPluginHost : IPluginHost
         _printFore = printFore ?? Rgb.DefaultFore;
     }
 
-    public void Send(string text) => _actions.Send(text);
+    // Through the session, which drops it while the idle guard is holding plugins.
+    public void Send(string text) => _session.SendFromPlugin(text);
 
     /// <summary>Echo a line to local output. The "[id] " tag is always the plugin colour; the
     /// rest of the line honours <see cref="Markup"/> and falls back to the same colour.</summary>

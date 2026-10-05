@@ -2003,9 +2003,20 @@ Automation that runs while nobody is watching is the thing most likely to get yo
 a bot that keeps walking an area for six hours after you fell asleep, a heal timer firing into an
 empty room. Scrye watches for that and stops.
 
+The **Idle** button in the bottom bar switches it on and off; the **▾** beside it opens its
+settings: the limit in minutes, which kinds of activity count as you being here, and a status line
+saying how long is left, what last reset the clock and what was last ignored. Changes apply at once
+and are saved to this world's own profile layer (a quick-connect tab keeps them for the session).
+
+While the guard is on, a small **Idle guard** panel on the HUD shows the time left as a bar (and
+"fired" once it has gone off). It is an ordinary HUD panel: drag it where you want it, roll it up,
+or put it in a book, and it stays there next time. It goes away when the guard is switched off.
+The same numbers are in the state store as `scrye.idle.left` (seconds), `scrye.idle.pct` and
+`scrye.idle.text`, for a plugin or the State inspector.
+
 ```
-.idle              show the current setting
-.idle on / off     turn it on or off for this session
+.idle              the current setting, what counts, and what last reset it
+.idle on / off     turn it on or off
 .idle 600          limit in seconds
 .idle 10m          the same, in minutes
 ```
@@ -2014,13 +2025,16 @@ Or set it in a profile layer, where it inherits Global → MUD → Account → C
 else:
 
 ```json
-{ "idleGuard": true, "idleGuardSeconds": 600 }
+{ "idleGuard": true, "idleGuardSeconds": 600, "idleGuardSources": "keyboard, macro", "idleGuardHoldPlugins": true }
 ```
 
-**What counts as you being here** is anything *you* send: typed commands, macro keys, and clicks on
-a plugin's panel links — they all arrive through the same path. What deliberately does **not** count
-is output from the MUD, or anything a trigger, timer or plugin sends. A bot producing output all
-night must never look like someone at the keyboard; that is the whole point.
+**What counts as you being here** is your choice, from six kinds of activity (all of them unless you
+narrow it): typing in this world's command line (including `.` and `/` lines), macro keys, clicking
+links in the output, clicking links and toggles in plugin panels, the phone companion, and commands
+broadcast from another world with **All** on. Tick only the keyboard and a tap on the phone, or a
+command typed into another tab, goes out as usual but leaves the clock running. What never counts,
+whatever you tick, is output from the MUD or anything a trigger, timer or plugin sends. A bot
+producing output all night must never look like someone at the keyboard; that is the whole point.
 
 **What happens.** At 80% of the limit you get one warning — type anything to reset it. At the limit,
 Scrye suspends its own profile timers and pauses a running sequence, and fires `scrye.onIdle` in
@@ -2029,6 +2043,15 @@ sequence automatically, because the hazard was being away and you are back. Plug
 until you restart them deliberately — `..` for the stepper, `cs auto on` for the chaos sea —
 since a bot silently resuming because you typed `look` is exactly the surprise this feature exists
 to prevent.
+
+**The hard stop.** A plugin that ignores `scrye.onIdle` — or one written before it existed — would
+otherwise carry on regardless, and one that sends something every few minutes to keep the MUD from
+idling you out would keep a bot alive all night. So once every plugin has been told, Scrye also
+**holds** them: plugin timers stop advancing and anything a plugin sends to the MUD is dropped (the
+first one is named in the output, so you can see who tried). Your next counted activity lifts the
+hold and says how many commands were held; nothing held is sent late. The hold is the **When it
+fires, also hold every plugin** box in the **▾** menu, on unless you untick it, or
+`"idleGuardHoldPlugins": false` in a profile layer.
 
 Off by default, limit 600s, clamped to 60–7200s.
 

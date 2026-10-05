@@ -66,6 +66,15 @@ public sealed class ProfileLayer
     /// <summary>Idle limit in seconds, clamped to 60..7200. Null inherits, then defaults to 600.</summary>
     public int? IdleGuardSeconds { get; set; }
 
+    /// <summary>Which kinds of activity reset the idle guard, as a comma list of
+    /// <c>keyboard, macro, outputlink, panellink, phone, broadcast</c> (or <c>all</c>). Null
+    /// inherits, then defaults to all of them.</summary>
+    public string? IdleGuardSources { get; set; }
+
+    /// <summary>When the idle guard fires, also hold every plugin (timers stopped, sends
+    /// dropped) until you are back. Null inherits, then defaults to on.</summary>
+    public bool? IdleGuardHoldPlugins { get; set; }
+
     /// <summary>Start a transcript automatically on connect. Null inherits; see
     /// <see cref="Scrye.Core.Model.WorldProfile.AutoLog"/>. Set it on a Character layer to log
     /// that character's sessions only.</summary>

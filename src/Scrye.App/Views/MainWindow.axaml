@@ -153,6 +153,42 @@
                                                       IsChecked="{Binding ShowTimestamps}" Margin="4,0,0,0"
                                                       AutomationProperties.Name="Timestamps"
                                                       ToolTip.Tip="Show an HH:mm:ss gutter in the output and capture panes (.ts)" />
+                                        <!-- The Idle menu: the limit, and which kinds of activity reset the guard. Docked to the
+                                             right BEFORE the toggle, so it sits just right of it. Saved to this world's own layer. -->
+                                        <Button DockPanel.Dock="Right" Content="▾" Padding="4,0" Margin="0,0,0,0"
+                                                AutomationProperties.Name="Idle guard settings"
+                                                ToolTip.Tip="Idle guard settings: the limit, and what counts as you being here">
+                                            <Button.Flyout>
+                                                <Flyout Placement="TopEdgeAlignedRight">
+                                                    <StackPanel Width="320" Spacing="6">
+                                                        <TextBlock Text="Idle guard" FontWeight="SemiBold" Foreground="{DynamicResource ScryeAccent}" />
+                                                        <TextBlock Text="Stops your timers, sequences and plugin bots when nobody has been here for a while."
+                                                                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <CheckBox Content="On" IsChecked="{Binding IdleGuardEnabled}" />
+                                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                                            <TextBlock Text="Stop after" VerticalAlignment="Center" />
+                                                            <NumericUpDown Value="{Binding IdleGuardMinutes}" Minimum="1" Maximum="120" Increment="1"
+                                                                           FormatString="0.#" Width="110" />
+                                                            <TextBlock Text="minutes with nothing from you" VerticalAlignment="Center" />
+                                                        </StackPanel>
+                                                        <TextBlock Text="What counts as you being here" Margin="0,6,0,0" FontWeight="SemiBold" />
+                                                        <CheckBox Content="Typing in this world's command line" IsChecked="{Binding IdleCountsKeyboard}" />
+                                                        <CheckBox Content="Macro keys" IsChecked="{Binding IdleCountsMacro}" />
+                                                        <CheckBox Content="Clicking links in the output" IsChecked="{Binding IdleCountsOutputLink}" />
+                                                        <CheckBox Content="Clicking links and toggles in plugin panels" IsChecked="{Binding IdleCountsPanelLink}" />
+                                                        <CheckBox Content="The phone companion" IsChecked="{Binding IdleCountsPhone}" />
+                                                        <CheckBox Content="Commands broadcast from another world (All)" IsChecked="{Binding IdleCountsBroadcast}" />
+                                                        <CheckBox Content="When it fires, also hold every plugin" IsChecked="{Binding IdleHoldPlugins}" Margin="0,6,0,0"
+                                                                  ToolTip.Tip="Plugins are told first and most stop their own bots. With this on, every plugin is also held until you are back: its timers stop and nothing it sends reaches the MUD - so a plugin that ignores the guard cannot carry on." />
+                                                        <TextBlock Text="Triggers, timers and plugins never count - a bot must never look like you."
+                                                                   TextWrapping="Wrap" FontSize="11" Foreground="{DynamicResource ScryeTextDim}" />
+                                                        <Border Background="{DynamicResource ScryeInsetBg}" CornerRadius="4" Padding="6" Margin="0,4,0,0">
+                                                            <TextBlock Text="{Binding IdleStatus}" TextWrapping="Wrap" FontSize="11" />
+                                                        </Border>
+                                                    </StackPanel>
+                                                </Flyout>
+                                            </Button.Flyout>
+                                        </Button>
                                         <ToggleButton DockPanel.Dock="Right" Content="Idle"
                                                       IsChecked="{Binding IdleGuardEnabled}" Margin="4,0,0,0"
                                                       AutomationProperties.Name="Idle guard"

@@ -59,7 +59,7 @@ public sealed class AppSessionSource : ICompanionSessionSource
     public async ValueTask SubmitLinkAsync(string sessionId, string command) =>
         await Dispatcher.UIThread.InvokeAsync<bool>(() =>
         {
-            Find(sessionId)?.HandleCommandLink(command, prompt: false);
+            Find(sessionId)?.HandleCommandLink(command, prompt: false, Scrye.Core.Session.IdleSource.Phone);
             return true;
         });
 
