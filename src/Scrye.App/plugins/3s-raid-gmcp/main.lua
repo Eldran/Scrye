@@ -746,6 +746,22 @@ scrye.addTrigger{
   end,
 }
 
+-- ---------- idle guard ----------
+
+-- Scrye's idle guard says nobody is at the keyboard: disarm, as 'araid off' would. Armed is
+-- never persisted, so this stays off until you arm it again by hand - a raid bot quietly
+-- re-arming because you typed 'look' is the surprise the guard exists to prevent.
+-- (Guarded so the plugin still loads on a host older than plugin API 1.5.)
+if scrye.onIdle then
+  scrye.onIdle(function()
+    if not ar.on then return end
+    ar.on = false
+    note("idle guard fired - auto-raid disarmed. 'araid on' when you are back.")
+    if nf.send then scrye.notify("Auto-Raid: idle guard disarmed the bot") end
+    publish()
+  end)
+end
+
 -- ---------- load ----------
 
 publish()

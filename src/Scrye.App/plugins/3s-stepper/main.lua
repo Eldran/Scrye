@@ -546,6 +546,11 @@ bot_stop = function()
   if not bot.active then note("bot is not active") return end
   save_position()
   bot.paused_on_mob = true
+  -- user_paused is what every trigger and timer checks before acting. Without it a stop in
+  -- mid-fight was not a stop: the killing blow re-attacked the same mob name, and "There is
+  -- no X here." with autoresume walked the route on, with nobody at the keyboard.
+  bot.user_paused = true
+  bot.mob_pending = nil
   bot.armed = false
   note("stopped. position " .. bot.pos .. "/" .. #bot.path .. " saved (.resume / .dcr to continue)")
   draw()
@@ -921,7 +926,9 @@ end)
 -- back should be '.resume', not a bot that quietly kept walking while you were gone.
 scrye.onIdle(function()
   if rec then return end
-  if bot.active and not bot.paused_on_mob then
+  -- Mid-fight included: that is where the bot keeps itself going (re-attack on the killing
+  -- blow, walk on when the mob is gone). Only a bot that is already stopped or paused is left.
+  if bot.active and not bot.user_paused then
     scrye.print("[bot] idle guard fired - stopping. '.resume' when you are back.")
     -- the guard firing means you are away, which is exactly what the phone is for
     pnotify("Stepper: idle guard stopped the bot")

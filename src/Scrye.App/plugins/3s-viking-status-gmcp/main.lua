@@ -3999,6 +3999,26 @@ scrye.onDisconnect(function() connected = false end)
 -- cart freed). No vik state to watch any more: the Guild.* adapters call this
 -- through mk_on_feed after every burst they translate.
 
+-- Scrye's idle guard says nobody is at the keyboard. Two things here would carry on without
+-- you: the auto-trader, and the 5-minute 'l' keepalive - which keeps the MUD from idling you
+-- out, so a character with a bot running never goes quiet. Disarm the one and stop the other
+-- for this session ('vtick' stays saved as it was, so the next load starts it as before).
+-- (Guarded so the plugin still loads on a host older than plugin API 1.5.)
+if scrye.onIdle then
+  scrye.onIdle(function()
+    if at.on then
+      at.on = false
+      note("idle guard fired - auto-trade disarmed. 'atrade on' when you are back.")
+      if at.notify then scrye.notify("auto-trade: idle guard disarmed the trader") end
+      at_draw()
+    end
+    if tick_timer then
+      scrye.cancel(tick_timer); tick_timer = nil
+      scrye.print("[viking] idle guard fired - keepalive 'l' stopped. 'vtick on' when you are back.")
+    end
+  end)
+end
+
 at_draw()   -- seed the Auto / Log tab state
 publish_notify_state()
 
