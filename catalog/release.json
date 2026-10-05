@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "version": "1.10.4",
-  "tag": "v1.10.4",
-  "notes": "v1.10.4 - Triggers: a \"Repeat on line\" setting fires a regex trigger once for every match on the line, each with its own wildcards (MUSHclient's \"repeat on same line\" now imports). Fixed a crash when a trigger was put in a group and another trigger in that group was then clicked. Click-to-focus: raising the window (title bar, taskbar, alt-tab) and the \"back to bottom\" chip now hand the keyboard to the command line, and the command line is focused with its text selected, so \"keep the last command\" works after a click too. Settings: the Connection, Appearance and Plugins tabs scroll when the window is too short. New plugin: 3S Changeling, the Changeling guild HUD (protoplasm, stamina, super, abilities, instincts, form, record; 'clhud'). Farmer 1.6.0: the kill log switches between this session and all time.",
-  "published": "2026-10-04"
+  "version": "1.10.5",
+  "tag": "v1.10.5",
+  "notes": "v1.10.5 - Idle guard: the Idle button gets a menu (the ▾ beside it) to set the limit in minutes and choose what counts as you being here - keyboard, macro keys, output links, plugin panel links, the phone companion, broadcasts from another world - with a status line saying what last reset the clock and what was ignored. A movable \"Idle guard\" HUD panel shows the time left as a bar. When the guard fires it now also holds every plugin: plugin timers stop and anything a plugin sends is dropped until you are back (on by default, untick it in the menu). Plugins: the Stepper now stops in mid-fight too, for the idle guard and for .stop (1.1.2); Auto-Raid disarms (2.3.2); Viking Status disarms auto-trade and stops the 5-minute vtick keepalive (2.27.3). Fixed ANSI colour after a '<' showing as raw codes such as [1m in `who`.",
+  "published": "2026-10-05"
 }
