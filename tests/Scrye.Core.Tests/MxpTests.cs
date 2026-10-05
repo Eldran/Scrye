@@ -72,6 +72,35 @@ public class MxpTests
     }
 
     [Fact]
+    public void ColourCodesRightAfterALessThanAreColourNotATag()
+    {
+        // 3Scapes' "who w" (5 Oct 2026): rank brackets wrap ANSI colour. Read as a Pueblo tag,
+        // the escapes vanished into it and "[1m" was printed instead of bold.
+        (List<Line> lines, List<string> ignored) = ParsePueblo(
+            " <\x1b[1mArchon \x1b[0m> [Areas]  << Adalius@3k\n~<\x1b[35mArchon \x1b[0m> [Areas]\n");
+        Assert.Equal(" <Archon > [Areas]  << Adalius@3k", lines[0].PlainText);
+        Assert.Contains(lines[0].Runs, r => r.Text.StartsWith("Archon") && (r.Flags & RunFlags.Bold) != 0);
+        Assert.Equal("~<Archon > [Areas]", lines[1].PlainText);
+        Assert.Empty(ignored);
+    }
+
+    [Fact]
+    public void AnEscapeInsideWhatLookedLikeATagReplaysItAsText()
+    {
+        (List<Line> lines, _) = ParsePueblo("<abc\x1b[1mdef\x1b[0m> x\n");
+        Assert.Equal("<abcdef> x", lines[0].PlainText);
+        Assert.Contains(lines[0].Runs, r => r.Text == "def" && (r.Flags & RunFlags.Bold) != 0);
+    }
+
+    [Fact]
+    public void ATagStillNeedsALetterSlashOrBang()
+    {
+        (List<Line> lines, _) = ParsePueblo("<B>bold</B> <-- arrow <!-- c -->\n");
+        Assert.StartsWith("bold <-- arrow", lines[0].PlainText);
+        Assert.Contains(lines[0].Runs, r => r.Text == "bold" && (r.Flags & RunFlags.Bold) != 0);
+    }
+
+    [Fact]
     public void PuebloModeSwitchesAndWrappersAreSilentNotIgnored()
     {
         // <IMG xch_mode=html> is the mode switch the server sends after the handshake, and

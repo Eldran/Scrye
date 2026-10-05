@@ -195,7 +195,12 @@ public sealed class AnsiParser
                 // "<" followed by whitespace or a digit is text, not a tag (the HTML rule):
                 // "-=< ARCHONS >=-" and "x < 5" must survive a Pueblo world, where every
                 // line is trusted and a swallowed banner would be the price of a link.
-                if (_tag.Length == 0 && (c == ' ' || c == '\t' || char.IsDigit(c) || c == '<' || c == '='))
+                //
+                // More generally a tag NAME starts with a letter (or '/' for a close, '!' for a
+                // definition); anything else after '<' is text. 3Scapes' "who" sends
+                // "<ESC[1mArchon ESC[0m>": read as a tag, the escapes were swallowed into it and
+                // came back as literal "[1m" text instead of bold (5 Oct 2026).
+                if (_tag.Length == 0 && !(char.IsAsciiLetter(c) || c == '/' || c == '!'))
                 {
                     AppendText('<');
                     _state = State.Normal;
@@ -208,6 +213,17 @@ public sealed class AnsiParser
                     if (c == _tagQuote) _tagQuote = '\0';
                 }
                 else if (c == '"' || c == '\'') { _tag.Append(c); _tagQuote = c; }
+                else if (c == '\x1b')
+                {
+                    // An escape sequence cannot sit inside a tag: this was text. Replay the '<'
+                    // and what followed it through the parser, so the colour codes are applied
+                    // rather than printed.
+                    string held = _tag.ToString();
+                    _state = State.Normal;
+                    AppendText('<');
+                    foreach (char t in held) FeedChar(t);
+                    FeedChar(c);
+                }
                 else if (c == '>')
                 {
                     _state = State.Normal;
