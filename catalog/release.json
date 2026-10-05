@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "version": "1.10.3",
-  "tag": "v1.10.3",
-  "notes": "v1.10.3 - A plugin turned on mid-session now fills straight away: enabling, reloading or updating a plugin while connected used to leave its panels empty until the next login, because most of the 3Scapes GMCP feed (Guild.Kingdom, Guild.Roster, Merc.* ...) is sent as a full report at login and only changes after that. Scrye now keeps what each package's current picture is built from and replays it to the plugin as it loads; chat and kill messages are never replayed.",
-  "published": "2026-10-01"
+  "version": "1.10.4",
+  "tag": "v1.10.4",
+  "notes": "v1.10.4 - Triggers: a \"Repeat on line\" setting fires a regex trigger once for every match on the line, each with its own wildcards (MUSHclient's \"repeat on same line\" now imports). Fixed a crash when a trigger was put in a group and another trigger in that group was then clicked. Click-to-focus: raising the window (title bar, taskbar, alt-tab) and the \"back to bottom\" chip now hand the keyboard to the command line, and the command line is focused with its text selected, so \"keep the last command\" works after a click too. Settings: the Connection, Appearance and Plugins tabs scroll when the window is too short. New plugin: 3S Changeling, the Changeling guild HUD (protoplasm, stamina, super, abilities, instincts, form, record; 'clhud'). Farmer 1.6.0: the kill log switches between this session and all time.",
+  "published": "2026-10-04"
 }

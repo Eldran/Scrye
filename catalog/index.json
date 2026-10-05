@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "v1.10.3",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.3/src/Scrye.App/plugins/",
-  "generated": "2026-10-01T14:14:00Z",
+  "ref": "v1.10.4",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.4/src/Scrye.App/plugins/",
+  "generated": "2026-10-05T00:47:35Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -42,6 +42,39 @@
         }
       ],
       "totalSize": 59662
+    },
+    {
+      "id": "3s-changeling",
+      "name": "3S Changeling",
+      "version": "1.0.0",
+      "author": "Joakim",
+      "description": "The Changeling guild HUD, fed by the Guild.State and Guild.Info GMCP packages. Tabs: Status (protoplasm and stamina as bars, super counting down, bioplasts, the dissipate / thermotaxis / adrenalize / hyperproliferate toggles, the two instincts, and the form you are in), Form (form, group, form points, time in it, intimacy, perform, the next and last form's cost, complex, ingested, familiar) and Record (kills, relinquishes, best kill with its class, arch foe, guild age and the share of it spent in combat). 'clhud' prints the Status page into the output window. Built from one capture (Kuben, 3 Sep 2026); super, reset and the instinct fields are shown as the server's numbers until their meaning is confirmed. Another guild's same-named packages are ignored.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-changeling",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "e7a022d41af39528eebc8db0af3af644e48f88d38ee1c1841dca19db0d1452ba",
+          "size": 12723
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "6c75409495b375bb6a31b4b75e5f903f77174e040b6ef2e8785a914f38d81c23",
+          "size": 1139
+        }
+      ],
+      "totalSize": 13862
     },
     {
       "id": "3s-chaossea",
@@ -157,9 +190,9 @@
     {
       "id": "3s-farmer",
       "name": "3S Farmer",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "author": "Joakim",
-      "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Kills are logged and tallied patrol or no patrol (1.4.2) - yours and your party's: every '<who> dealt the killing blow to <mob>' the server reports fills the kill log and the panel's Tally row, which counts per killer; only a fight the patrol opened moves its own counters, times the fight, and runs the after-kill chain. 1.5.0 (23 Sep): the kill log is kept per place - the area, and its floor when the room's name gives one (Megacity floor 30 and floor 40 are two logs); the panel shows the place you stand in, 'farm log all' every place, 'farm log clear here' one place - and its Last column became XP, what the last kill of each mob was worth (Char.XP over the fight). Also an XP row from GMCP Char.XP - the server's XP/hour and last-30-minute gain, the run's XP gain (frozen at the stop) and XP per kill, in 'farm' too; a crowded room's paged Room.Contents is read whole, and a monster's count is kept. 1.4.3 (23 Sep): GMCP Room.Death reports kills too; a kill's text line and its Room.Death are paired into one kill, whichever arrives first, and the pairing learns your character's name (kept per character), so a Room.Death alone counts as yours; a player's death (npc 0) is not a kill; your hird's kills (killer 'Hirdmadr') count as yours, and 'farm mine <name>' edits that list. The panel is three tabs (1.4.1): Patrol (status, buttons, gauges, roster, counters, kill log), Mobs (never / party / excludes / prefer / always), Settings (the after-kill chain and no-loot, rotation, the settings boxes, room rules). 1.4.0 (20 Sep): 'farm prefer <name>' sets the fight order per area (the preferred mob dies first when several stand together), 'farm always <name>' fights a mob even with a stranger in the room, 'farm rota add <area> / on' farms areas in turn - after a full circuit with no kill for the idle time the mapper is asked for a walk to the next one - and the settings (pace, hp, sp, rest, limit, panic) are boxes on the panel. 1.3.0 (20 Sep): 'farm after' is a chain - commands sent in order after each kill ('farm after add|del', the panel's table and box) - and 'farm noloot <name>' keeps a mob's corpse out of it per area; 'farm limit 45m|2h|50k' ends the run between fights, parking at the rest room when there is one, and tells your phone. 1.2.0 (20 Sep): a kill log on the panel (per mob: kills, average fight, last kill; 'farm log', 'farm log clear'), a rest room ('farm room <n> rest', or the map's right-click) the patrol walks to before resting and never fights in, the panic floor retreating there instead of stopping when one exists, an SP floor ('farm sp'), a resume bar for rests ('farm hp <start> <panic> <resume>'), and the leg being walked published for the map to light. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B.",
+      "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Kills are logged and tallied patrol or no patrol (1.4.2) - yours and your party's: every '<who> dealt the killing blow to <mob>' the server reports fills the kill log and the panel's Tally row, which counts per killer; only a fight the patrol opened moves its own counters, times the fight, and runs the after-kill chain. 1.6.0 (1 Oct): the kill log has two views - all time (kept, as before) and this session (since Scrye loaded the plugin) - switched by the panel's This session / All time buttons or 'farm log view all|session'; 'farm log session [all|<place>]' prints the session one and 'farm log clear session' empties only it. 1.5.0 (23 Sep): the kill log is kept per place - the area, and its floor when the room's name gives one (Megacity floor 30 and floor 40 are two logs); the panel shows the place you stand in, 'farm log all' every place, 'farm log clear here' one place - and its Last column became XP, what the last kill of each mob was worth (Char.XP over the fight). Also an XP row from GMCP Char.XP - the server's XP/hour and last-30-minute gain, the run's XP gain (frozen at the stop) and XP per kill, in 'farm' too; a crowded room's paged Room.Contents is read whole, and a monster's count is kept. 1.4.3 (23 Sep): GMCP Room.Death reports kills too; a kill's text line and its Room.Death are paired into one kill, whichever arrives first, and the pairing learns your character's name (kept per character), so a Room.Death alone counts as yours; a player's death (npc 0) is not a kill; your hird's kills (killer 'Hirdmadr') count as yours, and 'farm mine <name>' edits that list. The panel is three tabs (1.4.1): Patrol (status, buttons, gauges, roster, counters, kill log), Mobs (never / party / excludes / prefer / always), Settings (the after-kill chain and no-loot, rotation, the settings boxes, room rules). 1.4.0 (20 Sep): 'farm prefer <name>' sets the fight order per area (the preferred mob dies first when several stand together), 'farm always <name>' fights a mob even with a stranger in the room, 'farm rota add <area> / on' farms areas in turn - after a full circuit with no kill for the idle time the mapper is asked for a walk to the next one - and the settings (pace, hp, sp, rest, limit, panic) are boxes on the panel. 1.3.0 (20 Sep): 'farm after' is a chain - commands sent in order after each kill ('farm after add|del', the panel's table and box) - and 'farm noloot <name>' keeps a mob's corpse out of it per area; 'farm limit 45m|2h|50k' ends the run between fights, parking at the rest room when there is one, and tells your phone. 1.2.0 (20 Sep): a kill log on the panel (per mob: kills, average fight, last kill; 'farm log', 'farm log clear'), a rest room ('farm room <n> rest', or the map's right-click) the patrol walks to before resting and never fights in, the panic floor retreating there instead of stopping when one exists, an SP floor ('farm sp'), a resume bar for rests ('farm hp <start> <panic> <resume>'), and the leg being walked published for the map to light. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B.",
       "mudIds": [
         "*"
       ],
@@ -180,16 +213,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "5c25a13d1383633c5a6ab3d4cbccf23479cda742b819c49f216faaa853ef8601",
-          "size": 123033
+          "sha256": "f68609e7b5f1ac34825e73ec97ae159b7e3a45135561625453be3f06f8c155c7",
+          "size": 125900
         },
         {
           "path": "plugin.json",
-          "sha256": "1fb8db811368bfc7a9e0bf5c70ed90d32f2a57bb0dd0e0761febfcb169e4eb86",
-          "size": 4927
+          "sha256": "3be95c3b98b5163e8ce17d21efbecb66f83bed5f931b5d804683dec7abe501c9",
+          "size": 5239
         }
       ],
-      "totalSize": 127960
+      "totalSize": 131139
     },
     {
       "id": "3s-gentech",
