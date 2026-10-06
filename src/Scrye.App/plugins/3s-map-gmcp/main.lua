@@ -412,10 +412,23 @@ local function describe_exits(r, num)
   return table.concat(parts, "  ")
 end
 
-local function exits_differ(a, b)
-  for dir, dest in pairs(a or {}) do if (b or {})[dir] ~= dest then return true end end
-  for dir, dest in pairs(b or {}) do if (a or {})[dir] ~= dest then return true end end
-  return false
+-- What really changed between two exit lists, as short notes ("+n", "-w", "e 45233->45240").
+-- A destination the server WITHHOLDS (0) is not news against a number it gave another time:
+-- the same exit is sent with its number on one visit and 0 on the next (a room just out of
+-- sight, Joakim's Megacity walkways, 6 Oct 2026), and counting that flagged EXITS CHANGED on
+-- nearly every arrival. Only an exit appearing, vanishing, or naming a DIFFERENT room counts.
+local function exits_diff(a, b)
+  a, b = a or {}, b or {}
+  local out = {}
+  for _, dir in ipairs(sorted_dirs(a)) do
+    if b[dir] == nil then out[#out + 1] = "-" .. dir end
+  end
+  for _, dir in ipairs(sorted_dirs(b)) do
+    local was, now = a[dir], b[dir]
+    if was == nil then out[#out + 1] = "+" .. dir
+    elseif was ~= now and was ~= 0 and now ~= 0 then out[#out + 1] = dir .. " " .. was .. "->" .. now end
+  end
+  return out
 end
 
 -- ---------- persistence ----------
@@ -640,7 +653,15 @@ local function on_room_info(json)
   if prev and prev.shift then
     for d in pairs(prev.shift) do if exits[d] ~= nil then exits[d] = 0 end end
   end
-  local changed = prev and exits_differ(prev.exits, exits)
+  local diff = prev and exits_diff(prev.exits, exits) or {}
+  local changed = #diff > 0
+  -- and keep what we were told before where this visit withholds it
+  if prev and prev.exits then
+    for d, v in pairs(exits) do
+      local old = prev.exits[d]
+      if v == 0 and old and old ~= 0 and not (prev.shift and prev.shift[d]) then exits[d] = old end
+    end
+  end
 
   local shape_changed = (not prev) or changed or (prev and prev.area ~= area)
   if not prev then
@@ -728,7 +749,7 @@ local function on_room_info(json)
       name ~= "" and name or "(no name)",
       area ~= "" and area or "?",
       describe_exits(rooms[num], num),
-      prev and (changed and "   EXITS CHANGED" or "   (again)") or "   NEW"))
+      prev and (changed and ("   EXITS CHANGED (" .. table.concat(diff, ", ") .. ")") or "   (again)") or "   NEW"))
     if learned and from then
       note(string.format("  learned %d %s> %d - the server would not say where that went",
                          from, mv.dir, num))
