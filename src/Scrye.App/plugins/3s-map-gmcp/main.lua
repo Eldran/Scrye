@@ -221,6 +221,10 @@ local here    = nil       -- num of the room we are in
 local msgs    = 0
 local dirty   = false
 local moves   = {}        -- queued { dir, from, at } awaiting a Room.Info
+-- links added by hand ('mapg link'): one table, because the main chunk is at Lua's
+-- 200-local limit. typed = the commands typed since the last arrival (newest last);
+-- last_hop = { from, to, cmds }, the last arrival and what was typed before it.
+local HL = { typed = {}, last_hop = nil, MAX = 80 }
 local mapnames = {}       -- seed room number -> a name you gave that map
 local maplist_seeds = {}  -- Maps tab row index -> that row's map seed, for row clicks
 local maplist_filter = "" -- Maps tab search text (lowercased); "" = show everything
@@ -366,6 +370,13 @@ local function neighbours(r)
       out[#out + 1] = { dir = dir, to = r.walked[dir] }
     end
   end
+  -- Links added by hand ('mapg link', 6 Oct 2026): a door the room does not list - "climb
+  -- rope", "say open;enter" - that nothing typed there could ever teach. The key is the
+  -- command itself, sent as written (';' separates several), and the router uses it like
+  -- any walked exit. One-way: a door back is its own link.
+  for _, cmd in ipairs(sorted_dirs(r.custom)) do
+    out[#out + 1] = { dir = cmd, to = r.custom[cmd], custom = true }
+  end
   return out
 end
 
@@ -466,7 +477,7 @@ local function save(force)
   for num, r in pairs(rooms) do
     list[#list + 1] = { num = num, name = r.name, area = r.area,
                         exits = r.exits, walked = r.walked, visits = r.visits,
-                        shift = r.shift, vary = r.vary, edge = r.edge }
+                        shift = r.shift, vary = r.vary, edge = r.edge, custom = r.custom }
   end
   local names = {}
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
@@ -509,6 +520,7 @@ local function load()
       if type(r.shift) == "table" and next(r.shift) ~= nil then rooms[num].shift = r.shift end
       if type(r.vary) == "table" and next(r.vary) ~= nil then rooms[num].vary = r.vary end
       if type(r.edge) == "table" and next(r.edge) ~= nil then rooms[num].edge = r.edge end
+      if type(r.custom) == "table" and next(r.custom) ~= nil then rooms[num].custom = r.custom end
       -- drop links learned in a direction the room's listing does not name (see unlisted)
       for d in pairs(rooms[num].walked) do
         if unlisted(rooms[num], d) then rooms[num].walked[d] = nil ; pruned = pruned + 1 end
@@ -673,6 +685,11 @@ local function on_room_info(json)
     prev.visits = prev.visits + 1
   end
   local moved = (here ~= num)
+  -- What was typed before an arrival is what took you there; a room re-sent without a move
+  -- (a door that refused, a room that changed) clears it, so a command that went nowhere is
+  -- never pinned on a later move.
+  if moved then HL.last_hop = { from = here, to = num, cmds = HL.typed } end
+  HL.typed = {}
   here = num
   dirty = true
   if shape_changed then forget_adjacency() end
@@ -798,7 +815,18 @@ local function on_room_info(json)
 end
 
 local function on_command(cmd)
-  local word = tostring(cmd or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+  local raw = tostring(cmd or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local word = raw:lower()
+  -- the parts of a hand-added link the walker is sending: its own, not you moving
+  if walk and walk.custom_parts and (walk.custom_parts[word] or 0) > 0 then
+    walk.custom_parts[word] = walk.custom_parts[word] - 1
+    return
+  end
+  -- what you typed, for 'mapg link' to name the door you just went through
+  if raw ~= "" and not word:match("^mapg") then
+    HL.typed[#HL.typed + 1] = raw
+    if #HL.typed > 5 then table.remove(HL.typed, 1) end
+  end
   local dir = MOVE[word]
   -- The server NAMES nonstandard exits in Room.Info ("exit", "vortex", "portal"...), and
   -- typing one of those names from this room IS a move - the room's own feed says so. Pair
@@ -837,7 +865,7 @@ local function bfs(from, want)
       local steps, cur = {}, at
       while cur ~= from do
         local p = prev[cur]
-        table.insert(steps, 1, { dir = p.dir, to = cur })
+        table.insert(steps, 1, { dir = p.dir, to = cur, custom = p.custom })
         cur = p.from
       end
       return steps
@@ -845,7 +873,7 @@ local function bfs(from, want)
     for _, e in ipairs(neighbours(rooms[at])) do
       if rooms[e.to] and not seen[e.to] then
         seen[e.to] = true
-        prev[e.to] = { from = at, dir = e.dir }
+        prev[e.to] = { from = at, dir = e.dir, custom = e.custom }
         queue[#queue + 1] = e.to
       end
     end
@@ -1305,8 +1333,24 @@ local function walk_step()
     if exploring then explore_continue() end
     return
   end
-  walk.sent = st.dir              -- so on_command knows this one was ours
   walk_arm_watchdog()
+  if st.custom then
+    -- a hand-added link: its command as written, ';' separating several. Each part is
+    -- counted so on_command knows it was ours and not you moving.
+    walk.sent, walk.custom_parts = nil, {}
+    local parts = {}
+    for part in (st.dir .. ";"):gmatch("([^;]*);") do
+      part = part:gsub("^%s+", ""):gsub("%s+$", "")
+      if part ~= "" then
+        parts[#parts + 1] = part
+        walk.custom_parts[part:lower()] = (walk.custom_parts[part:lower()] or 0) + 1
+      end
+    end
+    for _, part in ipairs(parts) do scrye.send(part) end
+    return
+  end
+  walk.custom_parts = nil
+  walk.sent = st.dir              -- so on_command knows this one was ours
   scrye.send(st.dir)
 end
 
@@ -1334,6 +1378,12 @@ walk_arrived = function()
   if not walk then return end
   local st = walk.steps[walk.idx]
   if not st then return end
+  if st.custom and here ~= st.to then
+    -- A hand-added door of several commands can pass through rooms on its way ("n;climb
+    -- rope"): wait for the room it names, and let the watchdog say if it never comes.
+    walk_arm_watchdog()
+    return
+  end
   if not st.any and here ~= st.to then
     -- The step went somewhere else. No other walker can see this happen.
     walk_stop(string.format(
@@ -1412,6 +1462,7 @@ local function room_detail(num)
   if #ns == 0 then note("  no known way out") end
   for _, e in ipairs(ns) do
     local _, how = link(r, e.dir)
+    if e.custom then how = "added by hand - 'mapg unlink " .. num .. " " .. e.dir .. "' removes it" end
     note(string.format("  %-5s -> %-6d %-30s (%s)", e.dir, e.to, name_of(e.to), how or "walked"))
   end
   local fr = frontier_dirs(r)
@@ -1468,6 +1519,7 @@ local function route_to(target)
   if not steps then
     note("no known route from " .. here .. " to " .. target .. (why and (" - " .. why) or ""))
     note("  the store only links rooms it was told about or walked; 'mapg frontier' is what is unexplored")
+    note("  a door the room does not list (climb, say, pull...)? go through it by hand, then 'mapg link'")
     return nil
   end
   return steps
@@ -2032,7 +2084,7 @@ local function export_data(filter)
       keep[num] = true
       list[#list + 1] = { num = num, name = r.name, area = r.area, exits = r.exits,
                           walked = (r.walked and next(r.walked) ~= nil) and r.walked or nil,
-                          shift = r.shift, edge = r.edge }
+                          shift = r.shift, edge = r.edge, custom = r.custom }
     end
   end
   table.sort(list, function(a, b) return a.num < b.num end)
@@ -2182,9 +2234,29 @@ local function clean_marks(t)
   return out
 end
 
+
+function HL.clean_cmd(c)
+  c = tostring(c or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  c = c:gsub('^"(.*)"$', "%1"):gsub("^'(.*)'$", "%1")
+  if c == "" then return nil, "no command given" end
+  if #c > HL.MAX then return nil, "that command is longer than " .. HL.MAX .. " characters" end
+  if c:find("[%c]") then return nil, "a command cannot hold control characters" end
+  local first = c:sub(1, 1)
+  if first == "/" or first == "." then return nil, "a link's command goes to the MUD - not '/' or '.' client commands" end
+  if c:lower():match("^mapg") then return nil, "a link cannot run mapg itself" end
+  return c
+end
+
 local function import_map(name)
   if not scrye.exports then note(NO_EXPORTS) ; return end
   name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  -- Hand-added links carry COMMANDS the walker will send, so a shared map's are only taken
+  -- when asked for by name ('mapg import <file> links') - after reading the list below.
+  local take_links = false
+  do
+    local base = name:match("^(.-)%s+links$")
+    if base and base ~= "" then name, take_links = base, true end
+  end
   if name == "" then
     local maps = {}
     for _, f in ipairs(scrye.exports.list()) do if f:lower():match("%.json$") then maps[#maps + 1] = f end end
@@ -2206,10 +2278,16 @@ local function import_map(name)
     note(name .. " was exported by a newer mapper (format " .. tostring(data.ver) .. ") - update the plugin first") ; return
   end
   local added, links, kept, bad = 0, 0, 0, 0
+  local hand, hand_taken = {}, 0
   for _, r in ipairs(data.rooms) do
     local num = type(r) == "table" and whole(r.num) or nil
     if not num or num == 0 then bad = bad + 1
     else
+      for c, to in pairs(type(r.custom) == "table" and r.custom or {}) do
+        local cmd = type(c) == "string" and HL.clean_cmd(c) or nil
+        local dest = whole(to)
+        if cmd and dest and dest ~= num then hand[#hand + 1] = { from = num, cmd = cmd, to = dest } end
+      end
       local mine = rooms[num]
       if not mine then
         rooms[num] = { name = clip(r.name), area = clip(r.area, 80), exits = clean_links(r.exits),
@@ -2228,6 +2306,14 @@ local function import_map(name)
             mine.walked = mine.walked or {} ; mine.walked[d] = to ; links = links + 1
           end
         end
+      end
+    end
+  end
+  if take_links then
+    for _, e in ipairs(hand) do
+      local mine = rooms[e.from]
+      if mine and rooms[e.to] and not (mine.custom and mine.custom[e.cmd]) then
+        mine.custom = mine.custom or {} ; mine.custom[e.cmd] = e.to ; hand_taken = hand_taken + 1
       end
     end
   end
@@ -2250,6 +2336,108 @@ local function import_map(name)
        newnames > 0 and (", " .. newnames .. " map name(s)") or "",
        newplaces > 0 and (", " .. newplaces .. " place(s)") or "",
        bad > 0 and (" - " .. bad .. " unreadable entr" .. (bad == 1 and "y" or "ies") .. " skipped") or ""))
+  if take_links then
+    note(string.format("  %d hand-added link(s) taken", hand_taken))
+  elseif #hand > 0 then
+    note(string.format("  the file also has %d hand-added link(s) - commands the walker would send:", #hand))
+    for i = 1, math.min(#hand, 10) do
+      local e = hand[i]
+      note(string.format("    %d --'%s'--> %d", e.from, e.cmd, e.to))
+    end
+    if #hand > 10 then note("    ... and " .. (#hand - 10) .. " more") end
+    note("  'mapg import " .. name .. " links' takes them too, if you trust them")
+  end
+end
+
+-- ---------- links added by hand ----------
+-- A door the room does not list ("climb rope", "say open;enter") is never learned by
+-- walking - only commands the room names as exits are, so a guess like 'look' followed by
+-- a teleport cannot write a link nobody walked. These tell the mapper about such a door:
+--   mapg link                        the move you just made, with the last thing you typed
+--   mapg link <command>              the move you just made, with this command (';' = several)
+--   mapg link <from> <to> <command>  any two rooms, by number
+--   mapg unlink [<room>] <command>   drop one;   mapg links   list them all
+-- A link is one-way. The walker sends the command as written.
+function HL.add_link(from, cmd, to)
+  local ok, why = HL.clean_cmd(cmd)
+  if not ok then note(why) ; return end
+  cmd = ok
+  if not rooms[from] then note("room " .. tostring(from) .. " is not in the store") ; return end
+  if not rooms[to] then note("room " .. tostring(to) .. " is not in the store - walk it once first") ; return end
+  if from == to then note("a link from a room to itself goes nowhere") ; return end
+  local r = rooms[from]
+  for c in pairs(r.custom or {}) do
+    if c:lower() == cmd:lower() then r.custom[c] = nil end      -- re-adding replaces
+  end
+  r.custom = r.custom or {}
+  r.custom[cmd] = to
+  dirty = true ; forget_adjacency() ; save() ; draw()
+  if detail_num then show_detail(detail_num) end
+  note(string.format("linked: %d %s  --'%s'-->  %d %s", from, name_of(from), cmd, to, name_of(to)))
+  note("  routes can use it now. One way only - add the way back too if there is one.")
+end
+
+function HL.link_cmd(rest)
+  rest = tostring(rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local a, b, cmd = rest:match("^(%d+)%s+(%d+)%s+(.+)$")
+  if a then HL.add_link(tonumber(a), cmd, tonumber(b)) ; return end
+  local hop = HL.last_hop
+  if not hop or not hop.from then
+    note("no move to link yet - go through the door by hand first, then 'mapg link'")
+    note("  or name both rooms: mapg link <from> <to> <command>")
+    return
+  end
+  if here ~= hop.to then
+    note("you have moved on since - 'mapg link <from> <to> <command>' names the rooms") ; return
+  end
+  if rest == "" then
+    local cmds = hop.cmds or {}
+    if #cmds == 0 then
+      note(string.format("nothing typed took you from %d to %d - 'mapg link <command>' says what did", hop.from, hop.to))
+      return
+    end
+    rest = cmds[#cmds]
+    if #cmds > 1 then
+      note("using the last command, '" .. rest .. "' - if it took several, 'mapg link "
+           .. table.concat(cmds, ";") .. "' links them all")
+    end
+  end
+  HL.add_link(hop.from, rest, hop.to)
+end
+
+function HL.unlink_cmd(rest)
+  rest = tostring(rest or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  local num, cmd = rest:match("^(%d+)%s+(.+)$")
+  num = tonumber(num) or here
+  cmd = cmd or rest
+  local r = num and rooms[num]
+  if not r or cmd == "" then note("mapg unlink [<room>] <command> - 'mapg links' lists them") ; return end
+  for c in pairs(r.custom or {}) do
+    if c:lower() == cmd:lower() then
+      r.custom[c] = nil
+      if next(r.custom) == nil then r.custom = nil end
+      dirty = true ; forget_adjacency() ; save() ; draw()
+      if detail_num then show_detail(detail_num) end
+      note(string.format("unlinked '%s' from %d %s", c, num, name_of(num)))
+      return
+    end
+  end
+  note(string.format("%d %s has no hand-added link '%s'", num, name_of(num), cmd))
+end
+
+function HL.links_list()
+  local rows = {}
+  for num, r in pairs(rooms) do
+    for c, to in pairs(r.custom or {}) do rows[#rows + 1] = { from = num, cmd = c, to = to } end
+  end
+  if #rows == 0 then note("no hand-added links - 'mapg link' after going through a door the map does not know") ; return end
+  table.sort(rows, function(x, y) if x.from ~= y.from then return x.from < y.from end return x.cmd < y.cmd end)
+  note(#rows .. " hand-added link(s):")
+  for i = 1, math.min(#rows, LIST_CAP) do
+    local e = rows[i]
+    note(string.format("  %-6d %-24s --'%s'--> %d %s", e.from, name_of(e.from):sub(1, 24), e.cmd, e.to, name_of(e.to)))
+  end
+  if #rows > LIST_CAP then note("  ... and " .. (#rows - LIST_CAP) .. " more") end
 end
 
 -- ---------- alias ----------
@@ -2376,6 +2564,9 @@ scrye.addAlias{
       if rest == "off" then drawing = false; scrye.store.set("drawing", "0"); note("panel off")
       else drawing = true; scrye.store.set("drawing", "1"); draw(); note("panel on") end
     elseif verb == "shift"    then shift_cmd(rest)
+    elseif verb == "link"     then HL.link_cmd(rest)
+    elseif verb == "unlink"   then HL.unlink_cmd(rest)
+    elseif verb == "links"    then HL.links_list()
     elseif verb == "forget"   then
       local words = {}
       for w in rest:gmatch("%S+") do words[#words + 1] = w end
@@ -2423,6 +2614,10 @@ scrye.addAlias{
       note("mapg import [file] add a shared map to yours (nothing you have is overwritten); no file lists them")
       note("mapg draw on|off  the HUD panel")
       note("mapg shift [n] <dir> [off]  mark an exit shifting (elevator, portal): drawn ~, never routed")
+      note("mapg link         a door the room does not list: go through it by hand, then this links it")
+      note("mapg link <cmd>   the same, saying which command did it (';' between several)")
+      note("mapg link <from> <to> <cmd>  link any two rooms by number - one way only")
+      note("mapg unlink [n] <cmd> | mapg links   drop a hand-added link / list them")
       note("mapg forget <n>   drop one room")
       note("mapg forget map [seed] | area <name>   drop a whole map or area (asks first)")
       note("mapg wipe         erase the whole store and start again (asks first)")
@@ -2508,6 +2703,12 @@ show_detail = function(num)
   end
   links[#links + 1] = string.format("@{accent,click=mapg room %d}[Details]@{}", num)
   L[#L + 1] = table.concat(links, "  ")
+  -- the doors added by hand, each with its own unlink (a command that would not survive
+  -- the markup - a comma or brace in it - gets the typed form instead)
+  for _, c in ipairs(sorted_dirs(r.custom)) do
+    local un = c:find("[,{}@]") and "" or string.format("  @{dim,click=mapg unlink %d %s}[unlink]@{}", num, c)
+    L[#L + 1] = string.format("@{info}by hand:@{} '%s' -> %d %s%s", esc(c), r.custom[c], esc(name_of(r.custom[c])), un)
+  end
   scrye.setState(P .. "detail", table.concat(L, "\n"))
 end
 
@@ -2651,6 +2852,11 @@ scrye.addPanel{
             if walk then walk_stop("walk stopped")            -- takes the explore down with it
             elseif exploring then explore_end("Stop") end end },
         { text = "Redraw", action = function() forget_adjacency() ; draw() end },
+      } },
+      { type = "buttonrow", buttons = {
+        -- a door the room does not list: go through it by hand, then press this
+        { text = "Link last move", action = function() HL.link_cmd("") end },
+        { text = "Hand links",     action = function() HL.links_list() end },
       } },
       { type = "value", text = "", bind = P .. "where" },
       { type = "value", text = "", bind = P .. "peek" },
