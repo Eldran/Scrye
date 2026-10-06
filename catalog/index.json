@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "1374540105ec0054258dd7671ec296c3be9c4aae",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/1374540105ec0054258dd7671ec296c3be9c4aae/src/Scrye.App/plugins/",
-  "generated": "2026-10-06T15:29:02Z",
+  "ref": "d66c46b4097883d5e6703c294c3187b9f5a32e4a",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/d66c46b4097883d5e6703c294c3187b9f5a32e4a/src/Scrye.App/plugins/",
+  "generated": "2026-10-06T16:50:55Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -543,9 +543,9 @@
     {
       "id": "3s-viking-kingdom",
       "name": "3S Viking Kingdom",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "author": "Joakim",
-      "description": "The dynasty half of the Viking split - content the old status panel never showed, fed by the Guild.Roster / Guild.Kingdom / Guild.War GMCP packages (3Scapes only). Tabs: Hird (the roster grid - level, age, atk/def, loyalty, status, champions, the bond matrix), Recruit (what each post wants in a hire, hiring hall, training, spymaster, varangians), Thralls (per-building counts + the follower), Grudges (per-town raid cooldowns, soonest first - the other half of auto-raid's targeting; 'vgrudge' prints it), Kingdom (lineage standings, trade reputation progress, diplomacy), Dynasty (house, spouse, children, schooling, heir), War (army, campaign, prison, the war ledger - the battle BOARD waits for a real war's payloads, which the capture never carried).",
+      "description": "The dynasty half of the Viking split - content the old status panel never showed, fed by the Guild.Roster / Guild.Kingdom / Guild.War GMCP packages (3Scapes only). Tabs: Hird (the roster grid - level, age, atk/def, loyalty, status, champions, the bond matrix), Recruit (what each post wants in a hire, hiring hall, training, spymaster, varangians), Thralls (per-building counts + the follower), Grudges (per-town raid cooldowns, soonest first - the other half of auto-raid's targeting; 'vgrudge' prints it), Kingdom (lineage standings, trade reputation progress, diplomacy), Dynasty (house, spouse, children, schooling, heir), War (army, campaign, prison, the war ledger - the battle BOARD waits for a real war's payloads, which the capture never carried). 1.1.0 (6 Oct 2026): the War tab warns of an attack on its way (Guild.Kingdom war_incoming: town, strength, days left) and shows the war saga (Guild.War saga_war, newest first); the hird and the recruit needs are read from Guild.Roster's new windows (hird_from/hird_page, rneeds_c pieces); the finds hall comes from Guild.Warehouse, where it moved.",
       "mudIds": [
         "*"
       ],
@@ -563,23 +563,23 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "b3f3550d1b13d015e4ee5609f64c71b6f1469b89fc353047f141824bd76cbe85",
-          "size": 20889
+          "sha256": "b20d9c3f314cfe77f5715281be6c173008026fc65a890fcc4bd2464799b091cd",
+          "size": 25548
         },
         {
           "path": "plugin.json",
-          "sha256": "92a0cde4468479f46fd7c189c57008888f3e9190904cf614ed33b170e0cd2e76",
-          "size": 1163
+          "sha256": "795450194699e52e12ea913bed91aacea0e72b9916ca24f40f6f7ebffd278c57",
+          "size": 1511
         }
       ],
-      "totalSize": 22052
+      "totalSize": 27059
     },
     {
       "id": "3s-viking-status-gmcp",
       "name": "3S Viking Status (GMCP)",
-      "version": "2.27.4",
+      "version": "2.27.5",
       "author": "Joakim",
-      "description": "The settlement half of the Viking HUD, fed by the Guild.* GMCP packages (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). Tabs: Stats / Skills / City / Builds / Production / People / Settlers / Holds / Livestock / Trade / Trade Auto / Trade Log / Feeds - everywhere you travel TO lives in 3s-viking-world, and the travel engine, vgo/vhere and the mission runner went with it - this is the settlement half now. Livestock (2.23.0) reads Guild.Livestock: every herd with its stats, the breeding queue and its countdowns, feed per tick, and each lineage market you have looked at with every stat marked against your own best herd of that species. The city plan is still computed here (Guild.City feeds it, `vplan` edits it); only its picture is drawn there. Includes the build planner and the market scanner + auto-trader. Scrye's idle guard disarms the auto-trader and stops the 5-minute vtick keepalive for the session (2.27.3). The Trade Auto tab shows each switch in its state's colour (on green, off red) and its settings boxes are 10 characters wide on a host with plugin API 1.23 (2.27.4). Warehouse stock comes straight from the Guild.Warehouse feed (server-side since 28 Aug) with real per-grade freshness; the `vtrade stock` text scan - Refresh button, `vstock`, cart-event and staleness re-scans - remains only as the automatic fallback for a server without that package. An incoming raid (Guild.City raid) shows on the Stats tab's War section, damaged buildings (bdmg) on the Builds tab, and the four guild-xp tracks (buandi/drotta/viga/vitka off Guild.State.gxp - current, advance threshold, last gain) in the Stats tab's GXP section. Raw materials move in WHOLE CARTS both ways (2.24.0): Raw> and a per-good floor are minimums that TRIGGER a restock - under the line a full cart is bought, capped only by the town's supply, the budget and space, a partial cart still going - and a raw is sold only once a whole cart of surplus sits above the minimum, so the pile lives in [min, min+cart) and a restock is never shipped back out (under warehouse pressure the sell side relaxes to the dispatch minimum, space over yard time). Per-good stock floors ('atrade floor grain 500') keep a minimum of a good in the warehouse whatever the category reserve says - floored names show blue in the Trade tab, held (never-traded) names amber; the Trade tab's Floor box sets the value, and a right-click on a good's name opens a menu (host API 1.19) - hold/release, set the floor, clear it - with plain rclick=/click= fallbacks for older hosts. The auto-trader knows the cartyard's one-caravan-per-3-minutes rhythm: it holds after every dispatch, reads the yard's own 'Ready in' refusal to set the clock exactly, and never spams doomed carts into the cooldown ('atrade yard <sec>' tunes the hold). Market prices come straight from the Guild.TradeGoods feed (per-village, pushed; the 30 good codes solved mechanically and cross-validated), so the mkref scan burst is retired to a fallback. The trader treats a town's demand as an answer: zero demand gets no cart however good the price, and every dispatched cart provisionally debits the town's demand (or supply, for buys) locally, so quiet stretches between feed pushes can't stack a second caravan into demand the first already claimed - the next feed row restores the server's truth. Remaining GMCP feed gaps show honestly in their tabs. The Skills tab is the former lab-skillwatch, merged in: it scans the framed `vskills` listing for every skill's level, point cost and daler cost (there is no GMCP package for the listing - no skill field in any of the four captures), and prices each row against the live feed - daler from Guild.State.daler, and each pool from the Guild.State.gxp track it was PAIRED to by matching the listing's pool total against the four track values (exact equality, only when exactly one track carries it; an ambiguous pool stays unpaired and falls back to the scanned number). Before the merge that half read MIP-era vik.* keys this plugin never sets, so every row was costed against zero. Every row leads with a clickable INFO cell (as does the skill name): a left click sends `vhelp <skill>`, a right click opens an Info / Train menu (host API 1.19, with rclick=/click= fallbacks for older hosts) - `vtrain` lives only in that menu, since it spends points and daler and should not sit under a stray left click. A points gain now moves a row with no rescan; `vsk alert on` notifies when a skill crosses into affordable, `vsk feed` names the real source per pool, `vsk peek` shows the raw capture with per-line verdicts. The trade log records a sale when it is PAID, not when it is sent: a sell cart is paid on arrival, so it is held until the feed shows that cart back from the yard and only then logged and counted (cart_id rides the carts feed string as field 12 so one cart can be followed out and home). A buy still logs at dispatch, because that is when its daler leaves. Carts in flight persist across a restart - one still out is picked up again, one that docked while Scrye was closed is logged and marked - and the Trade Log shows what is still rolling and what it is worth, so nothing looks forgotten between dispatch and payday.",
+      "description": "The settlement half of the Viking HUD, fed by the Guild.* GMCP packages (3Scapes only; the MIP-fed original was retired in September 2026 when 3Scapes dropped its MIP feed). Tabs: Stats / Skills / City / Builds / Production / People / Settlers / Holds / Livestock / Trade / Trade Auto / Trade Log / Feeds - everywhere you travel TO lives in 3s-viking-world, and the travel engine, vgo/vhere and the mission runner went with it - this is the settlement half now. Livestock (2.23.0) reads Guild.Livestock: every herd with its stats, the breeding queue and its countdowns, feed per tick, and each lineage market you have looked at with every stat marked against your own best herd of that species. The city plan is still computed here (Guild.City feeds it, `vplan` edits it); only its picture is drawn there. Includes the build planner and the market scanner + auto-trader. Scrye's idle guard disarms the auto-trader and stops the 5-minute vtick keepalive for the session (2.27.3). The Trade Auto tab shows each switch in its state's colour (on green, off red) and its settings boxes are 10 characters wide on a host with plugin API 1.23 (2.27.4). The People tab gains a Staffing table (2.27.5): every building with the staff assigned to it, its thralls and the posts still wanted, read from Guild.Roster's staff windows, per-building thralls and rneeds pieces; the hird and Staff sections read the windowed roster too. Warehouse stock comes straight from the Guild.Warehouse feed (server-side since 28 Aug) with real per-grade freshness; the `vtrade stock` text scan - Refresh button, `vstock`, cart-event and staleness re-scans - remains only as the automatic fallback for a server without that package. An incoming raid (Guild.City raid) shows on the Stats tab's War section, damaged buildings (bdmg) on the Builds tab, and the four guild-xp tracks (buandi/drotta/viga/vitka off Guild.State.gxp - current, advance threshold, last gain) in the Stats tab's GXP section. Raw materials move in WHOLE CARTS both ways (2.24.0): Raw> and a per-good floor are minimums that TRIGGER a restock - under the line a full cart is bought, capped only by the town's supply, the budget and space, a partial cart still going - and a raw is sold only once a whole cart of surplus sits above the minimum, so the pile lives in [min, min+cart) and a restock is never shipped back out (under warehouse pressure the sell side relaxes to the dispatch minimum, space over yard time). Per-good stock floors ('atrade floor grain 500') keep a minimum of a good in the warehouse whatever the category reserve says - floored names show blue in the Trade tab, held (never-traded) names amber; the Trade tab's Floor box sets the value, and a right-click on a good's name opens a menu (host API 1.19) - hold/release, set the floor, clear it - with plain rclick=/click= fallbacks for older hosts. The auto-trader knows the cartyard's one-caravan-per-3-minutes rhythm: it holds after every dispatch, reads the yard's own 'Ready in' refusal to set the clock exactly, and never spams doomed carts into the cooldown ('atrade yard <sec>' tunes the hold). Market prices come straight from the Guild.TradeGoods feed (per-village, pushed; the 30 good codes solved mechanically and cross-validated), so the mkref scan burst is retired to a fallback. The trader treats a town's demand as an answer: zero demand gets no cart however good the price, and every dispatched cart provisionally debits the town's demand (or supply, for buys) locally, so quiet stretches between feed pushes can't stack a second caravan into demand the first already claimed - the next feed row restores the server's truth. Remaining GMCP feed gaps show honestly in their tabs. The Skills tab is the former lab-skillwatch, merged in: it scans the framed `vskills` listing for every skill's level, point cost and daler cost (there is no GMCP package for the listing - no skill field in any of the four captures), and prices each row against the live feed - daler from Guild.State.daler, and each pool from the Guild.State.gxp track it was PAIRED to by matching the listing's pool total against the four track values (exact equality, only when exactly one track carries it; an ambiguous pool stays unpaired and falls back to the scanned number). Before the merge that half read MIP-era vik.* keys this plugin never sets, so every row was costed against zero. Every row leads with a clickable INFO cell (as does the skill name): a left click sends `vhelp <skill>`, a right click opens an Info / Train menu (host API 1.19, with rclick=/click= fallbacks for older hosts) - `vtrain` lives only in that menu, since it spends points and daler and should not sit under a stray left click. A points gain now moves a row with no rescan; `vsk alert on` notifies when a skill crosses into affordable, `vsk feed` names the real source per pool, `vsk peek` shows the raw capture with per-line verdicts. The trade log records a sale when it is PAID, not when it is sent: a sell cart is paid on arrival, so it is held until the feed shows that cart back from the yard and only then logged and counted (cart_id rides the carts feed string as field 12 so one cart can be followed out and home). A buy still logs at dispatch, because that is when its daler leaves. Carts in flight persist across a restart - one still out is picked up again, one that docked while Scrye was closed is logged and marked - and the Trade Log shows what is still rolling and what it is worth, so nothing looks forgotten between dispatch and payday.",
       "mudIds": [
         "*"
       ],
@@ -599,16 +599,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "73303f2d928ddc45eb6a3d2cf8ad942f4be56d0351918fd1697307a85d5fe487",
-          "size": 248221
+          "sha256": "0f29d8c0759262c540bc12595e35b0b423d2ceed11bd99abd364fc9a682a0dce",
+          "size": 258293
         },
         {
           "path": "plugin.json",
-          "sha256": "9d81a52d677ad6f904c0c696ad11c76a0596653a112dc6ca33362aa52d1cec28",
-          "size": 5727
+          "sha256": "a7fe9230aea580beb6c674c9a86fa603b8a90b0392be917dbfcfb6aa32ec3150",
+          "size": 5999
         }
       ],
-      "totalSize": 253948
+      "totalSize": 264292
     },
     {
       "id": "3s-viking-world",
