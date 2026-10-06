@@ -341,6 +341,25 @@ Triggers, aliases and timers also have a **Group** field, and the list draws one
 
 Two things worth knowing about the ordering. It is **display only** — the file keeps the order you added things in, and match order has never come from this list anyway: the engine sorts rules by their **Sequence** number (lower runs first), which is the field to reach for when one trigger genuinely has to beat another. And the list re-sorts when you *leave* a rule rather than as you type, so renaming something doesn't make it jump around under the cursor mid-edit.
 
+### Moving a rule into a plugin — Copy Lua
+
+Try a rule out in the editor first, then take it into a plugin without retyping it: select a
+trigger, alias or timer and click **Copy Lua** under its list. The clipboard then holds the rule
+as plugin code — `scrye.addTrigger{…}`, `scrye.addAlias{…}`, or `scrye.every(…)` (`scrye.after`
+for a one-shot timer) — ready to paste into a plugin's `main.lua`.
+
+The pattern, *Regex*, *Ignore case* and *Lines* carry straight over, and a send to the MUD
+becomes `send = …`, which the plugin host expands exactly as a profile rule does (`%1`, `%0`,
+`%<name>`, `${var}`). The other targets turn into a `run` function using the wildcards it is
+handed: an echo becomes `scrye.print`, a variable `scrye.setVariable`, and a capture pane, sound
+or notify their `scrye.capture`, `scrye.sound` and `scrye.notify` calls. Patterns go in long
+brackets (`[[…]]`), so a regex keeps its backslashes as you typed them.
+
+What a plugin rule cannot do is **said, not dropped**: a gag, a highlight, *Keep evaluating*,
+*One-shot*, *Repeat on line*, a sequence other than 100 or a rule that is switched off each get a
+`-- note:` line at the top, and a send to Scrye's own commands or a script function becomes a
+comment where its code should go.
+
 ## Appearance
 
 In **Settings → Appearance**:
@@ -764,7 +783,7 @@ Plugins add commands and HUD panels. Manage them in the **Plugins** panel for a 
 - Plugins are **opt‑in per character** — enabling one for a character doesn't add it to every character.
 - Each plugin can be **enabled / disabled / reloaded / removed**.
 - **Reload** re‑reads the plugin's script from disk, so you can edit a Lua plugin and reload it live — no restart needed (this works for script‑only changes; changes to Scrye itself need a rebuild).
-- **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye. A plugin that is running when ↻ finds a new version of it on disk is reloaded from the new copy.
+- **New plugin** scaffolds a working `plugin.json` and `main.lua` in your user plugins folder (named `my-plugin`, `my-plugin-2`, …) — the quickest way to start one without hand-writing a manifest. To fill it with rules you already have, use **Copy Lua** in the rule editors (see *Moving a rule into a plugin* under Automation). **Open folder** opens that folder, and **↻** rescans the disk for anything added or removed outside Scrye. A plugin that is running when ↻ finds a new version of it on disk is reloaded from the new copy.
 
 ### The catalogue
 

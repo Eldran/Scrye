@@ -1224,6 +1224,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Editor.AddTriggerCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveTriggerCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyTriggerLuaCommand}"
+                                                ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TriggerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
@@ -1360,6 +1362,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Editor.AddAliasCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveAliasCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyAliasLuaCommand}"
+                                                ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.AliasList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
@@ -1458,6 +1462,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Editor.AddTimerCommand}" />
                                         <Button Content="Remove" Command="{Binding Editor.RemoveTimerCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyTimerLuaCommand}"
+                                                ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TimerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
@@ -1718,6 +1724,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Settings.AddTriggerCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveTriggerCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyTriggerLuaCommand}"
+                                                ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TriggerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
@@ -1854,6 +1862,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Settings.AddAliasCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveAliasCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyAliasLuaCommand}"
+                                                ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.AliasList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
@@ -1952,6 +1962,8 @@
                                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
                                         <Button Content="Add" Command="{Binding Settings.AddTimerCommand}" />
                                         <Button Content="Remove" Command="{Binding Settings.RemoveTimerCommand}" />
+                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyTimerLuaCommand}"
+                                                ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TimerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"

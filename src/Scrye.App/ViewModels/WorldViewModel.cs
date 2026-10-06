@@ -2175,7 +2175,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// model has no control to walk up from. Failures are swallowed: a clipboard that is
     /// locked by another process is a normal Windows occurrence and not worth an error
     /// dialog over a copy button.</para></summary>
-    private static void CopyToClipboard(string text)
+    internal static void CopyToClipboard(string text)
     {
         try
         {

@@ -133,10 +133,16 @@ public sealed class WorldEditorViewModel : ViewModelBase
 
     public RelayCommand AddTriggerCommand { get; }
     public RelayCommand RemoveTriggerCommand { get; }
+    /// <summary>The selected trigger as plugin Lua, on the clipboard (Scrye.Core.Automation.RuleLua).</summary>
+    public RelayCommand CopyTriggerLuaCommand { get; }
     public RelayCommand AddAliasCommand { get; }
     public RelayCommand RemoveAliasCommand { get; }
+    /// <summary>The selected alias as plugin Lua, on the clipboard (Scrye.Core.Automation.RuleLua).</summary>
+    public RelayCommand CopyAliasLuaCommand { get; }
     public RelayCommand AddTimerCommand { get; }
     public RelayCommand RemoveTimerCommand { get; }
+    /// <summary>The selected timer as plugin Lua, on the clipboard (Scrye.Core.Automation.RuleLua).</summary>
+    public RelayCommand CopyTimerLuaCommand { get; }
     public RelayCommand AddSequenceCommand { get; }
     public RelayCommand RemoveSequenceCommand { get; }
 
@@ -190,6 +196,11 @@ public sealed class WorldEditorViewModel : ViewModelBase
             Triggers.Add(row); SelectedTrigger = row;
         });
         RemoveTriggerCommand = new RelayCommand(() => { if (SelectedTrigger is not null) Triggers.Remove(SelectedTrigger); });
+        CopyTriggerLuaCommand = new RelayCommand(() =>
+        {
+            if (SelectedTrigger is not null)
+                WorldViewModel.CopyToClipboard(Scrye.Core.Automation.RuleLua.Trigger(SelectedTrigger.ToDef()));
+        });
 
         AddAliasCommand = new RelayCommand(() =>
         {
@@ -197,6 +208,11 @@ public sealed class WorldEditorViewModel : ViewModelBase
             Aliases.Add(row); SelectedAlias = row;
         });
         RemoveAliasCommand = new RelayCommand(() => { if (SelectedAlias is not null) Aliases.Remove(SelectedAlias); });
+        CopyAliasLuaCommand = new RelayCommand(() =>
+        {
+            if (SelectedAlias is not null)
+                WorldViewModel.CopyToClipboard(Scrye.Core.Automation.RuleLua.Alias(SelectedAlias.ToDef()));
+        });
 
         AddTimerCommand = new RelayCommand(() =>
         {
@@ -204,6 +220,11 @@ public sealed class WorldEditorViewModel : ViewModelBase
             Timers.Add(row); SelectedTimer = row;
         });
         RemoveTimerCommand = new RelayCommand(() => { if (SelectedTimer is not null) Timers.Remove(SelectedTimer); });
+        CopyTimerLuaCommand = new RelayCommand(() =>
+        {
+            if (SelectedTimer is not null)
+                WorldViewModel.CopyToClipboard(Scrye.Core.Automation.RuleLua.Timer(SelectedTimer.ToDef()));
+        });
 
         AddSequenceCommand = new RelayCommand(() =>
         {
