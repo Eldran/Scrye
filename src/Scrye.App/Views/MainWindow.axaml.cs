@@ -342,7 +342,8 @@ public partial class MainWindow : Window
                 FocusFindBox(box);
                 e.Handled = true;
                 break;
-            case Key.Escape:                              // clear the input
+            case Key.Escape:                              // clear the input; on an empty one, back to live
+                if (string.IsNullOrEmpty(box.Text)) ForScrollback(vm, p => p.JumpToLive());
                 box.Text = "";
                 box.CaretIndex = 0;
                 e.Handled = true;
@@ -362,11 +363,23 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnPagingKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.Key is not (Key.PageUp or Key.PageDown)) return;
+        // Ctrl+End: back to live, the "back to bottom" chip from the keyboard; Ctrl+Home: to the
+        // oldest line. Same rules as paging - the pane under focus, else this world's scrollback
+        // (a user testing patterns jumps around the output and types a lot, and going back and
+        // forth to the mouse for the chip was the complaint, 6 Oct 2026).
+        bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        int jump = ctrl && e.Key == Key.End ? 1 : ctrl && e.Key == Key.Home ? -1 : 0;
+        if (jump == 0 && e.Key is not (Key.PageUp or Key.PageDown)) return;
         if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
         if (vm.Settings is not null || vm.Editor is not null) return;
 
         int direction = e.Key == Key.PageUp ? -1 : 1;
+        void Move(Controls.TerminalPane p)
+        {
+            if (jump > 0) p.JumpToLive();
+            else if (jump < 0) p.JumpToTop();
+            else p.Page(direction);
+        }
         for (Avalonia.Visual? v = e.Source as Avalonia.Visual; v is not null; v = v.GetVisualParent())
         {
             switch (v)
@@ -375,7 +388,7 @@ public partial class MainWindow : Window
                 // its own place in it, so paging this world's scrollback would scroll the wrong
                 // window out from under you.
                 case Controls.TerminalPane pane:
-                    pane.Page(direction);
+                    Move(pane);
                     e.Handled = true;
                     return;
 
@@ -391,7 +404,7 @@ public partial class MainWindow : Window
             }
         }
 
-        PageScrollback(world, direction);
+        ForScrollback(world, Move);
         e.Handled = true;
     }
 
@@ -401,12 +414,12 @@ public partial class MainWindow : Window
     /// <para>Finds the pane by its SOURCE rather than by walking up from the box: capture
     /// panes and float windows are terminal panes too, and the one that should move is the
     /// one showing this world's scrollback.</para></summary>
-    private void PageScrollback(WorldViewModel vm, int direction)
+    private void ForScrollback(WorldViewModel vm, Action<Controls.TerminalPane> act)
     {
         foreach (Controls.TerminalPane pane in this.GetVisualDescendants().OfType<Controls.TerminalPane>())
         {
             if (!ReferenceEquals(pane.Source, vm.Scrollback) || !pane.IsEffectivelyVisible) continue;
-            pane.Page(direction);
+            act(pane);
             return;
         }
     }

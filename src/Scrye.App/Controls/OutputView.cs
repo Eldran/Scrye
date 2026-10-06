@@ -298,6 +298,15 @@ public class OutputView : Control
         InvalidateVisual();
     }
 
+    /// <summary>Jump to the oldest line kept, which stops following the tail.</summary>
+    public void ScrollToTop()
+    {
+        if (_scrollViewer is null) return;
+        SetFollowing(false);
+        _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, 0);
+        InvalidateVisual();
+    }
+
     private void ScrollToBottom()
     {
         if (_scrollViewer is null) return;

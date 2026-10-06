@@ -40,8 +40,11 @@ Each connected world gets its own tab with an output pane and a command line.
     tree) and the Settings/Edit-world overlays, which keep the keys while they are open.
     One line of overlap between pages; paging back to the bottom resumes following the
     newest lines.
+  - **Ctrl+End** — back to live: the **▼ back to bottom** chip without the mouse. **Ctrl+Home**
+    jumps to the oldest line kept. Like PgUp/PgDn they move the pane you are in, else this
+    world's scrollback.
   - **Ctrl+F** — open the find bar to search the scrollback.
-  - **Esc** — clear the input.
+  - **Esc** — clear the input. Press it again on the empty line and you are back to live too.
   - Global Settings → Appearance has **Keep the last command in the input box**: after Enter
     the command stays put with its text selected, so Enter on its own repeats it and typing
     replaces it. Off by default — the box clears, as it always has.

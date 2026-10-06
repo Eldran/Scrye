@@ -167,6 +167,13 @@ public class TerminalPane : Grid
     /// is a fixed window on the newest lines — so this forwards there.</summary>
     public void Page(int direction) => _history.Page(direction);
 
+    /// <summary>Back to live from the keyboard (Ctrl+End, Esc on an empty command line) - what
+    /// the "back to bottom" chip does, without reaching for the mouse.</summary>
+    public void JumpToLive() => _history.ScrollToEnd();
+
+    /// <summary>To the oldest line kept (Ctrl+Home).</summary>
+    public void JumpToTop() => _history.ScrollToTop();
+
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
