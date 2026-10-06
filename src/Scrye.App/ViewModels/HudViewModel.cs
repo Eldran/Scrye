@@ -485,7 +485,8 @@ public sealed class HudViewModel : IDisposable
             {
                 string? actionId = w.Action;
                 var vm = new InputWidgetViewModel(w.Text ?? "",
-                    text => { if (actionId is not null) _invokeSubmit?.Invoke(pluginId, actionId, text); });
+                    text => { if (actionId is not null) _invokeSubmit?.Invoke(pluginId, actionId, text); },
+                    w.Width);
                 BindText(w.Bind, vm.SetValue, subs);   // seed + track the current value
                 return vm;
             }
@@ -971,11 +972,21 @@ public sealed class InputWidgetViewModel : ViewModelBase
 
     public RelayCommand SubmitCommand { get; }
 
-    public InputWidgetViewModel(string prefix, Action<string> submit)
+    /// <summary>API 1.23: the plugin asked for a field of a given width in characters, so it
+    /// is drawn at that width beside its Set button rather than stretched across the row.</summary>
+    public bool HasWidth { get; }
+
+    /// <summary>The field's width in pixels for <see cref="HasWidth"/>: characters at the
+    /// widget font size (11) plus the box's padding and border.</summary>
+    public double BoxWidth { get; }
+
+    public InputWidgetViewModel(string prefix, Action<string> submit, int widthChars = 0)
     {
         Prefix = prefix;
         _submit = submit;
         SubmitCommand = new RelayCommand(() => _submit(_text ?? ""));
+        HasWidth = widthChars > 0;
+        BoxWidth = HasWidth ? Math.Clamp(widthChars, 1, 80) * 7.0 + 14 : double.NaN;
     }
 
     /// <summary>Update the displayed value from state without firing a submit.</summary>

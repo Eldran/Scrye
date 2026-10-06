@@ -222,7 +222,12 @@ public static class ScryeApi
     //
     //      Nothing else changes for a plugin: a page that is not on show is still bound and
     //      updating, it is only not drawn. Additive: an older host ignores `solo`.
-    public static readonly Version Current = new(1, 22);
+    // 1.23 `input` takes `width = N`: the field is N characters wide and sits next to its Set
+    //      button instead of stretching across the row, and the labels of a panel's sized
+    //      inputs share one column so a stack of settings lines up. The Trade Auto tab is why:
+    //      a dozen number boxes each the full width of the panel. Additive: an older host
+    //      ignores the field and stretches as before.
+    public static readonly Version Current = new(1, 23);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

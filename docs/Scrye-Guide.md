@@ -2094,7 +2094,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.22.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.23.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -2126,7 +2126,8 @@ bar draws one segment per quality stage instead of a single amber/green split. 1
 described in `ScryeApi.cs`; **1.20 adds `lines` on `scrye.addTrigger`**, triggers that match a
 block of lines (see [Rules](#rules)); **1.21 adds `scrye.exports`**, a file a plugin may write
 and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-keeps--scryeexports-121));
-**1.22 adds `solo` on `scrye.addPanel`**, a panel that stays out of books.
+**1.22 adds `solo` on `scrye.addPanel`**, a panel that stays out of books;
+**1.23 adds `width` on `input`**, a field N characters wide beside its Set button.
 
 ## Permissions
 
@@ -2403,7 +2404,7 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `progress` | A labeled bar with an explicit color. | `text`, `value`, `max`; `color` |
 | `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)*, `color` *(1.13 — colours the label, so a button can show the STATE of what it controls)* |
 | `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=, color=}, ... }` |
-| `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end` |
+| `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end`, `width = N` *(1.23 — the field is N characters wide and sits beside its Set button; the labels of a panel's sized inputs share a column so the boxes line up. Unset, it stretches across the row)* |
 | `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |

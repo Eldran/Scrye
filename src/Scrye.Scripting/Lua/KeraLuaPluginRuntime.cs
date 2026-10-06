@@ -983,6 +983,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         double cellMax = cl.Type(-1) == LuaType.Number ? cl.ToNumber(-1) : 0;
         cl.Pop(1);
 
+        // input field width in characters (API 1.23): width = 10
+        RawField(cl, w, "width");
+        int width = cl.Type(-1) == LuaType.Number ? (int)cl.ToNumber(-1) : 0;
+        cl.Pop(1);
+
         return new WidgetSpec
         {
             Type = Field(cl, w, "type") ?? "label",
@@ -997,6 +1002,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Icons = iconMap,
             Images = imageMap,
             Cell = cellMax,
+            Width = width,
             Columns = columns,
             Separator = Field(cl, w, "separator"),
             Labels = Field(cl, w, "labels"),

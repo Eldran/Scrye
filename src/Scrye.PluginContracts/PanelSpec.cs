@@ -123,6 +123,12 @@ public sealed record WidgetSpec
     /// 24). Hosts clamp hostile values (3–64); text-rendering hosts ignore it.</summary>
     public double Cell { get; init; }
 
+    /// <summary><c>input</c> only (API 1.23): the field's width in characters - 0 (the default)
+    /// keeps the old behaviour, a field stretching to fill the row. A sized field sits next to
+    /// its Set button, and the labels of the sized inputs in one panel share a column, so a
+    /// stack of settings lines up. Hosts clamp it to 1-80; text-only hosts ignore it.</summary>
+    public int Width { get; init; }
+
     /// <summary>For <c>table</c>: optional header labels. When set, a header row is drawn and the
     /// column count is taken from here; extra fields in a data row are ignored and missing ones
     /// render blank. When unset the table is headerless and sizes to the widest row.</summary>

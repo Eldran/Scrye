@@ -756,6 +756,8 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Icons = iconMap,
             Cell = w.TryGetProperty("cell", out JsonElement ce) && ce.ValueKind == JsonValueKind.Number
                 ? ce.GetDouble() : 0,
+            Width = w.TryGetProperty("width", out JsonElement we) && we.ValueKind == JsonValueKind.Number
+                ? (int)we.GetDouble() : 0,
             Columns = columns,
             Separator = Str(w, "separator"),
             Labels = Str(w, "labels"),

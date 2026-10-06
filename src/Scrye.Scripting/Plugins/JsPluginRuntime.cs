@@ -678,6 +678,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Dim = Get(w, "dim") is { } dv && dv.IsBoolean() && dv.AsBoolean(),
             Weave = Get(w, "weave") is { } wv && wv.IsBoolean() && wv.AsBoolean(),
             Palette = ToPalette(Get(w, "palette")),
+            Width = Get(w, "width") is { } wd && wd.IsNumber() ? (int)wd.AsNumber() : 0,
             Columns = ToStringList(Get(w, "columns")),
             Separator = Str(w, "separator"),
             Labels = Str(w, "labels"),

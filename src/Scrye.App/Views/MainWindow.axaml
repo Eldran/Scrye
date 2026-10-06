@@ -489,15 +489,34 @@
                                                                 HorizontalAlignment="Stretch" Margin="0,1" Padding="8,3" FontSize="11" />
                                                     </DataTemplate>
                                                     <DataTemplate DataType="vm:InputWidgetViewModel">
-                                                        <DockPanel Margin="0,1">
-                                                            <TextBlock DockPanel.Dock="Left" Text="{Binding Prefix}" FontSize="11"
-                                                                       VerticalAlignment="Center" Margin="0,0,4,0"
-                                                                       Foreground="{DynamicResource ScryeTextDim}" />
-                                                            <Button DockPanel.Dock="Right" Content="Set" Command="{Binding SubmitCommand}"
-                                                                    Padding="8,2" FontSize="11" Margin="4,0,0,0" />
-                                                            <TextBox Text="{Binding Text, Mode=TwoWay}" FontSize="11" Padding="4,2"
-                                                                     KeyDown="OnInputWidgetKeyDown" />
-                                                        </DockPanel>
+                                                        <Panel Margin="0,1">
+                                                            <DockPanel IsVisible="{Binding !HasWidth}">
+                                                                <TextBlock DockPanel.Dock="Left" Text="{Binding Prefix}" FontSize="11"
+                                                                           VerticalAlignment="Center" Margin="0,0,4,0"
+                                                                           Foreground="{DynamicResource ScryeTextDim}" />
+                                                                <Button DockPanel.Dock="Right" Content="Set" Command="{Binding SubmitCommand}"
+                                                                        Padding="8,2" FontSize="11" Margin="4,0,0,0" />
+                                                                <TextBox Text="{Binding Text, Mode=TwoWay}" FontSize="11" Padding="4,2"
+                                                                         KeyDown="OnInputWidgetKeyDown" />
+                                                            </DockPanel>
+                                                            <!-- width = N (API 1.23): a sized field beside its Set button; the label
+                                                                 column is shared by the panel's sized inputs so the boxes line up -->
+                                                            <Grid IsVisible="{Binding HasWidth}">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto" SharedSizeGroup="ScryeInputLabel" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock Grid.Column="0" Text="{Binding Prefix}" FontSize="11"
+                                                                           VerticalAlignment="Center" Margin="0,0,6,0"
+                                                                           Foreground="{DynamicResource ScryeTextDim}" />
+                                                                <TextBox Grid.Column="1" Width="{Binding BoxWidth}" Text="{Binding Text, Mode=TwoWay}"
+                                                                         FontSize="11" Padding="4,2" KeyDown="OnInputWidgetKeyDown" />
+                                                                <Button Grid.Column="2" Content="Set" Command="{Binding SubmitCommand}"
+                                                                        Padding="8,2" FontSize="11" Margin="4,0,0,0" />
+                                                            </Grid>
+                                                        </Panel>
                                                     </DataTemplate>
                                                     <!-- row container (API 1.8): children side by side, each at its measured
                                                          width — the colorgrid reports tight content size for exactly this -->
@@ -575,7 +594,7 @@
                                                     </StackPanel>
                                                     <ScrollViewer Grid.Row="1" IsVisible="{Binding ShowFlat}"
                                                                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                                        <ItemsControl ItemsSource="{Binding Widgets}" />
+                                                        <ItemsControl ItemsSource="{Binding Widgets}" Grid.IsSharedSizeScope="True" />
                                                     </ScrollViewer>
                                                     <TabControl Grid.Row="1" ItemsSource="{Binding Tabs}" IsVisible="{Binding ShowTabs}" Padding="0,4,0,0">
                                                         <TabControl.ItemTemplate>
@@ -589,7 +608,8 @@
                                                                      height (TabMaxHeight) — the panel is the constraint then. -->
                                                                 <ScrollViewer VerticalScrollBarVisibility="Auto"
                                                                               MaxHeight="{ReflectionBinding $parent[TabControl].DataContext.TabMaxHeight}">
-                                                                    <ItemsControl ItemsSource="{Binding Widgets}" Margin="0,2,0,0" />
+                                                                    <ItemsControl ItemsSource="{Binding Widgets}" Margin="0,2,0,0"
+                                                                                  Grid.IsSharedSizeScope="True" />
                                                                 </ScrollViewer>
                                                             </DataTemplate>
                                                         </TabControl.ContentTemplate>
