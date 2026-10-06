@@ -49,6 +49,22 @@
                                 </StackPanel>
                             </StackPanel>
                         </Border>
+                        <!-- plugins in use have newer versions in the catalogue: say which, and
+                             open the Plugins panel's Catalogue page where the Update buttons are -->
+                        <Border IsVisible="{Binding PluginUpdatesAvailable}" Padding="6" CornerRadius="4" Margin="0,0,0,4"
+                                Background="{DynamicResource ScryePanelAlt}" BorderBrush="{DynamicResource ScryeAccent}"
+                                BorderThickness="1">
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="{Binding PluginUpdatesText}" TextWrapping="Wrap" FontSize="11"
+                                           Foreground="{DynamicResource ScryeAccent}" ToolTip.Tip="{Binding PluginUpdatesTip}" />
+                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                    <Button Content="Show" Command="{Binding ShowPluginUpdatesCommand}" Padding="6,1" FontSize="10"
+                                            ToolTip.Tip="Open Plugins → Catalogue in the active world" />
+                                    <Button Content="Later" Command="{Binding DismissPluginUpdatesCommand}" Padding="6,1" FontSize="10"
+                                            ToolTip.Tip="Hide this until Scrye starts again" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                         <!-- also in each world's bottom bar; this copy makes Settings reachable
                              BEFORE any world is connected -->
                         <Button Content="⚙ Settings" Command="{Binding OpenSettingsCommand}" HorizontalAlignment="Stretch" />

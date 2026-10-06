@@ -158,6 +158,32 @@ public sealed class ProfileStore
         Path.Combine(CharacterDir(mud, account, character), "character.json");
 
     public IReadOnlyList<string> ListMuds() => ListDirsWith(_root, "mud.json");
+
+    /// <summary>Every plugin id enabled at ANY layer - global, flat worlds, MUDs, accounts,
+    /// characters - so "plugins someone uses" can be asked without connecting anything. A
+    /// layer that fails to load is skipped: this is a hint for a notice, not a resolve.</summary>
+    public ISet<string> AllEnabledPlugins()
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Add(Func<ProfileLayer?> load)
+        {
+            try { if (load() is { } l) foreach (string id in l.Plugins) ids.Add(id); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException) { }
+        }
+        Add(LoadGlobal);
+        foreach (string w in ListWorlds()) Add(() => LoadWorld(w));
+        foreach (string mud in ListMuds())
+        {
+            Add(() => LoadMud(mud));
+            foreach (string ch in ListCharacters(mud)) Add(() => LoadCharacter(mud, null, ch));
+            foreach (string acct in ListAccounts(mud))
+            {
+                Add(() => LoadAccount(mud, acct));
+                foreach (string ch in ListCharacters(mud, acct)) Add(() => LoadCharacter(mud, acct, ch));
+            }
+        }
+        return ids;
+    }
     public IReadOnlyList<string> ListAccounts(string mud) => ListDirsWith(MudDir(mud), "account.json");
     public IReadOnlyList<string> ListCharacters(string mud, string? account = null) =>
         ListDirsWith(string.IsNullOrEmpty(account) ? MudDir(mud) : AccountDir(mud, account), "character.json");

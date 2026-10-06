@@ -235,6 +235,80 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally { _checkingUpdate = false; }
     }
 
+    // ---- "your plugins have updates" -------------------------------------------------
+    // The catalogue is only read when someone opens it, so a plugin update published there
+    // reached nobody who did not go looking (Joakim, 6 Oct 2026). A few seconds after start
+    // Scrye reads it once and says, under the release notice, which plugins in use have a
+    // newer version. It only tells: updating stays a click in the Plugins panel.
+
+    private bool _pluginUpdatesAvailable;
+    public bool PluginUpdatesAvailable
+    {
+        get => _pluginUpdatesAvailable;
+        private set => SetField(ref _pluginUpdatesAvailable, value);
+    }
+
+    private string? _pluginUpdatesText;
+    public string? PluginUpdatesText { get => _pluginUpdatesText; private set => SetField(ref _pluginUpdatesText, value); }
+
+    private string? _pluginUpdatesTip;
+    /// <summary>Every update, one per line, as the notice's tooltip.</summary>
+    public string? PluginUpdatesTip { get => _pluginUpdatesTip; private set => SetField(ref _pluginUpdatesTip, value); }
+
+    public RelayCommand ShowPluginUpdatesCommand { get; private set; } = null!;
+    public RelayCommand DismissPluginUpdatesCommand { get; private set; } = null!;
+
+    private void InitPluginUpdateCheck()
+    {
+        ShowPluginUpdatesCommand = new RelayCommand(ShowPluginUpdates);
+        DismissPluginUpdatesCommand = new RelayCommand(() => PluginUpdatesAvailable = false);
+        var timer = new Avalonia.Threading.DispatcherTimer { Interval = System.TimeSpan.FromSeconds(8) };
+        timer.Tick += (_, _) => { timer.Stop(); CheckPluginUpdates(); };
+        timer.Start();
+    }
+
+    private async void CheckPluginUpdates()
+    {
+        try
+        {
+            string? extra = Scrye.Core.Plugins.PluginCatalog.NormaliseRoot(Services.PluginPreferences.ExtraRoot);
+            string bundled = System.IO.Path.Combine(System.AppContext.BaseDirectory, "plugins");
+            string user = System.IO.Path.Combine(
+                System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData), "Scrye", "plugins");
+            var pending = await System.Threading.Tasks.Task.Run(async () =>
+            {
+                var index = await Services.PluginCatalogClient.LoadAsync(Services.PluginPreferences.CatalogUrl, null);
+                var installed = Scrye.Core.Plugins.PluginCatalog.DiscoverNewest(extra, bundled, user);
+                return Scrye.Core.Plugins.CatalogUpdates.Find(index, installed, _store.AllEnabledPlugins(), extra);
+            });
+            if (pending.Count == 0) return;
+            PluginUpdatesText = Scrye.Core.Plugins.CatalogUpdates.Describe(pending);
+            PluginUpdatesTip = string.Join("\n", pending.Select(p =>
+                $"{(string.IsNullOrWhiteSpace(p.Entry.Name) ? p.Entry.Id : p.Entry.Name)}: v{p.InstalledVersion} → v{p.Entry.Version}"))
+                + "\n\nUpdate them under Plugins → Catalogue in a connected world.";
+            PluginUpdatesAvailable = true;
+        }
+        catch (System.Exception)
+        {
+            // offline, GitHub down, a broken index: the notice is a courtesy - say nothing
+        }
+    }
+
+    /// <summary>Open the active world's Plugins panel on its Catalogue page, where the
+    /// Update buttons are. With no world connected there is nothing to update into yet,
+    /// so the notice stays and says so.</summary>
+    private void ShowPluginUpdates()
+    {
+        if (Active is null)
+        {
+            PluginUpdatesText = (PluginUpdatesText ?? "").Split(" — ")[0] + " — connect a world, then Plugins → Catalogue";
+            return;
+        }
+        Active.Plugins.ShowCatalogue = true;
+        Active.Plugins.Open();
+        PluginUpdatesAvailable = false;
+    }
+
     private void OpenRelease()
     {
         if (_release is null) return;
@@ -291,6 +365,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         CloseWorldCommand = new RelayCommand<WorldViewModel>(CloseWorld);
         Companion = new CompanionController(this);
         InitUpdateCheck();
+        InitPluginUpdateCheck();
 
         RefreshTree();
         if (globalProblem is not null)
