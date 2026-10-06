@@ -414,6 +414,12 @@ local function build_stats()
       add(colb("error", string.format("RAID %s (%s) in %s",
         (rd[2] and rd[2] ~= "") and rd[2] or "?", rd[1], eta)))
     end
+    -- a war host on its way (Guild.Kingdom war_incoming, Oct 2026): town|strength|days
+    local wi = split(gv("KWAR"), "|")
+    if wi[1] and wi[1] ~= "" then
+      add(colb("error", string.format("WAR %s marches on you - strength %s, %s day%s left",
+        wi[1], wi[2] or "?", wi[3] or "?", wi[3] == "1" and "" or "s")))
+    end
   end
   add("")
   add("-- " .. q("LIN") .. "  GLvl " .. q("GLVL") .. " --")
@@ -1254,6 +1260,76 @@ local function build_production()
   return table.concat(L, "\n")
 end
 
+-- Staffing (6 Oct 2026): every building with who works there, from Guild.Roster - the staff
+-- list's `assigned`, the per-building thrall counts, and the posts still wanted (rneeds).
+-- A text block, not a table: the building name is coloured by whether anyone works there
+-- (green staffed, orange vacant - Joakim, 6 Oct 2026), and a vacant one says what it wants
+-- in the staff column. Table cells take no colour, a text widget's markup does.
+local function pretty_bldg(id)
+  id = tostring(id or "")
+  local ship = id:match("^ship_(%d+)$")
+  if ship then return "Ship #" .. ship end
+  local s = id:gsub("_", " ")
+  return (s:gsub("^%l", string.upper))
+end
+local function unassigned(a)
+  a = tostring(a or "")
+  return a == "" or a == "0" or a == "-" or a:lower() == "none" or a:lower() == "unassigned"
+end
+local function build_staffing()
+  local rows, at = {}, {}
+  local function row(id)
+    if not at[id] then at[id] = { staff = {}, thralls = 0, wanted = {} } ; rows[#rows + 1] = id end
+    return at[id]
+  end
+  for _, rec in ipairs(split(gv("STAFF"), ";")) do
+    local f = split(rec, "|")
+    local name = (f[1] or "?"):match("^(%S+)") or "?"
+    local where = unassigned(f[2]) and "~" or f[2]
+    local r = row(where)
+    r.staff[#r.staff + 1] = (f[3] and f[3] ~= "") and (name .. " (" .. f[3] .. ")") or name
+  end
+  for _, kv in ipairs(split(gv("THRALLS_AT"), ";")) do
+    local id, n = kv:match("^([^=]+)=(%d+)$")
+    if id then row(id).thralls = tonumber(n) end
+  end
+  for _, need in ipairs(split(gv("RNEEDS"), ";")) do
+    local tgt, stat, trait = need:match("^([^:]+):([^:]*):(.*)$")
+    if tgt then
+      local w = row(tgt).wanted
+      w[#w + 1] = stat .. (trait ~= "" and ("/" .. trait:gsub("_", " ")) or "")
+    end
+  end
+  if #rows == 0 then return col("dim", "waiting for Guild.Roster's staff list") end
+  table.sort(rows, function(a, b)
+    if (a == "~") ~= (b == "~") then return b == "~" end        -- the unassigned last
+    return pretty_bldg(a) < pretty_bldg(b)
+  end)
+  local W = 16
+  for _, id in ipairs(rows) do W = math.max(W, #pretty_bldg(id) + 1) end
+  local out = { "@{accent,bold}" .. padesc("Building", W) .. " Staff@{}" }
+  for _, id in ipairs(rows) do
+    local r = at[id]
+    local thr = r.thralls > 0 and ("  " .. col("dim", r.thralls .. " thralls")) or ""
+    if id == "~" then
+      -- three to a line, the rest under them: a long list ran off the side of the panel
+      for i = 1, #r.staff, 3 do
+        local chunk = table.concat(r.staff, ", ", i, math.min(i + 2, #r.staff))
+        if i + 2 < #r.staff then chunk = chunk .. "," end
+        out[#out + 1] = (i == 1 and ("@{dim}" .. padesc("(unassigned)", W) .. "@{} ") or string.rep(" ", W + 1))
+          .. esc(chunk)
+      end
+    elseif #r.staff > 0 then
+      local more = #r.wanted > 0 and ("  " .. col("warning", "+ wants " .. table.concat(r.wanted, ", "))) or ""
+      out[#out + 1] = "@{success}" .. padesc(pretty_bldg(id), W) .. "@{} " .. esc(table.concat(r.staff, ", ")) .. more .. thr
+    else
+      local want = #r.wanted > 0 and ("wants " .. table.concat(r.wanted, ", ")) or "vacant"
+      out[#out + 1] = "@{warning}" .. padesc(pretty_bldg(id), W) .. "@{} " .. col("warning", want) .. thr
+    end
+  end
+  return table.concat(out, "\n")
+end
+
 local function build_people()
   local L = {}
   -- section headers ("-- Foo --") take the accent colour in every tab, for free
@@ -1264,31 +1340,26 @@ local function build_people()
   end
   add("-- Forces --")
   add(string.format("Thralls %s   Followers %s", q("THRALLS"), q("THRALL_FOLLOWER"):sub(1, 30)))
-  add(string.format("Garrison %s   Threk %s", q("GARRISON"), q("MTHREK")))
+  add(string.format("Garrison %s", q("GARRISON")))
   add("")
   add("-- Hird Guard " .. (gv("HIRDCAP") ~= "" and ("(" .. gv("HIRDCAP") .. ") ") or "") .. "--")
   local hird = split(gv("HIRD"), ";")
   if #hird == 0 then add("no hird")
   else
+    -- columns sized to the longest name and stat block, so every row lines up (6 Oct 2026);
+    -- the status shows only when it is not the usual personal_guard (on patrol, wounded...)
+    local rows, nw, sw = {}, 4, 4
     for i = 1, math.min(#hird, 10) do
       local f = split(hird[i], "|")
-      add(string.format("%-16s %s/%s/%s/%s  %s  %s",
-        f[2] or "?", f[4] or "?", f[5] or "?", f[6] or "?", f[7] or "?", f[9] or "?", f[10] or "?"))
+      local function v(x) return (x and x ~= "") and x or "?" end
+      local r = { name = v(f[2]), stats = string.format("%s/%s/%s/%s", v(f[4]), v(f[5]), v(f[6]), v(f[7])),
+                  age = f[10] or "", status = f[9] or "" }
+      nw, sw = math.max(nw, #r.name), math.max(sw, #r.stats)
+      rows[#rows + 1] = r
     end
-  end
-  add("")
-  add("-- Staff --")
-  local staff = split(gv("STAFF"), ";")
-  if #staff == 0 then add("no staff hired")
-  else
-    add(string.format("%-16s %-13s %-4s%-4s%-4s%-4s%-4s%-4s%-4s",
-      "", "", "Cbt", "Trd", "Cft", "Sea", "Wld", "Lnd", "Chm"))
-    for i = 1, math.min(#staff, 10) do
-      local f = split(staff[i], "|")
-      local s = split(f[4] or "", ",")
-      add(string.format("%-16s %-13s %-4s%-4s%-4s%-4s%-4s%-4s%-4s",
-        f[1] or "?", f[2] or "?",
-        s[1] or "?", s[2] or "?", s[3] or "?", s[4] or "?", s[5] or "?", s[6] or "?", s[7] or "?"))
+    for _, r in ipairs(rows) do
+      local status = (r.status ~= "" and r.status ~= "personal_guard") and ("  " .. r.status:gsub("_", " ")) or ""
+      add((string.format("%-" .. nw .. "s  %-" .. sw .. "s  %s%s", r.name, r.stats, r.age, status):gsub("%s+$", "")))
     end
   end
   add("")
@@ -1696,6 +1767,7 @@ local BUILDERS = {
   builds     = function() scrye.setState(P .. "builds", build_builds()) end,
   production = function() scrye.setState(P .. "production", build_production()) end,
   people     = function() scrye.setState(P .. "people", build_people()) end,
+  staffing   = function() scrye.setState(P .. "staffing", build_staffing()) end,
   settlers   = function() scrye.setState(P .. "settlers", build_settlers()) end,
   holds      = function() scrye.setState(P .. "holds", build_holds()) end,
   livestock  = function() scrye.setState(P .. "livestock", build_livestock()) end,
@@ -1723,13 +1795,14 @@ local function keymap(sec, keys)
 end
 keymap("stats", "god_power god_power_focus blot lin glvl sub daler rank renown hp seid vig rad "
   .. "vmnew vmreg nexttick dcycle stfx fury threk mthrek chain bsdepth "
-  .. "rndz ldng mldng patrol craid gxp")
+  .. "rndz ldng mldng patrol craid kwar gxp")
 keymap("city", "ships carts refinery")
 -- wstock joined this list with the planner: affordability is half resources, so a stock
 -- change moves rows between "OK" and short exactly as a daler change does.
 keymap("builds", "buildings builds daler wstock bdmg")
 keymap("production", "production routes buildings wstock")
-keymap("people", "thralls thrall_follower garrison mthrek hird hirdcap staff bonds")
+keymap("people", "thralls thrall_follower garrison hird hirdcap bonds")
+keymap("staffing", "staff thralls_at rneeds")
 keymap("settlers", "blot sproj spop smood ssent swater stax supk snet nexttick scivics sconsume")
 keymap("holds", "vrep standings blot garrison monuments varang")
 keymap("plan", "cplan cpb")
@@ -4812,6 +4885,8 @@ scrye.addPanel{
     } },
     { title = "People", widgets = {
         { type = "text", bind = P .. "people" },
+        { type = "label", text = "Staffing - green: staffed, orange: vacant (and what it wants)", color = "accent" },
+        { type = "text", bind = P .. "staffing" },
     } },
     { title = "Settlers", widgets = {
         { type = "text", bind = P .. "settlers" },
@@ -5298,6 +5373,78 @@ local function varang_adapt(t)
   vset("varang", (nin + nout) == 0 and "" or ("in " .. nin .. ", out " .. nout))
 end
 
+-- Guild.Roster streams its long lists as WINDOWS (seen 6 Oct 2026): a burst says
+-- `hird_from = 3` / `staff_from = 8` and the `hird_page` / `staff_page` entries after it
+-- are the people from that index on (0-based), `hird_total` / `staff_total` saying how
+-- many there are; the open posts come as `rneeds_c`, a ~128-character piece of the
+-- "target:stat:trait;..." list cut wherever the limit falls. None of that survives the
+-- page assembler's merge (a window is not a list, a piece is not the string), so it is
+-- read here, message by message, ahead of the assembler. Registered first, so by the
+-- time a burst's snapshot reaches the adapter below, the windows are up to date.
+local RS = { hird = {}, staff = {}, needs = {}, base = {}, off = {} }
+local function rs_window(which, t)
+  local from = tonumber(t[which .. "_from"])
+  if from then RS.base[which], RS.off[which] = from, 0 end
+  local list = t[which .. "_page"]
+  if type(list) == "table" then
+    local base = RS.base[which] or 0
+    for _, e in ipairs(list) do
+      if type(e) == "table" then
+        RS[which][base + (RS.off[which] or 0) + 1] = e
+        RS.off[which] = (RS.off[which] or 0) + 1
+      end
+    end
+  end
+  local total = tonumber(t[which .. "_total"])
+  if total then
+    for i in pairs(RS[which]) do if i > total then RS[which][i] = nil end end
+  end
+end
+-- the window as a list, in roster order, one entry per id (a window that moved while
+-- someone left can briefly hold a person twice - the later index wins)
+local function rs_list(which)
+  local idx = {}
+  for i in pairs(RS[which]) do idx[#idx + 1] = i end
+  table.sort(idx)
+  local out, at = {}, {}
+  for _, i in ipairs(idx) do
+    local e = RS[which][i]
+    local id = e.id ~= nil and tostring(e.id) or ("#" .. i)
+    if at[id] then out[at[id]] = e else out[#out + 1] = e ; at[id] = #out end
+  end
+  return out
+end
+local NEED_TTL = 600     -- a wanted post not seen in any piece for 10 minutes is filled
+local function rs_needs_piece(c)
+  if type(c) ~= "string" or c == "" then return end
+  local parts = split(c, ";")
+  -- the cut lands mid-entry unless the piece ends on a separator or is short of the limit
+  if c:sub(-1) ~= ";" and #c >= 120 then parts[#parts] = nil end
+  for _, p in ipairs(parts) do
+    local tgt, stat, trait = p:match("^([%w_]+):([%w_]+):([%w_]+)$")
+    if tgt then RS.needs[tgt .. ":" .. stat .. ":" .. trait] = now_s end
+  end
+end
+scrye.onGmcp("Guild.Roster", function(json)
+  local ok, t = pcall(scrye.json.decode, json)
+  if not ok or type(t) ~= "table" then return end
+  rs_window("hird", t)
+  rs_window("staff", t)
+  rs_needs_piece(t.rneeds_c)
+end)
+
+-- a staff member's stats as the People tab's seven columns, whatever shape they come in
+local STAT_ORDER = { "combat", "trade", "craft", "sea", "wild", "land", "charm" }
+local function staff_stats(v)
+  if type(v) == "table" then
+    local out = {}
+    if v[1] ~= nil then for i, x in ipairs(v) do out[i] = S(x) end
+    else for i, k in ipairs(STAT_ORDER) do out[i] = S(v[k]) end end
+    return table.concat(out, ",")
+  end
+  return S(v):gsub("[|;]", " ")
+end
+
 gasm("Guild.Roster", function(t)
   -- build_people reads f2=name f4..f7 f9 f10; bonds' name lookup reads f1=id f2=name
   -- the hird comes sliced since the 17 Sep capture: hird_0, hird_1, ... (hird_slices
@@ -5314,6 +5461,7 @@ gasm("Guild.Roster", function(t)
       for _, m in ipairs(t["hird_" .. n]) do men[#men + 1] = m end
     end
     if #idx == 0 then men = T(t, "hird") end
+    if #idx == 0 and t.hird == nil and next(RS.hird) then men = rs_list("hird") end
     vset("hird", join(men, { "id", "name", "level", "atk", "def", "loyalty",
       "level", "mode", "status", "age" }))
   end
@@ -5326,6 +5474,48 @@ gasm("Guild.Roster", function(t)
     vset("bonds", table.concat(out, ";"))
   end
   vset("thralls", T(t, "thralls").total)
+  do
+    -- thralls per building: every key of `thralls` but the total
+    local at = {}
+    for k, v in pairs(T(t, "thralls")) do
+      if k ~= "total" and tonumber(v) then at[#at + 1] = k .. "=" .. math.floor(tonumber(v)) end
+    end
+    table.sort(at)
+    vset("thralls_at", table.concat(at, ";"))
+    -- staff: the old sliced shape (staff_0, staff_1...) when present, else the windows
+    local idx, people = {}, {}
+    for k, v in pairs(t) do
+      local n = k:match("^staff_(%d+)$")
+      if n and type(v) == "table" then idx[#idx + 1] = tonumber(n) end
+    end
+    table.sort(idx)
+    for _, n in ipairs(idx) do
+      for _, m in ipairs(t["staff_" .. n]) do people[#people + 1] = m end
+    end
+    if #idx == 0 then people = rs_list("staff") end
+    local out = {}
+    for _, m in ipairs(people) do
+      if type(m) == "table" then
+        out[#out + 1] = table.concat({ S(m.name):gsub("[|;]", " "), S(m.assigned):gsub("[|;]", " "),
+          S(m.best_stat):gsub("[|;]", " "), staff_stats(m.stats), S(m.trait):gsub("[|;]", " "),
+          S(m.loyalty) }, "|")
+      end
+    end
+    vset("staff", table.concat(out, ";"))
+    -- the posts still wanted: the whole list when the server sends one, else the pieces
+    local needs = {}
+    if type(t.rneeds) == "table" and t.rneeds[1] ~= nil then
+      for _, n in ipairs(t.rneeds) do
+        if type(n) == "table" then needs[#needs + 1] = S(n.target) .. ":" .. S(n.stat) .. ":" .. S(n.trait) end
+      end
+    else
+      for key, seen in pairs(RS.needs) do
+        if now_s - seen <= NEED_TTL then needs[#needs + 1] = key else RS.needs[key] = nil end
+      end
+    end
+    table.sort(needs)
+    vset("rneeds", table.concat(needs, ";"))
+  end
   local gn = T(t, "gneeds")
   vset("garrison", gn.garrison_cap and (S(gn.garrisoned) .. "/" .. S(gn.garrison_cap)) or "")
   vset("hirdcap", gn.hird_cap and (S(gn.hird_count) .. "/" .. S(gn.hird_cap)) or "")
@@ -5334,9 +5524,36 @@ gasm("Guild.Roster", function(t)
     f.state == nil and "" or (S(f.name) == "" and "none" or (S(f.name) .. " (" .. S(f.state) .. ")")))
 end)
 
+-- The market moved to its own package, Guild.LivestockMarket, in October 2026 (the herds
+-- stayed in Guild.Livestock). The tab reads one table, so LS is the two merged: herds
+-- from Guild.Livestock, the market from Guild.LivestockMarket once that has spoken -
+-- else from Guild.Livestock, for a server still sending it there.
+local LSH, LSM = {}, nil
+local function is_market(k) return k:match("^lmarket") ~= nil or k:match("^lfind") ~= nil end
+local function ls_merge()
+  local m = {}
+  for k, v in pairs(LSH) do if not (LSM and is_market(k)) then m[k] = v end end
+  if LSM then for k, v in pairs(LSM) do if is_market(k) then m[k] = v end end end
+  LS = m
+end
+
+gasm("Guild.LivestockMarket", function(t)
+  LSM = t
+  ls_merge()
+  dirty.livestock = true
+  schedule_flush()
+end, function(k)
+  -- one burst per lineage looked at: lmarket_<lin> is that lineage's section, so the
+  -- next lineage's full burst does not wipe this one; the finds and the partial flag
+  -- ride every burst
+  local lin = k:match("^lmarket_(%d+)$")
+  return lin and ("lin" .. lin) or "common"
+end)
+
 gasm("Guild.Livestock", function(t)
   -- the tab reads the snapshot itself; one summary key so the Feeds tab lists it
-  LS = t
+  LSH = t
+  ls_merge()
   dirty.livestock = true
   local lf = T(t, "lfeed")
   vset("lhead", lf.head ~= nil and S(lf.head) or "")
@@ -5349,6 +5566,10 @@ end)
 
 local kg_towns = { [0] = "Midgard" }   -- lin -> town, learned from grudges
 gasm("Guild.Kingdom", function(t)
+  do
+    local wi = type(t.war_incoming) == "table" and t.war_incoming or {}
+    vset("kwar", S(wi.town) ~= "" and (S(wi.town) .. "|" .. S(wi.strength) .. "|" .. S(wi.days)) or "")
+  end
   if type(t.vrep) == "table" then
     -- parse_idx_table + build_holds: idx|name|rep
     local out = {}
