@@ -3647,8 +3647,11 @@ at_draw = function()
   local used, wcap, wtier, pct, mode = at_modeline(v)
   local cd = tonumber(v.CDTIME) or 0
   local L = {}
+  -- each switch in its state's colour, so on/off reads at a glance (Joakim, 6 Oct 2026)
+  local function sw(on, txt) return on and col("success", txt) or col("error", txt) end
   L[#L+1] = string.format("Auto-trade: %s     Scalp: %s   Restock: %s   Refined: %s",
-    at.on and "ON" or "OFF", at.scalp and "on" or "off", at.restock and "on" or "off", at.refined and "on" or "off")
+    sw(at.on, at.on and "ON" or "OFF"), sw(at.scalp, at.scalp and "on" or "off"),
+    sw(at.restock, at.restock and "on" or "off"), sw(at.refined, at.refined and "on" or "off"))
   L[#L+1] = string.format("Warehouse %s / %s  (%d%%, tier %d)   Daler %s%s",
     comma(used), comma(wcap), math.floor(pct), wtier, comma(tonumber(v.DALER) or 0),
     cd > 0 and ("   cart cooldown " .. cd .. "s") or "")
@@ -4844,18 +4847,18 @@ scrye.addPanel{
             { text = "Refined On/Off", action = function() MK.toggle_refined() end },
         } },
         { type = "label", text = "Settings (type a value, Enter):", color = "dim" },
-        { type = "input", text = "Keep (every good) ",  bind = P .. "v_keep",    onSubmit = function(t) MK.setnum("keep", t) end },
-        { type = "input", text = "Raw> buffer ",        bind = P .. "v_stock",   onSubmit = function(t) MK.setnum("stock", t) end },
-        { type = "input", text = "Daler reserve ",      bind = P .. "v_reserve", onSubmit = function(t) MK.setnum("reserve", t) end },
-        { type = "input", text = "Cart cap (0=auto) ",  bind = P .. "v_carts",   onSubmit = function(t) MK.setnum("carts", t) end },
-        { type = "input", text = "Cart fill min % ",    bind = P .. "v_min",     onSubmit = function(t) MK.setnum("min", t) end },
-        { type = "input", text = "Value floor % ",      bind = P .. "v_rel",     onSubmit = function(t) MK.setnum("rel", t) end },
-        { type = "input", text = "Scalp margin/unit ",  bind = P .. "v_margin",  onSubmit = function(t) MK.setnum("margin", t) end },
-        { type = "input", text = "Flush cap (0=off) ",  bind = P .. "v_flush",   onSubmit = function(t) MK.setnum("flush", t) end },
-        { type = "input", text = "Pressure % ",         bind = P .. "v_soft",    onSubmit = function(t) MK.setnum("soft", t) end },
-        { type = "input", text = "Clearing % ",         bind = P .. "v_full",    onSubmit = function(t) MK.setnum("full", t) end },
-        { type = "input", text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) MK.setnum("clear", t) end },
-        { type = "input", text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) MK.setnum("escort", t) end },
+        { type = "input", width = 10, text = "Keep (every good) ",  bind = P .. "v_keep",    onSubmit = function(t) MK.setnum("keep", t) end },
+        { type = "input", width = 10, text = "Raw> buffer ",        bind = P .. "v_stock",   onSubmit = function(t) MK.setnum("stock", t) end },
+        { type = "input", width = 10, text = "Daler reserve ",      bind = P .. "v_reserve", onSubmit = function(t) MK.setnum("reserve", t) end },
+        { type = "input", width = 10, text = "Cart cap (0=auto) ",  bind = P .. "v_carts",   onSubmit = function(t) MK.setnum("carts", t) end },
+        { type = "input", width = 10, text = "Cart fill min % ",    bind = P .. "v_min",     onSubmit = function(t) MK.setnum("min", t) end },
+        { type = "input", width = 10, text = "Value floor % ",      bind = P .. "v_rel",     onSubmit = function(t) MK.setnum("rel", t) end },
+        { type = "input", width = 10, text = "Scalp margin/unit ",  bind = P .. "v_margin",  onSubmit = function(t) MK.setnum("margin", t) end },
+        { type = "input", width = 10, text = "Flush cap (0=off) ",  bind = P .. "v_flush",   onSubmit = function(t) MK.setnum("flush", t) end },
+        { type = "input", width = 10, text = "Pressure % ",         bind = P .. "v_soft",    onSubmit = function(t) MK.setnum("soft", t) end },
+        { type = "input", width = 10, text = "Clearing % ",         bind = P .. "v_full",    onSubmit = function(t) MK.setnum("full", t) end },
+        { type = "input", width = 10, text = "Clearing fill % ",    bind = P .. "v_clear",   onSubmit = function(t) MK.setnum("clear", t) end },
+        { type = "input", width = 10, text = "Escort size ",        bind = P .. "v_escort",  onSubmit = function(t) MK.setnum("escort", t) end },
         { type = "label", text = "Hold a good: click its name in the Trade tab (or: atrade exempt <good>)", color = "dim" },
         { type = "label", text = "Floor a good: atrade floor <good> <n> - never sold below n; its name turns blue", color = "dim" },
     } },
