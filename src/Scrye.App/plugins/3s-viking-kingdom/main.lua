@@ -56,9 +56,62 @@ local function loyalcol(v)
 end
 
 -- ------------------------------------------------------------- snapshots
-local ROSTER, KINGDOM, WAR = {}, {}, {}
+local ROSTER, KINGDOM, WAR, WAREHOUSE = {}, {}, {}, {}
 
 local function T(t, k) return type(t[k]) == "table" and t[k] or {} end
+
+-- Guild.Roster's long lists come as WINDOWS since October 2026: `hird_from = 3` and the
+-- `hird_page` entries after it are the hird from that index on (0-based, `hird_total`
+-- of them), and the open posts as `rneeds_c`, a ~128-character piece of the
+-- "target:stat:trait;..." list cut wherever the limit falls. The page assembler cannot
+-- rebuild either (a window is not a list, a piece is not the string), so they are read
+-- message by message (see the hook before the Roster assembler below).
+local clock = 0
+local RW = { hird = {}, base = 0, off = 0, needs = {} }
+local NEED_TTL = 600     -- a post no piece has named for 10 minutes counts as filled
+
+-- the hird as one list: the old whole list, else the 17 Sep slices, else the windows
+local function hird_list()
+  local h = T(ROSTER, "hird")
+  if #h > 0 then return h end
+  local idx = {}
+  for k, v in pairs(ROSTER) do
+    local n = k:match("^hird_(%d+)$")
+    if n and type(v) == "table" then idx[#idx + 1] = tonumber(n) end
+  end
+  if #idx > 0 then
+    table.sort(idx)
+    local men = {}
+    for _, n in ipairs(idx) do for _, m in ipairs(ROSTER["hird_" .. n]) do men[#men + 1] = m end end
+    return men
+  end
+  local keys, out, at = {}, {}, {}
+  for i in pairs(RW.hird) do keys[#keys + 1] = i end
+  table.sort(keys)
+  for _, i in ipairs(keys) do
+    local e = RW.hird[i]
+    local id = S(e.id) ~= "" and S(e.id) or ("#" .. i)
+    if at[id] then out[at[id]] = e else out[#out + 1] = e ; at[id] = #out end
+  end
+  return out
+end
+
+-- the open posts: the whole list when the server sends one, else the recent pieces
+local function needs_list()
+  local rn = T(ROSTER, "rneeds")
+  if #rn > 0 then return rn end
+  local out = {}
+  for key, seen in pairs(RW.needs) do
+    if clock - seen <= NEED_TTL then
+      local tgt, stat, trait = key:match("^([^:]+):([^:]+):(.+)$")
+      out[#out + 1] = { target = tgt, stat = stat, trait = trait }
+    else
+      RW.needs[key] = nil
+    end
+  end
+  return out
+end
+
 
 -- ------------------------------------------------------- dirty / flush
 local dirty = {}
@@ -95,7 +148,7 @@ local function build_hird()
     add("waiting for Guild.Roster...")
   end
   add("")
-  local hird = T(ROSTER, "hird")
+  local hird = hird_list()
   if #hird == 0 then
     add("no hirdmadr on the roster")
   else
@@ -157,7 +210,7 @@ local function build_recruit()
   local L = {}
   local add = mkadd(L)
   add("-- Recruit needs --")
-  local rn = T(ROSTER, "rneeds")
+  local rn = needs_list()
   if #rn == 0 then
     add("nothing asks for a hire")
   else
@@ -173,7 +226,9 @@ local function build_recruit()
         titlecase(S(r.target)):sub(1, 18), S(r.stat), titlecase(S(r.trait))))
     end
   end
-  local hall = T(ROSTER, "vfind_hall")
+  -- the finds hall rode Guild.Roster until October 2026, Guild.Warehouse since
+  local hall = T(WAREHOUSE, "vfind_hall")
+  if hall.tier == nil then hall = T(ROSTER, "vfind_hall") end
   if hall.tier ~= nil then
     add("")
     add(string.format("Hiring hall T%s   finds %s at a time", S(hall.tier), S(hall.max_finds)))
@@ -402,6 +457,15 @@ local function build_war()
     add(string.format("Prison %s/%s held%s", S(pr.held), S(pr.capacity),
       N(pr.pending) > 0 and ("   " .. col("warning", S(pr.pend_name) .. " pending")) or ""))
   end
+  -- an attack on its way (Guild.Kingdom war_incoming, Oct 2026): the town, its host's
+  -- strength and the days left to answer it
+  local wi = T(KINGDOM, "war_incoming")
+  if S(wi.town) ~= "" then
+    add("")
+    add("@{error,bold}" .. esc(string.format("INCOMING: %s marches on you - strength %s, %s day%s left",
+      S(wi.town), S(wi.strength), S(wi.days), N(wi.days) == 1 and "" or "s")) .. "@{}")
+    add("@{dim}answer with 'vcampaign defend' (or sue for peace with vwar) before it lands@{}")
+  end
   add("")
   add("-- War --")
   if N(WAR.active) > 0 then
@@ -414,6 +478,20 @@ local function build_war()
     add(col("warning", "terrain/units payloads (the capture only ever saw the empty shape)"))
   else
     add("no war declared")
+  end
+  -- the war saga (Guild.War saga_war): what the wars have cost and won, newest first
+  local sg = {}
+  for _, e in ipairs(T(WAR, "saga_war")) do if type(e) == "table" then sg[#sg + 1] = e end end
+  if #sg > 0 then
+    table.sort(sg, function(a, b) return N(a.t) > N(b.t) end)
+    add("")
+    add("-- War saga --")
+    local TONE = { loss = "error", omen = "warning", win = "success", victory = "success", gain = "success" }
+    for i = 1, math.min(#sg, 6) do
+      local e = sg[i]
+      local when = (os and os.date and N(e.t) > 0) and (os.date("%d %b", N(e.t)) .. "  ") or ""
+      add(col("dim", when) .. col(TONE[S(e.tone):lower()] or "text", S(e.text)))
+    end
   end
   return table.concat(L, "\n")
 end
@@ -494,6 +572,33 @@ local function gasm(pkg, on_snap)
   end)
 end
 
+scrye.every(1, function() clock = clock + 1 end)
+
+-- the windows and pieces (see RW above) - registered BEFORE the assembler, so a burst's
+-- windows are in place by the time its snapshot is drawn
+scrye.onGmcp("Guild.Roster", function(json)
+  local ok, t = pcall(scrye.json.decode, json)
+  if not ok or type(t) ~= "table" then return end
+  if tonumber(t.hird_from) then RW.base, RW.off = tonumber(t.hird_from), 0 end
+  if type(t.hird_page) == "table" then
+    for _, e in ipairs(t.hird_page) do
+      if type(e) == "table" then RW.hird[RW.base + RW.off + 1] = e ; RW.off = RW.off + 1 end
+    end
+  end
+  local total = tonumber(t.hird_total)
+  if total then for i in pairs(RW.hird) do if i > total then RW.hird[i] = nil end end end
+  local c = t.rneeds_c
+  if type(c) == "string" and c ~= "" then
+    local parts = {}
+    for p in (c .. ";"):gmatch("([^;]*);") do parts[#parts + 1] = p end
+    if c:sub(-1) ~= ";" and #c >= 120 then parts[#parts] = nil end   -- cut mid-entry
+    for _, p in ipairs(parts) do
+      local tgt, stat, trait = p:match("^([%w_]+):([%w_]+):([%w_]+)$")
+      if tgt then RW.needs[tgt .. ":" .. stat .. ":" .. trait] = clock end
+    end
+  end
+end)
+
 gasm("Guild.Roster", function(snap)
   ROSTER = snap
   for _, s in ipairs(ROSTER_TABS) do dirty[s] = true end
@@ -509,6 +614,13 @@ end)
 gasm("Guild.War", function(snap)
   WAR = snap
   dirty.war = true
+  schedule_flush()
+end)
+
+-- Guild.Warehouse carries the finds hall since October 2026 (vfind_hall/_offers/_posts)
+gasm("Guild.Warehouse", function(snap)
+  WAREHOUSE = snap
+  dirty.recruit = true
   schedule_flush()
 end)
 

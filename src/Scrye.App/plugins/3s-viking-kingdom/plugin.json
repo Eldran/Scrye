@@ -1,9 +1,9 @@
 {
   "id": "3s-viking-kingdom",
   "name": "3S Viking Kingdom",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Joakim",
-  "description": "The dynasty half of the Viking split - content the old status panel never showed, fed by the Guild.Roster / Guild.Kingdom / Guild.War GMCP packages (3Scapes only). Tabs: Hird (the roster grid - level, age, atk/def, loyalty, status, champions, the bond matrix), Recruit (what each post wants in a hire, hiring hall, training, spymaster, varangians), Thralls (per-building counts + the follower), Grudges (per-town raid cooldowns, soonest first - the other half of auto-raid's targeting; 'vgrudge' prints it), Kingdom (lineage standings, trade reputation progress, diplomacy), Dynasty (house, spouse, children, schooling, heir), War (army, campaign, prison, the war ledger - the battle BOARD waits for a real war's payloads, which the capture never carried).",
+  "description": "The dynasty half of the Viking split - content the old status panel never showed, fed by the Guild.Roster / Guild.Kingdom / Guild.War GMCP packages (3Scapes only). Tabs: Hird (the roster grid - level, age, atk/def, loyalty, status, champions, the bond matrix), Recruit (what each post wants in a hire, hiring hall, training, spymaster, varangians), Thralls (per-building counts + the follower), Grudges (per-town raid cooldowns, soonest first - the other half of auto-raid's targeting; 'vgrudge' prints it), Kingdom (lineage standings, trade reputation progress, diplomacy), Dynasty (house, spouse, children, schooling, heir), War (army, campaign, prison, the war ledger - the battle BOARD waits for a real war's payloads, which the capture never carried). 1.1.0 (6 Oct 2026): the War tab warns of an attack on its way (Guild.Kingdom war_incoming: town, strength, days left) and shows the war saga (Guild.War saga_war, newest first); the hird and the recruit needs are read from Guild.Roster's new windows (hird_from/hird_page, rneeds_c pieces); the finds hall comes from Guild.Warehouse, where it moved.",
   "mudIds": [
     "*"
   ],
