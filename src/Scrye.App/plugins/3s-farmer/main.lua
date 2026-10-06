@@ -1847,6 +1847,29 @@ local function own_kill(e, victim)
   end)
 end
 
+-- A kill seen here takes that mob off the roster at once (Joakim, 6 Oct 2026: after a kill
+-- the patrol swung at three guards and the mob it had just killed, one "There is no X
+-- here" each). The server's refreshed Room.Contents does come, but often after the breath
+-- - the roster the hunt consulted still held the dead. Matched by name with the tags and
+-- article stripped ("Wiremouth" is "Wiremouth {angry}"), one off the count; the refresh,
+-- when it lands, replaces the roster wholesale anyway.
+local function roster_key(name)
+  local n = tostring(name or ""):gsub("%b[]", ""):gsub("%b{}", ""):gsub("%b()", "")
+  return victim_key(n)
+end
+local function roster_drop_dead(victim)
+  local key = roster_key(victim)
+  if key == "" then return end
+  for i, name in ipairs(B.mobs) do
+    if roster_key(name) == key then
+      local left = (B.count[name] or 1) - 1
+      if left > 0 then B.count[name] = left
+      else B.count[name] = nil ; table.remove(B.mobs, i) end
+      return
+    end
+  end
+end
+
 scrye.addTrigger{ pattern = [[^(\S+) dealt the killing blow to (.+)\.]], regex = true, run = function(who, victim)
   who = tostring(who or "")
   local you = (who == "You" or who == "you")
@@ -1871,6 +1894,7 @@ scrye.addTrigger{ pattern = [[^(\S+) dealt the killing blow to (.+)\.]], regex =
   local killer = mine and "you" or who
   local kl = (ours and B.target and B.target.name) or mob_label(victim)
   local e = tally(killer, kl)
+  roster_drop_dead(victim)
   RECENT[#RECENT + 1] = { src = "text", key = key, at = now, killer = killer, e = e, ours = ours, you = you }
   if ours then own_kill(e, victim) else draw() end
 end }
@@ -1894,6 +1918,7 @@ scrye.onGmcp("Room.Death", function(json)
   local killer = mine and "you" or (raw ~= "" and raw or "someone")
   local kl = (ours and B.target and B.target.name) or mob_label(d.name)
   local e = tally(killer, kl)
+  roster_drop_dead(d.name)
   RECENT[#RECENT + 1] = { src = "gmcp", key = key, at = now, killer = killer, raw = raw, e = e, ours = ours }
   if ours then own_kill(e, d.name) else draw() end
 end)
@@ -1908,12 +1933,21 @@ scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true, run = f
     -- the word we swung with is not one the parser takes for anything here. If the
     -- name has another word, try it next; when they are all spent the mob is not here
     -- under any name we can say, and it leaves the roster until the server refreshes it.
-    local _, n = keyword(t.name)
-    local i = (B.kwidx[t.name] or 1) + 1
-    if i <= n then
-      B.kwidx[t.name] = i
-    else
-      for j, name in ipairs(B.mobs) do if name == t.name then table.remove(B.mobs, j) break end end
+    -- That goes for EVERY roster name whose next swing is the same word: "There is no
+    -- guard here" answers for "A guard {angry}" and "A guard [scratched]" alike, so one
+    -- refusal spends it for all of them rather than one refusal each.
+    local names = {}
+    for _, name in ipairs(B.mobs) do
+      if name == t.name or keyword(name) == gone then names[#names + 1] = name end
+    end
+    for _, name in ipairs(names) do
+      local _, n = keyword(name)
+      local i = (B.kwidx[name] or 1) + 1
+      if i <= n then
+        B.kwidx[name] = i
+      else
+        for j, m in ipairs(B.mobs) do if m == name then table.remove(B.mobs, j) break end end
+      end
     end
   else
     for i, name in ipairs(B.mobs) do
