@@ -53,12 +53,15 @@ local S = {               -- the run
   step = nil,             -- { dir, to, at } - the one outstanding step
   visited = 0,            -- rooms stepped into this run (panel)
   timer = nil,            -- the pending pace timer, so stop can cancel it
+  due = false,            -- that timer is the next patrol STEP (schedule_step): at pace 0
+                          -- the room's prompt takes it early
   route = nil,            -- the rooms of the leg being walked, for the map to light
   started = 0,            -- clock stamp when this patrol began (session counter)
   ended = nil,            -- final length of the LAST patrol, frozen at stop
 }
 local C = {               -- knobs (persisted)
-  pace = 1,               -- seconds between arrival and the next step
+  pace = 0,               -- seconds between arrival and the next step; 0 = fast: step as
+                          -- soon as the room has shown (its prompt) - 1.8.0
   timeout = 10,           -- seconds a step may stay unanswered
   breath = 2,             -- seconds after a killing blow, so YOUR looting triggers go first
   rest_below = 0,         -- Seid floor; 0 = off
@@ -246,6 +249,13 @@ local function load()
     end
   end
   C.pace = tonumber(scrye.store.get("pace")) or C.pace
+  -- 1.8.0: 1 was the old default AND the lowest pace there was, so a stored 1 is almost
+  -- never a choice - move it to fast once. A pace set after this sticks ('pace_v' marks it).
+  if scrye.store.get("pace_v") ~= "2" then
+    if C.pace == 1 then C.pace = 0 end
+    scrye.store.set("pace_v", "2")
+    scrye.store.set("pace", tostring(C.pace))
+  end
   local rb, rs = tostring(scrye.store.get("rest") or ""):match("^(%d+) (%d+)$")
   if rb then C.rest_below, C.rest_secs = tonumber(rb), tonumber(rs) end
   local hs, hpn, hpr = tostring(scrye.store.get("hp") or ""):match("^(%d+) (%d+) ?(%d*)$")
@@ -605,6 +615,20 @@ local function los_scan(rows)
   return out
 end
 
+-- Rooms whose mobs are nothing we fight (Joakim, 7 Oct 2026: stuck in a small part of
+-- The Corpse Dump, 21 of its 125 rooms stood in, with mobs elsewhere). The grid marks 'm'
+-- for ANY monster - a never-listed golem, an excluded one, a guild follower - so where
+-- those stand, 'go where the mobs are' became a chase from one to the next, round and
+-- round a corner of the area, and the stalest-room fallback never got a turn. When the
+-- prompt finds a room's roster holding mobs but none to fight, the room is a dud: its 'm'
+-- no longer pulls the patrol at all - "it should just ignore the mob and keep walking"
+-- (Joakim). The grid cannot say WHICH monster stands in a cell, so the first look is
+-- needed; after that the room is simply walked in its turn by the staleness rule, and
+-- that visit is what clears it (a roster with something to fight, or none at all).
+-- Session-only.
+local DUD = {}            -- room num -> clock stamp it was last found holding only non-targets
+local function is_dud(num) return DUD[num] ~= nil end
+
 local function on_room_map(json)
   local ok, t = pcall(scrye.json.decode, json)
   if not ok or type(t) ~= "table" then return end
@@ -628,7 +652,7 @@ local function pick_target()
       -- was only ever our own followers, is them catching up - not a reason to turn round;
       -- and a pass-through room is never a destination, mobs or no mobs
       local followers = B.left and B.left.num == num and B.left.quiet
-      if los.mobs[num] and not followers and not passing(num) then return num, first[num], "mobs in sight", prev end
+      if los.mobs[num] and not followers and not passing(num) and not is_dud(num) then return num, first[num], "mobs in sight", prev end
     end
   end
   local best, best_last = nil, nil
@@ -725,7 +749,7 @@ end
 -- arrives, cleared nothing, and the patrol stood forever. Now it looks again.
 local function hold(why)
   if why and why ~= S.held_on then S.held_on = why ; note("holding - " .. why) end
-  S.timer = scrye.after(C.pace * 5, step_out)
+  S.timer = scrye.after(math.max(C.pace, 1) * 5, step_out)
 end
 
 -- One step toward the rest room. The same one-step-per-confirmed-arrival chassis as the
@@ -749,7 +773,7 @@ retreat_step = function()
 end
 
 step_out = function()
-  S.timer = nil
+  S.timer = nil ; S.due = false
   if not S.on or S.paused or S.step then return end
   if S.fighting or B.hunting or in_combat() then hold(blocker()) return end
   if next_target() ~= nil then
@@ -772,14 +796,14 @@ step_out = function()
     -- (phase 3 fights what respawns) and look again in a while. The circuit, such as it
     -- is, is done - so a rotation can move on from here.
     S.swept = true
-    S.timer = scrye.after(C.pace * 5, step_out)
+    S.timer = scrye.after(math.max(C.pace, 1) * 5, step_out)
     return
   end
   if target == here then
     -- we are already the stalest room; wait for time to pass rather than jitter in place
     -- (and the circuit is trivially done - a one-room fence counts as swept)
     S.swept = true
-    S.timer = scrye.after(C.pace * 5, step_out)
+    S.timer = scrye.after(math.max(C.pace, 1) * 5, step_out)
     return
   end
   -- The stalest reachable room already visited this run = a full circuit is done. Said
@@ -799,6 +823,7 @@ end
 local function schedule_step()
   if S.timer then scrye.cancel(S.timer) end
   S.timer = scrye.after(C.pace, step_out)
+  S.due = true
 end
 
 -- ---------- the feed ----------
@@ -985,7 +1010,24 @@ consider = function()
   if S.timer then scrye.cancel(S.timer) ; S.timer = nil end   -- fight first, step later
   attack()
 end
-local function on_prompt() consider() end
+-- Pace 0 (1.8.0, Joakim 7 Oct 2026: "speed up the farmer ... when its walking between
+-- mobs"): host timers tick once a second, so even the shortest wait cost up to a second a
+-- room. But the room has fully shown by its prompt - the same moment attacks are decided -
+-- so a step that is due goes out right there, as fast as the server answers; step_out
+-- still makes every decision itself (a fight, a pause, a floor each hold it). The timer
+-- stays armed as the fallback for a prompt the client never flags. A walk to the rest
+-- room keeps its own timer - resting is not patrolling.
+local function on_prompt()
+  -- what this room's mobs are worth, for the line-of-sight chase (see DUD)
+  if S.on and here and B.seen then
+    if #B.mobs > 0 and not next_target() then DUD[here] = now else DUD[here] = nil end
+  end
+  consider()
+  if C.pace == 0 and S.on and S.timer and S.due and not B.resting then
+    scrye.cancel(S.timer)
+    step_out()
+  end
+end
 
 -- ---------- after the blow ----------
 -- Your own killing-blow triggers (looting, skinning) go first: a short breath, then the
@@ -1411,9 +1453,11 @@ farm_cmd = function(args)
       draw()
     elseif verb == "pace" then
       local n = tonumber(rest)
-      if not n or n < 1 then note("farm pace <seconds> - currently " .. C.pace) return end
+      if rest:lower() == "fast" then n = 0 end
+      if not n or n < 0 then note("farm pace <seconds> - currently " .. (C.pace == 0 and "0 (fast)" or C.pace) .. "; 0 = fast") return end
       C.pace = math.floor(n) ; dirty = true ; save()
-      note("pace: one step every " .. C.pace .. "s (after each arrival)")
+      if C.pace == 0 then note("pace: fast - each step as soon as the room has shown (its prompt)")
+      else note("pace: one step every " .. C.pace .. "s (after each arrival)") end
     elseif verb == "never" then
       if rest == "" then
         note(#NV > 0 and ("never attacked anywhere: " .. table.concat(NV, ", "))
@@ -1715,7 +1759,7 @@ farm_cmd = function(args)
       note("farm go <area>  travel there (the mapper walks), then lock and start")
       note("farm stop       stop; so does moving yourself or anything moving you")
       note("farm pause      hand brake, toggles")
-      note("farm pace <s>   seconds between arrival and the next step (now " .. C.pace .. ")")
+      note("farm pace <s>   seconds between arrival and the next step, 0 = fast (now " .. C.pace .. ")")
       note("farm exclude <name>   never attack this here (phase 3) - substring match")
       note("farm room <n> avoid|pass|-   never enter that room / walk through but never fight there / clear")
       note("farm include <name>   un-exclude")

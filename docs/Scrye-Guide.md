@@ -1013,7 +1013,10 @@ In `Unknown` there is no area to set up — walk into a named one.
 somewhere else, an arrival nothing ordered (a wimpy, a summon), a move you typed, or a step that
 never lands stops the patrol — and it never resumes on its own. Combat only pauses it. Between
 rooms it heads for the stalest room, unless the server's line‑of‑sight grid (`Room.Map`) shows
-monsters nearby, in which case it goes there first; rooms with a player in sight are skipped.
+monsters nearby, in which case it goes there first; rooms with a player in sight are skipped. The map can't say *which*
+monster stands in a room, so a mob it won't fight (never‑listed, excluded, your party's) can draw
+it once — but once it has seen that room it ignores its mark and walks on, visiting the room only
+in its normal turn.
 An elevator car is never a room to patrol, even though it sits in the area: the mapper's
 **shifting** mark comes along with the room, and a door whose way back is marked shifting is not a
 patrol link — the same rule the map uses to keep the floors apart.
@@ -1042,7 +1045,7 @@ the stalest, or the rest room), and the map lights the leg it is walking there.
 |---|---|
 | `farm start` / `farm stop` / `farm pause` | Lock to this area and patrol; stop (so does moving yourself); hand brake, toggles. The panel's buttons are these. |
 | `farm go <area>` | Ask the mapper to walk you there, then lock and start on arrival. |
-| `farm pace <s>` | Seconds between an arrival and the next step. |
+| `farm pace <s>` | Seconds between an arrival and the next step. `0` (or `fast`, the default) steps as soon as the room has shown — on its prompt — so walking between mobs goes as fast as the server answers; `1` or more waits that long. |
 | `farm exclude <name>` / `farm include <name>` / `farm excludes` | This area's excludes (substring, case‑blind). |
 | `farm room <n> avoid` / `farm room <n> pass` / `farm room <n> rest` / `farm room <n> -` | Room rules: **avoid** — the patrol never enters that room (routes go round it); **pass** — it may walk through but never fights there and never heads there on purpose; **rest** — a pass room that is also where the patrol goes to rest (below); `-` clears. Easiest from the map: right‑click a room and the menu offers *Farmer: pass through only* / *never enter* / *rest here* / *clear rule* whenever the farmer is loaded. `farm room` lists them; they're also a table on the panel, where a click clears one, and the map draws them in their own colours — `A` for a room never entered, `P` for pass‑through, `R` for the rest room (see the map's legend). |
 | `farm never [<name>\|-<name>]` | Mobs never attacked anywhere. |
