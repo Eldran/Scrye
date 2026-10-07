@@ -1002,6 +1002,13 @@ server lists in each room. Explore first, by walking or with `mapg explore area`
 it also takes the mapper's rooms for the area (over `map.query.area`), so a mapped area is a
 farmable one.
 
+**Set it up, then start.** While it isn't patrolling, the farmer follows the named area you stand
+in, so excludes, preferences and no‑loot — from the roster, the Mobs tab or the typed commands —
+go to *that* area before you ever press Start. **Read area** (`farm area`) reads the area in
+without starting: it takes the mapper's rooms, says how many the patrol would work with and what
+is already excluded, and the status line reads *ready*. Set things up, then press **Start**.
+In `Unknown` there is no area to set up — walk into a named one.
+
 **The chassis.** One step per confirmed arrival, verified by room number. A step that lands
 somewhere else, an arrival nothing ordered (a wimpy, a summon), a move you typed, or a step that
 never lands stops the patrol — and it never resumes on its own. Combat only pauses it. Between

@@ -802,6 +802,12 @@ local function schedule_step()
 end
 
 -- ---------- the feed ----------
+-- A place the farmer will lock to: named, and not 'Unknown' - which labels every stretch
+-- of connective realm on the MUD rather than one place.
+local function named_area(a)
+  return a ~= nil and a ~= "" and a:lower() ~= "unknown"
+end
+
 local function on_room_info(json)
   local ok, r = pcall(scrye.json.decode, json)
   if not ok or type(r) ~= "table" then return end
@@ -889,6 +895,11 @@ local function on_room_info(json)
     end
   else
     here = num
+    -- Off patrol the lock follows the named area you stand in (Joakim, 7 Oct 2026: excludes
+    -- could not be set before the first start, and after a stop they went to the area the
+    -- LAST patrol was in). So the Mobs tab, a click on the roster and 'farm exclude' always
+    -- mean the area you are in, and you set it up before pressing Start.
+    if not S.on then S.lock = named_area(area) and area or nil end
   end
   draw()
 end
@@ -1024,7 +1035,7 @@ end
 local function excludes_here() return S.lock and X[S.lock] or nil end
 
 local function exclude(name)
-  if not S.lock then note("no area locked - 'farm start' first, excludes are per area") return end
+  if not S.lock then note("not standing in a named area - excludes are per area") return end
   name = name:lower()
   X[S.lock] = X[S.lock] or {}
   for _, e in ipairs(X[S.lock]) do
@@ -1051,7 +1062,7 @@ end
 
 local function noloot_here() return S.lock and NL[S.lock] or nil end
 local function noloot_add(name)
-  if not S.lock then note("no area locked - 'farm start' first, no-loot is per area") return end
+  if not S.lock then note("not standing in a named area - no-loot is per area") return end
   name = name:lower()
   NL[S.lock] = NL[S.lock] or {}
   for _, e in ipairs(NL[S.lock]) do
@@ -1080,7 +1091,7 @@ end
 
 local function prefer_here() return S.lock and PF[S.lock] or nil end
 local function prefer_add(name)
-  if not S.lock then note("no area locked - 'farm start' first, preferences are per area") return end
+  if not S.lock then note("not standing in a named area - preferences are per area") return end
   name = name:lower()
   PF[S.lock] = PF[S.lock] or {}
   for _, e in ipairs(PF[S.lock]) do
@@ -1191,6 +1202,31 @@ local function area_rooms(name)
   local n = 0
   for _, r in pairs(G) do if r.area == name then n = n + 1 end end
   return n
+end
+
+-- 'farm area' / the Read area button (1.7.0): read the area in without starting - the
+-- mapper hands over its rooms, the lock is set, and the note says what the patrol would
+-- work with. Then set the excludes, the preferences and the settings for THIS area, and
+-- press Start when it is right.
+local function read_area()
+  if S.on then note("patrolling " .. tostring(S.lock) .. " already - 'farm stop' first") return end
+  if not here or not G[here] then
+    note("we are not anywhere yet - walk one room and try again")
+    return
+  end
+  local area = G[here].area
+  if not named_area(area) then
+    note("'" .. (area == "" and "?" or area) .. "' is not one place - it is every stretch of")
+    note("  connective realm on the MUD. Walk into a named area and read that.")
+    return
+  end
+  -- (the lock already follows you off patrol - see on_room_info - so it is this area)
+  scrye.emit("map.query.area", scrye.json.encode({ area = area }))
+  note(string.format("%s read in - %d explored room(s). Not patrolling yet:", area, area_rooms(area)))
+  note("  set excludes (click a mob on the roster, or the Mobs tab) and settings, then Start.")
+  local ex = excludes_here()
+  if ex then note("  already excluded here: " .. table.concat(ex, ", ")) end
+  draw()
 end
 
 local function start()
@@ -1347,6 +1383,7 @@ farm_cmd = function(args)
     verb = verb:lower()
     if verb == "" or verb == "status" then status()
     elseif verb == "start" then start()
+    elseif verb == "area" or verb == "read" then read_area()
     elseif verb == "go" then
       if rest == "" then note("farm go <area>   travel there (the mapper walks), then lock and start")
       else travel(rest) end
@@ -1531,7 +1568,7 @@ farm_cmd = function(args)
       if rest == "" then
         local pf = prefer_here()
         if pf then note("preferred in " .. S.lock .. ", in order: " .. table.concat(pf, ", "))
-        else note(S.lock and ("no preference in " .. S.lock .. " - the roster's own order") or "no area locked - preferences are per area") end
+        else note(S.lock and ("no preference in " .. S.lock .. " - the roster's own order") or "not in a named area - preferences are per area") end
       elseif rest:sub(1, 1) == "-" then prefer_drop((rest:sub(2):gsub("^%s+", "")))
       else prefer_add(rest) end
     elseif verb == "always" then
@@ -1571,7 +1608,7 @@ farm_cmd = function(args)
       if rest == "" then
         local nl = noloot_here()
         if nl then note("no loot in " .. S.lock .. ": " .. table.concat(nl, ", "))
-        else note(S.lock and ("everything killed in " .. S.lock .. " gets the after-kill commands") or "no area locked - no-loot is per area") end
+        else note(S.lock and ("everything killed in " .. S.lock .. " gets the after-kill commands") or "not in a named area - no-loot is per area") end
       elseif rest:sub(1, 1) == "-" then noloot_drop((rest:sub(2):gsub("^%s+", "")))
       else noloot_add(rest) end
     elseif verb == "limit" then
@@ -1631,7 +1668,7 @@ farm_cmd = function(args)
       local ex = excludes_here()
       if ex then note("excluded in " .. S.lock .. ": " .. table.concat(ex, ", "))
       else note(S.lock and ("nothing excluded in " .. S.lock)
-                        or "no area locked - excludes are per area") end
+                        or "not in a named area - excludes are per area") end
     elseif verb == "rooms" then
       -- The coverage report: what the fence holds, what the patrol can reach from here,
       -- and what it has visited this run. This is how "it only walks the same rooms" gets
@@ -1673,6 +1710,7 @@ farm_cmd = function(args)
       note("graph wiped - walk the area again to re-learn it")
       draw()
     elseif verb == "help" then
+      note("farm area       read this area in without starting - set excludes, then start")
       note("farm start      lock to this area and patrol its explored rooms")
       note("farm go <area>  travel there (the mapper walks), then lock and start")
       note("farm stop       stop; so does moving yourself or anything moving you")
@@ -2136,6 +2174,9 @@ draw = function()
     if B.resting then bits[#bits + 1] = "resting" end
   elseif here and G[here] then
     bits[#bits + 1] = string.format("off - %d %s [%s]", here, G[here].name, G[here].area)
+    if S.lock then
+      bits[#bits + 1] = string.format("ready: %d room(s) - set Mobs, then Start", area_rooms(S.lock))
+    end
   else
     bits[#bits + 1] = "off"
   end
@@ -2182,12 +2223,12 @@ draw = function()
     scrye.setState(P .. "afterlist", #rows > 0 and table.concat(rows, "\n") or "(none - type a command below: get all from corpse)")
     local nl = noloot_here()
     scrye.setState(P .. "nolootlist", nl and table.concat(nl, "\n")
-      or (S.lock and "(every kill in " .. S.lock .. " gets them)" or "(per area - starts with the patrol)"))
+      or (S.lock and "(every kill in " .. S.lock .. " gets them)" or "(per area - stand in a named area)"))
     local pf = prefer_here()
     local prows = {}
     for i, frag in ipairs(pf or {}) do prows[#prows + 1] = i .. ". " .. frag end
     scrye.setState(P .. "preferlist", #prows > 0 and table.concat(prows, "\n")
-      or (S.lock and "(the roster's own order in " .. S.lock .. ")" or "(per area - starts with the patrol)"))
+      or (S.lock and "(the roster's own order in " .. S.lock .. ")" or "(per area - stand in a named area)"))
     scrye.setState(P .. "alwayslist", #AL > 0 and table.concat(AL, "\n") or "(none - a stranger in the room parks the fists for every mob)")
     scrye.setState(P .. "rotalist", #RT.areas > 0 and table.concat(RT.areas, "\n") or "(none - add an area below)")
     scrye.setState(P .. "rotahint", #RT.areas > 0 and (RT.on and "rotation ON - click an area to drop it" or "rotation off ('farm rota on') - click an area to drop it")
@@ -2231,7 +2272,7 @@ draw = function()
   scrye.setState(P .. "neverlist", #NV > 0 and table.concat(NV, "\n") or "(nothing - click a mob's row, right-click, 'Never attack anywhere')")
   scrye.setState(P .. "partylist", #PT > 0 and table.concat(PT, "\n") or "(nobody - any player in a room parks the fists; click a player's row to add them)")
   scrye.setState(P .. "exlist", ex and table.concat(ex, "\n")
-                 or (S.lock and "(nothing excluded in " .. S.lock .. ")" or "(per area - starts with the patrol)"))
+                 or (S.lock and "(nothing excluded in " .. S.lock .. ")" or "(per area - stand in a named area)"))
   -- room rules, sorted by number: row index -> rule_rows[index] for the click
   rule_rows = {}
   for num in pairs(RR) do rule_rows[#rule_rows + 1] = num end
@@ -2263,6 +2304,7 @@ build_panel = function(m)
     { title = "Patrol", widgets = {
       { type = "label", bind = P .. "status", color = MOOD_COLOR[m] or "dim" },
       { type = "buttonrow", buttons = {
+        { text = "Read area", action = function() read_area() end },
         { text = "Start", action = function() start() end },
         { text = S.paused and "Resume" or "Pause", action = function()
             if not S.on then note("not patrolling") ; return end
