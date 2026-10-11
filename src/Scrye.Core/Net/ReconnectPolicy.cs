@@ -18,9 +18,20 @@ public sealed class ReconnectPolicy
     public double Factor { get; set; } = 2.0;
     /// <summary>Maximum retries before giving up; 0 means retry indefinitely.</summary>
     public int MaxAttempts { get; set; } = 12;
+    /// <summary>How long a connection must stay up before its drop starts a fresh retry series.
+    /// A server that accepts the socket and closes it again (a reboot in progress, a front end
+    /// with the game behind it down) used to reset the count on every accept, so the backoff
+    /// never grew, MaxAttempts was never reached and the client reconnected every
+    /// <see cref="BaseDelay"/> for as long as it lasted - with every plugin's onConnect firing
+    /// each time. A shorter-lived connection carries the series on instead.</summary>
+    public TimeSpan StableAfter { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Whether the session should keep retrying after <paramref name="attempt"/> tries so far.</summary>
     public bool ShouldRetry(int attempt) => MaxAttempts <= 0 || attempt < MaxAttempts;
+
+    /// <summary>Whether a connection that lasted <paramref name="uptime"/> counts as recovered:
+    /// its drop starts the retry series over rather than continuing it.</summary>
+    public bool IsStable(TimeSpan uptime) => uptime >= StableAfter;
 
     /// <summary>The wait before the <paramref name="attempt"/>-th retry (1-based).</summary>
     public TimeSpan Delay(int attempt)

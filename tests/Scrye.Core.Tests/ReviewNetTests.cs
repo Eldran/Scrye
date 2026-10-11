@@ -274,6 +274,76 @@ public class ReviewSessionTests
         finally { await s.DisposeAsync(); }
     }
 
+    /// <summary>Accept every connection and close it at once - a MUD mid-reboot, or a front end
+    /// whose game is down. Stops when <paramref name="stop"/> is cancelled.</summary>
+    private static Task Bounce(TcpListener listener, CancellationToken stop) => Task.Run(async () =>
+    {
+        try { while (!stop.IsCancellationRequested) (await listener.AcceptTcpClientAsync(stop)).Close(); }
+        catch { /* cancelled, or the listener stopped */ }
+    });
+
+    [Fact]
+    public async Task ServerThatDropsEveryConnectionDoesNotResetTheRetryBudget()
+    {
+        // Every accept used to hand the series a fresh budget: "attempt 1" every 2s for as long
+        // as the server bounced us, with every plugin's onConnect firing each time - 3s-viking-
+        // status booked a 'vbuild list' per cycle and 100+ went out (11 Oct 2026).
+        var shown = new List<string>();
+        int connects = 0;
+        var (s, server, listener) = await Connect(x =>
+        {
+            x.ReconnectPolicy.MaxAttempts = 3;
+            x.ReconnectPolicy.BaseDelay = TimeSpan.FromMilliseconds(10);
+            x.ReconnectPolicy.MaxDelay = TimeSpan.FromMilliseconds(10);
+            x.LineReady += l => { lock (shown) shown.Add(l.PlainText); };
+            x.StateChanged += st => { if (st == ConnectionState.Connected) Interlocked.Increment(ref connects); };
+        });
+        using var stop = new CancellationTokenSource();
+        Task bouncer = Bounce(listener, stop.Token);
+        try
+        {
+            server.Close();
+            await WaitFor(() => { lock (shown) return shown.Any(t => t.Contains("gave up")); });
+            await Task.Delay(500);                             // room for a wrongly restarted series
+            lock (shown)
+            {
+                Assert.Equal(3, shown.Count(t => t.StartsWith("[reconnect] attempt")));
+                Assert.Equal(1, shown.Count(t => t.Contains("gave up")));
+            }
+            Assert.True(Volatile.Read(ref connects) <= 4);     // the first connect + one per attempt
+        }
+        finally { stop.Cancel(); await s.DisposeAsync(); listener.Stop(); await bouncer; }
+    }
+
+    [Fact]
+    public async Task ConnectionThatStayedUpStartsAFreshRetrySeries()
+    {
+        // The other half: a connection that lasted StableAfter counts as recovered, so its drop
+        // starts over at attempt 1 rather than spending what an earlier outage left.
+        var shown = new List<string>();
+        var (s, server, listener) = await Connect(x =>
+        {
+            x.ReconnectPolicy.MaxAttempts = 2;
+            x.ReconnectPolicy.BaseDelay = TimeSpan.FromMilliseconds(10);
+            x.ReconnectPolicy.MaxDelay = TimeSpan.FromMilliseconds(10);
+            x.ReconnectPolicy.StableAfter = TimeSpan.Zero;     // every connection counts as stable
+            x.LineReady += l => { lock (shown) shown.Add(l.PlainText); };
+        });
+        using var stop = new CancellationTokenSource();
+        Task bouncer = Bounce(listener, stop.Token);
+        try
+        {
+            server.Close();
+            await WaitFor(() => { lock (shown) return shown.Count(t => t.StartsWith("[reconnect] attempt 1/2")) >= 4; });
+            lock (shown)
+            {
+                Assert.True(shown.Count(t => t.StartsWith("[reconnect] attempt 1/2")) >= 4);
+                Assert.DoesNotContain(shown, t => t.Contains("gave up"));
+            }
+        }
+        finally { stop.Cancel(); await s.DisposeAsync(); listener.Stop(); await bouncer; }
+    }
+
     [Fact]
     public async Task StaleInflatedDataFromAnOldPumpIsDropped()
     {

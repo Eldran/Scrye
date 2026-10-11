@@ -48,4 +48,13 @@ public class ReconnectPolicyTests
         var p = new ReconnectPolicy { MaxAttempts = 0 };
         Assert.True(p.ShouldRetry(1_000_000));
     }
+
+    [Fact]
+    public void StableAfterDecidesWhetherADropStartsOver()
+    {
+        var p = new ReconnectPolicy { StableAfter = TimeSpan.FromSeconds(30) };
+        Assert.False(p.IsStable(TimeSpan.FromSeconds(2)));    // bounced: carry the series on
+        Assert.True(p.IsStable(TimeSpan.FromSeconds(30)));
+        Assert.True(p.IsStable(TimeSpan.FromMinutes(10)));
+    }
 }

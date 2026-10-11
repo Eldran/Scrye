@@ -54,8 +54,15 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private CancellationTokenSource? _reconnectCts;
     // Set by a retry series that ran out of attempts. Each failed attempt still raises Failed
     // through the mailbox, and without this the last one would start a fresh series at attempt
-    // 0 - MaxAttempts would never be reached. Cleared by a successful connect or ConnectAsync.
+    // 0 - MaxAttempts would never be reached. Cleared by ConnectAsync, or by a connection that
+    // stayed up (ReconnectPolicy.StableAfter) dropping.
     private volatile bool _reconnectGaveUp;
+    // Attempts made in the current outage. Lives on the session, not in the retry loop, so a
+    // connection the server drops again at once continues the series (and its backoff) instead
+    // of restarting it at attempt 1 - see ReconnectPolicy.StableAfter. Written by the retry
+    // loop while it runs and by the session loop only when no loop is running.
+    private volatile int _reconnectAttempt;
+    private long _connectedAtMs;      // Environment.TickCount64 at the last Connected (loop thread)
 
     private readonly MipParser _mip = new();
     private readonly MipProcessor _mipProc;
@@ -384,6 +391,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     {
         if (Profile.EnableMip) ResetMipForConnect();
         _reconnectGaveUp = false;   // an explicit connect starts a fresh reconnect budget
+        _reconnectAttempt = 0;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
@@ -494,9 +502,9 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
     private async Task ReconnectLoopAsync(CancellationToken ct)
     {
-        int attempt = 0;
         while (!ct.IsCancellationRequested)
         {
+            int attempt = _reconnectAttempt;
             if (!_reconnect.ShouldRetry(attempt))
             {
                 _reconnectGaveUp = true;   // before returning, so the last Failed can't restart us
@@ -504,7 +512,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                     $"[reconnect] gave up after {attempt} attempt(s)"));
                 return;
             }
-            attempt++;
+            _reconnectAttempt = ++attempt;
             TimeSpan delay = _reconnect.Delay(attempt);
             string cap = _reconnect.MaxAttempts > 0 ? $"/{_reconnect.MaxAttempts}" : "";
             _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice(
@@ -1252,7 +1260,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 break;
             case ConnectionState.Connected:
                 _everConnected = true;
-                _reconnectGaveUp = false;        // a live connection earns a fresh retry budget
+                _connectedAtMs = Environment.TickCount64;   // the budget resets only if it lasts
                 CancelReconnect();               // a successful connect ends any retry loop
                 _mccp?.Dispose(); _mccp = null;  // compression renegotiates per connection
                 _mccpGeneration++;               // ...and nothing the old pump still posts applies
@@ -1277,6 +1285,14 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 _mccp?.Dispose(); _mccp = null;
                 _telnet.ResetCompression();
                 _events.Emit(SessionEventKind.Disconnected);
+                // A connection that stayed up earns a fresh retry budget; one the server closed
+                // again straight away carries the current series on, backoff and all.
+                if (_everConnected && _reconnect.IsStable(
+                        TimeSpan.FromMilliseconds(Environment.TickCount64 - _connectedAtMs)))
+                {
+                    _reconnectAttempt = 0;
+                    _reconnectGaveUp = false;
+                }
                 MaybeReconnect();
                 break;
             // Disconnecting is transient — no event.
