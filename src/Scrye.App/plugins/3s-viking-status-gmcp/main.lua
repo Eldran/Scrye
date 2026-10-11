@@ -1123,8 +1123,19 @@ scrye.addAlias{ pattern = [[^build refresh$]],    regex = true, run = function()
 scrye.addAlias{ pattern = [[^build scan$]],       regex = true, run = function() bp_scan() end }
 scrye.addAlias{ pattern = [[^build start (.+)$]], regex = true, run = function(w1) bp_start(w1) end }
 
--- re-scan costs on connect, after a delay so we're logged in first
-scrye.onConnect(function() scrye.after(20, bp_scan) end)
+-- re-scan costs on connect, after a delay so we're logged in first. ONE pending scan at
+-- most: every connect used to book its own, so a server that accepted and dropped the
+-- socket over and over (auto-reconnect cycling every few seconds) piled up a 'vbuild list'
+-- per cycle - 100+ seen live (11 Oct). A newer connect replaces the pending scan and a
+-- disconnect drops it, so only a connection that lasts the 20s gets its scan.
+local connect_scan = nil
+scrye.onConnect(function()
+  if connect_scan then scrye.cancel(connect_scan) end
+  connect_scan = scrye.after(20, function() connect_scan = nil; bp_scan() end)
+end)
+scrye.onDisconnect(function()
+  if connect_scan then scrye.cancel(connect_scan); connect_scan = nil end
+end)
 
 local function build_production()
   local L = {}
