@@ -1615,6 +1615,27 @@ do
       end
     end
 
+    -- Right-click buy menu on a market lot (2.28.0): 'vlivestock buy <town> <row> <qty>', the
+    -- town being the hold's city name ("Lodbrok's Hold" -> lodbrok) and the row 1-based - the
+    -- lot's idx + 1, which is the game's own numbering (idx is 0-based and the table is drawn
+    -- in idx order, so it is also the row you see). menu= only, deliberately no rclick=
+    -- fallback: a buy spends daler and must never sit under a single click on an older host.
+    -- Labels lose , ; | { } @ - the menu value must stay comma-free and those are its syntax.
+    local function clean(x) return (nice(x):gsub("[,;|{}@]", "")) end
+    local function buy_menu(town, row, left, each, l)
+      local items = { string.format("Lot %d: %s %s", row, clean(l.species), clean(l.breed)) }
+      local n = math.min(left, 6)          -- 6 steps + all keeps the spec well under 512 chars
+      for q = 1, n do
+        items[#items + 1] = string.format("Buy %d%s|vlivestock buy %s %d %d",
+          q, each and (" for " .. math.floor(each * q)) or "", town, row, q)
+      end
+      if left > n then
+        items[#items + 1] = string.format("Buy all %d%s|vlivestock buy %s %d %d",
+          left, each and (" for " .. math.floor(each * left)) or "", town, row, left)
+      end
+      return "menu=" .. table.concat(items, ";")
+    end
+
     -- the market, per lineage seen
     local lins = {}
     for k, v in pairs(LS) do
@@ -1634,13 +1655,25 @@ do
       add(col("dim", string.format("%-8s %-16s %5s  %-9s %5s %6s  %3s %3s %3s %3s %3s",
         "Species", "Breed", "Qty", "Trait", "Each", "Lot", "Con", "Hrd", "Vig", "Fer", "Yld")))
       table.sort(lots, function(a, b) return (tonumber(a.idx) or 0) < (tonumber(b.idx) or 0) end)
-      for _, l in ipairs(lots) do
+      local town = HOLDCITY[lin] and HOLDCITY[lin]:match("^(%a+)")
+      town = town and town:lower()
+      for pos, l in ipairs(lots) do
         local b = best[tostring(l.species)]
         local count, avail = tonumber(l.count), tonumber(l.available)
         local qty = (avail and count and avail ~= count) and (S(avail) .. "/" .. S(count)) or S(l.count)
         local each = tonumber(l.unit_price)
           or ((tonumber(l.price) and count and count > 0) and math.floor(tonumber(l.price) / count + 0.5) or nil)
-        add(padesc(nice(l.species):sub(1, 8), 8) .. " " .. padesc(nice(l.breed):sub(1, 16), 16)
+        -- the menu rides the species and breed cells, where the pointer is when you aim at a lot;
+        -- accent + underline is the house look for something you can click, and the column
+        -- padding stays outside the run so only the words are underlined
+        local left = avail or count or 0
+        local row = tonumber(l.idx) and (tonumber(l.idx) + 1) or pos
+        local spec = (town and left > 0) and buy_menu(town, row, left, each, l) or nil
+        local function cell(x, n)
+          if not spec then return padesc(x, n) end
+          return "@{accent,underline," .. spec .. "}" .. esc(x) .. "@{}" .. string.rep(" ", math.max(0, n - #x))
+        end
+        add(cell(nice(l.species):sub(1, 8), 8) .. " " .. cell(nice(l.breed):sub(1, 16), 16)
           .. esc(string.format(" %5s  ", qty)) .. padesc(trait(l.trait):sub(1, 9), 9)
           .. esc(string.format(" %5s %6s  ", each and S(each) or "", S(l.price)))
           .. versus(l.con, b and b.con) .. " " .. versus(l.hard, b and b.hard) .. " "
@@ -1648,6 +1681,7 @@ do
           .. versus(l.yield, b and b.yield))
       end
       if next(best) then add(col("dim", "green: better than your best herd of that species")) end
+      if town then add(col("dim", "right-click an underlined lot to buy")) end
     end
 
     local finds = 0
