@@ -99,6 +99,14 @@
 -- takes back the refused dispatch, and a never-left timeout releases a hold
 -- that was only guessed. The Trade Auto tab shows the countdown.
 --
+-- 2.29.0: NEVER SELL - a per-good flag beside hold and floor. A floor alone
+-- still sells the surplus above it, so a floored raw that restocked a whole cart sat
+-- over the line and shipped straight back out, dropped under, and bought again
+-- (Joakim, 13 Oct). Never sell stops the selling and nothing else: the restocker still tops a
+-- floored raw up to its floor, the scalper leaves it alone (a scalp buy only exists to
+-- be resold), and Quick dispatch offers no sell cart of it. Hold is unchanged and still
+-- means never traded at all. 'atrade nosell <good>' or the good's right-click menu.
+--
 -- 2.8.0: floors get a UI - a Floor box on the Trade tab (above Units), and a
 -- RIGHT-CLICK on a good's name in the report applies it as that good's floor
 -- (rclick= markup, API 1.16; same value again toggles it off; box at 0 = the
@@ -792,10 +800,17 @@ local function compute()
     if nm ~= "" then building[nm] = true end
   end
 
+  -- A building the game names one thing in 'vbuild list' and something else in the feed.
+  -- Levy Grounds is "herbyrgi" in Guild.City (the kingdom listing prints "Herbyrgi: T5
+  -- Levy grounds"), so without this the planner read it as T0 after it had been taken
+  -- to T5 - and every building that requires it as locked (Joakim, 15 Oct).
+  local FEED_ALIAS = { levy_grounds = "herbyrgi", levy_ground = "herbyrgi" }
+
   -- match a scanned building key to the game's feed key, tolerating a dropped possessive 's'
   -- (display "Goldsmith's" -> goldsmiths but the feed uses "goldsmith").
   local function feed_key(k)
     if tier[k] ~= nil or building[k] then return k end
+    if FEED_ALIAS[k] then return FEED_ALIAS[k] end
     local ks = k:gsub("s(_)", "%1"):gsub("s$", "")
     if tier[ks] ~= nil or building[ks] then return ks end
     for fk in pairs(tier)     do if ks:sub(1, #fk + 1) == fk .. "_" then return fk end end
@@ -2447,12 +2462,15 @@ local at = {
   pending = 0, last_carts = nil, cd_wait = false, pending_check = false,
   stats = { buys = 0, sells = 0, spent = 0, earned = 0, since = os.time(), recent = {} },
   exempt = {},
+  nosell = {},   -- per-good NEVER SELL: cmd -> true. Never sold or scalped; still restocked
+                 -- (a floored raw is still topped up to its floor). "grain,mead" in the store.
   floors = {},   -- per-good minimum stock: cmd -> units. The trader never sells a
                  -- floored good below its floor (the floor RAISES the category
                  -- reserve, never lowers it), and restock tops a floored raw up to
                  -- the floor instead of Raw>. "grain=500,mead=750" in the store.
 }
 for w in (sget("at_exempt") or ""):gmatch("[^,]+") do at.exempt[w] = true end
+for w in (sget("at_nosell") or ""):gmatch("[^,]+") do at.nosell[w] = true end
 for pair in (sget("at_floors") or ""):gmatch("[^,]+") do
   local g, n = pair:match("^(.-)=(%d+)$")
   if g and g ~= "" and tonumber(n) and tonumber(n) > 0 then at.floors[g] = tonumber(n) end
@@ -2472,6 +2490,9 @@ local mk_units = math.max(MK_UNITS_MIN, math.min(MK_UNITS_MAX, tonumber(sget("mk
 -- this value clears it - the same toggle feel as the exempt left-click. 0 turns
 -- the right button into an eraser: it only clears floors.
 local mk_floorset = math.max(0, math.floor(tonumber(sget("mk_floorset")) or 500))
+-- never-sell goods' name colour in the Trade tab: violet, apart from held amber,
+-- floored info-blue and the town links' blue/green
+local KEPT_COL = "#B48CFF"
 
 -- forward declarations (mk_finish / the feed watch call these before they're defined)
 local at_schedule, at_draw, auto_trade_tick, publish_dispatch
@@ -2637,10 +2658,14 @@ local function mk_render(status)
       -- rclick= behind it (the 1.16 floor toggle), and a pre-1.16 host to the click=.
       local mtail = at.floors[cmd]
         and string.format(";Clear floor (%d)|atrade floor %s 0", at.floors[cmd], cmd) or ""
+      -- colour, strongest statement first: held amber, never-sell violet, floored blue
+      local gcol = at.exempt[cmd] and "warning" or (at.nosell[cmd] and KEPT_COL)
+        or (at.floors[cmd] and "info") or "text"
       local goodcell = string.format(
-        "@{%s,menu=%s|atrade exempt %s;Set floor %d|atrade floorset %s%s,rclick=atrade floorset %s,click=atrade exempt %s}%s@{}",
-        at.exempt[cmd] and "warning" or (at.floors[cmd] and "info" or "text"),
+        "@{%s,menu=%s|atrade exempt %s;%s|atrade nosell %s;Set floor %d|atrade floorset %s%s,rclick=atrade floorset %s,click=atrade exempt %s}%s@{}",
+        gcol,
         at.exempt[cmd] and "Release from hold" or "Hold (never trade)", cmd,
+        at.nosell[cmd] and "Allow selling" or "Never sell", cmd,
         mk_floorset, cmd, mtail, cmd, cmd, padr(esc(r.res), 11))
       local function row(label, b)
         return label .. " " .. padl(b.bp, 4) .. " " .. town_link(b.bt, "buy", cmd) .. " "
@@ -3381,7 +3406,7 @@ auto_trade_tick = function()
     -- seen live on 2 Sep (buy 313 ore, sell 40 ore the next pass). Refined goods
     -- with a scalp inbound still sell - the scalp's whole point is the resale.
     local restocking = inbound[dc] and RAWBUILD[r.cmd]
-    if not at.exempt[dc] and not restocking and r.sells and r.sells[1] then
+    if not at.exempt[dc] and not at.nosell[dc] and not restocking and r.sells and r.sells[1] then
       local have  = have_of(r)
       local isref = REFINED[r.cmd] and true or false
       local reserve = at.keep or 20
@@ -3446,7 +3471,8 @@ auto_trade_tick = function()
   local space  = math.max(0, wcap - used - 200)
   if at.scalp and not pressure and budget > 0 and space >= need then
     for _, r in ipairs(results) do
-      if not at.exempt[disp_cmd(r.cmd)] and not inbound[disp_cmd(r.cmd)]
+      -- a never-sell good is never scalped: the buy only exists to be sold again
+      if not at.exempt[disp_cmd(r.cmd)] and not at.nosell[disp_cmd(r.cmd)] and not inbound[disp_cmd(r.cmd)]
          and r.buys and r.buys[1] and r.sells and r.sells[1] then
         local buy, sell = r.buys[1], r.sells[1]
         local per = (sell.price or 0) - (buy.price or 0)
@@ -3662,6 +3688,24 @@ local function at_toggle_exempt(word)
   mk_render(nil)          -- refresh the "#" held markers in the Market report
 end
 
+-- ---------- never-sell goods (still restocked) ----------
+local function at_save_nosell()
+  local list = {}
+  for k, on in pairs(at.nosell) do if on then list[#list + 1] = k end end
+  table.sort(list); sset("at_nosell", table.concat(list, ",")); return list
+end
+local function at_toggle_nosell(word)
+  word = trim(word or ""):lower(); word = DCMD[word] or word
+  if word == "" then return end
+  at.nosell[word] = (not at.nosell[word]) or nil
+  at_save_nosell()
+  note(at.nosell[word]
+    and ("never sell: " .. word .. (at.floors[word]
+      and string.format(" - restock still keeps it at %d or more", at.floors[word]) or ""))
+    or (word .. " sells its surplus again"))
+  mk_render(nil)          -- refresh the violet never-sell names in the Market report
+end
+
 -- ---------- per-good stock floors ----------
 -- A floor is "keep at least this many": Grain at 500 means the trader sells only
 -- the surplus above 500, whatever the raw/refined category reserve would allow.
@@ -3778,6 +3822,10 @@ at_draw = function()
   for k, on in pairs(at.exempt) do if on then held[#held+1] = k end end
   table.sort(held)
   if #held > 0 then L[#L+1] = "held (never sold): " .. table.concat(held, ", ") end
+  local ns = {}
+  for k, on in pairs(at.nosell) do if on then ns[#ns+1] = k end end
+  table.sort(ns)
+  if #ns > 0 then L[#L+1] = "never sell (still restocked): " .. table.concat(ns, ", ") end
   local fl = {}
   for k, n in pairs(at.floors) do fl[#fl+1] = k .. "=" .. n end
   table.sort(fl)
@@ -3880,13 +3928,16 @@ local function at_config(rest)
   elseif rest == "exempt"       then local l={}; for k,on in pairs(at.exempt) do if on then l[#l+1]=k end end; table.sort(l); note("held: " .. (#l>0 and table.concat(l, ", ") or "(none)")); return
   elseif rest == "exempt clear" then at.exempt = {}; sset("at_exempt", ""); note("held list cleared"); mk_render(nil); at_draw(); return
   elseif rest:match("^exempt%s+") then at_toggle_exempt(rest:gsub("^exempt%s+", "")); at_draw(); return
+  elseif rest == "nosell" then local l={}; for k,on in pairs(at.nosell) do if on then l[#l+1]=k end end; table.sort(l); note("never sell: " .. (#l>0 and table.concat(l, ", ") or "(none)")); return
+  elseif rest == "nosell clear" then at.nosell = {}; sset("at_nosell", ""); note("never-sell list cleared"); mk_render(nil); at_draw(); return
+  elseif rest:match("^nosell%s+") then at_toggle_nosell(rest:gsub("^nosell%s+", "")); at_draw(); return
   elseif rest == "floor" or rest == "floors" then at_list_floors(); return
   elseif rest == "floor clear"  then at.floors = {}; sset("at_floors", ""); note("all floors cleared"); mk_render(nil); at_draw(); return
   elseif rest:match("^floorset%s+") then at_floorset(rest:gsub("^floorset%s+", "")); at_draw(); return
   elseif rest:match("^floor%s+") then at_set_floor(rest:gsub("^floor%s+", "")); at_draw(); return
   elseif key and AT_FIELD[key] then at_setnum(key, val); return
   else
-    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | floor <good> <n> | floorset <good> | yard <sec> | stats | log")
+    note("usage: atrade on|off | scalp|restock|refined|notify on|off | keep|stock|reserve|margin|min|rel|carts|escort|flush|soft|full|clear <n> | exempt <good> | nosell <good> | floor <good> <n> | floorset <good> | yard <sec> | stats | log")
     return
   end
   at_status()
@@ -3984,7 +4035,7 @@ publish_dispatch = function()
         local dc = disp_cmd(r.cmd)
         local have = (stock[(r.cmd or ""):gsub("_", " ")] or stock[(r.res or ""):lower()] or 0)
                      - math.max(at.keep or 0, at.floors[dc] or 0)  -- mission reserve AND floor
-        if have > 0 and not at.exempt[dc] then               -- and the held list
+        if have > 0 and not at.exempt[dc] and not at.nosell[dc] then   -- held and never-sell lists
           local qty = math.floor(math.min(have, cap, best.qty))
           if qty >= MK_UNITS_MIN then
             cand[#cand + 1] = {
