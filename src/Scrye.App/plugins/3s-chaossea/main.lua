@@ -102,6 +102,14 @@ local sea_entering = false     -- New Sea sequence in flight: the swap is sent o
                                -- arrivals are ignored: the first is a room outside the sea
                                -- and mapping it would seed the new maze with a phantom.
 local now = 0                  -- seconds since plugin load (1 s ticker)
+-- Loop (2.3.0): at the cask, clear the room, then run New Sea by itself and carry on. A
+-- SETTING, kept in the store like notify; it only ever acts at a cask the bot has paused at.
+local loop = scrye.store.get("loop") == "1"
+local loop_wait = false        -- the cask is found: a new sea is owed once the room is quiet
+local loop_quiet = 0           -- seconds without combat since loop_wait began
+local loop_age_said = false    -- the "sea too young" wait has been announced
+local LOOP_SETTLE = 3          -- quiet seconds before the swap: the last corpse's loot first
+local LOOP_STALE = 10          -- a fight flag with no combat this long is a missed line
 
 -- A direction the user typed recently enough to still explain a move we did not order.
 -- Only ever used to word a message.
@@ -136,7 +144,7 @@ local wimpy_dir = nil
 local cs_draw, cs_step, cs_advance, mark_dirty, build_panel
 local soft_relearn
 -- what the buttons last showed, so the panel is only rebuilt when it would look different
-local panel_on, panel_auto, panel_paused = nil, nil, nil
+local panel_on, panel_auto, panel_paused, panel_loop = nil, nil, nil, nil
 
 -- the original drew ":: CSS ::" in red/grey/red before every message
 local function note(s) scrye.print("@{#FD2083,bold}::@{} @{#4BE4FF}CSS@{} @{#FD2083,bold}::@{} " .. s) end
@@ -824,10 +832,26 @@ end
 local function cs_reach_goal(gw)
   -- target item (cask/portal) is in the room: just PAUSE the bot. paused is the
   -- robust stop - cs_step/cs_advance/cs_on_prompt/watchdog all honour it.
+  local mob_here = pending_mob
   paused = true
   plan = nil
   pending_mob = nil
   room_goal_idx = nil; room_goal_word = nil   -- handled; don't re-pause on unpause
+  if loop and gw == "cask" then
+    -- Loop: the swap opens the cask and leaves the sea, and a fight still going would come
+    -- along - so the room is cleared first, by the ordinary kill chain (a killing blow
+    -- re-kills until 'There is no X here'), and cs_loop_tick runs New Sea once it is quiet.
+    -- Never with a player in the room: then it only waits for any fight to end.
+    loop_wait, loop_quiet, loop_age_said = true, 0, false
+    if mob_here and not cs_flags.player then
+      fighting = true
+      scrye.send("kill " .. killname)
+    end
+    note("CASK found - Loop: new sea once the room is clear ('cs loop off' to stop here).")
+    pnotify("Chaos sea: CASK found - looping to a new sea")
+    cs_draw()
+    return
+  end
   note(string.upper(gw) .. " found - bot PAUSED ('cs pause' / Pause button to continue).")
   pnotify("Chaos sea: " .. string.upper(gw) .. " found - bot paused")
   cs_draw()
@@ -894,6 +918,7 @@ local function cs_no_mob(name)
   if in_combat() then return end           -- something is still hitting us
   fighting = false
   idle_fight_prompts = 0
+  if paused then cs_draw() return end      -- e.g. the cask room cleared for Loop: stay put
   if plan then scrye.after(1, function() cs_advance() end)
   elseif auto then scrye.after(1, function() cs_step() end) end
   cs_draw()
@@ -1639,6 +1664,52 @@ local function cs_set_seanum(n)
   cs_draw()
 end
 
+-- ---------- Loop: the cask room is clear -> New Sea (every second) ----------
+-- "Clear" is combat-quiet for LOOP_SETTLE seconds AND the kill chain finished (fighting
+-- dropped by 'There is no X here'); a fight flag that outlives LOOP_STALE quiet seconds is
+-- a line we missed, not a monster. A monster that attacks us here keeps the kill chain
+-- going, so the LAST one dies before the cask is touched. The 60-minute unsetsea rule is
+-- waited out rather than refused, so a sea finished early still loops - just later.
+local function cs_loop_tick()
+  if not loop_wait then return end
+  if not (loop and enabled and paused) or sea_entering then
+    -- Loop switched off, the bot disabled, or you unpaused it yourself: the cask is yours
+    loop_wait = false
+    cs_draw()
+    return
+  end
+  if in_combat() then
+    loop_quiet = 0
+    if not fighting and not cs_flags.player then fighting = true end   -- keep re-killing
+    return
+  end
+  loop_quiet = loop_quiet + 1
+  if fighting and loop_quiet < LOOP_STALE then return end
+  if loop_quiet < LOOP_SETTLE then return end
+  if sea_time and sea_started_here and now - sea_time < 3600 then
+    if not loop_age_said then
+      loop_age_said = true
+      note(string.format("Loop: room clear - sea only %dm old, new sea in %dm (unsetsea needs 60m)",
+        math.floor((now - sea_time) / 60), math.ceil((3600 - (now - sea_time)) / 60)))
+      cs_draw()
+    end
+    return
+  end
+  loop_wait = false
+  fighting = false
+  note("Loop: room clear - opening the cask and starting the next sea")
+  cs_new_sea()
+end
+
+local function cs_set_loop(on)
+  loop = on
+  scrye.store.set("loop", loop and "1" or "0")
+  if not loop then loop_wait = false end
+  note("Loop " .. (loop and "ON - at the cask: clear the room, New Sea, go again" or "off")
+    .. ((loop and not auto) and " (Auto is off: each new sea waits for you to press Auto)" or ""))
+  cs_draw()
+end
+
 -- ---------- HUD panel state (replaces the miniwindow) ----------
 local COLS, ROWS = 20, 16   -- same viewport as the original 280x224 @ 14px cells
 
@@ -1651,14 +1722,19 @@ cs_draw = function()
   -- when that state changes -- but ONLY then. cs_draw runs on every room and every
   -- watchdog tick, and replacing the panel at that rate would be wasteful and visibly
   -- twitchy for a picture that has not changed.
-  if build_panel and (enabled ~= panel_on or auto ~= panel_auto or paused ~= panel_paused) then
-    panel_on, panel_auto, panel_paused = enabled, auto, paused
+  if build_panel and (enabled ~= panel_on or auto ~= panel_auto or paused ~= panel_paused
+                      or loop ~= panel_loop) then
+    panel_on, panel_auto, panel_paused, panel_loop = enabled, auto, paused, loop
     build_panel()
   end
 
   -- status banner: what is the bot doing RIGHT NOW
   local modetxt
   if not enabled then       modetxt = "OFF - press On in your start room"
+  elseif loop_wait then     modetxt = loop_age_said
+                              and string.format("LOOP - new sea in %dm (sea age)",
+                                    math.max(0, math.ceil((3600 - (now - (sea_time or now))) / 60)))
+                              or "LOOP - cask found, new sea when the room is clear"
   elseif paused then        modetxt = "PAUSED - press Pause to continue"
   elseif resting then       modetxt = string.format("RESTING - Seid low, %ds left", math.max(0, rest_until - now))
   elseif fighting then      modetxt = "FIGHTING - resumes when clear"
@@ -1785,7 +1861,12 @@ scrye.addPanel{
         { text = "Sea# -", action = function() cs_set_seanum(seanum - 1) end },
         { text = "Sea# +", action = function() cs_set_seanum(seanum + 1) end },
     } },
-    { type = "button", text = "New Sea", action = function() cs_new_sea() end },
+    { type = "buttonrow", buttons = {
+        { text = "New Sea", action = function() cs_new_sea() end },
+        -- Loop: green while on, like the other state buttons
+        { text = loop and "Loop ON" or "Loop", color = loop and LIT or nil,
+          action = function() cs_set_loop(not loop) end },
+    } },
   },
 }
 end
@@ -1809,10 +1890,16 @@ function cs_interface(args)
     note("  cs rest <seid> [secs] rest when Seid drops below <seid> (0 = off)")
     note("  cs seanum <n>         set the sea number (1-120) for New Sea")
     note("  (New Sea, at the cask, also loots it and resets the map for you)")
+    note("  cs loop on|off        at the cask: clear the room, New Sea, explore again (now: "
+      .. (loop and "on" or "off") .. ")")
     note("  cs party <names>      group members to ignore (comma separated; 'clear' to reset)")
     note("  cs pause              hold everything / continue (also the Pause button)")
     note("  cs notify on|off      buzz the phone when the bot pauses or runs out (now: "
       .. (notify_on and "on" or "off") .. ")")
+  elseif args == "loop on" or args == "loop off" then
+    cs_set_loop(args == "loop on")
+  elseif args == "loop" then
+    cs_set_loop(not loop)
   elseif args == "notify on" or args == "notify off" then
     notify_on = (args == "notify on")
     scrye.store.set("notify", notify_on and "1" or "0")
@@ -2023,7 +2110,7 @@ scrye.addAlias{ pattern = [[^cs(?:\s+(.*))?$]], regex = true,
   run = function(w1) cs_interface(w1) end }
 
 -- ---------- timers ----------
-scrye.every(1, function() now = now + 1; cs_step_timeout() end)   -- the clock (no os.time in Scrye)
+scrye.every(1, function() now = now + 1; cs_step_timeout(); cs_loop_tick() end)   -- the clock (no os.time in Scrye)
 scrye.every(5, cs_watchdog)
 
 -- MUSHclient called OnPluginSaveState on world save/close; Scrye has no such hook, so
