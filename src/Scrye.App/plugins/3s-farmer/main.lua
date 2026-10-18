@@ -128,7 +128,9 @@ local B = {               -- the current room's population and the fight (never 
   parking = false,        -- the run limit was reached: walking to the rest room to stop there
   hunting = false,        -- committed to clearing this room before patrolling on
   target = nil,           -- { name, kw } of the mob last attacked
-  hunt_at = 0,            -- clock stamp of the last 'kill' sent, for the hunt watchdog
+  hunt_at = 0,            -- clock stamp of the last 'kill' sent (times the fight)
+  live_at = 0,            -- last sign of life in the hunt: the 'kill' sent, or a fight ending
+  engaged = false,        -- the last 'kill' became a fight (Char.Combat went active)
   skip = {},              -- names given up on in THIS room: a 'kill' nothing answered
   kwidx = {},             -- name -> which keyword candidate is being tried
   kills = 0,
@@ -486,11 +488,14 @@ end
 -- here - and, with a stranger in the room, not on the always-list either (the stranger
 -- rule: hands off, unless the mob is one you fight regardless). `despite_stranger` asks
 -- the same question with the stranger rule off - what WOULD be fought - for the notes.
+local function fightable(name, despite_stranger)
+  return not is_excluded(name) and not in_party(name) and not B.skip[name]
+     and (despite_stranger or not B.player or is_always(name))
+end
 local function pick_from_roster(despite_stranger)
   if here and (RR[here] == "pass" or RR[here] == "rest") then return nil end   -- walk through, never fight here
   for _, name in ipairs(fight_order()) do
-    if not is_excluded(name) and not in_party(name) and not B.skip[name]
-       and (despite_stranger or not B.player or is_always(name)) then
+    if fightable(name, despite_stranger) then
       local kw = keyword(name)
       if kw then return name, kw end
     end
@@ -498,6 +503,29 @@ local function pick_from_roster(despite_stranger)
   return nil
 end
 local function next_target() return pick_from_roster(false) end
+
+-- The mob the hunt was already fighting, if the room still holds it: finish what was
+-- started. Matched with the wound tags and article stripped - "A Wiremouth guard" is
+-- "A Wiremouth guard [scratched]" a few rounds in, a NEW roster name, and fight order
+-- may put another mob ahead of it.
+local function bare(n)
+  local k = tostring(n or ""):gsub("%b[]", ""):gsub("%b{}", ""):gsub("%b()", "")
+  k = k:lower():gsub("^%s+", ""):gsub("%s+$", ""):gsub("^the ", ""):gsub("^an? ", "")
+  return k
+end
+local function current_target()
+  local t = B.target
+  if not t then return nil end
+  if here and (RR[here] == "pass" or RR[here] == "rest") then return nil end
+  local key = bare(t.name)
+  for _, name in ipairs(B.mobs) do
+    if bare(name) == key and fightable(name, false) then
+      local kw = keyword(name)
+      if kw then return name, kw end
+    end
+  end
+  return nil
+end
 
 -- ---------- the patrol ----------
 local function in_area(num)
@@ -973,15 +1001,24 @@ end
 -- their guards arrive typed as monsters, and a fight you start next to a stranger is a
 -- fight you may not be starting alone.
 local function attack()
-  local name, kw = next_target()
+  -- ONE FIGHT AT A TIME (1.8.1, Joakim 18 Oct 2026: it opened on a Wiremouth guard and
+  -- a few rounds later swung at another mob in the room). While anything is still hitting
+  -- us no new 'kill' goes out - in 3K that would switch the target mid-fight. The hunt
+  -- stays open; the fight's end (on_combat - the clock ends a stale one there) resumes it.
+  if in_combat() then return end
+  local name, kw = current_target()
+  if not name then name, kw = next_target() end
   if not name then
     B.hunting = false
+    B.target = nil
     if S.on and not S.paused then schedule_step() end
     return
   end
   B.target = { name = name, kw = kw }
   B.hunting = true
   B.hunt_at = now
+  B.live_at = now
+  B.engaged = false
   scrye.send("kill " .. kw)
   draw()
 end
@@ -1056,6 +1093,8 @@ local function on_combat(json)
   CC.seen = true
   CC.active = active
   if active then CC.at = now end
+  -- the hunt's 'kill' became a fight: from here on only the fight's END resumes the hunt
+  if active and B.hunting then B.engaged = true end
   local was = S.fighting
   if active and not was and XP.seen then XP.fight0 = XP.xp end   -- a fight's XP counts from here
   S.fighting = active
@@ -1064,6 +1103,8 @@ local function on_combat(json)
     note("combat - patrol waiting for it to end")
   elseif was and not active and S.on and not S.paused then
     if B.hunting then
+      B.engaged = false          -- the fight is over: resume_hunt takes it from here
+      B.live_at = now
       scrye.after(C.breath, resume_hunt)
     else
       note("combat over - patrol resuming")
@@ -2067,7 +2108,14 @@ scrye.every(1, function()
   -- the parser swallowed without a "There is no X here", a mob that left between roster
   -- and swing - would otherwise hold B.hunting forever and the patrol with it. Give the
   -- name up for this room and ask the roster again.
-  if S.on and B.hunting and not in_combat() and C.hunt_wait > 0 and (now - B.hunt_at) > C.hunt_wait then
+  -- Only a 'kill' that never BECAME a fight, timed from the hunt's last sign of life (the
+  -- send, or a fight ending). 1.8 timed it from the send alone and did not ask whether a
+  -- fight had started, so one quiet moment more than hunt_wait into a long fight read as
+  -- "unanswered", gave the live target up and swung at the next name. A fight that goes
+  -- quiet for good is ended by the stale-combat check at the bottom of this tick, through
+  -- on_combat, like any other fight.
+  if S.on and B.hunting and not B.engaged and not in_combat() and C.hunt_wait > 0
+     and (now - B.live_at) > C.hunt_wait then
     local t = B.target
     if t then
       B.skip[t.name] = true
