@@ -58,6 +58,15 @@ local S = {               -- the run
   route = nil,            -- the rooms of the leg being walked, for the map to light
   started = 0,            -- clock stamp when this patrol began (session counter)
   ended = nil,            -- final length of the LAST patrol, frozen at stop
+  seek = nil,             -- 'farm seek <name>' (1.9.0): the player looked for - lowercase,
+                          -- matched as whole words in Room.Contents' player names. While
+                          -- set, the patrol is a search: it fights nothing and stops on them
+  queue = nil,            -- a search's burst: the steps sent after S.step, landing in order
+  adrift = 0,             -- burst steps still in flight after one was refused: arrivals
+                          -- they cause are expected, not "something moved us"
+  adrift_at = 0,
+  found = nil,            -- { num, name }: the player was seen with a burst still in flight;
+                          -- the search walks back there once the burst has landed
 }
 local C = {               -- knobs (persisted)
   pace = 0,               -- seconds between arrival and the next step; 0 = fast: step as
@@ -77,6 +86,7 @@ local C = {               -- knobs (persisted)
                           -- ("get all from corpse", "skin corpse"...); 'farm after add|del'
   limit_secs = 0,         -- run limit: stop after this long (0 = none) - session only
   limit_kills = 0,        -- ...or after this many kills (0 = none) - session only
+  seek_burst = 3,         -- steps a search sends at once (1.9.0); 1 = one at a time
 }
 local X = {}              -- excludes: area -> { "name fragment", ... } (persisted)
 local PT = {}             -- party: real player names (lowercase fragments) who are not
@@ -185,6 +195,7 @@ local function save()
     WORLD.set("roomrules", scrye.json.encode(rules))
   end
   scrye.store.set("pace", tostring(C.pace))
+  scrye.store.set("seek_burst", tostring(C.seek_burst))
   scrye.store.set("rest", C.rest_below .. " " .. C.rest_secs)
   scrye.store.set("hp", C.hp_start .. " " .. C.hp_panic .. " " .. C.hp_resume)
   scrye.store.set("sp", C.sp_start .. " " .. C.sp_resume)
@@ -251,6 +262,7 @@ local function load()
     end
   end
   C.pace = tonumber(scrye.store.get("pace")) or C.pace
+  C.seek_burst = tonumber(scrye.store.get("seek_burst")) or C.seek_burst
   -- 1.8.0: 1 was the old default AND the lowest pace there was, so a stored 1 is almost
   -- never a choice - move it to fast once. A pace set after this sticks ('pace_v' marks it).
   if scrye.store.get("pace_v") ~= "2" then
@@ -493,6 +505,7 @@ local function fightable(name, despite_stranger)
      and (despite_stranger or not B.player or is_always(name))
 end
 local function pick_from_roster(despite_stranger)
+  if S.seek then return nil end                  -- a search fights nothing it is not made to
   if here and (RR[here] == "pass" or RR[here] == "rest") then return nil end   -- walk through, never fight here
   for _, name in ipairs(fight_order()) do
     if fightable(name, despite_stranger) then
@@ -657,6 +670,20 @@ end
 local DUD = {}            -- room num -> clock stamp it was last found holding only non-targets
 local function is_dud(num) return DUD[num] ~= nil end
 
+-- Rooms a search stood in that held players, none of them the one sought (1.9.0). The grid
+-- draws 'p' for ANY player, so without this a search would sit between two strangers'
+-- rooms; a checked room stops pulling it for SEEK_RECHECK seconds - people move, so it is
+-- a while, not for good. Session-only.
+local SEEN_P = {}
+local SEEK_RECHECK = 120
+
+-- Does a player name from Room.Contents name the player sought? Whole words, any case:
+-- 'walker' finds "Jarl of Ein, Walker hinn Hersir af Sigurdsson", not "Skywalkers".
+local function is_sought(name)
+  if not S.seek then return false end
+  return (" " .. tostring(name or ""):lower() .. " "):find("%f[%w]" .. S.seek:gsub("%p", "%%%0") .. "%f[%W]") ~= nil
+end
+
 local function on_room_map(json)
   local ok, t = pcall(scrye.json.decode, json)
   if not ok or type(t) ~= "table" then return end
@@ -674,6 +701,31 @@ local function pick_target()
   local order, first, prev = survey()
   if not order then return nil end
   local los = B.los
+  if S.seek and S.found then
+    -- seen as a burst went through: back to where they were
+    for _, num in ipairs(order) do
+      if num == S.found.num then return num, first[num], "back to where " .. S.seek .. " was seen", prev end
+    end
+    S.found = nil                -- cannot get back there: search on
+  end
+  if S.seek then
+    -- A search goes where the PEOPLE are - the nearest room the grid shows a player in that
+    -- has not been checked lately - and otherwise sweeps by staleness, players or not.
+    if los then
+      for _, num in ipairs(order) do
+        if los.players[num] and not passing(num) and not (SEEN_P[num] and now - SEEN_P[num] < SEEK_RECHECK) then
+          return num, first[num], "a player in sight", prev
+        end
+      end
+    end
+    local best, best_last = nil, nil
+    for _, num in ipairs(order) do
+      local l = G[num].last
+      if not passing(num) and (best_last == nil or l < best_last) then best, best_last = num, l end
+    end
+    if not best then return nil end
+    return best, first[best], nil, prev
+  end
   if los then
     for _, num in ipairs(order) do
       -- a cell is 'm' or 'p', never both; an 'm' on the room we just left, whose roster
@@ -699,6 +751,8 @@ local function stop_patrol(why)
   S.ended = now - (S.started or now)   -- freeze the session clock at its final length
   XP.run1 = XP.seen and XP.xp or nil   -- ...and the run's XP with it
   S.on = false ; S.step = nil ; S.route = nil
+  S.seek = nil                         -- a stopped search is over
+  S.queue = nil ; S.adrift = 0 ; S.found = nil
   B.hunting = false ; B.target = nil   -- no patrol, no hunt: the HUD shows no target
   B.retreat = nil ; B.parking = false ; B.resting = false
   if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
@@ -802,8 +856,10 @@ end
 
 step_out = function()
   S.timer = nil ; S.due = false
-  if not S.on or S.paused or S.step then return end
-  if S.fighting or B.hunting or in_combat() then hold(blocker()) return end
+  if not S.on or S.paused or S.step or S.adrift > 0 then return end
+  -- A search does not stand and fight (Joakim, 20 Oct 2026: "if I get attacked I want it
+  -- to keep going"): whatever is hitting us, the next step goes out.
+  if not S.seek and (S.fighting or B.hunting or in_combat()) then hold(blocker()) return end
   if next_target() ~= nil then
     -- A fight is about to start. The prompt is where attacks are decided, but the tick
     -- is entitled to the same decision: a prompt the client never flagged (no telnet
@@ -814,7 +870,9 @@ step_out = function()
   end
   if B.resting then retreat_step() return end
   S.held_on = nil
-  do
+  if not S.seek then
+    -- the floors are for fighting: a search resting in place would only stand there being
+    -- hit (the panic floor still applies - it works from the clock)
     local why = unfit()
     if why then begin_rest(why) return end
   end
@@ -838,13 +896,36 @@ step_out = function()
   -- once per patrol: from then on "the same rooms again" is the loop working, not stuck.
   if not S.swept and G[target].last > 0 then
     S.swept = true
-    note(string.format("full circuit - every reachable %s room visited this run; looping", S.lock))
+    if S.seek then
+      note(string.format("every reachable %s room searched - no %s yet; going round again", S.lock, S.seek))
+    else
+      note(string.format("full circuit - every reachable %s room visited this run; looping", S.lock))
+    end
   end
   local dest = tonumber(G[here].exits[dir])
   S.step = { dir = dir, to = dest, at = now }
   S.led = why_target ~= nil
   S.route = prev and leg_to(target, prev) or { dest }   -- the leg, for the map to light
+  -- A search sends the first few steps of the leg AT ONCE (1.9.0, Joakim: "make it quicker
+  -- than the normal patrol, so we get hit as little as possible"): one step per arrival
+  -- costs a round trip to the server per room. Each arrival is still checked against the
+  -- step it answers, in order; anything else stops the search exactly as for one step.
+  S.queue = nil
+  if S.seek and C.seek_burst > 1 then
+    S.queue = {}
+    local from = dest
+    for i = 2, math.min(#S.route, C.seek_burst) do
+      local to, d2 = S.route[i], nil
+      for d, v in pairs(G[from] and G[from].exits or {}) do
+        if tonumber(v) == to and patrol_link(d, to) then d2 = d ; break end
+      end
+      if not d2 then break end
+      S.queue[#S.queue + 1] = { dir = d2, to = to }
+      from = to
+    end
+  end
   scrye.send(dir)
+  for _, q in ipairs(S.queue or {}) do scrye.send(q.dir) end
   draw()
 end
 
@@ -916,12 +997,28 @@ local function on_room_info(json)
   G[num] = { area = area, name = tostring(r.name or ""), exits = exits, last = now, shift = shift }
   dirty = true
 
-  if S.on and moved then
+  if S.on and moved and not explained and S.adrift > 0 then
+    -- one of a refused burst's later steps, landing from wherever we actually were
+    here = num
+    S.visited = S.visited + 1
+    S.adrift = S.adrift - 1
+    if S.adrift == 0 then schedule_step() end
+  elseif S.on and moved then
     if explained then
       here = num
       S.step = nil
       S.visited = S.visited + 1
-      if B.retreat then
+      if S.queue and #S.queue > 0 then
+        -- the burst goes on: this arrival answered its step, the next is already on its way
+        S.step = table.remove(S.queue, 1)
+        S.step.at = now
+      elseif S.seek and S.found and num == S.found.num then
+        local who = S.seek
+        stop_patrol(nil)
+        note(string.format("found %s here - %s (%s): seen as we went through, walked back. Search stopped.",
+                           who, tostring(r.name or "?"), tostring(num)))
+        scrye.notify("farm: found " .. who .. " - " .. tostring(r.name or "?"))
+      elseif B.retreat then
         if num == B.retreat and B.parking then
           B.retreat = nil ; S.route = nil ; B.resting = false ; B.parking = false
           stop_patrol("parked at the rest room")
@@ -992,6 +1089,26 @@ local function on_room_contents(json)
     end
   end
   if page <= 1 then B.parked = false end   -- a new population: the player-present note may be due again
+  if S.on and S.seek then
+    for _, name in ipairs(B.players) do
+      if is_sought(name) and S.step then
+        -- a step of the burst is already on its way: let it land, then walk back here
+        S.found = { num = here, name = here and G[here] and G[here].name or "?" }
+        note(string.format("%s spotted in %s (%s) - the burst is still moving; walking back",
+                           S.seek, S.found.name, tostring(here)))
+        draw()
+        return
+      end
+      if is_sought(name) then
+        local who, where = S.seek, here and G[here] and G[here].name or "?"
+        stop_patrol(nil)
+        note(string.format("found %s here - %s (%s). Search stopped.", who, where, tostring(here or "?")))
+        scrye.notify("farm: found " .. who .. " - " .. where)
+        return
+      end
+    end
+    if #B.players > 0 and here then SEEN_P[here] = now end   -- somebody, not them
+  end
   draw()                  -- the roster IS the panel's middle: show it as it arrives
 end
 
@@ -1056,7 +1173,7 @@ end
 -- room keeps its own timer - resting is not patrolling.
 local function on_prompt()
   -- what this room's mobs are worth, for the line-of-sight chase (see DUD)
-  if S.on and here and B.seen then
+  if S.on and here and B.seen and not S.seek then   -- a search fights nothing: no verdicts
     if #B.mobs > 0 and not next_target() then DUD[here] = now else DUD[here] = nil end
   end
   consider()
@@ -1098,9 +1215,13 @@ local function on_combat(json)
   local was = S.fighting
   if active and not was and XP.seen then XP.fight0 = XP.xp end   -- a fight's XP counts from here
   S.fighting = active
-  if active and not was and S.on then
+  if active and not was and S.on and S.seek then
+    note("attacked - the search walks on")
+  elseif active and not was and S.on then
     if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
     note("combat - patrol waiting for it to end")
+  elseif was and not active and S.on and S.seek then
+    -- nothing to resume: the search never stopped for it
   elseif was and not active and S.on and not S.paused then
     if B.hunting then
       B.engaged = false          -- the fight is over: resume_hunt takes it from here
@@ -1349,6 +1470,39 @@ local function start()
   draw()
 end
 
+-- 'farm seek <name>' (1.9.0, Joakim 20 Oct 2026): walk the area looking for a player -
+-- "it wouldn't stop to fight mobs, just keeps going until it finds the person". The
+-- patrol's own chassis (the fence, every step confirmed by the room it lands in), with no
+-- targets, no stopping for a fight something else starts and no resting on the HP floors,
+-- steps sent a few at a time ('farm seek burst'), steered toward the players the
+-- line-of-sight grid shows, and stopped by Room.Contents naming them. A running patrol
+-- turns into the search; otherwise one starts here.
+local SEEK_MAX = 30       -- characters of a name a search uses (the panel box is that wide)
+local function seek(name)
+  name = tostring(name or ""):lower():gsub("^%s+", ""):sub(1, SEEK_MAX):gsub("%s+$", "")
+  if name == "" then return end
+  for _, pn in ipairs(B.players or {}) do
+    local was = S.seek ; S.seek = name
+    local hit = is_sought(pn)
+    S.seek = was
+    if hit then note(name .. " is right here - nothing to search for") return end
+  end
+  if S.on then
+    S.seek = name
+    B.hunting = false ; B.target = nil
+    S.swept = false
+    note(string.format("searching %s for %s - fighting nothing, stopping when they are found", S.lock, name))
+    draw()
+    return
+  end
+  S.seek = name
+  start()
+  if not S.on then S.seek = nil return end      -- start refused, and said why
+  note(string.format("  searching for %s - fighting nothing, walking on when attacked, %d step(s)", name, C.seek_burst))
+  note("  at a time; stopping when they are in the room. 'farm stop' ends the search.")
+  draw()
+end
+
 -- 'farm go <area>': ask the mapper (map.goto) to walk us into the area, and start the
 -- patrol on arrival. The farmer does not walk this itself - long-haul routing is the
 -- mapper's craft, and the walk contract already reports exactly one of arrived/stopped.
@@ -1428,6 +1582,7 @@ local function status()
   note("phase 2 - the chassis: patrols, fences, waits out combat. The kill loop is phase 3.")
   if T.going then note("  traveling to '" .. T.going .. "' - the patrol starts on arrival") end
   if S.on then
+    if S.seek then note("  searching for " .. S.seek .. " - fighting nothing") end
     note(string.format("  patrolling %s%s%s%s - %d room(s), %d visited, %d kill(s) this run",
       S.lock, S.paused and " (PAUSED)" or "", S.fighting and " (in combat)" or "",
       B.resting and " (resting)" or "", area_rooms(S.lock), S.visited, B.kills))
@@ -1466,6 +1621,19 @@ farm_cmd = function(args)
     verb = verb:lower()
     if verb == "" or verb == "status" then status()
     elseif verb == "start" then start()
+    elseif (verb == "seek" or verb == "find") and rest:lower():match("^burst") then
+      local n = tonumber(rest:match("(%d+)%s*$"))
+      if not n then
+        note("farm seek burst <n>   steps a search sends at once (now " .. C.seek_burst .. "; 1 = one at a time)")
+      else
+        C.seek_burst = math.max(1, math.min(6, math.floor(n))) ; dirty = true ; save()
+        note("a search now sends " .. C.seek_burst .. " step(s) at once")
+      end
+    elseif verb == "seek" or verb == "find" then
+      if rest == "" then
+        note(S.seek and ("searching for " .. S.seek .. " in " .. tostring(S.lock) .. " - 'farm stop' ends it")
+                    or "farm seek <name>   walk this area's explored rooms until that player is found")
+      else seek(rest) end
     elseif verb == "area" or verb == "read" then read_area()
     elseif verb == "go" then
       if rest == "" then note("farm go <area>   travel there (the mapper walks), then lock and start")
@@ -1798,6 +1966,8 @@ farm_cmd = function(args)
       note("farm area       read this area in without starting - set excludes, then start")
       note("farm start      lock to this area and patrol its explored rooms")
       note("farm go <area>  travel there (the mapper walks), then lock and start")
+      note("farm seek <name>   search this area for a player - fights nothing, stops on finding them")
+      note("farm seek burst <n>   steps a search sends at once (default 3; 1 = one at a time)")
       note("farm stop       stop; so does moving yourself or anything moving you")
       note("farm pause      hand brake, toggles")
       note("farm pace <s>   seconds between arrival and the next step, 0 = fast (now " .. C.pace .. ")")
@@ -2084,11 +2254,27 @@ scrye.addTrigger{ pattern = [[^You cannot go ]], regex = true, run = function()
   -- The graph promised an exit the room does not have. Drop the edge so it is not
   -- promised twice, and carry on - by-number verification means we know exactly where
   -- we still are.
-  if not S.step then return end
+  if not S.step then
+    -- a refused burst's later step, refused too: one fewer still in flight
+    if S.adrift > 0 then
+      S.adrift = S.adrift - 1
+      if S.adrift == 0 and S.on then schedule_step() end
+    end
+    return
+  end
   local bad = S.step
   S.step = nil
   if here and G[here] then G[here].exits[bad.dir] = nil ; dirty = true end
   if S.on then
+    if S.queue and #S.queue > 0 then
+      -- the burst's later steps were already sent: they land (or are refused) from HERE,
+      -- not from where they were planned. Take whatever they do, then replan.
+      S.adrift, S.adrift_at = #S.queue, now
+      S.queue = nil
+      note("refused going " .. bad.dir .. " - edge dropped; " .. S.adrift
+           .. " step(s) of the burst still in flight, replanning once they land")
+      return
+    end
     note("refused going " .. bad.dir .. " - edge dropped, picking another way")
     schedule_step()
   end
@@ -2100,6 +2286,10 @@ scrye.onIdle(function() stop_patrol("idle guard") end)
 -- ---------- the clock ----------
 scrye.every(1, function()
   now = now + 1
+  if S.on and S.adrift > 0 and not S.step and (now - S.adrift_at) > C.timeout then
+    S.adrift = 0               -- whatever the rest of a refused burst did, it is done
+    schedule_step()
+  end
   if S.step and (now - S.step.at) > C.timeout then
     stop_patrol(string.format("step '%s' never landed - nothing arrived in %ds",
                               S.step.dir, C.timeout))
@@ -2148,7 +2338,7 @@ scrye.every(1, function()
   -- Area rotation: the circuit done and nothing killed for RT.idle seconds, the area is
   -- farmed out for now - ask the mapper for a walk to the next one in the list; the
   -- patrol starts there on arrival. Never mid-fight, never while resting or parking.
-  if S.on and RT.on and #RT.areas > 0 and S.swept and not S.paused and not B.resting and not B.parking
+  if S.on and not S.seek and RT.on and #RT.areas > 0 and S.swept and not S.paused and not B.resting and not B.parking
      and not (S.fighting or B.hunting or in_combat()) and (now - last_kill_at) >= RT.idle then
     local cur = 0
     for i, a in ipairs(RT.areas) do if a:lower() == tostring(S.lock):lower() then cur = i end end
@@ -2259,6 +2449,11 @@ draw = function()
   local bits = {}
   if T.going then
     bits[#bits + 1] = "traveling to '" .. T.going .. "'"
+  elseif S.on and S.seek then
+    bits[#bits + 1] = "SEEKING " .. S.seek .. " in " .. tostring(S.lock)
+    if S.paused then bits[#bits + 1] = "paused" end
+    if S.fighting then bits[#bits + 1] = "combat" end
+    if B.resting then bits[#bits + 1] = "resting" end
   elseif S.on then
     bits[#bits + 1] = "PATROLLING " .. tostring(S.lock)
     if S.paused then bits[#bits + 1] = "paused" end
@@ -2421,6 +2616,8 @@ build_panel = function(m)
             draw()
           end },
       } },
+      { type = "input", width = 30, text = "seek <player>", bind = P .. "seekbox",
+        onSubmit = function(t) farm_cmd("seek " .. tostring(t or "")) end },
       { type = "gauge", text = "HP", value = P .. "hp", max = 100, dim = true },
       -- the enemy's health straight from Char.Combat (the vitals plugin binds the same path)
       { type = "gauge", text = "Enemy", value = "char.combat.attacker_hp", max = 100 },
