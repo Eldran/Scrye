@@ -10,6 +10,9 @@ namespace Scrye.App.Services;
 /// "F1", "NumPad1"). This lets a macro's saved key match whatever the user pressed,
 /// regardless of how they typed the modifiers ("ctrl-k", "Control+K", "K+Ctrl" all
 /// normalise the same). Modifier order in the canonical form is Ctrl, Alt, Shift, Win.
+/// <para>The numpad's operator keys are NumPlus, NumMinus, NumMultiply, NumDivide and
+/// NumDecimal (Joakim, 21 Oct 2026). They need word names: '+' and '-' are the separators
+/// of a typed gesture ("Ctrl+K", "ctrl-k"), so "NumPad+" could never be read back.</para>
 /// </summary>
 public static class MacroKeys
 {
@@ -22,6 +25,7 @@ public static class MacroKeys
     private static bool IsNonTextKey(Key key) =>
         (key >= Key.F1 && key <= Key.F24)
         || (key >= Key.NumPad0 && key <= Key.NumPad9)
+        || key is Key.Add or Key.Subtract or Key.Multiply or Key.Divide or Key.Decimal
         || key is Key.Up or Key.Down or Key.Left or Key.Right
                 or Key.Insert or Key.Delete or Key.Home or Key.End or Key.PageUp or Key.PageDown;
 
@@ -79,6 +83,7 @@ public static class MacroKeys
     {
         if (key >= Key.F1 && key <= Key.F24) return "F" + (key - Key.F1 + 1);
         if (key >= Key.NumPad0 && key <= Key.NumPad9) return "NumPad" + (key - Key.NumPad0);
+        if (NumOps.TryGetValue(key, out string? op)) return op;
         if (key >= Key.D0 && key <= Key.D9) return ((char)('0' + (key - Key.D0))).ToString();
         if (key >= Key.A && key <= Key.Z) return ((char)('A' + (key - Key.A))).ToString();
         return key switch
@@ -90,6 +95,13 @@ public static class MacroKeys
             _ => null,
         };
     }
+
+    // the numpad's operator keys and their canonical names
+    private static readonly System.Collections.Generic.Dictionary<Key, string> NumOps = new()
+    {
+        [Key.Add] = "NumPlus", [Key.Subtract] = "NumMinus", [Key.Multiply] = "NumMultiply",
+        [Key.Divide] = "NumDivide", [Key.Decimal] = "NumDecimal",
+    };
 
     private static string? MainTokenFromString(string tok)
     {
@@ -110,6 +122,11 @@ public static class MacroKeys
             "pagedown" or "pgdn" => "PageDown", "insert" or "ins" => "Insert",
             "delete" or "del" => "Delete", "space" => "Space", "enter" or "return" => "Enter",
             "tab" => "Tab", "escape" or "esc" => "Escape", "backspace" => "Backspace",
+            "numplus" or "numpadplus" or "numadd" or "numpadadd" => "NumPlus",
+            "numminus" or "numpadminus" or "numsubtract" or "numpadsubtract" or "numsub" => "NumMinus",
+            "nummultiply" or "numpadmultiply" or "numstar" or "nummul" => "NumMultiply",
+            "numdivide" or "numpaddivide" or "numslash" or "numdiv" => "NumDivide",
+            "numdecimal" or "numpaddecimal" or "numdot" => "NumDecimal",
             _ => tok,   // pass through unknown tokens verbatim
         };
     }

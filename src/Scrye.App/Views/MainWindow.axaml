@@ -2139,7 +2139,7 @@
                         <TabItem Header="Macros">
                             <DockPanel Margin="0,8,0,0">
                                 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                                    <TextBlock Text="Bind a key to a command. Key examples: F1, Ctrl+K, Shift+F2, NumPad1. Send box: one command per line; ${var} expands."
+                                    <TextBlock Text="Bind a key to a command. Key examples: F1, Ctrl+K, Shift+F2, NumPad1, NumPlus / NumMinus (numpad + and -). Send box: one command per line; ${var} expands."
                                                Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">

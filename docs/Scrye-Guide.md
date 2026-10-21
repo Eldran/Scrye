@@ -296,7 +296,7 @@ Deeper layers win for single values (theme, font), and collections (triggers, al
 - **Timers** — run on an interval.
 - **Sequences** — a named list of commands you can fire together (e.g. a walk).
 - **Highlights** — recolor matching text in the output without changing anything else.
-- **Macros / keybindings** — bind a key (e.g. `F1`, `Ctrl+K`, `NumPad1`) to send a command or run an action.
+- **Macros / keybindings** — bind a key (e.g. `F1`, `Ctrl+K`, `NumPad1`) to send a command or run an action. The numpad's operator keys are `NumPlus`, `NumMinus`, `NumMultiply`, `NumDivide` and `NumDecimal` (word names, since `+` and `-` separate the parts of a key like `Ctrl+K`). A key with no macro bound still types its character as usual.
 
 These are all editable in Settings (Global) or per world/character.
 
