@@ -63,6 +63,12 @@ public sealed class TelnetLayer
     public event Action? GoAhead;
     /// <summary>MXP (option 91) negotiated on — the text stream may now carry MXP tags.</summary>
     public event Action? MxpEnabled;
+    /// <summary>A handler of one of this layer's events threw. The parse carries on regardless:
+    /// a throwing GMCP or prompt handler used to unwind <see cref="Process"/> mid-chunk, losing
+    /// the rest of the chunk and leaving the state machine inside the subnegotiation it had just
+    /// finished - so every byte of game output after it was read as GMCP until the next IAC SE
+    /// (release review, 21 Oct 2026).</summary>
+    public event Action<Exception>? HandlerFailed;
 
     /// <summary>Whether to accept MXP when the server offers it (per-world setting).</summary>
     public bool MxpSupported { get; set; } = true;
@@ -151,6 +157,16 @@ public sealed class TelnetLayer
     /// <summary>Re-send the current window size (call on terminal resize).</summary>
     public void SendWindowSize() => SendNaws();
 
+    /// <summary>Run an event-raising step; a throw is reported, never propagated.</summary>
+    private void Guard(Action raise)
+    {
+        try { raise(); }
+        catch (Exception ex)
+        {
+            try { HandlerFailed?.Invoke(ex); } catch { /* the reporter must not break the parse either */ }
+        }
+    }
+
     private void Step(byte b, List<byte> data)
     {
         switch (_state)
@@ -169,14 +185,15 @@ public sealed class TelnetLayer
                     case DO: _state = P.Do; break;
                     case DONT: _state = P.Dont; break;
                     case SB: _state = P.Sb; break;
-                    case GA: case EOR: GoAhead?.Invoke(); _state = P.Data; break;
+                    case GA: case EOR: _state = P.Data; Guard(() => GoAhead?.Invoke()); break;
                     default: _state = P.Data; break;                    // NOP/other: ignore
                 }
                 break;
 
-            case P.Will: OnWill(b); _state = P.Data; break;
-            case P.Wont: OnWont(b); _state = P.Data; break;
-            case P.Do: OnDo(b); _state = P.Data; break;
+            // State first, THEN the handler: whatever the handler does, the next byte is data.
+            case P.Will: _state = P.Data; Guard(() => OnWill(b)); break;
+            case P.Wont: _state = P.Data; Guard(() => OnWont(b)); break;
+            case P.Do: _state = P.Data; Guard(() => OnDo(b)); break;
             case P.Dont: _state = P.Data; break;                        // ack only; no reply (avoid loops)
 
             case P.Sb: _sbOption = b; _sb.Clear(); _state = P.SbData; break;
@@ -185,7 +202,7 @@ public sealed class TelnetLayer
                 else AddSb(b);
                 break;
             case P.SbIac:
-                if (b == SE) { OnSubnegotiation(_sbOption, _sb); _state = P.Data; }
+                if (b == SE) { _state = P.Data; Guard(() => OnSubnegotiation(_sbOption, _sb)); }
                 else { _state = P.SbData; AddSb(b); }                  // IAC IAC inside SB -> literal
                 break;
         }

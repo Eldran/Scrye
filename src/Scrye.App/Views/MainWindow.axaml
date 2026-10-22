@@ -74,7 +74,8 @@
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <Button Content="New MUD" Command="{Binding NewMudCommand}" />
                             <Button Content="Edit" Command="{Binding EditNodeCommand}" />
-                            <Button Content="Delete" Command="{Binding DeleteNodeCommand}" />
+                            <Button Content="{Binding DeleteLabel}" Command="{Binding DeleteNodeCommand}"
+                                    ToolTip.Tip="Delete the selected MUD, account or character and everything under it — asks for a second press" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <Button Content="+ Account" Command="{Binding AddAccountCommand}"
@@ -149,6 +150,11 @@
                             <Grid Grid.Column="0">
                                 <DockPanel>
                                     <DockPanel DockPanel.Dock="Bottom" Margin="4">
+                                        <!-- only while the world is down: connect again in this tab -->
+                                        <Button DockPanel.Dock="Left" Content="⟳ Reconnect" Margin="0,0,4,0" Focusable="False"
+                                                Command="{Binding ReconnectCommand}" IsVisible="{Binding CanReconnect}"
+                                                Foreground="{DynamicResource ScryeAccent}"
+                                                ToolTip.Tip="Connect this world again, keeping its scrollback (.reconnect)" />
                                         <ToggleButton DockPanel.Dock="Right" Content="Debugger"
                                                       IsChecked="{Binding ShowDebugger}" Margin="4,0,0,0" />
                                         <ToggleButton DockPanel.Dock="Right" Content="Panes"
@@ -211,6 +217,7 @@
                                                       ToolTip.Tip="{Binding IdleGuardTip}" />
                                         <ToggleButton DockPanel.Dock="Right" Content="🔊 TTS"
                                                       IsChecked="{Binding TtsEnabled}" Margin="4,0,0,0"
+                                                      IsVisible="{Binding TtsSupported}"
                                                       AutomationProperties.Name="Text to speech"
                                                       ToolTip.Tip="Speak incoming lines aloud (Windows). Commands: .tts on/off/stop/rate N" />
                                         <TextBox Name="CommandInput" Text="{Binding Input}"
@@ -716,8 +723,9 @@
                                                                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="4">
                                                                     <Button Content="Reload" Command="{Binding ReloadCommand}" Padding="6,1" FontSize="10" />
                                                                     <Button Content="{Binding ToggleLabel}" Command="{Binding ToggleCommand}" Padding="6,1" FontSize="10" />
-                                                                    <Button Content="Remove" Command="{Binding RemoveCommand}" IsVisible="{Binding Removable}"
-                                                                            Padding="6,1" FontSize="10" />
+                                                                    <Button Content="{Binding RemoveLabel}" Command="{Binding RemoveCommand}" IsVisible="{Binding Removable}"
+                                                                            Padding="6,1" FontSize="10"
+                                                                            ToolTip.Tip="Unload the plugin and delete its folder from disk — asks for a second press" />
                                                                 </StackPanel>
                                                                 <StackPanel>
                                                                     <TextBlock Text="{Binding Name}" Foreground="{DynamicResource ScryeText}" FontSize="11" />
@@ -1188,13 +1196,16 @@
                                              ToolTip.Tip="What every telnet TTYPE request is answered with. Some MUDs decide what to send - MXP, colour depth - by the client name they recognise; naming a client they know is the experiment." />
                                     <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,4,0,0">
                                         <CheckBox Content="TLS" IsChecked="{Binding Editor.UseTls}" />
+                                        <CheckBox Content="Accept self-signed" IsChecked="{Binding Editor.AcceptSelfSigned}"
+                                                  IsVisible="{Binding Editor.UseTls}"
+                                                  ToolTip.Tip="Connect even when the server's certificate does not verify. Only for a server you know uses its own certificate — it also accepts an impostor's." />
                                         <CheckBox Content="MIP (3Scapes)" IsChecked="{Binding Editor.EnableMip}" />
                                         <CheckBox Content="GMCP" IsChecked="{Binding Editor.EnableGmcp}"
                                                   ToolTip.Tip="Out-of-band JSON: vitals, room, combat, chat. Negotiated automatically; turn it off to see what a HUD or plugin is getting from MIP alone." />
                                         <CheckBox Content="MXP" IsChecked="{Binding Editor.EnableMxp}"
                                                   ToolTip.Tip="Clickable links + inline markup when the server supports it" />
                                         <CheckBox Content="MSP" IsChecked="{Binding Editor.EnableMsp}"
-                                                  ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: %APPDATA%\Scrye\sounds)" />
+                                                  ToolTip.Tip="Play !!SOUND(…) directives from the server (sounds folder: Scrye\sounds in your app-data folder — %APPDATA% on Windows, ~/.config on Linux and macOS)" />
                                     </StackPanel>
                                     <TextBlock Text="Session log" Margin="0,10,0,0" />
                                     <StackPanel Orientation="Horizontal" Spacing="16">
@@ -1610,7 +1621,7 @@
                                Foreground="{DynamicResource ScryeAccent}" />
                     <TextBlock Text="Session-only: nothing is saved. Use a profile for worlds you keep."
                                FontSize="11" Foreground="{DynamicResource ScryeTextDim}" TextWrapping="Wrap" />
-                    <TextBox PlaceholderText="host" Text="{Binding Host}" AutomationProperties.Name="Host" />
+                    <TextBox Name="QuickConnectHost" PlaceholderText="host" Text="{Binding Host}" AutomationProperties.Name="Host" />
                     <DockPanel>
                         <CheckBox DockPanel.Dock="Right" Content="MIP" IsChecked="{Binding EnableMip}"
                                   Margin="8,0,0,0" VerticalAlignment="Center"
@@ -1619,6 +1630,9 @@
                                   Margin="8,0,0,0" VerticalAlignment="Center" />
                         <TextBox PlaceholderText="port" Text="{Binding Port}" AutomationProperties.Name="Port" />
                     </DockPanel>
+                    <CheckBox Content="Accept a self-signed certificate" IsChecked="{Binding AcceptSelfSigned}"
+                              IsVisible="{Binding UseTls}"
+                              ToolTip.Tip="Connect even when the server's certificate does not verify. Only for a server you know uses its own certificate — it also accepts an impostor's." />
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right" Margin="0,6,0,0">
                         <Button Content="Cancel" Command="{Binding CancelQuickConnectCommand}" />
                         <Button Content="Connect" Command="{Binding ConnectCommand}" />
@@ -1707,7 +1721,7 @@
                                     <TextBlock Text="Extra plugin folder" />
                                     <TextBox Text="{Binding Settings.ExtraPluginRoot}"
                                              PlaceholderText="e.g. C:\3ScapesMUD\Scrye\Scrye\_lab\plugins" />
-                                    <TextBlock Text="A folder to look for plugins in, on top of the ones bundled with Scrye and your own under %APPDATA%\Scrye\plugins. Every immediate subfolder holding a plugin.json is a plugin, exactly as in the other two."
+                                    <TextBlock Text="A folder to look for plugins in, on top of the ones bundled with Scrye and your own under Scrye/plugins in your app-data folder (%APPDATA% on Windows, ~/.config on Linux and macOS). Every immediate subfolder holding a plugin.json is a plugin, exactly as in the other two."
                                                Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
                                     <TextBlock Text="For working on a plugin where it lives instead of copying it into place after every edit. It is searched FIRST, so a plugin here overrides a bundled one with the same id — which is the point of pointing Scrye at it. Applies to worlds you connect after saving."
                                                Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />

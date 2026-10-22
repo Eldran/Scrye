@@ -53,13 +53,19 @@ public sealed class CompiledPattern
     /// <c>matchTimeout</c> constructor parameter).</summary>
     public static readonly TimeSpan PluginMatchTimeout = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>The match limit the user's own triggers and aliases compile with. They had none,
+    /// so one catastrophically backtracking pattern - easily imported from MUSHclient - froze
+    /// the session loop for good (release review, 21 Oct 2026). More generous than the plugin
+    /// limit: a hand-written pattern on a long line is allowed to be slow, just not endless.</summary>
+    public static readonly TimeSpan UserMatchTimeout = TimeSpan.FromMilliseconds(250);
+
     /// <param name="multiLine">Matching over several lines joined with <c>\n</c> (a trigger's
     /// <see cref="TriggerDef.Lines"/> &gt; 1): <c>^</c> and <c>$</c> then match at every line's start
     /// and end, as they do in MUSHclient's multi-line triggers, so a wildcard pattern typed on two
     /// lines matches two consecutive lines wherever they sit in the window.</param>
     /// <param name="matchTimeout">Per-match time limit. Null (the default) keeps the process-wide
-    /// default, which is what the user's own triggers/aliases use. Plugin runtimes pass a short
-    /// limit so a catastrophically backtracking plugin regex throws
+    /// default (none). The automation engine passes <see cref="UserMatchTimeout"/> and plugin
+    /// runtimes <see cref="PluginMatchTimeout"/>, so a catastrophically backtracking regex throws
     /// <see cref="RegexMatchTimeoutException"/> instead of freezing the session loop.</param>
     public CompiledPattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false,
                            TimeSpan? matchTimeout = null)

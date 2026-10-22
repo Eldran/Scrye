@@ -99,7 +99,8 @@ public sealed class AutomationEngine
         _triggers.Add(new Trig
         {
             Def = def, Lines = lines, Enabled = def.Enabled, Order = _nextOrder++,
-            Pattern = new CompiledPattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1),
+            Pattern = new CompiledPattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1,
+                                          matchTimeout: CompiledPattern.UserMatchTimeout),
         });
         // Stable: Sequence, then insertion order - which equal-Sequence rule wins must not be random.
         _triggers.Sort((a, b) => a.Def.Sequence != b.Def.Sequence ? a.Def.Sequence.CompareTo(b.Def.Sequence) : a.Order.CompareTo(b.Order));
@@ -205,7 +206,14 @@ public sealed class AutomationEngine
             Trig t = pass[i];
             if (!t.Enabled || t.Retired) continue;   // disabled, or removed by an earlier rule's script
 
-            MatchResult? m = MatchTrigger(t, line, buffered: true, out int newestStart);
+            MatchResult? m;
+            int newestStart;
+            try { m = MatchTrigger(t, line, buffered: true, out newestStart); }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                SlowPattern("trigger", t.Def.Name, ctx);
+                continue;
+            }
             if (m is null) continue;
 
             string action = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, m, ctx,
@@ -218,7 +226,13 @@ public sealed class AutomationEngine
             // A one-shot is spent on its first match.
             if (Repeats(t) && !t.Def.OneShot)
             {
-                IReadOnlyList<MatchResult> more = t.Pattern.Matches(line, TriggerDef.MaxRepeats);
+                IReadOnlyList<MatchResult> more;
+                try { more = t.Pattern.Matches(line, TriggerDef.MaxRepeats); }
+                catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+                {
+                    SlowPattern("trigger", t.Def.Name, ctx);
+                    more = Array.Empty<MatchResult>();
+                }
                 for (int k = 1; k < more.Count && !t.Retired; k++)
                 {
                     string again = Fire(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, more[k], ctx);
@@ -245,7 +259,9 @@ public sealed class AutomationEngine
             Trig t = _triggers[i];
             if (!t.Enabled) continue;
 
-            MatchResult? m = MatchTrigger(t, line, buffered: false, out _);
+            MatchResult? m;
+            try { m = MatchTrigger(t, line, buffered: false, out _); }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { continue; }   // too slow: no hit
             if (m is null) continue;
 
             hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
@@ -253,7 +269,9 @@ public sealed class AutomationEngine
                          t.Def.CapturePane, t.Def.Gag, t.Def.Notify, t.Def.Sound)));
             if (Repeats(t) && !t.Def.OneShot)
             {
-                IReadOnlyList<MatchResult> more = t.Pattern.Matches(line, TriggerDef.MaxRepeats);
+                IReadOnlyList<MatchResult> more;
+                try { more = t.Pattern.Matches(line, TriggerDef.MaxRepeats); }
+                catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { more = Array.Empty<MatchResult>(); }
                 for (int k = 1; k < more.Count; k++)
                     hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
                         Describe(t.Def.SendTo, t.Def.Send, t.Def.Variable, t.Def.Script, more[k])));
@@ -282,7 +300,13 @@ public sealed class AutomationEngine
             Als a = pass[i];
             if (!a.Enabled || !_aliases.Contains(a)) continue;   // disabled, or already retired
 
-            MatchResult? m = a.Pattern.Match(input);
+            MatchResult? m;
+            try { m = a.Pattern.Match(input); }
+            catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
+            {
+                SlowPattern("alias", a.Def.Name, ctx);
+                continue;
+            }
             if (m is null) continue;
 
             if (a.Def.OneShot) _aliases.Remove(a);   // retire BEFORE firing: a Client send that
@@ -547,5 +571,19 @@ public sealed class AutomationEngine
     }
 
     private static CompiledPattern Compile(string pattern, bool isRegex, bool ignoreCase) =>
-        new(pattern, isRegex, ignoreCase);
+        new(pattern, isRegex, ignoreCase, matchTimeout: CompiledPattern.UserMatchTimeout);
+
+    // Rules whose pattern ran over UserMatchTimeout, said once each: the rule is skipped on
+    // that line or command and the rest of the pass goes on.
+    private readonly HashSet<string> _slowSaid = new(StringComparer.Ordinal);
+    private void SlowPattern(string kind, string name, IWorldActions ctx)
+    {
+        if (!_slowSaid.Add(kind + "\0" + name)) return;
+        try
+        {
+            ctx.Echo($"[{kind}] '{name}' took over {CompiledPattern.UserMatchTimeout.TotalMilliseconds:0} ms to match"
+                     + " and was skipped - its pattern probably backtracks; this is said once.");
+        }
+        catch { /* reporting must not break the pass */ }
+    }
 }

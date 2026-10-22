@@ -50,6 +50,14 @@ public readonly record struct PluginHealth(
 /// callbacks quarantines the plugin: the host unloads it and says why. Consecutive, not total,
 /// because a plugin that throws on one unusual line a day is not broken; one that throws on
 /// every line is. Any success resets the counter.</item>
+/// <item><b>Failing often</b> — <see cref="QuarantineAfterFailuresInWindow"/> failures inside one
+/// <see cref="FailureWindow"/> also quarantines, successes or not. The streak alone missed a
+/// plugin that fails on every other line: each success reset it, so it printed an error line
+/// every few lines for as long as the session ran (release review, 21 Oct 2026).</item>
+/// <item><b>Error lines</b> — the runtimes ask <see cref="ShouldPrintError"/> before printing a
+/// failure into the world output: the first <see cref="ErrorLinesPerWindow"/> per plugin per
+/// window are shown, the rest are counted and summed up in one line when the window turns over.
+/// The Plugins panel always has the last error.</item>
 /// </list>
 ///
 /// <para>Quarantine is deliberately not persisted — a reload or reconnect gives the plugin
@@ -72,6 +80,16 @@ public sealed class PluginDiagnostics
     /// <summary>Minimum gap between "plugin X was slow" reports for the same plugin.</summary>
     public static readonly TimeSpan SlowReportCooldown = TimeSpan.FromSeconds(30);
 
+    /// <summary>The window both the failure-rate quarantine and the error-line limit count over.</summary>
+    public static readonly TimeSpan FailureWindow = TimeSpan.FromSeconds(60);
+
+    /// <summary>Failures inside one <see cref="FailureWindow"/> that quarantine a plugin even
+    /// though it succeeds in between. One a second for half a minute is not an unusual line.</summary>
+    public const int QuarantineAfterFailuresInWindow = 30;
+
+    /// <summary>Error lines a plugin may print into the world output per <see cref="FailureWindow"/>.</summary>
+    public const int ErrorLinesPerWindow = 3;
+
     private sealed class Entry
     {
         public long Calls;
@@ -83,6 +101,10 @@ public sealed class PluginDiagnostics
         public string? LastError;
         public bool Quarantined;
         public long LastSlowReportTicks;
+        public readonly Queue<double> RecentFailureMs = new();   // failure times inside the window
+        public double PrintWindowStartMs = double.NegativeInfinity;
+        public int PrintedInWindow;
+        public int Hidden;                                        // error lines not shown this window
     }
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
@@ -103,8 +125,16 @@ public sealed class PluginDiagnostics
     /// that loop is iterating.</summary>
     private readonly List<string> _pendingQuarantine = new();
 
+    private readonly Func<double> _nowMs;
+    private static readonly Stopwatch Clock = Stopwatch.StartNew();
+
     /// <param name="report">Status sink — the same one plugin load/unload messages go to.</param>
-    public PluginDiagnostics(Action<string> report) => _report = report;
+    /// <param name="nowMs">Milliseconds on a monotonic clock; a test passes its own.</param>
+    public PluginDiagnostics(Action<string> report, Func<double>? nowMs = null)
+    {
+        _report = report;
+        _nowMs = nowMs ?? (() => Clock.Elapsed.TotalMilliseconds);
+    }
 
     private Entry For(string pluginId)
     {
@@ -157,16 +187,51 @@ public sealed class PluginDiagnostics
         e.Failures++;
         e.ConsecutiveFailures++;
         e.LastError = $"{what}: {message}";
+        double now = _nowMs();
+        e.RecentFailureMs.Enqueue(now);
+        while (e.RecentFailureMs.Count > 0 && now - e.RecentFailureMs.Peek() >= FailureWindow.TotalMilliseconds)
+            e.RecentFailureMs.Dequeue();
         Publish();
 
-        if (e.Quarantined || e.ConsecutiveFailures < QuarantineAfterConsecutiveFailures) return false;
+        if (e.Quarantined) return false;
+        string why;
+        if (e.ConsecutiveFailures >= QuarantineAfterConsecutiveFailures)
+            why = $"failed {e.ConsecutiveFailures} times in a row";
+        else if (e.RecentFailureMs.Count >= QuarantineAfterFailuresInWindow)
+            why = $"failed {e.RecentFailureMs.Count} times in the last {FailureWindow.TotalSeconds:0} seconds";
+        else return false;
 
         e.Quarantined = true;
         _pendingQuarantine.Add(pluginId);
         Publish();
-        _report($"plugin '{pluginId}' failed {e.ConsecutiveFailures} times in a row " +
+        _report($"plugin '{pluginId}' {why} " +
                 $"(last: {e.LastError}) — unloading it. Fix the script and press Reload in the Plugins panel.");
         return true;
+    }
+
+    /// <summary>
+    /// Ask before printing a failure into the world output: true for the first
+    /// <see cref="ErrorLinesPerWindow"/> per plugin per <see cref="FailureWindow"/>. The first
+    /// line held back says so; when a new window opens, the count held back is reported first.
+    /// Call it once per failure, next to <see cref="RecordFailure"/>.
+    /// </summary>
+    public bool ShouldPrintError(string pluginId)
+    {
+        Entry e = For(pluginId);
+        double now = _nowMs();
+        if (now - e.PrintWindowStartMs >= FailureWindow.TotalMilliseconds)
+        {
+            if (e.Hidden > 0)
+                _report($"plugin '{pluginId}': {e.Hidden} more error(s) were not shown");
+            e.PrintWindowStartMs = now;
+            e.PrintedInWindow = 0;
+            e.Hidden = 0;
+        }
+        if (e.PrintedInWindow < ErrorLinesPerWindow) { e.PrintedInWindow++; return true; }
+        if (++e.Hidden == 1)
+            _report($"plugin '{pluginId}' keeps failing — its errors are hidden for the rest of the minute; " +
+                    "the Plugins panel shows the last one");
+        return false;
     }
 
     /// <summary>Drain the ids awaiting unload. Call after a dispatch loop, never during one.</summary>

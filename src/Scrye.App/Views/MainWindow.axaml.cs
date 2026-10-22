@@ -17,7 +17,17 @@ public partial class MainWindow : Window
         DataContextChanged += (_, _) =>
         {
             if (DataContext is MainWindowViewModel vm)
+            {
                 vm.ToastRaised += () => { if (!IsActive) FlashTaskbar(); };
+                // Quick Connect opens with the keyboard in its host box, so Enter connects and
+                // typing types there - not into a button left focused behind the scrim.
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName == nameof(MainWindowViewModel.QuickConnectOpen) && vm.QuickConnectOpen)
+                        Dispatcher.UIThread.Post(() => this.FindControl<TextBox>("QuickConnectHost")?.Focus(),
+                                                 DispatcherPriority.Background);
+                };
+            }
         };
         // pane-tab right-click menu (see OnPanePointerPressed for why this is code, not XAML)
         AddHandler(Avalonia.Input.InputElement.PointerPressedEvent, OnPanePointerPressed,
@@ -47,7 +57,7 @@ public partial class MainWindow : Window
         AddHandler(Controls.TerminalPane.CaughtUpEvent, (_, _) =>
         {
             if (DataContext is MainWindowViewModel vm && vm.Active is WorldViewModel world
-                && vm.Settings is null && vm.Editor is null)
+                && !OverlayOpen(vm))
                 FocusCommandInput(world);
         });
         // Orderly exit. The first close is cancelled, the worlds are torn down asynchronously
@@ -91,7 +101,7 @@ public partial class MainWindow : Window
     {
         if (e.InitialPressMouseButton != MouseButton.Left) return;
         if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
-        if (vm.Settings is not null || vm.Editor is not null) return;   // an overlay owns the keyboard
+        if (OverlayOpen(vm)) return;   // an overlay owns the keyboard
         if (e.Source is not Avalonia.Visual source) return;
         if (!MayTakeFocus(source)) return;
         FocusCommandInput(world);
@@ -108,7 +118,7 @@ public partial class MainWindow : Window
     private void OnWindowActivated(object? sender, EventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
-        if (vm.Settings is not null || vm.Editor is not null) return;
+        if (OverlayOpen(vm)) return;
         Dispatcher.UIThread.Post(() =>
         {
             if (!MayTakeFocus(FocusManager?.GetFocusedElement() as Avalonia.Visual)) return;
@@ -208,9 +218,51 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (DataContext is MainWindowViewModel vm && vm.Active is WorldViewModel world
-            && world.TryFireMacro(e.Key, e.KeyModifiers))
+        if (DataContext is not MainWindowViewModel vm) return;
+
+        // The overlays: Escape is Cancel - for the one on top (Settings sits over Quick
+        // Connect, which sits over the profile editor). Enter connects from Quick Connect.
+        // Not Enter-for-Done in Settings or the editor: a form with dozens of fields and
+        // multi-line send boxes would close itself mid-edit.
+        if (vm.Settings is not null || vm.QuickConnectOpen || vm.Editor is not null)
+        {
+            if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None)
+            {
+                if (vm.Settings is not null) vm.CancelSettingsCommand.Execute(null);
+                else if (vm.QuickConnectOpen) vm.CancelQuickConnectCommand.Execute(null);
+                else vm.CancelEditorCommand.Execute(null);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None
+                     && vm.QuickConnectOpen && vm.Settings is null)
+            {
+                vm.ConnectCommand.Execute(null);
+                e.Handled = true;
+            }
+            return;   // an open overlay owns the keyboard: no macros behind it
+        }
+
+        // Macros are for the game. Typing in any other text box (a plugin panel's input, a
+        // filter, the find box) must type: a TextBox does not consume numpad digits or
+        // NumPlus/NumMinus, so they bubbled here and walked the character while you typed a
+        // number (release review, 21 Oct 2026). The command line itself keeps its macros.
+        if (InTextBoxOtherThanCommandLine(e.Source)) return;
+
+        if (vm.Active is WorldViewModel world && world.TryFireMacro(e.Key, e.KeyModifiers))
             e.Handled = true;
+    }
+
+    /// <summary>Settings, the profile editor or Quick Connect is up and owns the keyboard. Quick
+    /// Connect was missing from these checks, so a click on its padding handed the keyboard to
+    /// the hidden command line behind it - where Enter sent whatever was typed there.</summary>
+    private static bool OverlayOpen(MainWindowViewModel vm) =>
+        vm.Settings is not null || vm.Editor is not null || vm.QuickConnectOpen;
+
+    private static bool InTextBoxOtherThanCommandLine(object? source)
+    {
+        for (Avalonia.Visual? v = source as Avalonia.Visual; v is not null; v = v.GetVisualParent())
+            if (v is TextBox box) return box.Name != "CommandInput";
+        return false;
     }
 
     /// <summary>Right-click on a capture-pane tab header: open the move/float/close menu.
@@ -371,7 +423,7 @@ public partial class MainWindow : Window
         int jump = ctrl && e.Key == Key.End ? 1 : ctrl && e.Key == Key.Home ? -1 : 0;
         if (jump == 0 && e.Key is not (Key.PageUp or Key.PageDown)) return;
         if (DataContext is not MainWindowViewModel vm || vm.Active is not WorldViewModel world) return;
-        if (vm.Settings is not null || vm.Editor is not null) return;
+        if (OverlayOpen(vm)) return;
 
         int direction = e.Key == Key.PageUp ? -1 : 1;
         void Move(Controls.TerminalPane p)

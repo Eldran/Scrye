@@ -340,7 +340,7 @@ public sealed class PluginManager : IDisposable
         string msg = ex is System.Text.RegularExpressions.RegexMatchTimeoutException
             ? "a trigger/alias pattern took too long to match (catastrophic backtracking?) and was abandoned"
             : ex.Message;
-        _report($"plugin '{rt.Id}' {what} error: {msg}");
+        if (_diagnostics.ShouldPrintError(rt.Id)) _report($"plugin '{rt.Id}' {what} error: {msg}");
         _diagnostics.RecordFailure(rt.Id, what, msg);
     }
 

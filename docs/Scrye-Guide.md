@@ -20,6 +20,33 @@ A "world" is a MUD connection. You can connect two ways:
 
 Each connected world gets its own tab with an output pane and a command line.
 
+When a world drops, Scrye retries on its own with growing pauses, and gives up after a while.
+At any point while it is down a **⟳ Reconnect** button sits at the left of the bottom bar (or
+type `.reconnect`): it connects again in the same tab, scrollback and all, and if it cannot,
+says why. Double-clicking a character whose tab is already open goes to that tab — and, if it
+has dropped, reconnects it with the profile as it is now, so a host or password you have fixed
+since is the one used — rather than opening a second tab.
+
+**TLS** encrypts the connection and checks the server's certificate. A server that uses a
+certificate of its own making fails that check; for one you know does, tick **Accept
+self-signed** beside TLS (in a profile or in Quick Connect). It is off by default, because it
+accepts an impostor's certificate just as happily. (Before 1.10.7 ticking TLS turned this on
+too; a profile saved then still has it ticked, so it connects as it did until you untick it.)
+
+**Delete** in the sidebar removes the selected MUD, account or character *and everything under
+it* — every account, character, trigger, alias, timer and setting — so it asks twice: the first
+press says what would go and turns the button into **Confirm delete**, and a second press
+within eight seconds does it. Selecting something else, or waiting, puts it back.
+
+**A prompt that does not end its line.** Some MUDs send a prompt with neither a newline nor
+the telnet GA/EOR marker that says "this is a prompt" (`What is your name: ` and a bare `> ` are
+the usual ones). Scrye shows such a line once the server has been quiet for about a third of a
+second, as a prompt, so triggers, auto-login and plugins see it straight away rather than when
+the next text arrives. Only something that looks like a prompt — ending in `>`, `:`, `?`, `]`,
+`)` or `#` — is shown early; half a sentence is never cut, and the line break the server sends
+after the prompt does not add an empty line. On a MUD that does mark its prompts with GA/EOR
+this steps aside.
+
 ## The main window
 
 - **Output pane** — the MUD's text, with ANSI colors, MXP links, and clickable command links. It has its own scrollback; scroll up to read history, and it snaps back to the bottom on new output.
@@ -55,6 +82,9 @@ Each connected world gets its own tab with an output pane and a command line.
   **▼ back to bottom** chip is the exception among buttons — it hands the keyboard back,
   because "take me back to live" is the moment you want to be typing.
 - **F11** — fullscreen on and off.
+- **Esc** in Settings, the profile editor or Quick Connect is **Cancel** (nothing is saved).
+  **Enter** in Quick Connect connects. While one of them is open your macros are off, so typing
+  in its fields only ever types.
 - **Which Scrye, and is there a newer one.** The last line of the MUD list says which version
   you are running (`Scrye v1.9.1`). A few seconds after start Scrye asks GitHub whether a newer
   release is out, and if so a notice sits above the Settings button: *Scrye v1.9.2 is out* (hover
@@ -174,6 +204,7 @@ with a dot, and they're intercepted before plugins see them, so a plugin can't s
 | `.mip` | Audit the MIP feed for structural drift — see below. |
 | `.mip fields` | List what this character actually receives — every field, key and frame type. |
 | `.import <file>` | Read a MUSHclient world file (`.mcl`) or exported plugin and say what would come across. Add `apply` to keep it. |
+| `.reconnect` | Connect this world again now — after it dropped, while auto-reconnect is waiting, or to replace a connection that has gone strange. The **⟳ Reconnect** button at the left of the bottom bar does the same and shows whenever the world is down. |
 
 ### Bringing rules over from MUSHclient
 
@@ -241,6 +272,10 @@ starting a fragment per dropped connection, and **`.log off` stays off** for the
 session — a blip on the link won't turn logging back on after you've explicitly stopped it.
 A later `.log` re-arms both.
 
+If the log can no longer be written — the disk filled up, the folder went away — it stops
+itself and says so once (`[log] transcript stopped - could not write ...`), and the game goes on
+showing as normal. `.log` starts a fresh one, and auto-log starts one on the next connect.
+
 ## The script console
 
 Anything you type starting with **`/`** is run as Lua on this world's session loop instead of
@@ -296,7 +331,8 @@ Deeper layers win for single values (theme, font), and collections (triggers, al
 - **Timers** — run on an interval.
 - **Sequences** — a named list of commands you can fire together (e.g. a walk).
 - **Highlights** — recolor matching text in the output without changing anything else.
-- **Macros / keybindings** — bind a key (e.g. `F1`, `Ctrl+K`, `NumPad1`) to send a command or run an action. The numpad's operator keys are `NumPlus`, `NumMinus`, `NumMultiply`, `NumDivide` and `NumDecimal` (word names, since `+` and `-` separate the parts of a key like `Ctrl+K`). A key with no macro bound still types its character as usual.
+- **Macros / keybindings** — bind a key (e.g. `F1`, `Ctrl+K`, `NumPad1`) to send a command or run an action. The numpad's operator keys are `NumPlus`, `NumMinus`, `NumMultiply`, `NumDivide` and `NumDecimal` (word names, since `+` and `-` separate the parts of a key like `Ctrl+K`). A key with no macro bound still types its character as usual. Macros fire from the command line and from the rest of the window, but **not while you are typing in another text box** — a plugin panel's input, a filter, a Settings field — so a bound numpad key types its digit there instead of walking you.
+- **A time limit on your patterns.** A regular expression can be written so that it takes practically forever on some lines — `(a+)+$` is the classic, and it is easy to bring one in from MUSHclient without noticing. A trigger or alias whose pattern takes more than 250 ms on a line is skipped for that line (the rest still run), and Scrye says once which rule it was. Rewrite it; until then it simply never matches the lines it chokes on.
 
 These are all editable in Settings (Global) or per world/character.
 
@@ -2541,9 +2577,13 @@ it delays that world's output.
   plugin can't flood the output it's already slowing down. The Plugins panel shows a running
   count and the worst case.
 - **Repeated failures.** Errors in a callback are caught and printed (one bad plugin never takes
-  down line processing), but they're also counted. **Ten consecutive failures unloads the
-  plugin** and says why. Consecutive, not total — a plugin that throws on one odd line a day
-  isn't broken; one that throws on every line is. Any success resets the streak.
+  down line processing), but they're also counted. A plugin is unloaded, with the reason, after
+  **ten failures in a row**, or **thirty within a minute** even if it succeeds in between — the
+  second rule catches a plugin that fails on every other line, which the streak alone never
+  did. A plugin that throws on one odd line now and then is left alone.
+- **Error lines are limited.** A failing plugin prints its first three errors in any minute;
+  after that one line says it keeps failing, and its next error after the minute says how many
+  were not shown. The Plugins panel always has the latest one.
 - **Getting it back.** Quarantine isn't persisted, so reconnecting clears it. Pressing **Reload**
   wipes the plugin's error history and gives it a clean run — that's the button to press after
   you've fixed the script.
@@ -2563,6 +2603,7 @@ Scrye runs real Lua 5.4 (it used the managed MoonSharp engine before; that engin
 
 - **Integers are real (5.4).** `math.floor` returns an integer, `7 // 2` is `3`, and `string.format("%d", x)` **errors** if `x` has a fractional part — `math.floor` it first (this was silently truncated on the old engine).
 - **Runaway loops abort.** Every callback runs under an instruction budget (~200M VM instructions, a few hundred ms). An accidental `while true do end` raises "exceeded its execution budget" instead of freezing the client, and repeated offenders quarantine like any erroring plugin.
+- **Memory is capped at 256 MB** per plugin (since 1.10.7 — the same as a JavaScript plugin). A table that grows forever stops with "not enough memory - the plugin reached its 256 MB memory limit" in the callback that crossed it; the plugin keeps running, and repeated failures quarantine it. Nothing a real plugin keeps comes near it.
 - **Timers tick at 250 ms** (since API 1.6). Fractional seconds work down to 0.25; don't rely on anything finer.
 - **Colors are `#RRGGBB` strings.** The host builds thread‑safe brushes for you; just pass hex.
 - **State is strings.** Numbers come back as text — `tonumber(...)` them.

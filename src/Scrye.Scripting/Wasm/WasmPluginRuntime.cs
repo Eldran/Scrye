@@ -368,7 +368,7 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         }
         catch (Exception ex)
         {
-            _host.Print(Id, $"{what} error: {FirstLine(ex.Message)}");
+            if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {FirstLine(ex.Message)}");
             _diagnostics?.RecordFailure(Id, what, ex.Message);
             return null;
         }

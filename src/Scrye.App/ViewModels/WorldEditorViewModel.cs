@@ -74,11 +74,20 @@ public sealed class WorldEditorViewModel : ViewModelBase
 
     public string PasswordHint => ExistingPasswordRef is not null
         ? "a password is stored — leave blank to keep it"
-        : "stored in Windows Credential Manager, not in the profile file";
+        : !CredentialStore.Available
+            ? "can't be saved on this system — you'll be asked at login"
+            : System.OperatingSystem.IsWindows()
+                ? "stored in Windows Credential Manager, not in the profile file"
+                : "stored in your keyring (Secret Service), not in the profile file";
     private string _encoding;
     public string Encoding { get => _encoding; set => SetField(ref _encoding, value); }
     private bool _useTls;
     public bool UseTls { get => _useTls; set => SetField(ref _useTls, value); }
+    private bool _acceptSelfSigned;
+    /// <summary>Accept a certificate that does not verify (only with TLS). Was implied by TLS
+    /// until 1.10.7; a profile saved before then loads with it ticked, so nothing changes
+    /// under it until you untick it.</summary>
+    public bool AcceptSelfSigned { get => _acceptSelfSigned; set => SetField(ref _acceptSelfSigned, value); }
     private bool _enableMip;
     public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
 
@@ -164,6 +173,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _username = _layer.Username ?? "";
         _encoding = _layer.EncodingName ?? (kind == LayerKind.Mud ? "utf-8" : "");
         _useTls = _layer.UseTls ?? false;
+        _acceptSelfSigned = _layer.AcceptInvalidCertificates ?? false;
         _enableMip = _layer.EnableMip ?? false;
         _enableGmcp = _layer.EnableGmcp ?? true;
         _enableMxp = _layer.EnableMxp ?? true;   // on by default; negotiation-gated anyway
@@ -257,7 +267,7 @@ public sealed class WorldEditorViewModel : ViewModelBase
         _layer.Username = string.IsNullOrWhiteSpace(Username) ? null : Username.Trim();
         _layer.EncodingName = string.IsNullOrWhiteSpace(Encoding) ? null : Encoding.Trim();
         _layer.UseTls = UseTls ? true : null;
-        _layer.AcceptInvalidCertificates = UseTls ? true : null;   // accept self-signed when TLS on
+        _layer.AcceptInvalidCertificates = UseTls && AcceptSelfSigned ? true : null;
         _layer.EnableMip = EnableMip ? true : null;
         _layer.EnableGmcp = EnableGmcp ? null : false;   // on is the default; only "off" is a choice
         _layer.EnableMxp = EnableMxp ? null : false;   // default-on: only an explicit OFF is stored

@@ -82,6 +82,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         _lua = new LuaHost();
         LuaSandbox.Apply(_lua);
         _lua.EnableDispatchBudget();   // a spinning hook aborts + reports instead of freezing the loop
+        _lua.EnableMemoryLimit();      // a table grown forever errors in the plugin, not in the client
         BuildApi();               // leaves globals scrye + print bound
     }
 
@@ -318,7 +319,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             _diagnostics?.RecordSuccess(Id);
             return true;
         }
-        _host.Print(Id, $"{what} error: {FirstLine(error)}");
+        if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {FirstLine(error)}");
         _diagnostics?.RecordFailure(Id, what, error ?? "unknown error");
         return false;
     }
@@ -354,7 +355,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// directly — same visible outcome, same accounting.</summary>
     private void BindError(string what, string message)
     {
-        _host.Print(Id, $"{what} error: {message}");
+        if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {message}");
         _diagnostics?.RecordFailure(Id, what, message);
     }
 

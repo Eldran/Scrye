@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Scrye.App.Services;
 using Scrye.App.ViewModels;
 using Scrye.App.Views;
 
@@ -14,7 +15,10 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow { DataContext = new MainWindowViewModel() };
+            var vm = new MainWindowViewModel();
+            CrashLog.InstallUiThread(ex => vm.RaiseToast("Something went wrong",
+                $"{ex.GetType().Name}: {ex.Message} - Scrye kept running. Details: {CrashLog.LogDirectory}"));
+            desktop.MainWindow = new MainWindow { DataContext = vm };
         }
         base.OnFrameworkInitializationCompleted();
     }

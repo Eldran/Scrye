@@ -53,6 +53,10 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string Port { get => _port; set => SetField(ref _port, value); }
     private bool _useTls;
     public bool UseTls { get => _useTls; set => SetField(ref _useTls, value); }
+    private bool _acceptSelfSigned;
+    /// <summary>Accept a certificate that does not verify. Its own choice since 1.10.7 - it used
+    /// to come with TLS itself, which made TLS protect against nothing.</summary>
+    public bool AcceptSelfSigned { get => _acceptSelfSigned; set => SetField(ref _acceptSelfSigned, value); }
     private bool _enableMip;
     public bool EnableMip { get => _enableMip; set => SetField(ref _enableMip, value); }
 
@@ -151,7 +155,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string SidebarToggleTip => SidebarCollapsed ? "Show the MUD list" : "Hide the MUD list";
 
     private ProfileNodeViewModel? _selectedNode;
-    public ProfileNodeViewModel? SelectedNode { get => _selectedNode; set => SetField(ref _selectedNode, value); }
+    public ProfileNodeViewModel? SelectedNode
+    {
+        get => _selectedNode;
+        set { if (SetField(ref _selectedNode, value)) DisarmDelete(); }   // a confirm is for ONE node
+    }
+
+    private string _deleteLabel = "Delete";
+    /// <summary>"Delete", or "Confirm delete" while a first press waits for its second.</summary>
+    public string DeleteLabel { get => _deleteLabel; private set => SetField(ref _deleteLabel, value); }
 
     private WorldEditorViewModel? _editor;
     public WorldEditorViewModel? Editor { get => _editor; set => SetField(ref _editor, value); }
@@ -344,7 +356,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         Services.InputPreferences.KeepAfterSend = startupGlobal.KeepInputAfterSend ?? false;
         Services.PluginPreferences.ExtraRoot = startupGlobal.ExtraPluginRoot;
 
-        ConnectCommand = new RelayCommand(() => { QuickConnectOpen = false; QuickConnect(); });
+        ConnectCommand = new RelayCommand(() =>
+        {
+            // a blank host or a bad port keeps the dialog open rather than closing on nothing
+            if (string.IsNullOrWhiteSpace(Host) || !int.TryParse(Port, out int p) || p is < 1 or > 65535)
+            {
+                RaiseToast("Quick Connect", "Enter a host and a port number (1-65535).");
+                return;
+            }
+            QuickConnectOpen = false;
+            QuickConnect();
+        });
         OpenQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = true);
         CancelQuickConnectCommand = new RelayCommand(() => QuickConnectOpen = false);
         NewMudCommand = new RelayCommand(() =>
@@ -358,7 +380,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         DoneEditorCommand = new RelayCommand(() => SaveEditor(close: true));
         CancelEditorCommand = new RelayCommand(() => Editor = null);
         ToggleSidebarCommand = new RelayCommand(() => SidebarCollapsed = !SidebarCollapsed);
-        OpenSettingsCommand = new RelayCommand(() => Settings = new GlobalSettingsViewModel(_store.LoadGlobal()));
+        OpenSettingsCommand = new RelayCommand(OpenSettings);
         SaveSettingsCommand = new RelayCommand(() => SaveSettings(close: false));
         DoneSettingsCommand = new RelayCommand(() => SaveSettings(close: true));
         CancelSettingsCommand = new RelayCommand(() => Settings = null);
@@ -414,27 +436,119 @@ public sealed class MainWindowViewModel : ViewModelBase
                                           LayerKind.Character, parentMud: SelectedNode.Mud, parentAccount: account);
     }
 
+    /// <summary>A profile file that will not load (damaged JSON, a locked file) is said, not
+    /// thrown: these run from a button, and a throw from a button closed the app.</summary>
+    private static bool IsLoadProblem(System.Exception ex) =>
+        ex is System.IO.InvalidDataException or System.IO.IOException or System.UnauthorizedAccessException
+           or System.Text.Json.JsonException;
+
+    private void OpenSettings()
+    {
+        ProfileLayer global;
+        try { global = _store.LoadGlobal(); }
+        catch (System.Exception ex) when (IsLoadProblem(ex))
+        {
+            // The startup toast sends you here to fix a damaged global.json: open on defaults,
+            // and saving writes a good file over the bad one.
+            Services.CrashLog.Write("open settings", ex);
+            RaiseToast("Global settings not loaded", ex.Message + " — showing defaults; Save replaces the damaged file.");
+            global = new ProfileLayer { Kind = LayerKind.Global, Name = "global" };
+        }
+        Settings = new GlobalSettingsViewModel(global);
+    }
+
     private void EditNode()
     {
         if (SelectedNode is not ProfileNodeViewModel n) return;
-        Editor = n.Kind switch
+        try
         {
-            LayerKind.Mud => new WorldEditorViewModel(n.Name, _store.LoadMud(n.Name), isNew: false, LayerKind.Mud),
-            LayerKind.Account => new WorldEditorViewModel(n.Name, _store.LoadAccount(n.Mud, n.Name), isNew: false,
-                                                          LayerKind.Account, parentMud: n.Mud),
-            _ => new WorldEditorViewModel(n.Name, _store.LoadCharacter(n.Mud, n.Account, n.Name), isNew: false,
-                                          LayerKind.Character, parentMud: n.Mud, parentAccount: n.Account),
-        };
+            Editor = n.Kind switch
+            {
+                LayerKind.Mud => new WorldEditorViewModel(n.Name, _store.LoadMud(n.Name), isNew: false, LayerKind.Mud),
+                LayerKind.Account => new WorldEditorViewModel(n.Name, _store.LoadAccount(n.Mud, n.Name), isNew: false,
+                                                              LayerKind.Account, parentMud: n.Mud),
+                _ => new WorldEditorViewModel(n.Name, _store.LoadCharacter(n.Mud, n.Account, n.Name), isNew: false,
+                                              LayerKind.Character, parentMud: n.Mud, parentAccount: n.Account),
+            };
+        }
+        catch (System.Exception ex) when (IsLoadProblem(ex))
+        {
+            // Not opened on defaults, unlike Settings: saving defaults over a character would
+            // throw away its triggers and aliases. The file stays as it is for fixing by hand.
+            Services.CrashLog.Write("edit profile", ex);
+            RaiseToast("Can't edit " + n.Name, ex.Message);
+        }
+    }
+
+    // Delete is recursive and permanent - a MUD takes every account, character, trigger and
+    // alias under it - so it takes two presses: the first names what goes and arms the
+    // button, a second within ArmSeconds on the same node does it.
+    private const int ArmSeconds = 8;
+    private ProfileNodeViewModel? _deleteArmed;
+    private Avalonia.Threading.DispatcherTimer? _deleteTimer;
+
+    private void DisarmDelete()
+    {
+        _deleteArmed = null;
+        _deleteTimer?.Stop();
+        _deleteTimer = null;
+        DeleteLabel = "Delete";
+    }
+
+    /// <summary>"the MUD 'X' with 2 accounts and 5 characters" - what a delete would take.</summary>
+    private string DescribeDeletion(ProfileNodeViewModel n)
+    {
+        static string Count(int k, string what) => k == 1 ? $"1 {what}" : $"{k} {what}s";
+        try
+        {
+            switch (n.Kind)
+            {
+                case LayerKind.Mud:
+                {
+                    var accounts = _store.ListAccounts(n.Name).ToList();
+                    int chars = _store.ListCharacters(n.Name).Count()
+                                + accounts.Sum(a => _store.ListCharacters(n.Name, a).Count());
+                    return $"the MUD '{n.Name}' with {Count(accounts.Count, "account")} and {Count(chars, "character")}";
+                }
+                case LayerKind.Account:
+                    return $"the account '{n.Name}' with {Count(_store.ListCharacters(n.Mud, n.Name).Count(), "character")}";
+                default:
+                    return $"the character '{n.Name}'";
+            }
+        }
+        catch (System.Exception) { return $"'{n.Name}' and everything under it"; }   // a count is not worth failing over
     }
 
     private void DeleteNode()
     {
         if (SelectedNode is not ProfileNodeViewModel n) return;
-        switch (n.Kind)
+        if (!ReferenceEquals(_deleteArmed, n))
         {
-            case LayerKind.Mud: _store.DeleteMud(n.Name); break;
-            case LayerKind.Account: _store.DeleteAccount(n.Mud, n.Name); break;
-            default: _store.DeleteCharacter(n.Mud, n.Account, n.Name); break;
+            DisarmDelete();
+            _deleteArmed = n;
+            DeleteLabel = "Confirm delete";
+            RaiseToast("Delete?", $"This deletes {DescribeDeletion(n)}, with every trigger, alias, timer and setting "
+                                  + $"saved on them. It cannot be undone. Press Confirm delete within {ArmSeconds} seconds to go ahead.");
+            var timer = new Avalonia.Threading.DispatcherTimer { Interval = System.TimeSpan.FromSeconds(ArmSeconds) };
+            timer.Tick += (_, _) => { if (ReferenceEquals(_deleteTimer, timer)) DisarmDelete(); else timer.Stop(); };
+            _deleteTimer = timer;
+            timer.Start();
+            return;
+        }
+        DisarmDelete();
+        try
+        {
+            switch (n.Kind)
+            {
+                case LayerKind.Mud: _store.DeleteMud(n.Name); break;
+                case LayerKind.Account: _store.DeleteAccount(n.Mud, n.Name); break;
+                default: _store.DeleteCharacter(n.Mud, n.Account, n.Name); break;
+            }
+        }
+        catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException)
+        {
+            // a file held open (an editor, a log being written) - part may already be gone
+            RaiseToast("Not deleted", ex.Message);
         }
         SelectedNode = null;
         RefreshTree();
@@ -530,7 +644,13 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         if (Settings is null) return;
         ProfileLayer layer = Settings.ToLayer();
-        _store.SaveGlobal(layer);
+        try { _store.SaveGlobal(layer); }
+        catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException
+                                              or System.ArgumentException)
+        {
+            RaiseToast("Not saved", ex.Message);   // the form stays open, nothing is lost
+            return;
+        }
         Services.ThemeService.Apply(layer.Theme);   // scheme change takes effect immediately
         Services.ThemeService.ApplyAnsiPalette(layer.AnsiPalette);
         Services.InputPreferences.KeepAfterSend = layer.KeepInputAfterSend ?? false;
@@ -715,6 +835,29 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         if (SelectedNode is not ProfileNodeViewModel n) return;
         ProfileRef r = n.ToRef();
+        // Already open: go to its tab - and if it has dropped, connect it again there - rather
+        // than opening a second tab on the same character (which the MUD would then fight over).
+        if (Worlds.FirstOrDefault(w => w.Ref == r) is WorldViewModel open)
+        {
+            Active = open;
+            if (!open.IsDown) return;          // connected, or on its way: going there is all
+            WorldProfile fresh;
+            try
+            {
+                // the profile as it is NOW: a host typo or a password fixed since the tab opened
+                EffectiveProfile e = Resolve(r);
+                if (e.PasswordRef is not null) e.World.Password = CredentialStore.Load(e.PasswordRef) ?? "";
+                fresh = e.World;
+            }
+            catch (System.Exception ex)
+            {
+                Services.CrashLog.Write("ConnectNode/reconnect", ex);
+                RaiseToast("Connect", $"Couldn't read {r.Character ?? r.Account ?? r.Mud}: {ex.Message}");
+                return;
+            }
+            await open.ReconnectAsync(fresh);
+            return;
+        }
         EffectiveProfile eff;
         WorldViewModel vm;
         // async void: anything thrown here would take the whole app down. Resolving a corrupt
@@ -801,17 +944,29 @@ public sealed class MainWindowViewModel : ViewModelBase
     private async void QuickConnect()
     {
         if (string.IsNullOrWhiteSpace(Host) || !int.TryParse(Port, out int port)) return;
-        var vm = new WorldViewModel(new WorldProfile
+        WorldViewModel vm;
+        // async void, like ConnectNode: a throw while building the world (plugins load in its
+        // constructor) would take the app down, so it becomes a toast.
+        try
         {
-            Name = Host, Host = Host, Port = port,
-            UseTls = UseTls, AcceptInvalidCertificates = UseTls, EnableMip = EnableMip,
-        })
-        { Broadcast = SendBroadcast, Toast = RaiseToast };
-        vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
-        Worlds.Add(vm);
-        Companion.Attach(vm);
-        AttachRelay(vm);
-        Active = vm;
+            vm = new WorldViewModel(new WorldProfile
+            {
+                Name = Host, Host = Host, Port = port,
+                UseTls = UseTls, AcceptInvalidCertificates = UseTls && AcceptSelfSigned, EnableMip = EnableMip,
+            })
+            { Broadcast = SendBroadcast, Toast = RaiseToast };
+            vm.CompanionControl = Companion;   // lets `.companion` start/stop the server
+            Worlds.Add(vm);
+            Companion.Attach(vm);
+            AttachRelay(vm);
+            Active = vm;
+        }
+        catch (System.Exception ex)
+        {
+            Services.CrashLog.Write("QuickConnect", ex);
+            RaiseToast("Connect", $"Couldn't open {Host}: {ex.Message}");
+            return;
+        }
         try { await vm.ConnectAsync(); }
         catch (System.Exception ex) { vm.AppendSystem($"connect failed: {ex.Message}"); }
     }

@@ -18,21 +18,40 @@ public sealed class Connection : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _readLoop;
 
+    // Which connect is current. A read loop belongs to the connect that started it: when that
+    // connect has been superseded (ConnectAsync again while it was still running - a manual
+    // reconnect), the old loop must clean up ITS socket and say nothing. Before 1.10.7 its
+    // finally nulled the shared fields - by then the NEW socket's - and reported Disconnected
+    // after the new Connected, so a reconnect over a live connection killed itself.
+    private int _generation;
+
     public ConnectionState State { get; private set; } = ConnectionState.Disconnected;
 
     public event Action<byte[]>? BytesReceived;
     public event Action<ConnectionState>? StateChanged;
 
-    public async Task ConnectAsync(string host, int port, bool useTls, bool acceptInvalidCerts, CancellationToken ct = default)
+    /// <param name="ct">The connection's lifetime: cancelling it aborts the attempt AND later
+    /// closes the established connection.</param>
+    /// <param name="attemptCt">Aborts only the attempt (DNS, TCP, TLS). Once connected it no
+    /// longer matters, so a retry loop can be cancelled without killing what it connected.</param>
+    public async Task ConnectAsync(string host, int port, bool useTls, bool acceptInvalidCerts,
+                                   CancellationToken ct = default, CancellationToken attemptCt = default)
     {
+        // The generation moves BEFORE the old socket is closed: closing it wakes the old read
+        // loop, and if that loop finished in between it would still see itself as current.
+        int gen = Interlocked.Increment(ref _generation);
         CloseSocket();   // tear down any prior socket so this instance can reconnect cleanly
         SetState(ConnectionState.Connecting);
+        using CancellationTokenSource? attempt = attemptCt.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct, attemptCt) : null;
+        CancellationToken connectCt = attempt?.Token ?? ct;
         try
         {
-            _tcp = new TcpClient { NoDelay = true };
-            await _tcp.ConnectAsync(host, port, ct).ConfigureAwait(false);
+            var tcp = new TcpClient { NoDelay = true };
+            _tcp = tcp;
+            await tcp.ConnectAsync(host, port, connectCt).ConfigureAwait(false);
 
-            Stream stream = _tcp.GetStream();
+            Stream stream = tcp.GetStream();
             if (useTls)
             {
                 RemoteCertificateValidationCallback? validate =
@@ -42,14 +61,15 @@ public sealed class Connection : IAsyncDisposable
                 {
                     TargetHost = host,
                     EnabledSslProtocols = SslProtocols.None,   // OS-chosen (TLS 1.2/1.3)
-                }, ct).ConfigureAwait(false);
+                }, connectCt).ConfigureAwait(false);
                 stream = ssl;
             }
 
             _stream = stream;
-            _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _cts = cts;
             SetState(ConnectionState.Connected);
-            _readLoop = Task.Run(() => ReadLoopAsync(_cts.Token));
+            _readLoop = Task.Run(() => ReadLoopAsync(gen, tcp, stream, cts.Token));
         }
         catch
         {
@@ -65,20 +85,21 @@ public sealed class Connection : IAsyncDisposable
         await _stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    private async Task ReadLoopAsync(CancellationToken ct)
+    private async Task ReadLoopAsync(int gen, TcpClient tcp, Stream stream, CancellationToken ct)
     {
         var buffer = new byte[8192];
         try
         {
-            while (!ct.IsCancellationRequested && _stream is not null)
+            while (!ct.IsCancellationRequested)
             {
-                int n = await _stream.ReadAsync(buffer, ct).ConfigureAwait(false);
+                int n = await stream.ReadAsync(buffer, ct).ConfigureAwait(false);
                 if (n <= 0) break;
                 BytesReceived?.Invoke(buffer.AsSpan(0, n).ToArray());
             }
         }
         catch (OperationCanceledException) { }
         catch (IOException) { }
+        catch (ObjectDisposedException) { }   // CloseSocket disposed this stream under us
         finally
         {
             // Close OUR half of the socket, not just the loop.
@@ -94,12 +115,16 @@ public sealed class Connection : IAsyncDisposable
             // The CancellationTokenSource is deliberately left alone: it belongs to
             // ConnectAsync/DisposeAsync, and this loop is still running under its token.
             // The fields are nulled so CloseSocket()/DisposeAsync's `?.` become no-ops and
-            // SendAsync says "Not connected." rather than throwing ObjectDisposedException.
-            _stream?.Dispose();
-            _stream = null;
-            _tcp?.Dispose();
-            _tcp = null;
-            SetState(ConnectionState.Disconnected);
+            // SendAsync says "Not connected." rather than throwing ObjectDisposedException -
+            // but only while this loop's connect is still the current one (see _generation).
+            stream.Dispose();
+            tcp.Dispose();
+            if (gen == Volatile.Read(ref _generation))
+            {
+                _stream = null;
+                _tcp = null;
+                SetState(ConnectionState.Disconnected);
+            }
         }
     }
 

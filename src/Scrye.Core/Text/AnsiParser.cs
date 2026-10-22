@@ -142,11 +142,51 @@ public sealed class AnsiParser
             EmitLine(isPrompt: true);
     }
 
+    // Set by an idle flush: the line it emitted is already ended, so the newline the server
+    // sends after it (a "> " prompt, then "\nYou see...") must not add an empty line.
+    private bool _swallowNewline;
+
+    /// <summary>
+    /// The server stopped part-way through a line and has been quiet (the session decides how
+    /// long): emit the line so far as a prompt - but only if it looks like one. Without this,
+    /// a prompt sent with neither a newline nor GA/EOR ("What is your name: ", "> ") reached
+    /// triggers, onPrompt and auto-login only once more text arrived (release review, 21 Oct
+    /// 2026). A half-sent sentence is left alone: cutting it would hand triggers two halves.
+    /// Returns true when a line was emitted.
+    /// </summary>
+    public bool TryFlushIdlePrompt()
+    {
+        if (_state != State.Normal) return false;               // mid escape sequence or MXP tag
+        if (_text.Length == 0 && _runs.Count == 0) return false;
+        var pending = new StringBuilder();
+        foreach (StyledRun r in _runs) pending.Append(r.Text);
+        pending.Append(_text);
+        if (!LooksLikePrompt(pending.ToString())) return false;
+        EmitLine(isPrompt: true);
+        _swallowNewline = true;
+        return true;
+    }
+
+    /// <summary>A short unfinished line ending the way prompts end: <c>&gt;</c>, <c>:</c>,
+    /// <c>?</c>, <c>]</c>, <c>)</c> or <c>#</c>, trailing spaces allowed.</summary>
+    public static bool LooksLikePrompt(string text)
+    {
+        string t = text.TrimEnd();
+        return t.Length is > 0 and <= 200 && t[^1] is '>' or ':' or '?' or ']' or ')' or '#';
+    }
+
     private void FeedChar(char c)
     {
         switch (_state)
         {
             case State.Normal:
+                if (_swallowNewline)
+                {
+                    // colour codes and a CR may come before it; anything else means the line
+                    // simply goes on, as a new line
+                    if (c == '\n') { _swallowNewline = false; break; }
+                    if (c != '\r' && c != '\x1b') _swallowNewline = false;
+                }
                 if (c == '\x1b') _state = State.Esc;
                 else if (c == '\n') EmitLine(isPrompt: false);
                 else if (c == '\r') { /* ignore bare CR */ }

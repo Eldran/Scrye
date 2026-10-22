@@ -295,6 +295,11 @@ public sealed class PluginRowViewModel : ViewModelBase
     public RelayCommand ToggleCommand { get; }
     public RelayCommand RemoveCommand { get; }
 
+    private string _removeLabel = "Remove";
+    /// <summary>"Remove", or "Confirm remove" while a first press waits for its second.</summary>
+    public string RemoveLabel { get => _removeLabel; private set => SetField(ref _removeLabel, value); }
+    private Avalonia.Threading.DispatcherTimer? _removeTimer;
+
     public PluginRowViewModel(PluginInfo info, PluginHealth? health,
                               Action<string> reload, Action<string, bool> setEnabled, Action<string> remove)
     {
@@ -335,6 +340,23 @@ public sealed class PluginRowViewModel : ViewModelBase
 
         ReloadCommand = new RelayCommand(() => reload(Id));
         ToggleCommand = new RelayCommand(() => setEnabled(Id, !Loaded));
-        RemoveCommand = new RelayCommand(() => remove(Id));
+        // Remove deletes the plugin's folder from disk: two presses, the second within 8 s.
+        // The row is rebuilt on every refresh, so an armed button never outlives its plugin.
+        RemoveCommand = new RelayCommand(() =>
+        {
+            if (_removeTimer is null)
+            {
+                RemoveLabel = "Confirm remove";
+                var timer = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+                timer.Tick += (_, _) => { timer.Stop(); _removeTimer = null; RemoveLabel = "Remove"; };
+                _removeTimer = timer;
+                timer.Start();
+                return;
+            }
+            _removeTimer.Stop();
+            _removeTimer = null;
+            RemoveLabel = "Remove";
+            remove(Id);
+        });
     }
 }

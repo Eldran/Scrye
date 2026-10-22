@@ -37,6 +37,28 @@ public sealed class SessionLogger : IDisposable
     public int LineCount { get; private set; }
     public bool IsOpen => !_closed;
 
+    /// <summary>The write error that stopped this transcript, or null. A log must never stand
+    /// between the game and the screen: the session logs each line before it shows it, and an
+    /// I/O error thrown from here (a full disk, a log folder on a USB stick that was pulled)
+    /// used to stop that line - and the rest of the chunk - from ever being displayed (release
+    /// review, 21 Oct 2026). Now the first failure closes the transcript, raises
+    /// <see cref="WriteFailed"/> once, and every later call is a no-op.</summary>
+    public Exception? Failure { get; private set; }
+
+    /// <summary>Raised once, on the first write error (see <see cref="Failure"/>).</summary>
+    public event Action<Exception>? WriteFailed;
+
+    private void Fail(Exception ex)
+    {
+        _closed = true;
+        Failure = ex;
+        try { _writer.Dispose(); } catch { /* it is already broken */ }
+        try { WriteFailed?.Invoke(ex); } catch { }
+    }
+
+    private static bool IsWriteError(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or ObjectDisposedException;
+
     public SessionLogger(string world, TextWriter writer, LogFormat format = LogFormat.Text,
                          bool timestamps = true, Func<DateTimeOffset>? clock = null, string? path = null)
     {
@@ -95,9 +117,13 @@ public sealed class SessionLogger : IDisposable
         lock (_gate)
         {
             if (_closed) return;
-            if (_format == LogFormat.Html) WriteHtmlLine(line);
-            else WriteTextLine(line);
-            LineCount++;
+            try
+            {
+                if (_format == LogFormat.Html) WriteHtmlLine(line);
+                else WriteTextLine(line);
+                LineCount++;
+            }
+            catch (Exception ex) when (IsWriteError(ex)) { Fail(ex); }
         }
     }
 
@@ -111,7 +137,9 @@ public sealed class SessionLogger : IDisposable
     {
         lock (_gate)
         {
-            if (!_closed) _writer.Flush();
+            if (_closed) return;
+            try { _writer.Flush(); }
+            catch (Exception ex) when (IsWriteError(ex)) { Fail(ex); }
         }
     }
 
@@ -122,9 +150,13 @@ public sealed class SessionLogger : IDisposable
         {
             if (_closed) return;
             _closed = true;
-            WriteFooter();
-            _writer.Flush();
-            _writer.Dispose();
+            try
+            {
+                WriteFooter();
+                _writer.Flush();
+                _writer.Dispose();
+            }
+            catch (Exception ex) when (IsWriteError(ex)) { Fail(ex); }
         }
     }
 

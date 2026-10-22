@@ -52,6 +52,13 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private bool _everConnected;      // reconnect only after a live connection has dropped
     private Task? _reconnectTask;
     private CancellationTokenSource? _reconnectCts;
+    // MaybeReconnect runs on the session loop, ReconnectAsync on whoever pressed the button:
+    // the pair of fields above is swapped and read under this.
+    private readonly object _reconnectLock = new();
+    // One connect at a time. The first connect, every retry and a manual reconnect all go
+    // through it, so a button pressed while a retry is mid-handshake waits for it rather than
+    // opening a second socket beside it.
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
     // Set by a retry series that ran out of attempts. Each failed attempt still raises Failed
     // through the mailbox, and without this the last one would start a fresh series at attempt
     // 0 - MaxAttempts would never be reached. Cleared by ConnectAsync, or by a connection that
@@ -150,6 +157,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     /// Tells arrive with channel "Tell". Raised on the loop thread, in addition to
     /// the formatted output line — drives plugin <c>scrye.onChannel</c> hooks.</summary>
     public event Action<string, string>? ChannelMessage;
+
+    /// <summary>The running transcript hit a write error and stopped itself (a full disk, a
+    /// log folder that went away). Raised on the session loop, after the notice line; the app
+    /// uses it to know logging is off, so <c>.log</c> and auto-log on reconnect start afresh.</summary>
+    public event Action? LogFailed;
     /// <summary>Raised as a running command sequence progresses (drive the status strip).</summary>
     public event Action<SequenceStatus>? SequenceStatusChanged;
     /// <summary>Fires once per scheduler tick, on the loop thread, with the delta seconds
@@ -237,7 +249,14 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         // A per-world terminal-type override: the one name answered to every TTYPE ask.
         // Blank keeps the MTTS cycle (Scrye / XTERM-256COLOR / MTTS bitmask).
         _telnet.TerminalTypeOverride = string.IsNullOrWhiteSpace(profile.TerminalType) ? null : profile.TerminalType;
-        _telnet.GoAhead += () => _ansi.FlushAsPrompt();
+        _telnet.GoAhead += () => { _sawGoAhead = true; _ansi.FlushAsPrompt(); };
+        // a handler that failed inside the telnet parse: said, and the parse goes on
+        _telnet.HandlerFailed += ex =>
+        {
+            string text = $"[scrye] error handling a telnet/GMCP message: {ex.GetType().Name}: {ex.Message}";
+            try { _events.Emit(SessionEventKind.Notice, text); } catch { }
+            try { RaiseLine(Line.FromText(text, SysColour)); } catch { }
+        };
 
         // MXP: negotiated via telnet option 91 → the ANSI parser starts interpreting tags.
         _telnet.MxpSupported = profile.EnableMxp;
@@ -395,8 +414,75 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _loop = Task.Run(() => RunLoopAsync(_cts.Token));
         _ticker = Task.Run(() => RunTickerAsync(_cts.Token));
-        await _connection.ConnectAsync(Profile.Host, Profile.Port, Profile.UseTls,
-            Profile.AcceptInvalidCertificates, _cts.Token).ConfigureAwait(false);
+        await ConnectOnceAsync(CancellationToken.None, onlyIfDown: false).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Connect again now, whatever state the connection is in: after auto-reconnect gave up,
+    /// while it is waiting out a backoff, or over a live connection (which is closed). Any
+    /// retry series is stopped first and the budget starts fresh, as with
+    /// <see cref="ConnectAsync"/>. A failure is reported like any failed connect, and then
+    /// retried in the usual way. Safe from any thread.
+    /// </summary>
+    /// <param name="settings">Connection settings to use from now on - host, port, TLS and
+    /// login - when the profile was edited after this session was made (a typo in the host
+    /// fixed, a new password). Null keeps the current ones.</param>
+    public async Task ReconnectAsync(WorldProfile? settings = null)
+    {
+        if (_userClosing) return;
+        if (settings is not null) UseConnectionSettings(settings);
+        if (_loop is null) { await ConnectAsync().ConfigureAwait(false); return; }   // never started
+
+        Task? running;
+        lock (_reconnectLock)
+        {
+            _reconnectCts?.Cancel();   // a retry waiting out its delay, or mid-connect, stops
+            running = _reconnectTask;
+        }
+        if (running is not null) { try { await running.ConfigureAwait(false); } catch { /* it reported */ } }
+        if (_userClosing) return;   // the tab closed while the old retry wound down
+
+        _reconnectGaveUp = false;
+        _reconnectAttempt = 0;
+        _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice("[reconnect] reconnecting now"));
+        try { await ConnectOnceAsync(CancellationToken.None, onlyIfDown: false).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* the session is closing */ }
+        catch (ObjectDisposedException) { /* ...or has closed */ }
+        catch (Exception ex)
+        {
+            // Failed was raised (and MaybeReconnect takes it from there); say WHY, which the
+            // bare state change does not - an unknown host, a refused port
+            _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice($"[reconnect] could not connect: {ex.Message}"));
+        }
+    }
+
+    /// <summary>Take connection settings - host, port, TLS, login - from an edited profile,
+    /// for the next connect. Everything else (encoding, protocols, rules) stays as the session
+    /// was made; rules have their own reload.</summary>
+    public void UseConnectionSettings(WorldProfile settings)
+    {
+        Profile.Host = settings.Host;
+        Profile.Port = settings.Port;
+        Profile.UseTls = settings.UseTls;
+        Profile.AcceptInvalidCertificates = settings.AcceptInvalidCertificates;
+        Profile.Username = settings.Username;
+        Profile.Password = settings.Password;
+    }
+
+    /// <summary>The one way <see cref="_connection"/> is connected: under the gate, for the
+    /// session's lifetime, with <paramref name="attempt"/> able to abort only the attempt.
+    /// <paramref name="onlyIfDown"/>: a retry that finds the connection already up (a manual
+    /// reconnect got there first) stands down instead of replacing it.</summary>
+    private async Task ConnectOnceAsync(CancellationToken attempt, bool onlyIfDown)
+    {
+        await _connectGate.WaitAsync(attempt).ConfigureAwait(false);
+        try
+        {
+            if (onlyIfDown && _connection.State is ConnectionState.Connected) return;
+            await _connection.ConnectAsync(Profile.Host, Profile.Port, Profile.UseTls,
+                Profile.AcceptInvalidCertificates, _cts?.Token ?? CancellationToken.None, attempt).ConfigureAwait(false);
+        }
+        finally { _connectGate.Release(); }
     }
 
     private void ResetMipForConnect()
@@ -493,12 +579,19 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
     private void MaybeReconnect()
     {
         if (!ReconnectEnabled || _userClosing || !_everConnected || _reconnectGaveUp) return;
-        if (_reconnectTask is { IsCompleted: false }) return;   // a retry loop is already running
-        _reconnectCts = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
-        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_reconnectCts.Token));
+        // A Failed or Disconnected that arrives late - the cancelled attempt of a retry that a
+        // manual reconnect replaced - must not start a series over the connection now up.
+        if (_connection.State is ConnectionState.Connected or ConnectionState.Connecting) return;
+        lock (_reconnectLock)
+        {
+            if (_reconnectTask is { IsCompleted: false }) return;   // a retry loop is already running
+            var cts = CancellationTokenSource.CreateLinkedTokenSource(_cts?.Token ?? CancellationToken.None);
+            _reconnectCts = cts;
+            _reconnectTask = Task.Run(() => ReconnectLoopAsync(cts.Token));
+        }
     }
 
-    private void CancelReconnect() => _reconnectCts?.Cancel();
+    private void CancelReconnect() { lock (_reconnectLock) _reconnectCts?.Cancel(); }
 
     private async Task ReconnectLoopAsync(CancellationToken ct)
     {
@@ -509,7 +602,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             {
                 _reconnectGaveUp = true;   // before returning, so the last Failed can't restart us
                 _mailbox.Writer.TryWrite(new SessionMessage.SystemNotice(
-                    $"[reconnect] gave up after {attempt} attempt(s)"));
+                    $"[reconnect] gave up after {attempt} attempt(s) - Reconnect or .reconnect tries again"));
                 return;
             }
             _reconnectAttempt = ++attempt;
@@ -523,11 +616,11 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
 
             try
             {
-                // Bind the socket to the SESSION lifetime (_cts), not the reconnect
-                // token — CancelReconnect() fires on success and must not kill the
-                // freshly-established connection.
-                await _connection.ConnectAsync(Profile.Host, Profile.Port, Profile.UseTls,
-                    Profile.AcceptInvalidCertificates, _cts?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                // The socket lives for the SESSION (_cts); the reconnect token aborts only
+                // this attempt - CancelReconnect() fires on success and must not kill the
+                // freshly-established connection, but a manual reconnect must be able to stop
+                // an attempt that is still dialling.
+                await ConnectOnceAsync(ct, onlyIfDown: true).ConfigureAwait(false);
                 return;   // Connected state will fire and CancelReconnect() this loop
             }
             catch (OperationCanceledException) { return; }
@@ -818,6 +911,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         // MIP keepalive — still runs on an accumulated 1s clock. Their
                         // semantics (and their tests) are unchanged.
                         _tickCarry += TickIntervalSeconds;
+                        MaybeIdleFlush();   // every 250 ms: a prompt left hanging shows within ~0.5 s
                         if (_tickCarry >= 0.999)
                         {
                             _tickCarry -= 1.0;
@@ -835,9 +929,26 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                         HandleSequenceControl(sc.Kind, sc.Arg);
                         break;
                     case SessionMessage.LoggingControl lc:
-                        _logger?.Close();
+                    {
+                        // Swap first, close after: an old log whose last flush fails must not
+                        // report "logging is off" while its replacement is already running.
+                        SessionLogger? old = _logger;
                         _logger = lc.Logger;
+                        if (lc.Logger is { } started)
+                            started.WriteFailed += ex =>
+                            {
+                                // raised on the loop (Log/Flush run there); the line being
+                                // logged is still shown - the logger no longer throws
+                                bool current = ReferenceEquals(_logger, started);
+                                if (current) _logger = null;
+                                string text = $"[log] transcript stopped - could not write {started.Path ?? "the log"}: {ex.Message}";
+                                try { _events.Emit(SessionEventKind.Notice, text); } catch { }
+                                LineReady?.Invoke(Line.FromText(text, SysColour));
+                                if (current) LogFailed?.Invoke();
+                            };
+                        old?.Close();
                         break;
+                    }
                     case SessionMessage.SystemNotice n:
                         _events.Emit(SessionEventKind.Notice, n.Text);
                         RaiseLine(Line.FromText(n.Text, SysColour));
@@ -939,10 +1050,28 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
         if (Profile.EnableMip)
             text = _mip.Process(text);   // strip MIP frames; raises MessageReceived
         if (text.Length > 0)
+        {
+            _lastTextAtMs = Environment.TickCount64;
             _ansi.Feed(text);
+        }
     }
 
     private bool _puebloAnswered;
+
+    /// <summary>Show an unfinished line that looks like a prompt once the server has been quiet
+    /// for <see cref="IdleFlushMs"/> (see <see cref="AnsiParser.TryFlushIdlePrompt"/>). Steps
+    /// aside for good on a connection whose server marks its prompts with GA/EOR.</summary>
+    public bool IdleFlushEnabled { get; set; } = true;
+    public const int IdleFlushMs = 300;
+    private bool _sawGoAhead;                 // this connection marks prompts itself
+    private long _lastTextAtMs;               // Environment.TickCount64 of the last game text
+
+    private void MaybeIdleFlush()
+    {
+        if (!IdleFlushEnabled || _sawGoAhead) return;
+        if (Environment.TickCount64 - _lastTextAtMs < IdleFlushMs) return;
+        _ansi.TryFlushIdlePrompt();
+    }
 
     /// <summary>The Pueblo greeting, as MUSHclient recognises it: "This world is Pueblo 1.0
     /// Enhanced" or "This world is Pueblo 1.10 enhanced", any case, anywhere on the line.</summary>
@@ -1022,10 +1151,13 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             System.Text.Json.JsonElement root = doc.RootElement;
             if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return;
-            string channel = root.TryGetProperty("channel", out System.Text.Json.JsonElement c)
-                ? c.GetString() ?? "" : "";
-            string text = root.TryGetProperty("text", out System.Text.Json.JsonElement t)
-                ? t.GetString() ?? "" : "";
+            // GetString() THROWS on a number or an object, and only JsonException is caught
+            // below - so every field is type-checked rather than trusted
+            static string Str(System.Text.Json.JsonElement o, string name) =>
+                o.TryGetProperty(name, out System.Text.Json.JsonElement e)
+                && e.ValueKind == System.Text.Json.JsonValueKind.String ? e.GetString() ?? "" : "";
+            string channel = Str(root, "channel");
+            string text = Str(root, "text");
             if (channel.Length == 0 || text.Length == 0) return;   // not a chat line we can file
             // WHO said it: channels are inconsistent about embedding the speaker - vik sends
             // "Rictor: neigh" while gossip sends a bare "yep" with the name only in `talker`.
@@ -1034,8 +1166,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
             // from the hall" - the text stands as sent. A contains-check is a heuristic
             // (a name that happens to occur mid-word would suppress the prefix), accepted:
             // the failure mode is a missing name, never a mangled line.
-            string talker = root.TryGetProperty("talker", out System.Text.Json.JsonElement tk)
-                ? tk.GetString() ?? "" : "";
+            string talker = Str(root, "talker");
             // A tell YOU sent: the payload says so (`outgoing: 1`, `targets: [...]`, talker =
             // you). Naming yourself as the speaker is technically right and useless - what a
             // reader wants is who it went TO. Composed as "To <name>: text", the exact shape the
@@ -1270,6 +1401,7 @@ public sealed class MudSession : IAsyncDisposable, IWorldActions
                 MxpAudit.Reset();                             // ...and so does MXP
                 MxpAudit.Enabled = Profile.EnableMxp;
                 _puebloAnswered = false;                      // the greeting comes again per connection
+                _sawGoAhead = false;                          // a different server may not use GA
                 if (Profile.EnableMip) ResetMipForConnect();   // re-arm the handshake on (re)connect
                 // arm auto-login for this (re)connect when the profile carries a username
                 _autoLogin = Profile.Username.Length > 0

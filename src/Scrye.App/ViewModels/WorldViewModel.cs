@@ -434,10 +434,12 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         get => _connState;
         private set
         {
+            _stateReported = true;
             if (SetField(ref _connState, value))
             {
                 OnPropertyChanged(nameof(StatusBrush));
                 OnPropertyChanged(nameof(StatusTip));
+                OnPropertyChanged(nameof(CanReconnect));
             }
         }
     }
@@ -459,6 +461,51 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _ => IdleBrush,
     };
     public string StatusTip => $"{Title}: {_connState}";
+
+    private bool _connectStarted;   // ConnectAsync was called (a tab with no host never is)
+    private bool _stateReported;    // the connection has said something since
+    private bool _reconnecting;
+
+    /// <summary>Not connected and not on the way: dropped, failed, auto-reconnect gave up - or
+    /// never started (no host). A connect that was started but has not reported yet is NOT
+    /// down: ConnState starts at Disconnected, and reconnecting in that moment replaced the
+    /// connection about to be made.</summary>
+    public bool IsDown =>
+        !_connectStarted
+        || (_stateReported && _connState is ConnectionState.Disconnected or ConnectionState.Failed);
+
+    /// <summary>Down, with a host to go back to and no reconnect already under way: the
+    /// Reconnect button shows.</summary>
+    public bool CanReconnect =>
+        _connectStarted && IsDown && !_reconnecting && !string.IsNullOrWhiteSpace(_session.Profile.Host);
+
+    /// <summary>Connect this tab again, keeping its scrollback, panes and plugins: the Reconnect
+    /// button, <c>.reconnect</c>, and a double-click on a character whose tab is already open
+    /// (which passes the profile as it is NOW, so a host or password fixed since is used).
+    /// Before 1.10.7, once auto-reconnect gave up the only way back was closing the tab.</summary>
+    public async Task ReconnectAsync(WorldProfile? settings = null)
+    {
+        if (_reconnecting) { AppendSystem("already reconnecting"); return; }
+        if (_connState == ConnectionState.Connecting) { AppendSystem("already connecting"); return; }
+        if (string.IsNullOrWhiteSpace(settings?.Host ?? _session.Profile.Host))
+        {
+            if (settings is not null) _session.UseConnectionSettings(settings);
+            AppendSystem("no host set — add one on the MUD layer (Edit the MUD).");
+            return;
+        }
+        _reconnecting = true;
+        _connectStarted = true;
+        OnPropertyChanged(nameof(CanReconnect));
+        try { await _session.ReconnectAsync(settings); }
+        catch (Exception ex) { AppendSystem($"reconnect failed: {ex.Message}"); }
+        finally
+        {
+            _reconnecting = false;
+            OnPropertyChanged(nameof(CanReconnect));
+        }
+    }
+
+    public RelayCommand ReconnectCommand { get; }
 
     /// <summary>Set by the main window: sends a command to every connected world
     /// (input-broadcast). Null when this tab stands alone.</summary>
@@ -490,6 +537,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     // ---- text-to-speech (accessibility) ----------------------------------------
 
     private readonly Services.SpeechService _speech = new();
+
+    /// <summary>Speech is Windows-only (System.Speech); elsewhere the toggle is hidden.</summary>
+    public bool TtsSupported => Services.SpeechService.Supported;
 
     private bool _ttsEnabled;
     /// <summary>Speak incoming lines aloud while this tab is active (".tts" / TTS toggle).</summary>
@@ -606,6 +656,9 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 Ref?.Character ?? Title, line.PlainText, SessionId, DateTimeOffset.UtcNow);
         };
         _session.SoundRequested += sound => Services.SoundService.Play(sound, Title);
+        // the transcript stopped itself on a write error: logging is off, so `.log` starts a
+        // new one rather than "stopping" a dead one, and auto-log may start it on reconnect
+        _session.LogFailed += () => Dispatcher.UIThread.Post(() => _logging = false);
         _session.MsspReceived += mssp =>
         {
             string name = mssp.TryGetValue("NAME", out var n) ? n : Title;
@@ -921,6 +974,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         };
 
         SubmitCommand = new RelayCommand(Submit);
+        ReconnectCommand = new RelayCommand(() => _ = ReconnectAsync());
 
         // bring back this world's saved pane setup (docks + timestamp toggle), then add any
         // pane a loaded plugin declares but the saved layout does not have yet — the fresh-
@@ -986,7 +1040,11 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         return true;
     }
 
-    public Task ConnectAsync() => _session.ConnectAsync();
+    public Task ConnectAsync()
+    {
+        _connectStarted = true;
+        return _session.ConnectAsync();
+    }
 
     /// <summary>Live-apply a re-resolved profile's rules to this connected session
     /// (triggers/aliases/timers replaced; runtime state untouched).</summary>
@@ -1568,6 +1626,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".gmcp": HandleGmcpCommand(arg); return true;
             case ".mxp": HandleMxpCommand(arg); return true;
             case ".import": HandleImportCommand(arg); return true;
+            case ".reconnect": _ = ReconnectAsync(); return true;
             case ".ts" or ".timestamps":
                 ShowTimestamps = !ShowTimestamps;
                 AppendSystem(ShowTimestamps ? "timestamps on" : "timestamps off");
@@ -2288,7 +2347,14 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         }
         LogFormat fmt = a.Contains("htm") ? LogFormat.Html : LogFormat.Text;
         _loggingDeclined = false;         // asking for it back re-arms auto-logging too
-        string path = _session.StartLogging(fmt);
+        string path;
+        try { path = _session.StartLogging(fmt); }
+        catch (System.Exception ex)
+        {
+            // a read-only or missing logs folder, a full disk - said, never thrown at the input box
+            AppendSystem($"could not start logging: {ex.Message}");
+            return;
+        }
         _logging = true;
         AppendSystem($"logging ({fmt.ToString().ToLowerInvariant()}) to {path}");
     }

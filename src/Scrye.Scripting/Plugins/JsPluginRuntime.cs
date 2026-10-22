@@ -386,7 +386,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             catch (PanelTooDeepException ex)
             {
                 // Reported, not thrown: the rest of the script (often the entry script) runs on.
-                _host.Print(Id, "addPanel error: " + ex.Message);
+                if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, "addPanel error: " + ex.Message);
                 _diagnostics?.RecordFailure(Id, "addPanel", ex.Message);
                 return;
             }
@@ -748,7 +748,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         }
         catch (Exception ex)
         {
-            _host.Print(Id, $"{what} error: {ex.Message}");
+            if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {ex.Message}");
             _diagnostics?.RecordFailure(Id, what, ex.Message);
         }
     }
@@ -763,7 +763,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         }
         catch (Exception ex)
         {
-            _host.Print(Id, $"{what} error: {ex.Message}");
+            if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {ex.Message}");
             _diagnostics?.RecordFailure(Id, what, ex.Message);
             return null;
         }

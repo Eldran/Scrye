@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using KeraLua;
 using NativeLua = KeraLua.Lua;
@@ -55,10 +56,15 @@ public sealed class LuaHost : IDisposable
         // longjmp back to pcall, on a normal stack.
         LuaFunction traceback = static ptr =>
         {
-            NativeLua l = NativeLua.FromIntPtr(ptr);
-            string? msg = l.Type(1) == LuaType.String ? l.ToString(1, false) : null;
-            l.Traceback(l, msg, 1);
-            return 1;
+            t_managedDepth++;   // see EnableMemoryLimit: the traceback's own strings are never refused
+            try
+            {
+                NativeLua l = NativeLua.FromIntPtr(ptr);
+                string? msg = l.Type(1) == LuaType.String ? l.ToString(1, false) : null;
+                l.Traceback(l, msg, 1);
+                return 1;
+            }
+            finally { t_managedDepth--; }
         };
         _keepAlive.Add(traceback);
         State.PushCFunction(traceback);
@@ -67,11 +73,97 @@ public sealed class LuaHost : IDisposable
 
     // ---- callbacks -----------------------------------------------------------
 
-    /// <summary>Push a C# callback, rooting the delegate for the state's lifetime.</summary>
+    /// <summary>Push a C# callback, rooting the delegate for the state's lifetime. The body
+    /// runs marked as managed code, so the memory limit never refuses an allocation it makes
+    /// (see <see cref="EnableMemoryLimit"/>).</summary>
     public void PushCallback(LuaFunction fn)
     {
-        _keepAlive.Add(fn);
-        State.PushCFunction(fn);
+        LuaFunction marked = ptr =>
+        {
+            t_managedDepth++;
+            try { return fn(ptr); }
+            finally { t_managedDepth--; }
+        };
+        _keepAlive.Add(marked);
+        State.PushCFunction(marked);
+    }
+
+    // ---- memory limit (see EnableMemoryLimit) ----
+    /// <summary>The memory limit plugin states get: the same as a JS plugin's.</summary>
+    public const long DefaultMemoryLimit = 256L * 1024 * 1024;
+    // What the allocator reads and writes. Its own object, not fields of this host, so the
+    // allocator closure does not keep the host alive (see _allocatorRoot).
+    private sealed class MemoryGate
+    {
+        public long Limit;             // 0 = none
+        public long Used;
+        public int ProtectedDepth;     // inside the native lua_pcall of PCall
+    }
+    private readonly MemoryGate _mem = new();
+    private LuaAlloc? _allocator;
+    // Native Lua holds a raw pointer to the allocator, and lua_close frees every block through
+    // it. A host that is dropped without Dispose is closed later by KeraLua's FINALIZER - and
+    // if the delegate was collected first, that close is "a callback on a garbage collected
+    // delegate": the process dies. So the delegate is rooted by a GCHandle, freed in Dispose
+    // after the close; for a host never disposed it stays rooted (a few bytes), and the
+    // finalizer's close still finds it. Found running the real Lua under the test suite.
+    private GCHandle _allocatorRoot;
+    /// <summary>Above 0 while a C# function called from Lua (a binding, the traceback handler)
+    /// is running on this thread. Thread-static, not per host: all of a session's states run
+    /// on its one loop thread, and a binding of one plugin can reach into another's state.</summary>
+    [ThreadStatic] private static int t_managedDepth;
+
+    /// <summary>Bytes Lua has allocated for this state (meaningful once the limit is on).</summary>
+    public long MemoryUsed => _mem.Used;
+    public long MemoryLimit => _mem.Limit;
+
+    /// <summary>
+    /// Cap what this state may allocate. Before 1.10.7 JS and wasm plugins had a memory limit
+    /// and Lua had none: a plugin that grew a table forever took the whole client with it.
+    ///
+    /// <para>How. The state's own allocator (the one <c>luaL_newstate</c> installed) is
+    /// wrapped, not replaced: every call is forwarded to it and the byte count kept here, so
+    /// blocks allocated before the switch are freed by the same allocator that made them. A
+    /// growth that would pass the limit returns NULL; Lua then runs an emergency collection,
+    /// retries, and only if that does not help raises "not enough memory" - an ordinary
+    /// error into the plugin's pcall, reported and counted toward quarantine.</para>
+    ///
+    /// <para>When it may refuse - and this is the whole difficulty. A failed allocation raises
+    /// a Lua error AT THAT POINT. Outside any pcall (the host pushing a line's text before
+    /// calling onLine) that is a panic, and Lua's panic aborts the process. Inside a C#
+    /// binding it is a longjmp across a managed frame. So the limit applies only while Lua
+    /// code runs inside <see cref="PCall"/> and no C# callback is on top of it; everything
+    /// else - the host's own pushes (even those inside PCall around the native call), binding
+    /// results, the traceback - is small, bounded and
+    /// always allowed, and may take the count a little past the limit. The budget hook is
+    /// deliberately NOT marked: it raises its error with a longjmp out of its own frame, which
+    /// would skip the unmark and leave the limit off for good.</para>
+    /// </summary>
+    public void EnableMemoryLimit(long bytes = DefaultMemoryLimit)
+    {
+        if (_allocator is not null) { _mem.Limit = bytes; return; }
+        IntPtr baseUd = IntPtr.Zero;
+        LuaAlloc baseAlloc = State.GetAllocFunction(ref baseUd);
+        MemoryGate gate = _mem;
+        // what the state already holds (lua_gc COUNT is KB, COUNTB the remainder in bytes)
+        gate.Used = State.GarbageCollector(LuaGC.Count, 0) * 1024L + State.GarbageCollector(LuaGC.Countb, 0);
+        gate.Limit = bytes;
+        _allocator = (ud, ptr, osize, nsize) =>
+        {
+            // osize is the old block's size only when ptr is set; for a new block it is the
+            // object type, not a size
+            long oldSize = ptr == IntPtr.Zero ? 0 : (long)(ulong)osize;
+            long newSize = (long)(ulong)nsize;
+            long growth = newSize - oldSize;
+            if (growth > 0 && gate.Limit > 0 && gate.ProtectedDepth > 0 && t_managedDepth == 0
+                && gate.Used + growth > gate.Limit)
+                return IntPtr.Zero;
+            IntPtr result = baseAlloc(ud, ptr, osize, nsize);
+            if (result != IntPtr.Zero || newSize == 0) gate.Used += growth;   // a free, or it worked
+            return result;
+        };
+        _allocatorRoot = GCHandle.Alloc(_allocator);
+        State.SetAllocFunction(_allocator, ref baseUd);
     }
 
     /// <summary>
@@ -110,7 +202,7 @@ public sealed class LuaHost : IDisposable
     /// out; the next outermost <see cref="PCall"/> restores normal granularity. Lua hooks are
     /// per-thread (a coroutine inherits its creator's hook), so a coroutine the plugin resumes
     /// is counted only if it was created after this was armed. Memory is NOT capped here: a
-    /// real cap needs a custom allocator (<c>lua_setallocf</c>), not a count-hook check.</para>
+    /// real cap needs a custom allocator - see <see cref="EnableMemoryLimit"/>.</para>
     ///
     /// <para>Boundary note: <c>luaL_error</c> longjmps from inside the managed hook frame
     /// back to the enclosing pcall. This is the one sanctioned exception to the
@@ -201,7 +293,30 @@ public sealed class LuaHost : IDisposable
             State.RawGetInteger(LuaRegistry.Index, _tracebackRef);
             State.Insert(fnIndex);
 
-            LuaStatus status = State.PCall(nargs, nresults, fnIndex);
+            // The limit applies only inside the native call. The pushes around it run outside
+            // any protection - or, for a call made from inside a binding, on top of that
+            // binding's managed frame - where a refused allocation is a panic or a longjmp
+            // across .NET. Inside, Lua code called from a binding is limited again: an error
+            // there unwinds to THIS pcall, not across the binding.
+            LuaStatus status;
+            int managedDepth = t_managedDepth;
+            _mem.ProtectedDepth++;
+            t_managedDepth = 0;
+            try { status = State.PCall(nargs, nresults, fnIndex); }
+            finally { _mem.ProtectedDepth--; t_managedDepth = managedDepth; }
+
+            // Ran out, or the host's own pushes took it past: collect now. Lua's emergency
+            // collection runs only on its own allocations - a string being built (string.rep,
+            // table.concat, a long ..) grows through luaL_Buffer, which asks the allocator
+            // directly and fails without one. Without this the garbage of the call that just
+            // failed kept the next dispatch's strings refused until the collector got round
+            // to it. Outermost call only, and outside the native pcall: a plain API call.
+            if (_mem.Limit > 0 && _callDepth == 1
+                && (_mem.Used > _mem.Limit
+                    || status == LuaStatus.ErrMem
+                    || (status != LuaStatus.OK && OutOfMemoryMessage())))   // error on top of the stack
+                State.GarbageCollector(LuaGC.Collect, 0);
+
             if (status == LuaStatus.OK)
             {
                 State.Remove(fnIndex);   // drop the msgh, leaving just the results
@@ -219,12 +334,26 @@ public sealed class LuaHost : IDisposable
         }
     }
 
+    // The note goes on the message line, not after a traceback (callers print the first line).
+    private static string InsertAfterFirstLine(string msg, string note)
+    {
+        int nl = msg.IndexOf('\n');
+        return nl < 0 ? msg + note : msg[..nl] + note + msg[nl..];
+    }
+
+    // luaL_Buffer's "not enough memory" is a plain runtime error, not LUA_ERRMEM.
+    private bool OutOfMemoryMessage() =>
+        State.Type(-1) == LuaType.String && State.ToString(-1, false).Contains("not enough memory");
+
     private string PopErrorMessage(LuaStatus status)
     {
         string msg = State.Type(-1) == LuaType.String
             ? State.ToString(-1, false)
             : $"non-string error ({status})";
         State.Pop(1);
+        if (_mem.Limit > 0 && (status == LuaStatus.ErrMem || msg.Contains("not enough memory"))
+            && !msg.Contains("memory limit"))
+            msg = InsertAfterFirstLine(msg, $" - the plugin reached its {_mem.Limit / (1024 * 1024)} MB memory limit");
         return msg;
     }
 
@@ -303,6 +432,7 @@ public sealed class LuaHost : IDisposable
         _disposed = true;
         State.Dispose();      // lua_close: frees every Lua-side value, ref and pointer
         _keepAlive.Clear();   // only now is it safe to let the delegates go
+        if (_allocatorRoot.IsAllocated) _allocatorRoot.Free();   // lua_close was its last caller
     }
 }
 
