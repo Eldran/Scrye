@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "33b8a81f983cffd0f522bf848eb4f253e4ff684a",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/33b8a81f983cffd0f522bf848eb4f253e4ff684a/src/Scrye.App/plugins/",
-  "generated": "2026-10-21T15:50:04Z",
+  "ref": "v1.10.7",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.7/src/Scrye.App/plugins/",
+  "generated": "2026-10-22T15:11:14Z",
   "plugins": [
     {
       "id": "3k-chaossea",

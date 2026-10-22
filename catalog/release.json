@@ -1,7 +1,7 @@
 {
   "format": 1,
-  "version": "1.10.6",
-  "tag": "v1.10.6",
-  "notes": "v1.10.6 - Keyboard: Ctrl+End jumps from scrollback back to live output (Esc on an empty command line does too), Ctrl+Home to the top. Copy Lua: each trigger, alias and timer list gets a Copy Lua button that puts the selected rule on the clipboard as plugin code (scrye.addTrigger / addAlias / every), with what a plugin rule cannot do noted as comments. A notice at startup names the plugins you use that have a newer version in the catalogue. Plugin API 1.23: input widgets take a width in characters. Plugins: 3S Map GMCP 1.13.0 adds hand links for doors the map cannot see ('mapg link', or the Link last move button), and 1.12.1 stops false EXITS CHANGED warnings; Farmer 1.6.1 no longer swings at dead mobs and guards after a kill; Viking Status 2.27.5 adds a Staffing view in the People tab, the livestock market's new home and an incoming-war warning, with coloured ON/OFF and compact settings on Trade Auto (2.27.4); Viking Kingdom 1.1.0 shows incoming war and the war saga.",
-  "published": "2026-10-06"
+  "version": "1.10.7",
+  "tag": "v1.10.7",
+  "notes": "v1.10.7 - Reconnect: a Reconnect button while a world is down (or .reconnect) connects again in the same tab, scrollback and all; double-clicking a character whose tab is open goes to that tab instead of opening a second one, using the profile as it is now; and a server that drops the connection straight away no longer resets the retry budget. A prompt sent without a newline or GA now shows after a short pause, so triggers and auto-login see it at once. Safer: an error in the window is logged and shown instead of closing Scrye; Delete in the MUD list and Remove for a plugin ask for a second press; macros no longer fire while you type in other text boxes; Esc closes Settings, the profile editor and Quick Connect; TLS no longer accepts any certificate unless 'Accept self-signed' is ticked; a log that cannot be written stops itself instead of stopping the display; a malformed GMCP message can no longer swallow game output; a trigger or alias pattern that takes over 250 ms is skipped and named. Plugins: Lua plugins get a 256 MB memory limit, a failing plugin prints a few errors a minute instead of one per line, and one failing 30 times a minute is unloaded. Macros: the numpad's + - *…",
+  "published": "2026-10-22"
 }
