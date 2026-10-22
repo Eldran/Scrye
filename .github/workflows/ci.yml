@@ -121,15 +121,34 @@ jobs:
           # the default 'warn' just adds a red herring to an already-failing run.
           if-no-files-found: ignore
 
+  # The shipped Lua plugins' own harnesses (tests/plugins/*_test.lua): each loads the REAL
+  # plugin from src/Scrye.App/plugins into a fake host and exits non-zero when a check
+  # fails. Before 1.10.7 they lived in the git-excluded _lab folder, so CI never saw them -
+  # and one (raidgmcp) had gone stale against its plugin without anyone noticing. Plain
+  # Lua 5.4, no .NET and no build, so one cheap Linux runner covers every platform.
+  plugins:
+    name: Plugin harnesses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Lua 5.4
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.4
+
+      # bash, not ./run.sh: a commit from Windows does not carry the executable bit.
+      - name: Run every harness
+        run: bash tests/plugins/run.sh
+
   # A single job to point branch protection at, so the required check does not have to be
   # renamed every time the matrix changes shape.
   ci:
     name: CI
     if: always()
-    needs: build
+    needs: [build, plugins]
     runs-on: ubuntu-latest
     steps:
       - name: Check matrix result
         run: |
           echo "build result: ${{ needs.build.result }}"
-          [ "${{ needs.build.result }}" = "success" ]
+          echo "plugin harnesses: ${{ needs.plugins.result }}"
+          [ "${{ needs.build.result }}" = "success" ] && [ "${{ needs.plugins.result }}" = "success" ]
