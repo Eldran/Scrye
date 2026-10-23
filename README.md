@@ -62,13 +62,16 @@ Scrye is a working client in daily use on [3Scapes](https://www.3scapes.org/). C
 
 What's there today:
 
-- **Connection** — TCP with TLS, telnet negotiation, MCCP compression, automatic reconnect with backoff, and optional auto-login.
-- **Protocols** — ANSI (16 / 256 / truecolour), MXP with clickable command links, GMCP, MSP sound, and MIP.
+- **Connection** — TCP with TLS, telnet negotiation, MCCP compression, automatic reconnect with backoff (and a Reconnect button that keeps the tab's scrollback once it gives up), and optional auto-login with the password kept in the OS credential store.
+- **Protocols** — ANSI (16 / 256 / truecolour), MXP with clickable command links, GMCP, MSP sound, and MIP — with `.gmcp` and `.mxp` reports of what the server actually sends.
 - **Multi-world** — several worlds connected at once as tabs, each with its own scrollback, automation and plugins. Optionally broadcast a command to all of them.
 - **Automation** — triggers (plain or regex), aliases, timers, sequences, highlights, and keyboard macros, with an event debugger and a state inspector for working out why a rule did or didn't fire.
 - **Profiles** — a four-layer cascade (Global → MUD → Account → Character). Single values take the deepest layer that sets them; collections merge across layers.
 - **Scripting** — a Lua console (`/…` in the command line) and a `world.*` API, running on the session loop so ordering stays deterministic.
-- **Plugins** — Lua and JavaScript plugins with a manifest, per-character opt-in, live reload, persistent per-world storage, and declarative HUD panels.
+- **Plugins** — Lua, JavaScript and WebAssembly plugins with a manifest, per-character opt-in, live reload, persistent per-world storage, and declarative HUD panels. An in-app **catalogue** installs and updates them from the release, checksum-verified, and Scrye tells you at startup when a plugin you use has a newer version.
+- **Updates** — Scrye knows its own version and says when a newer release is out.
+- **Coming from MUSHclient** — `.import` reads a MUSHclient world file or exported plugin and brings the triggers, aliases, timers, macros and variables across, saying what it left behind and why.
+- **Idle guard** — a dead-man's switch: when nobody has been at the keyboard for a while, timers, sequences and plugin bots stop.
 - **Output** — a virtualized renderer, find-in-scrollback, tab completion from seen words, command history, capture panes for routed lines (chat, tells), session logging, and recording/replay.
 - **Appearance** — themes, a monospace-only font picker with live preview, and a choice between the modern xterm and classic MUSHclient ANSI palettes.
 - **Text-to-speech** for incoming output (Windows only at runtime).
@@ -86,7 +89,8 @@ A strict engine/UI split, a staged receive pipeline (bytes → telnet → decode
 | `Scrye.Cli` | A dependency-free harness; `--selftest` runs canned bytes through the telnet + ANSI pipeline and prints the parsed lines. |
 | `Scrye.Companion.Protocol` | The mobile-companion wire contract: message DTOs, batching and JSON config. References `Scrye.Core` only — no NuGet. |
 | `Scrye.Companion.Server` | Kestrel + WebSocket host running inside `Scrye.App`, plus the PWA client and Web Push. Kestrel comes from the shared framework — no NuGet. |
-| `Scrye.Core.Tests` | xUnit tests over the engine — parser, telnet, automation, highlights, profiles, state store, MIP, plugins, sequences, replay, logging, reconnect. |
+| `Scrye.Core.Tests` | xUnit tests over the engine — parser, telnet, automation, highlights, profiles, state store, MIP, plugins, sequences, replay, logging, reconnect — and the Lua runtime on real Lua. |
+| `tests/plugins` | Each shipped plugin's own Lua harness: it loads the real plugin into a fake host. `bash tests/plugins/run.sh` runs them all. |
 
 `Scrye.Core` staying NuGet-free is deliberate: it keeps the engine portable and makes it cheap to host somewhere other than the desktop app.
 
@@ -104,6 +108,7 @@ Requires the **.NET 10 SDK**. First build restores NuGet packages (Avalonia 12, 
 ```
 dotnet build
 dotnet test                                          # engine tests
+bash tests/plugins/run.sh                            # plugin harnesses (needs lua5.4)
 dotnet run --project src/Scrye.Cli -- --selftest     # offline pipeline demo
 dotnet run --project src/Scrye.App                   # the GUI
 ```
@@ -135,7 +140,7 @@ That script is for handing a build to someone directly. **Releases are automated
 - **Linux** works. The `linux-x64` self-contained build has been run on Ubuntu and renders identically to Windows, fonts included. It is smoke-tested when something platform-sensitive changes, not on every commit, so treat it as working-but-lightly-exercised.
 - **macOS** works — built from source and run there, no problems reported. There is no macOS download, though: shipping one needs a `.app` bundle, a Developer ID certificate and notarization, or Gatekeeper refuses to open it, and that pipeline is the real cost rather than the code. So build it yourself with the `dotnet publish` command above. It sees less use than Windows or Linux, and text-to-speech and saved passwords are unimplemented there.
 
-CI compiles the whole solution on Linux and Windows per push, so a build break surfaces within minutes on any of them. `WinExe` in `Scrye.App.csproj` is not an obstacle to a non-Windows build: it only sets the Windows PE subsystem and is ignored for other RIDs.
+CI builds the whole solution and runs the tests on Linux and Windows on every push (macOS weekly), and runs every shipped plugin's harness, so a build break or a plugin regression surfaces within minutes. `WinExe` in `Scrye.App.csproj` is not an obstacle to a non-Windows build: it only sets the Windows PE subsystem and is ignored for other RIDs.
 
 ## Plugins
 
@@ -145,7 +150,7 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 {
   "id": "3s-viking-status-gmcp",
   "name": "3S Viking Status (GMCP)",
-  "version": "2.26.0",
+  "version": "2.29.1",
   "author": "Joakim",
   "description": "Tabbed Viking status HUD panel fed by the Guild.* GMCP packages",
   "mudIds": ["*"],
@@ -157,12 +162,16 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 }
 ```
 
-The **plugin API is versioned independently of the client** (currently 1.11, and versioned as the
+The **plugin API is versioned independently of the client** (currently 1.23, and versioned as the
 `Scrye.PluginContracts` assembly), so a plugin declares what it needs and an incompatible build
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
-Plugins are loaded from `plugins/` next to the executable and from `%APPDATA%/Scrye/plugins`, and are enabled per character. The bundled 3Scapes plugins include `3s-chaossea`, `3s-chat`, `3s-map-gmcp` (the automapper, with the auto‑explore sweep), `3s-farmer`, `3s-raid-gmcp`, `3s-stepper`, `3s-viking-status-gmcp` (with `3s-viking-world` and `3s-viking-kingdom`) and `3s-vitals`; the old dead‑reckoning `3s-map` was retired in favour of the GMCP mapper, and the MIP‑fed Viking Status and Auto‑Raid classics went in September 2026 when 3Scapes dropped its MIP feed. Two more folders, `3s-build` and `3s-market`, are now only notices — the build planner became the **Builds** tab of `3s-viking-status-gmcp`, and the market scanner and auto-trader its **Trade** tabs.
+Plugins are loaded from `plugins/` next to the executable and from your user plugins folder (`%APPDATA%/Scrye/plugins` on Windows, `~/.config/Scrye/plugins` on Linux and macOS), and are enabled per character. The ones that ship with Scrye, nearly all for [3Scapes](https://www.3scapes.org/):
+
+- **Getting around** — `3s-map-gmcp`, the automapper (rooms by the number the server gives them, with an auto-explore sweep); `3s-farmer`, an area farming bot that also searches an area for a player; `3s-stepper`, recorded routes; `3s-chaossea`, the chaos-sea bot, with `3s-pathfinder` doing its path search in Rust compiled to WebAssembly; and `3k-chaossea`, the classic bot kept for 3K-3Kingdoms.
+- **Guild HUDs** — the Viking guild as four plugins (`3s-viking-status-gmcp` for the settlement, `3s-viking-world` for the fleet, `3s-viking-kingdom` for the dynasty, `3s-viking-fx` for effect timers) plus `3s-raid-gmcp`, the auto-raider; and one each for Changeling, Cyborg, Gentech, Juggernaut and Mage, and `3s-merc` for a hired mercenary.
+- **Everyday** — `3s-chat`, every channel and tell in one capture pane with name watching; `3s-vitals`, compact gauges.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:
 
@@ -185,9 +194,12 @@ bound data, so a variable-length collection no longer has to be composed into a 
 
 Because a panel is data rather than drawing code, the same spec can be rendered by something other than the desktop UI — which is what the mobile companion below is built on.
 
-Plugins are also **measured**: everything a plugin does on an output line runs on the session loop,
-so Scrye reports callbacks slower than 50 ms and unloads a plugin that fails ten times in a row,
-rather than letting one bad script quietly degrade a world.
+Plugins are also **measured and bounded**: everything a plugin does on an output line runs on the
+session loop, so Scrye reports callbacks slower than 50 ms, prints a failing plugin's errors a few
+times a minute rather than once per line, and unloads a plugin that fails ten times in a row or
+thirty times in a minute, rather than letting one bad script quietly degrade a world. Lua runs
+under an instruction budget and a 256 MB memory limit, JavaScript under time, memory and
+recursion limits, WebAssembly under a deadline and a 64 MB cap.
 
 See **[docs/Scrye-Guide.md](docs/Scrye-Guide.md)** for the user guide and the full `scrye.*` plugin API.
 
@@ -208,19 +220,19 @@ output lines, state changes, HUD panel specs) and the phone renders its own UI.
 - **Resume, not reload** — every output line carries a sequence number, so a phone that was
   asleep replays the gap instead of starting over.
 
-Two new projects, both NuGet-free: `Scrye.Companion.Protocol` (the wire contract) and
+Two projects, both NuGet-free: `Scrye.Companion.Protocol` (the wire contract) and
 `Scrye.Companion.Server` (Kestrel + WebSocket, hosted inside `Scrye.App`).
 
-Start it with `.companion` in any connected world. To reach it from outside the machine,
+Start it from the **📱 Companion** panel in a world's bottom bar (or `.companion`). To reach it from outside the machine,
 see **[docs/Scrye-Companion-Setup.md](docs/Scrye-Companion-Setup.md)** — it stays bound to
 loopback and Tailscale provides the certificate and the route.
 
-## Roadmap
+## What isn't there yet
 
-Per-device pairing and revocation, panel `input`/`colorgrid` interactions, and a desktop
-settings panel to replace the `.companion` command. A native Avalonia-mobile client remains
-optional — the PWA has not yet run out of road. The full build order and the reasoning
-behind each decision are in
+**[docs/Backlog.md](docs/Backlog.md)** lists it honestly. The larger gaps: no macOS download
+(the app runs there; shipping it needs signing and notarization), text-to-speech outside
+Windows, saved passwords on macOS, and per-device pairing for the mobile companion. A native Avalonia-mobile
+client remains optional — the PWA has not yet run out of road; the reasoning is in
 **[docs/Scrye-Companion-Design.md](docs/Scrye-Companion-Design.md)**.
 
 ## License
