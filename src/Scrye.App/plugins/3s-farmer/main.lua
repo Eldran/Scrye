@@ -67,6 +67,8 @@ local S = {               -- the run
   adrift_at = 0,
   found = nil,            -- { num, name }: the player was seen with a burst still in flight;
                           -- the search walks back there once the burst has landed
+  recheck = nil,          -- the room walked back to: its Contents says whether they are
+                          -- still there (found) or have moved on (search on)
 }
 local C = {               -- knobs (persisted)
   pace = 0,               -- seconds between arrival and the next step; 0 = fast: step as
@@ -675,6 +677,19 @@ local function is_dud(num) return DUD[num] ~= nil end
 -- rooms; a checked room stops pulling it for SEEK_RECHECK seconds - people move, so it is
 -- a while, not for good. Session-only.
 local SEEN_P = {}
+
+-- The steps we have sent that have not come back through scrye.onCommand yet. Every command
+-- that goes to the MUD - ours included - is echoed to every plugin's onCommand, and the
+-- echo is how a move YOU type is told from ours. 1.9.0 only recognised the step in hand
+-- (S.step), and a search's burst sends its steps at once: their echoes all arrive before
+-- the first one lands, so in a burst that turned a corner ('s', 'w') the 'w' echo read as
+-- you moving and stopped the search - "it just stops though they are still in the area"
+-- (Joakim, 22 Oct 2026). Counted per direction; reset when the patrol stops.
+local ECHO = {}
+local function go(dir)
+  ECHO[dir] = (ECHO[dir] or 0) + 1
+  scrye.send(dir)
+end
 local SEEK_RECHECK = 120
 
 -- Does a player name from Room.Contents name the player sought? Whole words, any case:
@@ -711,9 +726,12 @@ local function pick_target()
   if S.seek then
     -- A search goes where the PEOPLE are - the nearest room the grid shows a player in that
     -- has not been checked lately - and otherwise sweeps by staleness, players or not.
+    -- Every room is a place to look, pass-through and rest rooms included: those are rules
+    -- about FIGHTING, and 1.9.0 never chose one as a destination, so somebody standing in a
+    -- corridor marked 'pass' was only found if a route happened to cross it.
     if los then
       for _, num in ipairs(order) do
-        if los.players[num] and not passing(num) and not (SEEN_P[num] and now - SEEN_P[num] < SEEK_RECHECK) then
+        if los.players[num] and not (SEEN_P[num] and now - SEEN_P[num] < SEEK_RECHECK) then
           return num, first[num], "a player in sight", prev
         end
       end
@@ -721,7 +739,7 @@ local function pick_target()
     local best, best_last = nil, nil
     for _, num in ipairs(order) do
       local l = G[num].last
-      if not passing(num) and (best_last == nil or l < best_last) then best, best_last = num, l end
+      if best_last == nil or l < best_last then best, best_last = num, l end
     end
     if not best then return nil end
     return best, first[best], nil, prev
@@ -752,7 +770,8 @@ local function stop_patrol(why)
   XP.run1 = XP.seen and XP.xp or nil   -- ...and the run's XP with it
   S.on = false ; S.step = nil ; S.route = nil
   S.seek = nil                         -- a stopped search is over
-  S.queue = nil ; S.adrift = 0 ; S.found = nil
+  S.queue = nil ; S.adrift = 0 ; S.found = nil ; S.recheck = nil
+  ECHO = {}
   B.hunting = false ; B.target = nil   -- no patrol, no hunt: the HUD shows no target
   B.retreat = nil ; B.parking = false ; B.resting = false
   if S.timer then scrye.cancel(S.timer) ; S.timer = nil end
@@ -850,7 +869,7 @@ retreat_step = function()
   S.route = leg_to(B.retreat, prev)
   S.step = { dir = dir, to = tonumber(G[here].exits[dir]), at = now }
   S.led = false
-  scrye.send(dir)
+  go(dir)
   draw()
 end
 
@@ -924,8 +943,8 @@ step_out = function()
       from = to
     end
   end
-  scrye.send(dir)
-  for _, q in ipairs(S.queue or {}) do scrye.send(q.dir) end
+  go(dir)
+  for _, q in ipairs(S.queue or {}) do go(q.dir) end
   draw()
 end
 
@@ -965,6 +984,7 @@ local function on_room_info(json)
     -- not "quiet" in this sense: an 'm' appearing there is something new, worth a look.
     B.left = { num = here, quiet = #B.mobs > 0 and pick_from_roster(true) == nil }   -- B.mobs is still that room's
     B.skip = {} ; B.kwidx = {} ; B.los = nil   -- give-ups, keyword tries and the LOS picture are per room
+    if S.recheck and num ~= S.recheck then S.recheck = nil end   -- moved on before its Contents came
   end
 
   -- The roster is deliberately NOT touched on arrival. The server suppresses a
@@ -1013,11 +1033,13 @@ local function on_room_info(json)
         S.step = table.remove(S.queue, 1)
         S.step.at = now
       elseif S.seek and S.found and num == S.found.num then
-        local who = S.seek
-        stop_patrol(nil)
-        note(string.format("found %s here - %s (%s): seen as we went through, walked back. Search stopped.",
-                           who, tostring(r.name or "?"), tostring(num)))
-        scrye.notify("farm: found " .. who .. " - " .. tostring(r.name or "?"))
+        -- Back where they were seen. Whether they are STILL here is the room's Contents,
+        -- arriving now, to say (1.9.0 stopped on arrival and called it found - a player who
+        -- had walked on meant a search stopped in an empty room). If they are gone, the
+        -- search walks on from here.
+        S.found = nil
+        S.recheck = num
+        schedule_step()
       elseif B.retreat then
         if num == B.retreat and B.parking then
           B.retreat = nil ; S.route = nil ; B.resting = false ; B.parking = false
@@ -1101,11 +1123,17 @@ local function on_room_contents(json)
       end
       if is_sought(name) then
         local who, where = S.seek, here and G[here] and G[here].name or "?"
+        local back = S.recheck ~= nil and S.recheck == here
         stop_patrol(nil)
-        note(string.format("found %s here - %s (%s). Search stopped.", who, where, tostring(here or "?")))
+        note(string.format("found %s here - %s (%s)%s. Search stopped.", who, where, tostring(here or "?"),
+                           back and ": seen as we went through, walked back" or ""))
         scrye.notify("farm: found " .. who .. " - " .. where)
         return
       end
+    end
+    if S.recheck ~= nil and S.recheck == here then
+      S.recheck = nil
+      note(string.format("%s has moved on from %s - searching on", S.seek, here and G[here] and G[here].name or "?"))
     end
     if #B.players > 0 and here then SEEN_P[here] = now end   -- somebody, not them
   end
@@ -2005,7 +2033,7 @@ scrye.addAlias{
 scrye.onCommand(function(cmd)
   local word = tostring(cmd or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
   if not DIRS[word] then return end
-  if S.step and S.step.dir == word then return end   -- our own step echoing back
+  if (ECHO[word] or 0) > 0 then ECHO[word] = ECHO[word] - 1 ; return end   -- one of ours echoing back
   if S.on then stop_patrol("you moved yourself") end
 end)
 

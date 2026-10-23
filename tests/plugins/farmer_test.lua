@@ -1834,7 +1834,79 @@ sent = {}
 fire_timers()
 check(first_move() == "e", "seek: ...and it walks back toward where they were seen")
 room(F2) ; tick()
+check(not said("found walker here"), "seek: arriving back is not yet finding them - the room's Contents says")
+contents(WALKER)
 check(said("found walker here - Yard (2): seen as we went through, walked back"), "seek: back there, the search stops")
+
+-- 1.9.1: walked back, and they have moved on - the search goes on instead of stopping in
+-- an empty room (1.9.0 called the arrival itself "found")
+fresh_client() ; load_plugin()
+explore()
+room(F2) ; tick() ; room(F3) ; tick()
+farm("seek walker")
+sent = {}
+fire_timers()                               -- w, w
+room(F2) ; tick()
+contents(WALKER)                            -- seen mid-burst
+room(F1) ; tick()
+sent = {}
+fire_timers()                               -- back east toward the Yard
+clear()
+room(F2) ; tick()
+contents(STRANGER)                          -- somebody else stands there now
+check(not said("found walker"), "seek: back where they were seen, but gone: not found")
+check(said("walker has moved on from Yard - searching on"), "seek: ...it says so")
+check((state["plugin.3s-farmer.status"] or ""):find("SEEKING", 1, true) ~= nil, "seek: ...and the search goes on")
+sent = {}
+fire_timers()
+check(first_move() ~= nil, "seek: ...walking on from there")
+farm("stop")
+
+-- 1.9.1: a burst's steps all echo back through onCommand before the first one lands. A
+-- burst that turns a corner ('s' then 'w') had its second echo read as YOU moving, and the
+-- search stopped ("it just stops though they are still in the area", Joakim 22 Oct 2026).
+local T11 = '{ "num": 11, "name": "Mill", "area": "Turnland", "exits": { "e": 12 } }'
+local T12 = '{ "num": 12, "name": "Lane", "area": "Turnland", "exits": { "w": 11, "n": 13 } }'
+local T13 = '{ "num": 13, "name": "Pond", "area": "Turnland", "exits": { "s": 12 } }'
+fresh_client() ; load_plugin()
+room(T11) ; tick() ; room(T12) ; tick() ; room(T13) ; tick()   -- the Mill is stalest; we stand in the Pond
+farm("seek walker")
+sent = {}
+fire_timers()
+check(#sent == 2 and sent[1] == "s" and sent[2] == "w",
+      "(setup) a burst round a corner: s, w (" .. table.concat(sent, ",") .. ")")
+clear()
+for _, c in ipairs(sent) do cmd(c) end      -- as the client does: every send echoes, all before any arrival
+check(not said("you moved yourself") and not said("patrol stopped"),
+      "seek: the burst's own steps echoing back are not you - round a corner too")
+room(T12) ; tick() ; room(T11) ; tick()
+check(not said("patrol stopped"), "seek: ...and both steps land as the search's own")
+check((state["plugin.3s-farmer.status"] or ""):find("SEEKING", 1, true) ~= nil, "seek: ...still searching")
+cmd("w")                                    -- you, at the keyboard - the same word as an echo already
+                                            -- spent: each send excuses ONE echo, not that word for good
+check(said("you moved yourself"), "seek: a move you type mid-search still stops it")
+
+-- the plain patrol's steps echo too, and are not you either
+fresh_client() ; load_plugin()
+room(T11) ; tick() ; room(T12) ; tick() ; room(T13) ; tick()
+farm("start")
+sent = {}
+fire_timers() ; prompt()
+clear()
+for _, c in ipairs(sent) do cmd(c) end
+check(#sent > 0 and not said("you moved yourself"), "patrol: its own step echoing back is not you")
+farm("stop")
+
+-- 1.9.1: a search looks in pass-through rooms too - 'pass' is a rule about fighting, and
+-- 1.9.0 never chose one as a destination, so a player standing in one went unfound
+fresh_client() ; load_plugin()
+room(T11) ; tick() ; room(T12) ; tick() ; room(T13) ; tick()
+farm("room 11 pass")                        -- the Mill, the stalest room, is pass-through
+farm("seek walker")
+sent = {}
+fire_timers()
+check(#sent == 2 and sent[1] == "s" and sent[2] == "w", "seek: the search heads for the pass room like any other")
+farm("stop")
 
 -- a step of a burst refused: the rest still lands from where we are, and the search goes on
 fresh_client() ; load_plugin()
