@@ -1,9 +1,9 @@
 {
   "id": "3s-stepper",
   "name": "3S Stepper",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "author": "Joakim",
-  "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper. Reads the room and its contents from GMCP, so the MUD's '=S=', '=M=' and '=P=' display markers are no longer needed; those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. 1.1.2 (5 Oct): the idle guard and .stop now stop a bot in mid-fight too - before, the killing blow re-attacked and autoresume walked on.",
+  "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper. Reads the room and its contents from GMCP, so the MUD's '=S=', '=M=' and '=P=' display markers are no longer needed; those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. 1.1.2 (5 Oct): the idle guard and .stop now stop a bot in mid-fight too - before, the killing blow re-attacked and autoresume walked on. 1.1.3 (25 Oct): its end-anchored triggers (\"There is no X here.\", \"You cannot go X.\", the =M=/=P= markers) allow trailing whitespace, so a guild that pads its lines (a Changeling) no longer stalls it.",
   "mudIds": [
     "*"
   ],

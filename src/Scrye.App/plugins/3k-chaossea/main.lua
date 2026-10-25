@@ -1337,17 +1337,17 @@ end
 -- ---------- triggers ----------
 scrye.addTrigger{ pattern = [[^=S=(.*)=S=]], regex = true,
   run = function(w1) cs_on_room(w1 or "") end }
-scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+?)\s*$]], regex = true,
   run = function(w1) cs_on_mob(w1 or "") end }
-scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+?)\s*$]], regex = true,
   run = function(w1) cs_on_player(w1 or "") end }
-scrye.addTrigger{ pattern = [[^=[AWI]= ?(.*)$]], regex = true,
+scrye.addTrigger{ pattern = [[^=[AWI]= ?(.*?)\s*$]], regex = true,
   run = function(w1) cs_on_item(w1 or "") end }
-scrye.addTrigger{ pattern = [[ gold coins\.$]], regex = true,
+scrye.addTrigger{ pattern = [[ gold coins\.\s*$]], regex = true,
   run = function() cs_flags.gold = true end }
-scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true,
+scrye.addTrigger{ pattern = [[^There is no (.+) here\.\s*$]], regex = true,
   run = function(w1) cs_no_mob(w1 or "") end }
-scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.$]], regex = true,
+scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.\s*$]], regex = true,
   run = function() cs_blocked() end }
 scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], regex = true,
   run = function() cs_blocked() end }

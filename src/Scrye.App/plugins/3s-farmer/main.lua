@@ -2244,7 +2244,7 @@ scrye.onGmcp("Room.Death", function(json)
   if ours then own_kill(e, d.name) else draw() end
 end)
 
-scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true, run = function(what)
+scrye.addTrigger{ pattern = [[^There is no (.+) here\.\s*$]], regex = true, run = function(what)
   -- We swung at a name the room no longer holds - it died to someone else, wandered off,
   -- or the roster was a beat stale. Drop it and consult the roster again.
   if not (S.on and B.hunting) then return end

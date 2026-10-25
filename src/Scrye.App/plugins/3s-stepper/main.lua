@@ -767,11 +767,11 @@ scrye.onGmcp("Room.Contents", on_gmcp_contents)
 -- pattern never matched a real line - unnoticed for as long as GMCP covered arrivals.
 scrye.addTrigger{ pattern = [[^\s*=S=(.*)=S=]], regex = true,
   run = function() if not gmcp_room then on_room() end end }
-scrye.addTrigger{ pattern = [[^\s*(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^\s*(?:=M= ?|\[MONSTAR!\])(.+?)\s*$]], regex = true,
   run = function(name) if not gmcp_contents then on_mob(name) end end }
-scrye.addTrigger{ pattern = [[^\s*(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^\s*(?:=P= ?|\[PLAYAR!\])(.+?)\s*$]], regex = true,
   run = function(name) if not gmcp_contents then on_player(name) end end }
-scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.$]], regex = true,
+scrye.addTrigger{ pattern = [[^You cannot go (\w+)\.\s*$]], regex = true,
   run = function() bot_path_undo() end }
 scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], regex = true,
   run = function() bot_path_undo() end }
@@ -780,7 +780,7 @@ scrye.addTrigger{ pattern = [[collapses, unblocking the escape routes\.]], regex
   -- glance is asking for something already on its way. Worse than redundant with the
   -- markers off: '!glance' then produces nothing this plugin can read.
   run = function() if bot.active and not gmcp_live then scrye.send("!glance") end end }
-scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true,
+scrye.addTrigger{ pattern = [[^There is no (.+) here\.\s*$]], regex = true,
   run = function(name)
     if bot.active and not bot.user_paused and bot.paused_on_mob and bot.autoresume
        and name == bot.current_mob then

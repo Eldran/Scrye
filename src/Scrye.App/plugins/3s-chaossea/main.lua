@@ -2061,15 +2061,19 @@ scrye.addTrigger{ pattern = [[^Suddenly you find yourself elsewhere]], regex = t
 -- The marker triggers are now the FALLBACK, not the source: they stand down for any room
 -- Room.Contents has already described. Keeping them means the markers can be switched off
 -- one at a time, and that a MUD or a character without GMCP still works.
-scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^(?:=M= ?|\[MONSTAR!\])(.+?)\s*$]], regex = true,
   run = function(w1) if not contents_seen then cs_on_mob(w1 or "") end end }
-scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+)$]], regex = true,
+scrye.addTrigger{ pattern = [[^(?:=P= ?|\[PLAYAR!\])(.+?)\s*$]], regex = true,
   run = function(w1) if not contents_seen then cs_on_player(w1 or "") end end }
-scrye.addTrigger{ pattern = [[^=[AWI]= ?(.*)$]], regex = true,
+scrye.addTrigger{ pattern = [[^=[AWI]= ?(.*?)\s*$]], regex = true,
   run = function(w1) if not contents_seen then cs_on_item(w1 or "") end end }
-scrye.addTrigger{ pattern = [[ gold coins\.$]], regex = true,
+scrye.addTrigger{ pattern = [[ gold coins\.\s*$]], regex = true,
   run = function() cs_flags.gold = true end }
-scrye.addTrigger{ pattern = [[^There is no (.+) here\.$]], regex = true,
+-- Trailing whitespace allowed on every end-anchored line (2.3.1): a Changeling's output is
+-- padded with spaces, so an exact "here\.$" never matched, the room-clear signal never came,
+-- and the bot re-sent 'kill mutant' into an empty room for good (Joakim, 25 Oct 2026).
+-- ShippedPluginTriggerTests holds every shipped plugin to it.
+scrye.addTrigger{ pattern = [[^There is no (.+) here\.\s*$]], regex = true,
   run = function(w1) cs_no_mob(w1 or "") end }
 -- Deliberately NOT anchored at the end. This was [[^You cannot go (\w+)\.$]], which fails
 -- on a single trailing space -- and a refusal that does not match costs the full step
