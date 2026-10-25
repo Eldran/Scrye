@@ -7,6 +7,9 @@
 -- Equivalent mutants (documented, not hunted): pick_target's map branch once read
 -- `los.mobs[num] and not los.players[num]` - a grid cell is one glyph, 'm' or 'p', never
 -- both, so the second half could not be false when the first was true; it is gone.
+-- The after-kill delay's watchdog stamp is B.breath_until = math.max(B.breath_until, now +
+-- C.breath); a plain `now + C.breath` differs only when a breath is armed while a LONGER
+-- one is still pending - the delay lowered mid-breath - which no test stages.
 
 -- Run from anywhere: paths are resolved relative to THIS file, which sits
 -- beside the plugin it tests.
@@ -3234,5 +3237,124 @@ do
   local _, _, why4 = dud_run(0, { GOLEM, EMPTY })
   check(why4:find("(mobs in sight)", 1, true) ~= nil, "a dud that is then seen empty is a dud no longer")
 end
+
+-- 70. THE AFTER-KILL DELAY (1.10.0, Joakim 25 Oct 2026: "extend the after kill delay, in
+--     the UI"). 'farm delay <s>' - and its Settings box - sets the breath after a kill:
+--     the time your own looting triggers get before the after-kill commands and the next
+--     mob. It persists, it is bounded, and the hunt watchdog waits it out.
+local function armed()          -- the seconds of every timer now pending, sorted
+  local t = {}
+  for id in pairs(timers) do t[#t + 1] = timer_secs[id] or -1 end
+  table.sort(t)
+  return t
+end
+local function has(list, v) for _, x in ipairs(list) do if x == v then return true end end return false end
+fresh_client() ; load_plugin()
+clear() ; farm("delay")
+check(said("farm delay <seconds> - after each kill, 0 to 30 (now 2s; default 2)"), "delay: bare 'farm delay' says the current value and the range")
+check((state["plugin.3s-farmer.delayhint"] or ""):find("wait 2s", 1, true) ~= nil, "delay: the Settings tab shows the default 2s")
+explore() ; farm("start")
+contents(CUR) ; prompt()                   -- kill cur
+fire_trigger("dealt the killing blow", "You", "a small cur")
+check(has(armed(), 2), "delay: by default the breath after a kill is 2s")
+farm("stop") ; timers = {}
+-- set it
+clear() ; farm("delay 6.5")
+check(said("after-kill delay: 6.5s"), "delay: 'farm delay 6.5' sets it, decimals kept")
+check(store["breath"] == "6.5", "delay: ...and stores it (" .. tostring(store["breath"]) .. ")")
+check((state["plugin.3s-farmer.delayhint"] or ""):find("wait 6.5s", 1, true) ~= nil, "delay: ...and the Settings tab shows it")
+clear() ; farm("help")
+check(said("farm delay <s>") and said("(now 6.5)"), "delay: the help lists it with the current value")
+clear() ; farm("delay 2.36")
+check(said("after-kill delay: 2.4s"), "delay: kept to tenths of a second, rounded")
+clear() ; farm("breath 0")
+check(said("after-kill delay: 0s"), "delay: 'farm breath' is the same command; 0 is allowed")
+for _, bad in ipairs({ "31", "-1", "abc", "1e999" }) do
+  clear() ; farm("delay " .. bad)
+  check(said("farm delay <seconds>") and said("now 0s"), "delay: '" .. bad .. "' is refused and changes nothing")
+end
+clear() ; farm("delay 30")
+check(said("after-kill delay: 30s"), "delay: 30 is the ceiling, and allowed")
+-- the Settings box is the typed command
+local dbox
+for _, w in ipairs(pw()) do if w.bind == "plugin.3s-farmer.set_delay" then dbox = w end end
+check(dbox and dbox.type == "input" and dbox.onSubmit, "delay: a Settings box for it")
+local dhint = false
+for _, w in ipairs(pw()) do if w.bind == "plugin.3s-farmer.delayhint" and w.type == "label" then dhint = true end end
+check(dhint, "delay: ...with a live label beside it")
+clear() ; dbox.onSubmit("12")
+check(said("after-kill delay: 12s"), "delay: the box is 'farm delay'")
+-- it survives a reload
+fresh_client(true) ; load_plugin()
+clear() ; farm("delay")
+check(said("now 12s"), "delay: the setting survives a reload")
+-- a stored value out of range is not trusted
+for _, bad in ipairs({ "99", "-1", "x" }) do
+  store["breath"] = bad
+  fresh_client(true) ; load_plugin()
+  clear() ; farm("delay")
+  check(said("now 2s"), "delay: a stored '" .. bad .. "' is not trusted - the default stands")
+end
+store["breath"] = "12"
+fresh_client(true) ; load_plugin()
+-- the kill uses it: the after-kill commands wait the whole delay
+explore() ; farm("start")
+farm("after add get all from corpse")
+contents(CUR) ; prompt()                   -- kill cur
+fire_trigger("dealt the killing blow", "You", "a small cur")
+check(has(armed(), 12), "delay: the kill's breath is armed with the set delay (" .. table.concat(armed(), ",") .. ")")
+contents(EMPTY) ; sent = {}
+for _ = 1, 5 do tick() end
+check(#sent == 0, "delay: nothing goes out inside the delay")
+fire_timers()
+check(sent[1] == "get all from corpse", "delay: ...and the after-kill commands when it ends")
+farm("stop")
+-- a fight that ends (Char.Combat) breathes the set delay too
+fresh_client(true) ; load_plugin()
+explore() ; farm("start")
+contents(TWO) ; prompt()
+combat('{ "attacker": "Small cur", "rounds": 2, "target": "you" }')
+timers = {}
+combat('{ "attacker": "", "rounds": 0 }')
+check(has(armed(), 12), "delay: the fight's end breathes the set delay (" .. table.concat(armed(), ",") .. ")")
+farm("stop")
+-- THE WATCHDOG WAITS IT OUT. With no Char.Combat the hunt's last sign of life is the
+-- 'kill' sent; a delay longer than hunt_wait (8 s) would read as a 'kill' nobody answered
+-- and give up the name - and a second cur still standing here with it.
+local CURS = '{ "full": 1, "items": [ { "name": "Small cur", "type": "monster" }, { "name": "Small cur", "type": "monster" } ] }'
+fresh_client(true) ; load_plugin()
+farm("after -")                            -- just the hunt here
+explore() ; farm("start")
+contents(CURS) ; prompt()                  -- kill cur
+fire_trigger("dealt the killing blow", "You", "a small cur")
+contents(CUR)                              -- one cur left
+sent = {} ; clear()
+for _ = 1, 15 do tick() end                -- past hunt_wait, inside the 12 s delay + 8
+check(not said("went unanswered") and #sent == 0, "delay: the watchdog does not fire inside a long delay (" .. table.concat(sent, "; ") .. ")")
+fire_timers()                              -- the delay ends
+check(sent[1] == "kill cur", "delay: ...and the cur still here is swung at after it (" .. table.concat(sent, "; ") .. ")")
+sent = {} ; clear()
+for _ = 1, 9 do tick() end                 -- this 'kill' nobody answers
+check(said("went unanswered for 8s"), "delay: the watchdog still works once the delay is over")
+farm("stop")
+-- ...and a breath that ends with something still hitting us re-arms the whole delay, which
+-- the watchdog waits out too: the fight clears a moment later, the cur is still swung at.
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+contents(CURS) ; prompt()                  -- kill cur
+state["enemy.name"] = "cur"
+fire_trigger("dealt the killing blow", "You", "a small cur")
+contents(CUR)
+for _ = 1, 12 do tick() end
+fire_timers()                              -- the delay ends mid-combat: armed again
+state["enemy.name"] = nil                  -- and the combat clears
+sent = {} ; clear()
+for _ = 1, 10 do tick() end                -- past hunt_wait from the first delay's end
+check(not said("went unanswered") and #sent == 0, "delay: a re-armed delay is waited out too (" .. table.concat(sent, "; ") .. ")")
+fire_timers()
+check(sent[1] == "kill cur", "delay: ...and then the cur still here is swung at (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+
 print(string.format("%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)

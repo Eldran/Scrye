@@ -70,11 +70,12 @@ local S = {               -- the run
   recheck = nil,          -- the room walked back to: its Contents says whether they are
                           -- still there (found) or have moved on (search on)
 }
+local MAX_BREATH = 30     -- the longest after-kill delay 'farm delay' takes, in seconds
 local C = {               -- knobs (persisted)
   pace = 0,               -- seconds between arrival and the next step; 0 = fast: step as
                           -- soon as the room has shown (its prompt) - 1.8.0
   timeout = 10,           -- seconds a step may stay unanswered
-  breath = 2,             -- seconds after a killing blow, so YOUR looting triggers go first
+  breath = 2,             -- seconds after a killing blow, so YOUR looting triggers go first ('farm delay')
   rest_below = 0,         -- Seid floor; 0 = off
   rest_secs = 30,         -- how long to sit when below it
   hp_start = 50,          -- HP% floor for STARTING a fight or a step; 0 = off
@@ -142,6 +143,7 @@ local B = {               -- the current room's population and the fight (never 
   target = nil,           -- { name, kw } of the mob last attacked
   hunt_at = 0,            -- clock stamp of the last 'kill' sent (times the fight)
   live_at = 0,            -- last sign of life in the hunt: the 'kill' sent, or a fight ending
+  breath_until = 0,       -- when the after-kill delay armed last runs out: waiting on purpose
   engaged = false,        -- the last 'kill' became a fight (Char.Combat went active)
   skip = {},              -- names given up on in THIS room: a 'kill' nothing answered
   kwidx = {},             -- name -> which keyword candidate is being tried
@@ -198,6 +200,7 @@ local function save()
   end
   scrye.store.set("pace", tostring(C.pace))
   scrye.store.set("seek_burst", tostring(C.seek_burst))
+  scrye.store.set("breath", tostring(C.breath))
   scrye.store.set("rest", C.rest_below .. " " .. C.rest_secs)
   scrye.store.set("hp", C.hp_start .. " " .. C.hp_panic .. " " .. C.hp_resume)
   scrye.store.set("sp", C.sp_start .. " " .. C.sp_resume)
@@ -265,6 +268,10 @@ local function load()
   end
   C.pace = tonumber(scrye.store.get("pace")) or C.pace
   C.seek_burst = tonumber(scrye.store.get("seek_burst")) or C.seek_burst
+  do   -- the after-kill delay (1.10.0); a stored value out of range keeps the default
+    local b = tonumber(scrye.store.get("breath"))
+    if b and b >= 0 and b <= MAX_BREATH then C.breath = b end
+  end
   -- 1.8.0: 1 was the old default AND the lowest pace there was, so a stored 1 is almost
   -- never a choice - move it to fast once. A pace set after this sticks ('pace_v' marks it).
   if scrye.store.get("pace_v") ~= "2" then
@@ -1215,11 +1222,18 @@ end
 -- Your own killing-blow triggers (looting, skinning) go first: a short breath, then the
 -- roster - which the server refreshes itself, since a death CHANGES Room.Contents and a
 -- changed payload is never suppressed - says whether anything is left to fight.
+-- The breath, armed. While it runs the hunt is waiting on purpose, not unanswered: the
+-- watchdog counts hunt_wait from the breath's END, so a long after-kill delay ('farm
+-- delay 20') cannot read as a 'kill' nobody answered and give up a name still standing here.
+local function breathe(fn)
+  B.breath_until = math.max(B.breath_until, now + C.breath)
+  return scrye.after(C.breath, fn)
+end
 local resume_hunt
 resume_hunt = function()
   if not (S.on and B.hunting) then return end
   if in_combat() then
-    scrye.after(C.breath, resume_hunt)
+    breathe(resume_hunt)
     return
   end
   attack()   -- next mob from the fresh roster, or hunting ends and the patrol resumes
@@ -1254,7 +1268,7 @@ local function on_combat(json)
     if B.hunting then
       B.engaged = false          -- the fight is over: resume_hunt takes it from here
       B.live_at = now
-      scrye.after(C.breath, resume_hunt)
+      breathe(resume_hunt)
     else
       note("combat over - patrol resuming")
       schedule_step()
@@ -1695,6 +1709,17 @@ farm_cmd = function(args)
       C.pace = math.floor(n) ; dirty = true ; save()
       if C.pace == 0 then note("pace: fast - each step as soon as the room has shown (its prompt)")
       else note("pace: one step every " .. C.pace .. "s (after each arrival)") end
+    elseif verb == "delay" or verb == "breath" then
+      -- The after-kill delay: how long the patrol stands over a body before the after-kill
+      -- commands and the next mob - the time your own looting/skinning triggers get. Tenths
+      -- of a second are kept; 0 is allowed (the next tick), 30 is the ceiling.
+      local n = tonumber(rest)
+      if not n or n < 0 or n > MAX_BREATH then
+        note(string.format("farm delay <seconds> - after each kill, 0 to %d (now %gs; default 2)", MAX_BREATH, C.breath))
+        return
+      end
+      C.breath = math.floor(n * 10 + 0.5) / 10 ; dirty = true ; save() ; draw()
+      note(string.format("after-kill delay: %gs - then the after-kill commands and the next mob", C.breath))
     elseif verb == "never" then
       if rest == "" then
         note(#NV > 0 and ("never attacked anywhere: " .. table.concat(NV, ", "))
@@ -1999,6 +2024,7 @@ farm_cmd = function(args)
       note("farm stop       stop; so does moving yourself or anything moving you")
       note("farm pause      hand brake, toggles")
       note("farm pace <s>   seconds between arrival and the next step, 0 = fast (now " .. C.pace .. ")")
+      note(string.format("farm delay <s>  seconds after each kill before the after-kill commands and the next mob (now %g)", C.breath))
       note("farm exclude <name>   never attack this here (phase 3) - substring match")
       note("farm room <n> avoid|pass|-   never enter that room / walk through but never fight there / clear")
       note("farm include <name>   un-exclude")
@@ -2009,7 +2035,7 @@ farm_cmd = function(args)
       note("farm rest <seid> <secs>       sit out low Seid between fights")
       note("farm hp <start%> [<panic%>]   no new fight or step under start%; abandon under panic%")
       note("farm panic <cmd>              the one command sent at the panic floor ('-' clears)")
-      note("farm after <cmd>              sent after each killing blow's breath, e.g. get all from corpse ('-' clears)")
+      note("farm after <cmd>              sent after each kill's delay, e.g. get all from corpse ('-' clears)")
       note("farm rooms      this area's rooms: reachable, visited this run, or cut off")
       note("farm prefer <name> | -<name>   fought first in this area (in the order added)")
       note("farm always <name> | -<name>   attacked even with a stranger in the room")
@@ -2157,7 +2183,7 @@ local function own_kill(e, victim)
   last_kill_at = now
   draw()
   local victim_name = (B.target and B.target.name) or tostring(victim or "")
-  scrye.after(C.breath, function()
+  breathe(function()
     -- your own looting triggers went first, during the breath; the commands you asked
     -- for go now, in order, before the roster is consulted for the next mob - unless
     -- this mob is on the area's no-loot list ('farm noloot <name>')
@@ -2333,7 +2359,7 @@ scrye.every(1, function()
   -- quiet for good is ended by the stale-combat check at the bottom of this tick, through
   -- on_combat, like any other fight.
   if S.on and B.hunting and not B.engaged and not in_combat() and C.hunt_wait > 0
-     and (now - B.live_at) > C.hunt_wait then
+     and (now - math.max(B.live_at, B.breath_until)) > C.hunt_wait then
     local t = B.target
     if t then
       B.skip[t.name] = true
@@ -2536,6 +2562,7 @@ draw = function()
     local rows = {}
     for i, cmd in ipairs(C.after) do rows[#rows + 1] = string.format("%d. %s", i, cmd) end
     scrye.setState(P .. "afterlist", #rows > 0 and table.concat(rows, "\n") or "(none - type a command below: get all from corpse)")
+    scrye.setState(P .. "delayhint", string.format("after each kill: wait %gs for your own triggers, then the commands above, then the next mob", C.breath))
     local nl = noloot_here()
     scrye.setState(P .. "nolootlist", nl and table.concat(nl, "\n")
       or (S.lock and "(every kill in " .. S.lock .. " gets them)" or "(per area - stand in a named area)"))
@@ -2774,6 +2801,10 @@ build_panel = function(m)
           text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
           if text ~= "" then scrye.setState(P .. "afterbox", "") ; after_add(text) end
         end },
+      -- the after-kill delay: how long the patrol waits over a body before the list above
+      { type = "label", bind = P .. "delayhint", color = "dim" },
+      { type = "input", text = "delay <s> (after each kill)", bind = P .. "set_delay",
+        onSubmit = function(t) farm_cmd("delay " .. tostring(t or "")) end },
       { type = "table", bind = P .. "nolootlist", columns = { "No loot in this area (click to allow)" },
         onRowClick = function(_, index)
           local nl = noloot_here()
