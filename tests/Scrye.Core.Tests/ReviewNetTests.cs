@@ -263,7 +263,10 @@ public class ReviewSessionTests
         {
             listener.Stop();                                   // every retry is refused
             server.Close();
-            await WaitFor(() => { lock (shown) return shown.Any(t => t.Contains("gave up")); });
+            // Windows does not refuse a loopback connect at once: it retries the SYN after
+            // the RST and fails each attempt after ~2 s, so two attempts can outlast the
+            // default 5 s wait (CI, 25 Oct 2026). The wait returns as soon as it is true.
+            await WaitFor(() => { lock (shown) return shown.Any(t => t.Contains("gave up")); }, 20000);
             await Task.Delay(800);                             // room for a wrongly restarted series
             lock (shown)
             {

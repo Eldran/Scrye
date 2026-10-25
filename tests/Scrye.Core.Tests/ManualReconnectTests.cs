@@ -230,7 +230,8 @@ public class ManualReconnectTests
             await WaitFor(() => { lock (states) return states.Contains(ConnectionState.Disconnected); });
 
             await s.ReconnectAsync();
-            await WaitFor(() => { lock (shown) return shown.Exists(l => l.StartsWith("[reconnect] could not connect:")); });
+            // a refused loopback connect takes ~2 s on Windows (SYN retried after the RST)
+            await WaitFor(() => { lock (shown) return shown.Exists(l => l.StartsWith("[reconnect] could not connect:")); }, 15000);
 
             lock (shown) Assert.Contains(shown, l => l.StartsWith("[reconnect] could not connect:"));
         }
