@@ -1,15 +1,15 @@
 {
   "format": 1,
-  "ref": "ec6ddcfbd388b2f67355001a1585d31e39c13340",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/ec6ddcfbd388b2f67355001a1585d31e39c13340/src/Scrye.App/plugins/",
-  "generated": "2026-10-23T14:17:25Z",
+  "ref": "d571eb6e428706604419b409ca0bab4bdefb0f18",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/d571eb6e428706604419b409ca0bab4bdefb0f18/src/Scrye.App/plugins/",
+  "generated": "2026-10-25T00:22:40Z",
   "plugins": [
     {
       "id": "3k-chaossea",
       "name": "Chaos Sea (classic)",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "author": "Joakim",
-      "description": "The marker/dead-reckoning chaos-sea stepper, frozen at its long-proven pre-GMCP state - for 3K-3Kingdoms and any character or world without GMCP (needs the '=S='/'=M='/'=P' display settings and MIP for combat truth). Alias 'csc', so it loads beside the GMCP 3s-chaossea ('cs') without a fight. Maps rooms on a 3D grid by dead reckoning, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Frozen legacy: bugfixes only - new features go to the GMCP bot.",
+      "description": "The marker/dead-reckoning chaos-sea stepper, frozen at its long-proven pre-GMCP state - for 3K-3Kingdoms and any character or world without GMCP (needs the '=S='/'=M='/'=P' display settings and MIP for combat truth). Alias 'csc', so it loads beside the GMCP 3s-chaossea ('cs') without a fight. Maps rooms on a 3D grid by dead reckoning, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Frozen legacy: bugfixes only - new features go to the GMCP bot. 1.3.1 (25 Oct 2026): its end-anchored triggers allow trailing whitespace, so a guild that pads its lines (a Changeling) no longer leaves the bot re-killing an empty room, and padded marker lines no longer carry the spaces into the mob name.",
       "mudIds": [
         "*"
       ],
@@ -32,16 +32,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "42e12716e92b06de14c99b71045e8c82d86765feb89afda3fd556ae6c2a85cd4",
-          "size": 58645
+          "sha256": "c0b7d0e4e87a2e944ab4eb6d558cc9b64ed89e128d1c370aac7c503e9fa71f30",
+          "size": 58666
         },
         {
           "path": "plugin.json",
-          "sha256": "28e59e4f27ba80b4f15ebb25c48688acdaec1a6bc65a007cfa380aeb21713788",
-          "size": 1017
+          "sha256": "8a71ac0bd274ab26f81201658f7b356f826872e0ac2c8f1a5773ba2e0a0c52d2",
+          "size": 1258
         }
       ],
-      "totalSize": 59662
+      "totalSize": 59924
     },
     {
       "id": "3s-changeling",
@@ -79,9 +79,9 @@
     {
       "id": "3s-chaossea",
       "name": "3S Chaos Sea",
-      "version": "2.3.0",
+      "version": "2.3.1",
       "author": "Joakim",
-      "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Reads the room, its contents and combat from GMCP, and takes its arrival signal from the MUD's own room header - so none of the '=S=', '=M=', '=P=' or '=A|W|I=' display markers need to be switched on. Those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. Which exits are still unexplored comes from the server rather than from dead reckoning: in the sea an exit's destination is 0 until you have walked it, so the frontier survives the coordinate collisions a dead-reckoned map cannot avoid. Loop (2.3.0, the Loop button or 'cs loop on'): at the cask the bot kills what is in the room, waits until nothing is hitting it, then runs New Sea by itself - looting the cask and entering a fresh sea - and explores that one too (with Auto on); a sea younger than unsetsea's 60 minutes is waited out, and a player in the cask room is never attacked.",
+      "description": "Chaos sea stepper: maps rooms on a 3D grid, queues unexplored exits, BFS-walks to the nearest frontier room; auto mode fights mobs on the way. Reads the room, its contents and combat from GMCP, and takes its arrival signal from the MUD's own room header - so none of the '=S=', '=M=', '=P=' or '=A|W|I=' display markers need to be switched on. Those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. Which exits are still unexplored comes from the server rather than from dead reckoning: in the sea an exit's destination is 0 until you have walked it, so the frontier survives the coordinate collisions a dead-reckoned map cannot avoid. Loop (2.3.0, the Loop button or 'cs loop on'): at the cask the bot kills what is in the room, waits until nothing is hitting it, then runs New Sea by itself - looting the cask and entering a fresh sea - and explores that one too (with Auto on); a sea younger than unsetsea's 60 minutes is waited out, and a player in the cask room is never attacked. 2.3.1 (25 Oct): works for a Changeling - that guild pads its output lines with spaces, so \"There is no mutant here.\" never matched the room-clear trigger and the bot re-sent 'kill mutant' into the empty room for good; every end-anchored trigger now allows trailing whitespace, and padded marker lines no longer carry the spaces into the mob name.",
       "mudIds": [
         "*"
       ],
@@ -104,16 +104,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "582217107f6e9dccbeda6b483d65b24997b2ed2c474181d2c6875ca018e1ebc4",
-          "size": 100440
+          "sha256": "93519fa84890036e8eac34948685e2036f3a7ab7e53cc4ee8ba07f328bda7590",
+          "size": 100795
         },
         {
           "path": "plugin.json",
-          "sha256": "430ac1a5f72fbb3518bd4dcff4b08fe156ecb58531f03d6ae9d64ffda902c860",
-          "size": 1574
+          "sha256": "86fd0fa1bde420d8d4e3c1ce71202b8937e80e86016347c26a8576c36a784315",
+          "size": 1923
         }
       ],
-      "totalSize": 102014
+      "totalSize": 102718
     },
     {
       "id": "3s-chat",
@@ -190,9 +190,9 @@
     {
       "id": "3s-farmer",
       "name": "3S Farmer",
-      "version": "1.9.1",
+      "version": "1.9.2",
       "author": "Joakim",
-      "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Seek (1.9.0): 'farm seek <name>' or the panel's seek box searches the area for a player - it walks the explored rooms fighting nothing and walking on when attacked, sends its steps a few at a time to spend as little time as possible in each room ('farm seek burst <n>', default 3), heads first for rooms the line-of-sight map shows players in, and stops (with a phone notify) when that name is in your room. 1.9.1 (22 Oct): a search no longer stops by itself when a burst turns a corner - every step echoes back to the plugin, and the burst's later steps were read as you moving ('you moved yourself'); it now looks in pass-through and rest rooms too (rules about fighting, not about where people stand); and walking back to where someone was seen, it checks they are still there before calling them found - if they have moved on it says so and searches on. One fight at a time (1.8.1): no new 'kill' goes out while anything is still hitting you, and a quiet moment in a long fight no longer gives the mob up and switches to another name - once the fight ends, the mob it was fighting (still listed, wound tags and all) is checked first. Kills are logged and tallied patrol or no patrol (1.4.2) - yours and your party's: every '<who> dealt the killing blow to <mob>' the server reports fills the kill log and the panel's Tally row, which counts per killer; only a fight the patrol opened moves its own counters, times the fight, and runs the after-kill chain. 1.8.0 (7 Oct): faster walking - pace 0, now the default ('farm pace 0' or 'fast'), sends each step as soon as the room has shown, on its prompt, instead of at the next one-second timer tick; 'farm pace 1' or more keeps a fixed wait. And a room found holding only mobs it will not fight (never-listed, excluded, party, given up on) no longer pulls the patrol through the line-of-sight map - it is walked in its turn like any room, and that visit clears it - so it no longer chases a never-listed golem round one corner of an area while the stalest rooms wait. 1.7.0 (7 Oct): read the area in before you start - off patrol the farmer follows the named area you stand in, so excludes, preferences and no-loot set from the roster or the Mobs tab go to THAT area (before, they needed a started patrol, and after a stop went to the last patrol's area); the Read area button ('farm area') hands over the mapper's rooms and says what the patrol would work with, without starting - set things up, then Start. 1.6.1 (6 Oct): a mob killed in the room leaves the roster at once, so after a kill the patrol no longer swings at the dead one (or at the room's already-dead guards) before the server's refreshed Room.Contents arrives; and one 'There is no X here' spends that word for every roster name that would have used it. 1.6.0 (1 Oct): the kill log has two views - all time (kept, as before) and this session (since Scrye loaded the plugin) - switched by the panel's This session / All time buttons or 'farm log view all|session'; 'farm log session [all|<place>]' prints the session one and 'farm log clear session' empties only it. 1.5.0 (23 Sep): the kill log is kept per place - the area, and its floor when the room's name gives one (Megacity floor 30 and floor 40 are two logs); the panel shows the place you stand in, 'farm log all' every place, 'farm log clear here' one place - and its Last column became XP, what the last kill of each mob was worth (Char.XP over the fight). Also an XP row from GMCP Char.XP - the server's XP/hour and last-30-minute gain, the run's XP gain (frozen at the stop) and XP per kill, in 'farm' too; a crowded room's paged Room.Contents is read whole, and a monster's count is kept. 1.4.3 (23 Sep): GMCP Room.Death reports kills too; a kill's text line and its Room.Death are paired into one kill, whichever arrives first, and the pairing learns your character's name (kept per character), so a Room.Death alone counts as yours; a player's death (npc 0) is not a kill; your hird's kills (killer 'Hirdmadr') count as yours, and 'farm mine <name>' edits that list. The panel is three tabs (1.4.1): Patrol (status, buttons, gauges, roster, counters, kill log), Mobs (never / party / excludes / prefer / always), Settings (the after-kill chain and no-loot, rotation, the settings boxes, room rules). 1.4.0 (20 Sep): 'farm prefer <name>' sets the fight order per area (the preferred mob dies first when several stand together), 'farm always <name>' fights a mob even with a stranger in the room, 'farm rota add <area> / on' farms areas in turn - after a full circuit with no kill for the idle time the mapper is asked for a walk to the next one - and the settings (pace, hp, sp, rest, limit, panic) are boxes on the panel. 1.3.0 (20 Sep): 'farm after' is a chain - commands sent in order after each kill ('farm after add|del', the panel's table and box) - and 'farm noloot <name>' keeps a mob's corpse out of it per area; 'farm limit 45m|2h|50k' ends the run between fights, parking at the rest room when there is one, and tells your phone. 1.2.0 (20 Sep): a kill log on the panel (per mob: kills, average fight, last kill; 'farm log', 'farm log clear'), a rest room ('farm room <n> rest', or the map's right-click) the patrol walks to before resting and never fights in, the panic floor retreating there instead of stopping when one exists, an SP floor ('farm sp'), a resume bar for rests ('farm hp <start> <panic> <resume>'), and the leg being walked published for the map to light. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B.",
+      "description": "Area farming bot: patrols the explored rooms of the area you stand in and fights what the server lists there. Its fence is its own room graph, built from Room.Info - a room joins it only when you stand in it - so exploring first (or the mapper's handover of the area, 'map.query.area') is the workflow. One step per confirmed arrival, verified by room number; a step that lands elsewhere, an arrival nothing ordered, a move you typed, or a step that never lands stops the patrol, and it never resumes on its own. The target list IS the Room.Contents feed (no mob files): any monster not excluded here, not the party's and not on the never-list is attacked by the plain words of its name from the end, rotated on 'There is no X here'; a player in the room means hands off everything. Kill timing reads Char.Combat with a shelf life; a breath after each killing blow lets your looting triggers go first ('farm after <cmd>' sends one of yours), then the refreshed roster says what is left. Room.Map, the line-of-sight grid, steers the patrol toward rooms with monsters in sight and away from rooms with players. Floors: 'farm hp <start%> [<panic%>]' - no new fight or step under start%, the fight abandoned under panic% with 'farm panic <cmd>' sent once; 'farm rest <seid> <secs>' for Seid. 'farm go <area>' asks the mapper to walk you there and starts on arrival. Excludes: click a mob on the panel's roster (per area), or right-click it for the never-list that guild followers go on; 'farm exclude|include|excludes|never' are the typed forms. A patrol that stands still says why - on the panel's Waiting row, in 'farm', and once in the output. Seek (1.9.0): 'farm seek <name>' or the panel's seek box searches the area for a player - it walks the explored rooms fighting nothing and walking on when attacked, sends its steps a few at a time to spend as little time as possible in each room ('farm seek burst <n>', default 3), heads first for rooms the line-of-sight map shows players in, and stops (with a phone notify) when that name is in your room. 1.9.1 (22 Oct): a search no longer stops by itself when a burst turns a corner - every step echoes back to the plugin, and the burst's later steps were read as you moving ('you moved yourself'); it now looks in pass-through and rest rooms too (rules about fighting, not about where people stand); and walking back to where someone was seen, it checks they are still there before calling them found - if they have moved on it says so and searches on. One fight at a time (1.8.1): no new 'kill' goes out while anything is still hitting you, and a quiet moment in a long fight no longer gives the mob up and switches to another name - once the fight ends, the mob it was fighting (still listed, wound tags and all) is checked first. Kills are logged and tallied patrol or no patrol (1.4.2) - yours and your party's: every '<who> dealt the killing blow to <mob>' the server reports fills the kill log and the panel's Tally row, which counts per killer; only a fight the patrol opened moves its own counters, times the fight, and runs the after-kill chain. 1.8.0 (7 Oct): faster walking - pace 0, now the default ('farm pace 0' or 'fast'), sends each step as soon as the room has shown, on its prompt, instead of at the next one-second timer tick; 'farm pace 1' or more keeps a fixed wait. And a room found holding only mobs it will not fight (never-listed, excluded, party, given up on) no longer pulls the patrol through the line-of-sight map - it is walked in its turn like any room, and that visit clears it - so it no longer chases a never-listed golem round one corner of an area while the stalest rooms wait. 1.7.0 (7 Oct): read the area in before you start - off patrol the farmer follows the named area you stand in, so excludes, preferences and no-loot set from the roster or the Mobs tab go to THAT area (before, they needed a started patrol, and after a stop went to the last patrol's area); the Read area button ('farm area') hands over the mapper's rooms and says what the patrol would work with, without starting - set things up, then Start. 1.6.1 (6 Oct): a mob killed in the room leaves the roster at once, so after a kill the patrol no longer swings at the dead one (or at the room's already-dead guards) before the server's refreshed Room.Contents arrives; and one 'There is no X here' spends that word for every roster name that would have used it. 1.6.0 (1 Oct): the kill log has two views - all time (kept, as before) and this session (since Scrye loaded the plugin) - switched by the panel's This session / All time buttons or 'farm log view all|session'; 'farm log session [all|<place>]' prints the session one and 'farm log clear session' empties only it. 1.5.0 (23 Sep): the kill log is kept per place - the area, and its floor when the room's name gives one (Megacity floor 30 and floor 40 are two logs); the panel shows the place you stand in, 'farm log all' every place, 'farm log clear here' one place - and its Last column became XP, what the last kill of each mob was worth (Char.XP over the fight). Also an XP row from GMCP Char.XP - the server's XP/hour and last-30-minute gain, the run's XP gain (frozen at the stop) and XP per kill, in 'farm' too; a crowded room's paged Room.Contents is read whole, and a monster's count is kept. 1.4.3 (23 Sep): GMCP Room.Death reports kills too; a kill's text line and its Room.Death are paired into one kill, whichever arrives first, and the pairing learns your character's name (kept per character), so a Room.Death alone counts as yours; a player's death (npc 0) is not a kill; your hird's kills (killer 'Hirdmadr') count as yours, and 'farm mine <name>' edits that list. The panel is three tabs (1.4.1): Patrol (status, buttons, gauges, roster, counters, kill log), Mobs (never / party / excludes / prefer / always), Settings (the after-kill chain and no-loot, rotation, the settings boxes, room rules). 1.4.0 (20 Sep): 'farm prefer <name>' sets the fight order per area (the preferred mob dies first when several stand together), 'farm always <name>' fights a mob even with a stranger in the room, 'farm rota add <area> / on' farms areas in turn - after a full circuit with no kill for the idle time the mapper is asked for a walk to the next one - and the settings (pace, hp, sp, rest, limit, panic) are boxes on the panel. 1.3.0 (20 Sep): 'farm after' is a chain - commands sent in order after each kill ('farm after add|del', the panel's table and box) - and 'farm noloot <name>' keeps a mob's corpse out of it per area; 'farm limit 45m|2h|50k' ends the run between fights, parking at the rest room when there is one, and tells your phone. 1.2.0 (20 Sep): a kill log on the panel (per mob: kills, average fight, last kill; 'farm log', 'farm log clear'), a rest room ('farm room <n> rest', or the map's right-click) the patrol walks to before resting and never fights in, the panic floor retreating there instead of stopping when one exists, an SP floor ('farm sp'), a resume bar for rests ('farm hp <start> <panic> <resume>'), and the leg being walked published for the map to light. Promoted from the lab at 1.0.0 (16 Sep 2026): docs/Plan-Map-Farmer.md phases 2-4 and Plan-Map-Farmer-Round2.md phases A-B. 1.9.2 (25 Oct): \"There is no X here.\" is recognised on padded lines (a Changeling's), so a dead or departed target is dropped at once instead of after the hunt timeout.",
       "mudIds": [
         "*"
       ],
@@ -213,16 +213,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "0d474c6874802cfd1cb35c856383944c35e5ab6df1c462c4b7497eb5f0c92393",
-          "size": 146821
+          "sha256": "7993d3aded8f7db1fc76bccb5f72b73e0f7b3954b64be1e077b64f4791430755",
+          "size": 146824
         },
         {
           "path": "plugin.json",
-          "sha256": "98a32b0c198ab4ab83d807aceb7e85b6ce6590e2f1cb4399e61964458fc43082",
-          "size": 7689
+          "sha256": "5d29ee91ec53c69276431ba628914a5a20bea0b38396ff5cd155d89975852f72",
+          "size": 7860
         }
       ],
-      "totalSize": 154510
+      "totalSize": 154684
     },
     {
       "id": "3s-gentech",
@@ -464,9 +464,9 @@
     {
       "id": "3s-stepper",
       "name": "3S Stepper",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "author": "Joakim",
-      "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper. Reads the room and its contents from GMCP, so the MUD's '=S=', '=M=' and '=P=' display markers are no longer needed; those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. 1.1.2 (5 Oct): the idle guard and .stop now stop a bot in mid-fight too - before, the killing blow re-attacked and autoresume walked on.",
+      "description": "Area bot: walks a recorded route, kills the mobs it meets, and records new routes as you walk them. Port of ThreeS_Stepper. Reads the room and its contents from GMCP, so the MUD's '=S=', '=M=' and '=P=' display markers are no longer needed; those triggers remain as a fallback for a character or MUD without GMCP, each standing down for any room GMCP has already described. 1.1.2 (5 Oct): the idle guard and .stop now stop a bot in mid-fight too - before, the killing blow re-attacked and autoresume walked on. 1.1.3 (25 Oct): its end-anchored triggers (\"There is no X here.\", \"You cannot go X.\", the =M=/=P= markers) allow trailing whitespace, so a guild that pads its lines (a Changeling) no longer stalls it.",
       "mudIds": [
         "*"
       ],
@@ -494,16 +494,16 @@
         },
         {
           "path": "main.lua",
-          "sha256": "3da0b35a9b341fbc80b5189b2f85fc8b19bc876257ace2ce16b935f9b9c02b5a",
-          "size": 37301
+          "sha256": "a7f443b61701217265d5e7adac86c1cd046d26a54a0138878c8b104dc51402f8",
+          "size": 37315
         },
         {
           "path": "plugin.json",
-          "sha256": "562fa950695087df9b75ac52e0ba9756b231bef6051043031898d6761e58b8c2",
-          "size": 1058
+          "sha256": "63208e6f8106178c7ca4f18092efc56c2652bb2c731be61cd2ebfb73b51028c5",
+          "size": 1263
         }
       ],
-      "totalSize": 51600
+      "totalSize": 51819
     },
     {
       "id": "3s-viking-fx",
