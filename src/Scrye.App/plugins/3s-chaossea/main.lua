@@ -140,9 +140,46 @@ local teleported = false
 -- times an hour for nothing.
 local wimpy_dir = nil
 
+-- FINDING OURSELVES ON THE SAVED MAP (2.4.0). The sea is static once made, so the map we
+-- built of it stays true even when our idea of where we stand in it does not - after a
+-- teleport, or a desync that leaves every queued exit unreachable. What we have seen of the
+-- room we are standing in is kept here, and matched against the map instead of throwing it
+-- away (see 'the locator' below).
+--   exits: the room's full exit set (Room.Info's keys, or the room header's list)
+--   pic:   the Room.Map picture read as rooms and links around us
+-- Emptied whenever we leave the room, so a picture of one room is never matched with the
+-- exits of another.
+local obs = {}
+local obs_prev = nil          -- the room we just tried to leave, for a move that was refused
+local last_pic = nil          -- the last Room.Map read: an unsent one would have been the same
+local last_layer = nil        -- the layer the last Room.Info named (a suppressed one is the same)
+-- Set while the position is unknown and we are looking: { resume = was the bot walking,
+-- cands = the places that still fit, base/dir = the fits before the move you made and its
+-- direction, at = when it began, told = the phone has heard }. The bot is paused meanwhile.
+local lost = nil
+
 -- forward declarations (mutually recursive)
 local cs_draw, cs_step, cs_advance, mark_dirty, build_panel
 local soft_relearn
+local lost_check, begin_lost
+
+-- Leaving the room: what we saw of it no longer describes where we stand - unless the move
+-- is refused, and then it does again.
+-- (Called twice for one move in the real client - the send, then onCommand seeing it - so
+-- only the first, with something to put aside, counts.)
+local function leave_room()
+  if next(obs) then
+    obs_prev = obs
+    if lost then lost.moved = lost.moved + 1 end
+  end
+  obs = {}
+end
+local function stay_in_room()
+  if obs_prev then
+    obs = obs_prev ; obs_prev = nil
+    if lost then lost.moved = math.max(0, lost.moved - 1) end
+  end
+end
 -- what the buttons last showed, so the panel is only rebuilt when it would look different
 local panel_on, panel_auto, panel_paused, panel_loop = nil, nil, nil, nil
 
@@ -686,6 +723,7 @@ cs_advance = function()
   pending_mob = nil
   contents_seen = false
   last_dir = plan.dirs[plan.idx]
+  leave_room()                  -- what we saw belongs to the room behind us now
   scrye.send(plan.dirs[plan.idx])
 end
 
@@ -718,6 +756,30 @@ local function on_room_info(json)
   local layer = layer_of(info.name)
   local tp = teleported
   teleported = false
+  -- A new room (or the same one re-sent): its exits and layer, and no picture of it yet.
+  local left_judged = obs.judged
+  if layer then
+    local set = {}
+    for _, k in ipairs(keys) do
+      local d = SHORT_DIR[k]
+      if d then set[d] = true end
+    end
+    obs = { exits = set }
+    last_layer = layer
+  else
+    obs = {}
+  end
+
+  -- Dragged a room by wimpy while lost: for the search, a move like any other (the room we
+  -- left, moved that way); for the map, nothing - where we were is what we are looking for.
+  if lost and wimpy_dir then
+    local d = SHORT_DIR[wimpy_dir]
+    wimpy_dir = nil
+    lost.base = left_judged and lost.cands or nil
+    lost.dir = d
+    lost.moved = lost.moved + 1
+    return
+  end
 
   -- Two ways the arrival is not ours to confirm.
   --
@@ -741,8 +803,7 @@ local function on_room_info(json)
       note(string.format("the sea threw us out to %s - 'enter sea' to go back in.", tostring(info.name)))
       pnotify("Chaos sea: thrown out of the maze - bot paused")
     elseif tp then
-      note("teleported inside the maze - pos is now unknown. 'cs reset' here, then unpause.")
-      pnotify("Chaos sea: teleported - bot paused, position unknown")
+      begin_lost("teleported inside the maze")
     else
       note(string.format("left the maze (%s) - bot PAUSED.", tostring(info.name)))
       pnotify("Chaos sea: left the maze - bot paused")
@@ -1018,6 +1079,453 @@ local function exits_from_map(m)
   return found
 end
 
+-- ---------- the locator: where on the saved map is this room? (2.4.0) ----------
+-- Every maze room is num 60494, so a room cannot be recognised by name or number - but it
+-- can by its SHAPE. The Room.Map picture is a patch of the maze around us: rooms every 2
+-- columns and rows, the links between them drawn in. Slide that patch over the saved map
+-- of the layer and look for the places where it fits.
+--
+-- A place FITS when nothing there contradicts what we see:
+--   * the room mapped there has EXACTLY this room's exits (Room.Info / header: complete);
+--   * every link the picture draws is an exit of a mapped room at one end or the other,
+--     and a mapped room at either end that lacks it rules the place out;
+--   * two rooms drawn side by side with NO link drawn between them, where the map has one,
+--     rule it out too (the picture draws every link of what is in sight - even one leading
+--     to a room out of sight);
+--   * a room the picture draws where the map has none says nothing: unmapped.
+--
+-- Fitting is not enough to MOVE there. The danger is not two mapped places fitting - that is
+-- seen and waited out - but the room we are in not being on the map at all while one mapped
+-- place happens to look the same: a corridor looks like every other corridor (a review's
+-- simulation placed 56 of 100 landings in unexplored rooms wrongly on that rule alone). So
+-- a place must also EARN it, in bits of evidence: each room stood in is worth -log2 of how
+-- common its exit set is on this map (a junction says far more than a corridor), and each
+-- link the picture confirms on the map one bit more - each counted once along a walk.
+-- Enough of it, a single surviving place, and no trail leading off the map: only then.
+-- "Enough" grows with the map, because every mapped room is one more chance of a lookalike:
+-- LOC_BITS plus log2 of the rooms mapped on the layer (~30 bits at 1000 rooms). Tuned on
+-- simulated mazes - corridor-heavy ones the hardest - to zero wrong placements in
+-- thousands of landings, mapped and unmapped.
+local LOC_BITS = 20
+local LINK_CHARS = { ["-"] = true, ["|"] = true, ["/"] = true, ["\\"] = true, ["X"] = true, ["x"] = true }
+
+-- Where we stand in a Room.Map picture: rows, and '@' (or the down/up marker that replaces
+-- it) as row, column - the same search exits_from_map makes for the links touching us.
+local function find_self(m)
+  local rows = m and m.rows
+  if type(rows) ~= "table" then return nil end
+  for r = 1, #rows do
+    local line = rows[r]
+    if type(line) == "string" then
+      local c = line:find("@", 1, true)
+      if c then return rows, r, c end
+    end
+  end
+  local mid = math.floor((tonumber(m.w) or 17) / 2) + 1
+  for r = 1, #rows do
+    local line = rows[r]
+    local ch = type(line) == "string" and line:sub(mid, mid) or " "
+    if ch == "v" or ch == "^" or ch == "+" then return rows, r, mid end
+  end
+  return nil
+end
+
+-- The picture as map offsets from us (x east, y north): rooms; links, each as the room it
+-- starts from and one of e, s, se, ne; and GAPS - two rooms drawn side by side with no link
+-- between them. 'X' (two diagonals crossing) is not read, as in exits_from_map, and the two
+-- pairs it might join are no gap either.
+local function read_patch(m)
+  local rows, r0, c0 = find_self(m)
+  if not r0 then return nil end
+  local cells, links, selfx = {}, {}, {}
+  local cellset, linkset = {}, {}
+  for r = 1, #rows do
+    local line = rows[r]
+    if type(line) == "string" then
+      for c = 1, #line do
+        local ch = line:sub(c, c)
+        if ch ~= " " then
+          local dr, dc = r - r0, c - c0
+          local er, ec = dr % 2 == 0, dc % 2 == 0
+          local l
+          if er and ec then
+            if not LINK_CHARS[ch] then
+              cells[#cells + 1] = { dc // 2, -(dr // 2) }
+              cellset[(dc // 2) .. "|" .. -(dr // 2)] = true
+            end
+          elseif ch == "-" and er then l = { (dc - 1) // 2, -(dr // 2), "e" }
+          elseif ch == "|" and ec then l = { dc // 2, -((dr - 1) // 2), "s" }
+          elseif ch == "/" and not er and not ec then l = { (dc - 1) // 2, -((dr + 1) // 2), "ne" }
+          elseif ch == "\\" and not er and not ec then l = { (dc - 1) // 2, -((dr - 1) // 2), "se" }
+          elseif (ch == "X" or ch == "x") and not er and not ec then
+            linkset[((dc - 1) // 2) .. "|" .. -((dr + 1) // 2) .. "|ne"] = true   -- unknown: not a gap
+            linkset[((dc - 1) // 2) .. "|" .. -((dr - 1) // 2) .. "|se"] = true
+          end
+          if l then
+            links[#links + 1] = l
+            linkset[l[1] .. "|" .. l[2] .. "|" .. l[3]] = true
+            local dd = DELTA[l[3]]
+            if l[1] == 0 and l[2] == 0 then selfx[l[3]] = true end
+            if l[1] + dd[1] == 0 and l[2] + dd[2] == 0 then selfx[OPP[l[3]]] = true end
+          end
+        end
+      end
+    end
+  end
+  local gaps = {}
+  for _, a in ipairs(cells) do
+    for _, d in ipairs({ "e", "s", "se", "ne" }) do
+      local dd = DELTA[d]
+      if cellset[(a[1] + dd[1]) .. "|" .. (a[2] + dd[2])] and not linkset[a[1] .. "|" .. a[2] .. "|" .. d] then
+        gaps[#gaps + 1] = { a[1], a[2], d }
+      end
+    end
+  end
+  return { cells = cells, links = links, self = selfx, gaps = gaps }
+end
+
+-- Both halves of the room in hand, and from the SAME room: every link the picture draws
+-- from us must be one of the exits. A picture of the next room with the exits of this one
+-- (a step in flight) disagrees with itself and is not matched at all.
+local function obs_ready(o)
+  if not (o.exits and o.pic) then return false end
+  for d in pairs(o.pic.self) do
+    if not o.exits[d] then return false end
+  end
+  return true
+end
+
+local function has_exit(room, d)
+  for k in pairs(room.exits) do
+    if SHORT_DIR[k] == d then return true end
+  end
+  return false
+end
+
+local function exit_key(set)
+  local t = {}
+  for d in pairs(set) do t[#t + 1] = d end
+  table.sort(t)
+  return table.concat(t, ",")
+end
+
+-- How surprising an exit set is on THIS map, in bits: -log2 of its share of the mapped
+-- rooms of the layer (smoothed, so a set the map has never seen is worth a little more
+-- than its rarest; every layer when it is not known).
+-- `given`: a direction the room is already known to have - the way back, when we walked in
+-- - so only what the set says BEYOND that counts. Walk west into a room and its east exit
+-- is no news; counting it as news is how a simulation once "proved" a wrong place in four
+-- rooms of corridor.
+local function exit_bits(z)
+  local counts, sets = {}, {}
+  for lz, zt in pairs(rooms) do
+    for _, xt in pairs((z == nil or lz == z) and zt or {}) do
+      for _, r in pairs(xt) do
+        local s = {}
+        for k in pairs(r.exits) do
+          local d = SHORT_DIR[k]
+          if d then s[d] = true end
+        end
+        local key = exit_key(s)
+        if not counts[key] then counts[key] = 0 ; sets[key] = s end
+        counts[key] = counts[key] + 1
+      end
+    end
+  end
+  return function(set, given)
+    local n, kinds = 0, 0
+    for key, c in pairs(counts) do
+      if not given or sets[key][given] then n = n + c ; kinds = kinds + 1 end
+    end
+    return -math.log(((counts[exit_key(set)] or 0) + 1) / (n + kinds + 1), 2)
+  end
+end
+
+-- Does the observation fit with us standing at p? nil if anything contradicts it. Else
+-- what it adds as evidence: `self` (bits for this room's exit set; nil when p is not on the
+-- map - only a walk can lead a candidate there), and `links`, the keys of the links the map
+-- confirms (evidence() leaves out the ones a room stood in already accounts for).
+local function fit(p, o, bits_of, given)
+  local here = get_room(p)
+  local self_bits = nil
+  if here then
+    local stored = {}
+    for k in pairs(here.exits) do
+      local d = SHORT_DIR[k]
+      if d then stored[d] = true end
+    end
+    for d in pairs(o.exits) do
+      if not stored[d] then return nil end
+    end
+    for d in pairs(stored) do
+      if not o.exits[d] then return nil end
+    end
+    self_bits = bits_of(o.exits, given)
+  end
+  local links = {}
+  for _, l in ipairs(o.pic.links) do
+    local dd = DELTA[l[3]]
+    local ax, ay = p.x + l[1], p.y + l[2]
+    local a = get_room({ x = ax, y = ay, z = p.z })
+    local b = get_room({ x = ax + dd[1], y = ay + dd[2], z = p.z })
+    if (a and has_exit(a, l[3])) or (b and has_exit(b, OPP[l[3]])) then
+      links[#links + 1] = ax .. "|" .. ay .. "|" .. p.z .. "|" .. l[3]
+    elseif a or b then
+      return nil          -- a mapped room at the end of a drawn link, without the exit
+    end
+  end
+  for _, g in ipairs(o.pic.gaps) do
+    local dd = DELTA[g[3]]
+    local a = get_room({ x = p.x + g[1], y = p.y + g[2], z = p.z })
+    local b = get_room({ x = p.x + g[1] + dd[1], y = p.y + g[2] + dd[2], z = p.z })
+    if (a and has_exit(a, g[3])) or (b and has_exit(b, OPP[g[3]])) then
+      return nil          -- the map links two rooms the picture draws apart
+    end
+  end
+  return { self = self_bits, links = links }
+end
+
+-- A candidate place: where, and the evidence for it so far (rooms stood in, links seen -
+-- keyed, so walking past the same thing twice does not count it twice). `off` = the trail
+-- has led it off the map: not checkable, and while it lives nothing is certain.
+local function candidate(p, r, from)
+  local c = { x = p.x, y = p.y, z = p.z, rooms = {}, lk = {}, off = r.self == nil }
+  if from then
+    for k, v in pairs(from.rooms) do c.rooms[k] = v end
+    for k in pairs(from.lk) do c.lk[k] = true end
+  end
+  if r.self then c.rooms[p.x .. "|" .. p.y .. "|" .. p.z] = r.self end
+  for _, k in ipairs(r.links) do c.lk[k] = true end
+  return c
+end
+
+-- Rooms stood in, by their exit sets; and one bit for each confirmed link that is NOT an
+-- exit of a room stood in - those are already in that room's exit set, and counting them
+-- twice is how evidence piles up faster than the facts behind it.
+local function evidence(c)
+  local bits = 0
+  for _, b in pairs(c.rooms) do bits = bits + b end
+  for k in pairs(c.lk) do
+    local x, y, z, d = k:match("^(%-?%d+)|(%-?%d+)|(%-?%d+)|(%a+)$")
+    local dd = DELTA[d]
+    x, y = tonumber(x), tonumber(y)
+    if not c.rooms[x .. "|" .. y .. "|" .. z] and not c.rooms[(x + dd[1]) .. "|" .. (y + dd[2]) .. "|" .. z] then
+      bits = bits + 1
+    end
+  end
+  return bits
+end
+
+-- The layer to search: the one the server named, through the anchor. Unknown (no anchor
+-- yet) searches every layer.
+local function target_z()
+  if last_layer and layer_base then return layer_base - last_layer end
+  return nil
+end
+
+local function layer_rooms(z)
+  local n = 0
+  for lz, zt in pairs(rooms) do
+    if z == nil or lz == z then
+      for _, xt in pairs(zt) do
+        for _ in pairs(xt) do n = n + 1 end
+      end
+    end
+  end
+  return n
+end
+
+local function all_fits(o, z, bits_of)
+  bits_of = bits_of or exit_bits(z)
+  local out = {}
+  for lz, zt in pairs(rooms) do
+    if z == nil or lz == z then
+      for x, xt in pairs(zt) do
+        for y in pairs(xt) do
+          local p = { x = x, y = y, z = lz }
+          local r = fit(p, o, bits_of)
+          if r then out[#out + 1] = candidate(p, r) end
+        end
+      end
+    end
+  end
+  return out
+end
+
+-- The evidence a place needs on a layer of this many mapped rooms.
+local function needed(z) return LOC_BITS + math.log(math.max(2, layer_rooms(z)), 2) end
+
+-- The one place: nothing else still possible, on the map, and with the evidence behind it.
+local function sure(cands)
+  local c = #cands == 1 and cands[1]
+  if c and not c.off and evidence(c) >= needed(c.z) then return c end
+  return nil
+end
+
+local function fmt_pos(p) return string.format("[%d %d %d]", p.x, p.y, p.z) end
+
+-- Stand at c. The map is untouched: only where we are on it changes.
+local function relocate(c, how)
+  if plan and plan.entry then table.insert(frontier, 1, plan.entry) end   -- not lost with the plan
+  pos = { x = c.x, y = c.y, z = c.z }
+  if last_layer and not layer_base then layer_base = pos.z + last_layer end
+  local was = lost
+  lost = nil
+  plan = nil
+  blind_steps = 0
+  teleported = false        -- a teleport seen while lost belongs to the search, now over
+  fighting = false          -- in_combat() is the truth from here; a stale flag only stalls
+  local walked = (was and was.moved > 0) and string.format(", after walking %d room(s)", was.moved) or ""
+  note(string.format("%s: this room is at %s on the saved map (%.1f bits of evidence%s)",
+    how, fmt_pos(pos), evidence(c), walked))
+  if was and was.resume then
+    paused = false
+    note(auto and "carrying on exploring" or "unpaused - 'cs step' or 'cs auto on' to go on")
+    -- The room's own Room.Map or header arms the step, and the prompt after it takes it;
+    -- but a prompt that came BEFORE Room.Map is already gone, so ask once more ourselves.
+    -- (cs_step does nothing while a step it started is still in flight.)
+    if auto then scrye.after(1, function() cs_step() end) end
+    if was.told then pnotify("Chaos sea: found itself on the map again - carrying on") end
+  end
+  cs_draw()
+end
+
+-- Position unknown: pause, and look for the room on the map as its picture and exits come in.
+-- `resume`: the bot was walking, so it goes on by itself once found - and, on Auto, walks
+-- to find itself (see lost_walk).
+begin_lost = function(what)
+  lost = { resume = true, at = now, steps = 0, moved = 0 }
+  plan = nil
+  paused = true
+  pending_mob = nil          -- a mob in the room we were thrown out of
+  note(what .. " - position unknown; looking for this room on the saved map"
+    .. " ('cs reset' here starts the map over instead)")
+end
+
+-- How far the bot walks looking for itself before it gives up and waits for you.
+local LOST_WALK = 30
+
+-- A move while lost: the places that fitted this room are where to look from next - but only
+-- if this room was ever judged; a room passed through unjudged (its picture never came)
+-- would hand on fits from the room before it, a step behind.
+local function lost_move(d)
+  lost.base = obs.judged and lost.cands or nil
+  lost.dir = d
+  lost.at_move = now
+end
+
+-- A move that did not happen. The room is the one we were in, so what we saw of it stands
+-- again (and its fits are still lost.cands); while lost, the way that was refused is not
+-- tried again from here.
+local function lost_refused()
+  stay_in_room()
+  if lost and lost.dir then
+    lost.blocked = lost.blocked or {}
+    lost.blocked[lost.dir] = true
+    lost.base, lost.dir, lost.at_move = nil, nil, nil
+    obs.reported = nil                       -- judge this room again: another way out
+  end
+end
+
+-- One step while lost, through a real exit of this room, never up or down (one-way doors)
+-- and not straight back if anything else is open. Nothing is written to the map: the bot is
+-- paused, and paused arrivals are only LOOKED at. Returns false if there is no way to go.
+local function lost_walk()
+  local choices = {}
+  local blocked = lost.blocked or {}
+  local function add(back_ok)
+    for d in pairs(obs.exits) do
+      if DELTA[d] and d ~= "u" and d ~= "d" and not blocked[d]
+         and (back_ok or d ~= OPP[lost.last or ""]) then
+        choices[#choices + 1] = d
+      end
+    end
+  end
+  add(false)
+  if #choices == 0 then add(true) end
+  if #choices == 0 then return false end
+  table.sort(choices)                 -- pairs() order is not stable; the pick should be
+  local d = choices[math.random(#choices)]
+  lost.steps = lost.steps + 1
+  lost.last = d
+  lost.echo = d                       -- the client shows us our own send: not a typed move
+  lost_move(d)
+  leave_room()
+  scrye.send(d)
+  return true
+end
+
+local function fits_text(cands)
+  if #cands == 0 then return "this room is not on the saved map" end
+  if #cands == 1 then
+    local c = cands[1]
+    if c.off then return "it may have walked off the saved map" end
+    return string.format("one place on the saved map fits %s, not yet surely (%.1f of %.1f bits)",
+      fmt_pos(c), evidence(c), needed(c.z))
+  end
+  return string.format("this room fits %d places on the saved map", #cands)
+end
+
+-- The room has printed and still does not fit one place: walk on (Auto), or say so and wait.
+local function lost_final(cands)
+  if obs.reported then return end
+  if lost.resume and auto then
+    if in_combat() then return end          -- not while something is hitting us: next prompt
+    if lost.steps < LOST_WALK then
+      obs.reported = true
+      if lost.steps == 0 then note(fits_text(cands) .. " - walking until it is sure") end
+      if lost_walk() then return end
+    end
+    obs.reported = true
+    note(string.format("walked %d room(s) and could not place them on the saved map - bot paused"
+      .. " ('cs reset' here starts the map over, 'cs locate' tries again)", lost.steps))
+  else
+    obs.reported = true
+    note(fits_text(cands) .. " - walk a step and it looks again ('cs reset' here starts the map over)")
+  end
+  if not lost.told then
+    lost.told = true
+    pnotify("Chaos sea: teleported - bot paused, position unknown")
+  end
+end
+
+-- Called as each piece of the room arrives, and with `final` set once the room has printed
+-- (the prompt, or the watchdog for a prompt that beat Room.Map).
+lost_check = function(final)
+  if not lost then return end
+  if not obs_ready(obs) then return end
+  local bits_of = exit_bits(target_z())
+  local cands
+  if lost.base and lost.dir then
+    -- We walked: the places that fitted the last room, moved the way we went, that also
+    -- fit this one - including a step off the map, which cannot be checked and is kept.
+    -- Recomputed from the same base each time the room fills in.
+    cands = {}
+    for _, c in ipairs(lost.base) do
+      local t = moved(c, lost.dir)
+      local r = t and fit(t, obs, bits_of, OPP[lost.dir])
+      if r then cands[#cands + 1] = candidate(t, r, c) end
+    end
+    if #cands == 0 then cands = nil end      -- the trail went cold: start again from here
+    lost.blocked = nil                       -- a new room: its walls are its own
+  end
+  cands = cands or all_fits(obs, target_z(), bits_of)
+  lost.cands = cands
+  obs.judged = true
+  local c = sure(cands)
+  if c then relocate(c, "found it") return end
+  if final then lost_final(cands) end
+end
+
+-- A stuck route: before re-orienting or relearning, ask whether the room we are in fits the
+-- map somewhere else - surely, from this one look. Returns the place, or nil.
+local function stuck_locate()
+  if not obs_ready(obs) then return nil end
+  local c = sure(all_fits(obs, target_z() or pos.z))
+  if c and not (c.x == pos.x and c.y == pos.y and c.z == pos.z) then return c end
+  return nil
+end
+
 -- ---------- arrival with no Room.Info (Room.Map) ----------
 -- The step landed, the server redrew the map, and said nothing about the room because there
 -- was nothing new to say. Confirm from the map instead of sitting out the step timeout.
@@ -1026,9 +1534,13 @@ end
 -- burst, so by now it may already have told us what is in the room we just walked into --
 -- clearing here would throw that away. The clearing happens when the step is SENT.
 local function on_room_map(json)
-  if not enabled or paused then return end
+  if not enabled then return end
   local ok, m = pcall(scrye.json.decode, json)
   if not ok or type(m) ~= "table" then return end
+  obs.pic = read_patch(m)
+  last_pic = obs.pic
+  if lost then lost_check(false) end
+  if paused then return end
   if not (plan and plan.awaiting) then
     -- Not an arrival -- Room.Map also fires when something moves in sight. Arm anyway: it
     -- is the end of whatever burst it belongs to, and arming is only permission to think
@@ -1039,10 +1551,7 @@ local function on_room_map(json)
 
   if teleported then
     teleported = false
-    plan = nil
-    paused = true
-    note("teleported - the sea moved us and pos is now unknown. 'cs reset' here, then unpause.")
-    pnotify("Chaos sea: teleported - bot paused, position unknown")
+    begin_lost("teleported - the sea moved us")   -- the exits come with the header
     cs_draw()
     return
   end
@@ -1083,19 +1592,26 @@ end
 -- outstanding. Typing 'look' in the moment a step is in flight would confirm it wrongly --
 -- the same risk the old '=S=' design carried, and rarer than the stall it replaces.
 local function on_sea_header(exitstr)
-  if not enabled or paused then return end
+  if not enabled then return end
   local keys = {}
   for d in tostring(exitstr or ""):gmatch("[^,%s]+") do keys[#keys + 1] = d:lower() end
   table.sort(keys)
+  -- the room's full exit list, for the locator - paused or not
+  local set = {}
+  for _, k in ipairs(keys) do
+    local d = SHORT_DIR[k]
+    if d then set[d] = true end
+  end
+  obs.exits = set
+  obs.exits_at = now
+  if lost then lost_check(false) end
+  if paused then return end
 
   local confirmed = false
   if plan and plan.awaiting then
     if teleported then
       teleported = false
-      plan = nil
-      paused = true
-      note("teleported - the sea moved us and pos is now unknown. 'cs reset' here, then unpause.")
-      pnotify("Chaos sea: teleported - bot paused, position unknown")
+      begin_lost("teleported - the sea moved us")
       cs_draw()
       return
     end
@@ -1169,6 +1685,7 @@ end
 
 -- ---------- prompt: goals + keep the plan moving ----------
 local function cs_on_prompt()
+  if enabled and lost then lost_check(true) end
   if not enabled or paused or resting then return end
   -- whole room is printed now: if a goal item was here, act on the
   -- highest-priority one (cask before portal), ignoring print order.
@@ -1274,6 +1791,12 @@ local function cs_pause_toggle()
   if paused then
     note("PAUSED - 'cs pause' (or the Pause button) to continue")
   else
+    if lost then lost = nil ; note("(no longer looking for this room on the map - carrying on from " .. fmt_pos(pos) .. ")") end
+    -- Paused arrivals arm nothing, and a teleported step had used the arming up: going on is
+    -- your say-so that the room has finished printing. A teleport seen while paused is
+    -- forgotten with everything else a pause ignores.
+    if not (plan and plan.awaiting) then armed = true end
+    teleported = false
     note("resuming")
     if enabled and not fighting and not in_combat() then
       if plan then cs_advance()
@@ -1350,9 +1873,25 @@ cs_step = function(asked)
   end
   -- unreachable exits go back at the BOTTOM of the pile, never lost
   for i = #stash, 1, -1 do table.insert(frontier, 1, stash[i]) end
+  if not entry and auto then
+    -- Before anything else: maybe the map is fine and WE are wrong about where we are on
+    -- it. If this room fits exactly one other place, stand there and plan again. Asked on
+    -- every stuck step, so each room a blind step shows us is another chance. (Planning
+    -- again cannot land back here: from the corrected position the only fit is where we are.)
+    local c = stuck_locate()
+    if c then
+      note(string.format("lost: this room fits the saved map at %s, not %s - position corrected",
+        fmt_pos(c), fmt_pos(pos)))
+      pos = { x = c.x, y = c.y, z = c.z }
+      cs_step()
+      return
+    end
+  end
   if not entry then
-    -- The sea maze shifts, so our dead-reckoned map can go stale and BFS finds no route to any
-    -- unexplored exit. Rather than dropping auto, step blindly through a REAL exit of this room
+    -- The sea itself is static once made (Joakim, 26 Oct 2026), but our dead-reckoned
+    -- position is not: a missed or doubled step and the map stops matching where we stand,
+    -- and BFS finds no route to any unexplored exit. (The locator above has already asked
+    -- whether this room fits the map somewhere else.) Rather than dropping auto, step blindly through a REAL exit of this room
     -- (exits are re-parsed accurately every room) to re-orient, then keep exploring. The fresh
     -- room's exits become a reachable frontier, so normal pathing resumes on the next tick.
     -- Not conditional on there being unreachable exits left. An EMPTY frontier in the sea
@@ -1507,6 +2046,7 @@ end
 
 local function reset()
   rooms = {}; frontier = {}
+  lost = nil                   -- a fresh map: nothing to look for on the old one
   wimpy_dir = nil              -- ...and a retreat nobody acted on
   contents_seen = false        -- ...and what we thought had described the room
   teleported = false           -- ...and a teleport nobody acted on
@@ -1527,6 +2067,27 @@ local idle_ticks = 0
 local cs_last_sea_min = nil
 
 local function cs_watchdog()
+  -- A teleport that has not been found again in 10 s - no picture came, say - is a bot
+  -- standing still; that is what the phone is for. (A found one never buzzes.)
+  if lost and not lost.told and now - lost.at >= 10 then
+    lost.told = true
+    pnotify("Chaos sea: teleported - bot paused, position unknown")
+  end
+  if lost and enabled then
+    -- GMCP sends nothing whose payload has not changed, so in a uniform corridor the next
+    -- room's Room.Map may never come: two seconds after its header, the last picture IS
+    -- this room's.
+    if obs.exits and not obs.pic and last_pic and now - (obs.exits_at or now) >= 2 then
+      obs.pic = last_pic
+    end
+    -- A move that nothing answered - not a room, not a refusal we know the words of - in
+    -- ten seconds did not happen: back to the room we were in, and another way out.
+    if lost.dir and lost.at_move and not next(obs) and now - lost.at_move >= 10 then
+      lost_refused()
+    end
+    -- The prompt can beat Room.Map, and then nothing judges the finished room: do it here.
+    if obs_ready(obs) and not obs.reported then lost_check(true) end
+  end
   -- tick the sea-age timer even while idle/paused: redraw once per minute change
   if sea_time then
     local m = math.floor((now - sea_time) / 60)
@@ -1735,6 +2296,7 @@ cs_draw = function()
                               and string.format("LOOP - new sea in %dm (sea age)",
                                     math.max(0, math.ceil((3600 - (now - (sea_time or now))) / 60)))
                               or "LOOP - cask found, new sea when the room is clear"
+  elseif lost then          modetxt = "LOST - looking for this room on the saved map"
   elseif paused then        modetxt = "PAUSED - press Pause to continue"
   elseif resting then       modetxt = string.format("RESTING - Seid low, %ds left", math.max(0, rest_until - now))
   elseif fighting then      modetxt = "FIGHTING - resumes when clear"
@@ -1884,6 +2446,7 @@ function cs_interface(args)
     note("  cs leave              walk back to 0 0 0")
     note("  cs reset              wipe map        (map lives in the HUD panel)")
     note("  cs set/find <x> <y> <z>")
+    note("  cs locate             find this room on the saved map (also automatic after a teleport)")
     note("  cs kill <name>        cs exclude <mob long name>")
     note("  cs goal <word>        stop + open it when seen (default: cask)")
     note("  cs delay <secs>       pause after killing blows (default 2.5s)")
@@ -1917,8 +2480,26 @@ function cs_interface(args)
     -- Nothing can re-describe the room you are STANDING in any more: Room.Info is sent on
     -- a room change, and 'look' produces none. The map seeds itself on your first step.
     note("enabled - walk one step to seed the map, then 'cs step' or 'cs auto on'")
+  elseif args == "locate" then
+    if not obs_ready(obs) then
+      note("nothing to match yet - this room's map picture and exits have not both arrived (walk a step)")
+    else
+      local cands = all_fits(obs, target_z())
+      local c = sure(cands)
+      if c and c.x == pos.x and c.y == pos.y and c.z == pos.z then
+        note("this room fits the saved map exactly where we think we are, " .. fmt_pos(pos))
+      elseif c then
+        relocate(c, "located")
+      elseif #cands == 0 then
+        note("this room does not fit anywhere on the saved map")
+      elseif #cands == 1 then
+        note(fits_text(cands))
+      else
+        note(string.format("this room fits %d places on the saved map - walk a step and try again", #cands))
+      end
+    end
   elseif args == "disable" then
-    enabled = false; auto = false
+    enabled = false; auto = false; lost = nil
     scrye.emit("map.hold", scrye.json.encode({ on = false }))   -- release the automapper
     note("disabled")
   elseif args == "reset" then
@@ -1968,6 +2549,7 @@ function cs_interface(args)
       pos.y = tonumber(parts[3]) or pos.y
       pos.z = tonumber(parts[4]) or pos.z
       add_room(pos)
+      lost = nil
       note(string.format("position set to %d %d %d", pos.x, pos.y, pos.z))
     elseif parts[1] == "find" then
       local dst = { x = tonumber(parts[2]) or 0, y = tonumber(parts[3]) or 0, z = tonumber(parts[4]) or 0 }
@@ -2056,7 +2638,12 @@ scrye.addTrigger{ pattern = [[^Your legs run away with you (\w+)]], regex = true
 -- one did -- and this is the difference between our step landing and being thrown across
 -- the maze.
 scrye.addTrigger{ pattern = [[^Suddenly you find yourself elsewhere]], regex = true,
-  run = function() if enabled then teleported = true end end }
+  run = function()
+    if not enabled then return end
+    teleported = true
+    obs, obs_prev = {}, nil                    -- what we saw was of the room we left
+    if lost then lost.base, lost.dir = nil, nil end   -- thrown again: start the search over
+  end }
 
 -- The marker triggers are now the FALLBACK, not the source: they stand down for any room
 -- Room.Contents has already described. Keeping them means the markers can be switched off
@@ -2079,10 +2666,11 @@ scrye.addTrigger{ pattern = [[^There is no (.+) here\.\s*$]], regex = true,
 -- on a single trailing space -- and a refusal that does not match costs the full step
 -- timeout before the bot works out for itself that it did not move. The direction was
 -- captured and then ignored anyway: cs_blocked reads the one it sent.
+-- A move you tried while the bot was lost did not happen: the search stays where it was.
 scrye.addTrigger{ pattern = [[^You cannot go ]], regex = true,
-  run = function() cs_blocked() end }
+  run = function() lost_refused() ; cs_blocked() end }
 scrye.addTrigger{ pattern = [[^You are unable to penetrate the wall that]], regex = true,
-  run = function() cs_blocked() end }
+  run = function() lost_refused() ; cs_blocked() end }
 scrye.addTrigger{ pattern = [[dealt the killing blow to (.+)\.]], regex = true,
   run = function() cs_killblow() end }
 
@@ -2098,7 +2686,12 @@ scrye.onCommand(function(text)
   if not first then return end
   first = first:lower()
   if DELTA[first] and not (plan and plan.awaiting) then
+    -- The search walk's own step, seen coming back through here: already accounted for.
+    if lost and lost.echo == SHORT_DIR[first] then lost.echo = nil ; return end
     last_typed = { dir = first, at = now }
+    -- Lost and walking: the places that fit here, moved your way, are where to look next.
+    if lost then lost_move(SHORT_DIR[first]) end
+    leave_room()                               -- you are leaving this room
   end
 end)
 

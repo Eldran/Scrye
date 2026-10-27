@@ -4,6 +4,15 @@
 --
 -- The properties this fork exists to keep are at the bottom: it never asks the MUD to
 -- re-describe a room, and it never needs the '=S=' display markers to know where it is.
+--
+-- Equivalent mutants of the locator (2.4.0), documented rather than hunted. (Its odds of a
+-- WRONG place are measured separately, on simulated mazes - see the comment on LOC_BITS.)
+--   * the teleport line emptying what we saw: Room.Info empties it a moment later, and on a
+--     Room.Map-only arrival the picture and then the header replace both halves before the
+--     first look at them.
+--   * cs_advance's leave_room(): a step's arrival either sends Room.Info, which starts afresh,
+--     or does not - and then its exits are the same as the room before (that is WHY nothing
+--     was sent), so the picture that replaces the old one is all that changes.
 
 local HERE = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
 -- This file sits in tests/plugins/ (CI runs it), not beside the plugin: everything in the plugin folder is copied
@@ -1593,6 +1602,831 @@ check(store["loop"] == "1", "loop: the setting is kept")
 local kept = store
 fresh_client(); store = kept; dofile(PLUGIN)
 check(find_button(panel, "Loop ON") ~= nil, "loop: ...and is still on after a reload")
+
+-- ---------------------------------------------------------------------------------------
+-- 60. FINDING OURSELVES ON THE SAVED MAP (2.4.0, Joakim 26 Oct 2026: "it sometimes gets
+--     lost and has to reset and start over"). The sea is static once made, so the map the
+--     bot built stays true when its idea of WHERE it is does not. A room cannot be told by
+--     its number (all 60494), but it can by its shape: the Room.Map picture is a patch of
+--     the maze, and it fits the saved map in one place.
+--
+--     The maze below is drawn in Room.Map's own notation (rooms every 2 columns and rows,
+--     links between), so every picture the bot is shown is a window cut from it - the
+--     format of the verbatim captures above, at any crop. The whole maze is the "saved
+--     map", written into the store the way save_state writes it.
+local MAZE = {
+  "O-O-O-O O-O-O-O-O",
+  "|     | |     |  ",
+  "O O-O O-O O-O O-O",
+  "| | | |   |X  |  ",
+  "O-O O O-O-O O-O O",
+  "  |   |     |\\  |",
+  "O-O-O O O-O-O O-O",
+  "|     | |   | |  ",
+  "O O-O-O O O O-O-O",
+  "| |     | | |/   ",
+  "O-O O-O-O O-O-O-O",
+}
+local function mz_ch(r, c)
+  local l = MAZE[r]
+  if not l or c < 1 or c > #l then return " " end
+  return l:sub(c, c)
+end
+local function mz_is_room(r, c) return mz_ch(r, c) == "O" end
+-- the maze is well formed: every link joins two rooms
+do
+  local ok = true
+  for r = 1, #MAZE do
+    for c = 1, #MAZE[r] do
+      local ch = mz_ch(r, c)
+      if ch == "-" then ok = ok and mz_is_room(r, c - 1) and mz_is_room(r, c + 1)
+      elseif ch == "|" then ok = ok and mz_is_room(r - 1, c) and mz_is_room(r + 1, c)
+      elseif ch == "\\" then ok = ok and mz_is_room(r - 1, c - 1) and mz_is_room(r + 1, c + 1)
+      elseif ch == "/" then ok = ok and mz_is_room(r + 1, c - 1) and mz_is_room(r - 1, c + 1)
+      elseif ch == "X" then ok = ok and mz_is_room(r - 1, c - 1) and mz_is_room(r + 1, c + 1)
+                                    and mz_is_room(r + 1, c - 1) and mz_is_room(r - 1, c + 1) end
+    end
+  end
+  check(ok, "(the test maze is well formed)")
+end
+local MZ_STEP = { n = { -2, 0 }, s = { 2, 0 }, e = { 0, 2 }, w = { 0, -2 },
+                  ne = { -2, 2 }, nw = { -2, -2 }, se = { 2, 2 }, sw = { 2, -2 } }
+local function mz_exits(r, c)
+  local ex = {}
+  if mz_ch(r, c + 1) == "-" then ex[#ex + 1] = "e" end
+  if mz_ch(r, c - 1) == "-" then ex[#ex + 1] = "w" end
+  if mz_ch(r - 1, c) == "|" then ex[#ex + 1] = "n" end
+  if mz_ch(r + 1, c) == "|" then ex[#ex + 1] = "s" end
+  -- 'X' is both diagonals crossing
+  local function diag(ch, want) return ch == want or ch == "X" end
+  if diag(mz_ch(r - 1, c + 1), "/") then ex[#ex + 1] = "ne" end
+  if diag(mz_ch(r + 1, c - 1), "/") then ex[#ex + 1] = "sw" end
+  if diag(mz_ch(r + 1, c + 1), "\\") then ex[#ex + 1] = "se" end
+  if diag(mz_ch(r - 1, c - 1), "\\") then ex[#ex + 1] = "nw" end
+  table.sort(ex)
+  return ex
+end
+-- drawing (r, c) <-> map (x, y): x east, y north, the top-left room at 0 0
+local function mz_xy(r, c) return (c - 1) // 2, -((r - 1) // 2) end
+local function mz_rooms()
+  local out = {}
+  for r = 1, #MAZE, 2 do
+    for c = 1, #MAZE[r], 2 do
+      if mz_is_room(r, c) then out[#out + 1] = { r, c } end
+    end
+  end
+  return out
+end
+-- the saved map, as save_state writes it; `keep(r, c)` picks the rooms that were explored
+local function mz_store(keep, z)
+  local lines = {}
+  for _, rc in ipairs(mz_rooms()) do
+    if not keep or keep(rc[1], rc[2]) then
+      local x, y = mz_xy(rc[1], rc[2])
+      lines[#lines + 1] = string.format("%d|%d|%d|%s", z or 0, x, y, table.concat(mz_exits(rc[1], rc[2]), ","))
+    end
+  end
+  return table.concat(lines, "\n")
+end
+-- The Room.Map picture standing at (r, c): the 17x9 window, rooms within `k` rooms drawn
+-- and the links one step past them (a link to a room out of sight is drawn - MAP_W), rows
+-- right-trimmed. k = nil draws the whole window.
+local function mz_window(r, c, k)
+  local rows = {}
+  for dr = -4, 4 do
+    local line = {}
+    for dc = -8, 8 do
+      local ch = mz_ch(r + dr, c + dc)
+      local room_cell = dr % 2 == 0 and dc % 2 == 0
+      local lim = room_cell and 2 * k or (k and 2 * k + 1)
+      if k and (math.abs(dr) > lim or math.abs(dc) > lim) then ch = " " end
+      if dr == 0 and dc == 0 then ch = "@" end
+      line[#line + 1] = ch
+    end
+    local s = table.concat(line):gsub("%s+$", ""):gsub("\\", "\\\\")
+    rows[#rows + 1] = '"' .. s .. '"'
+  end
+  return '{ "rows": [ ' .. table.concat(rows, ", ") .. ' ], "h": 9, "w": 17, "kind": "los" }'
+end
+local function mz_info(r, c)
+  local parts = {}
+  for _, d in ipairs(mz_exits(r, c)) do parts[#parts + 1] = '"' .. d .. '": 60494' end
+  return layer3("{ " .. table.concat(parts, ", ") .. " }")
+end
+-- One arrival at (r, c), the whole burst as the server sends it, and the prompt.
+local function mz_arrive(r, c, k)
+  room(mz_info(r, c))
+  roommap(mz_window(r, c, k))
+  header(table.concat(mz_exits(r, c), ","))
+  prompt()
+end
+local function found_at()
+  for _, l in ipairs(printed) do
+    local x, y, z = l:match("this room is at %[(%-?%d+) (%-?%d+) (%-?%d+)%] on the saved map")
+    if x then return tonumber(x), tonumber(y), tonumber(z) end
+  end
+  return nil
+end
+-- Standing in (sr, sc) with the map loaded; `walking` puts the bot on Auto, and the first
+-- prompt then has it step out (a blind step: the saved map has no frontier).
+local NOTES = {}
+local function mz_start(store_map, sr, sc, walking, k, z)
+  fresh_client()
+  NOTES = {}
+  local sx, sy = mz_xy(sr, sc)
+  store.map = store_map
+  store.pos = sx .. "|" .. sy .. "|" .. (z or 0)
+  dofile(PLUGIN)
+  scrye.notify = function(m) NOTES[#NOTES + 1] = m end
+  csg("enable")
+  if walking then csg("auto on") end
+  mz_arrive(sr, sc, k or 2)                -- standing in the start room: anchors the layer
+end
+
+-- 60a. Thrown across the maze, the bot finds the room on the map - by one picture or by
+--      walking a few rooms - and goes on from the RIGHT place. Every room of the maze as
+--      the landing spot, twice over (pictures two rooms deep, and one room deep), with the
+--      walk's choices seeded: wherever it says it is, it is. (The odds of a WRONG place are
+--      what the evidence rule is tuned against - on simulated mazes of up to 1500 mapped
+--      rooms, corridor-heavy ones the hardest; this suite pins the behaviour, not the odds.)
+local START_R, START_C = 5, 9
+local wrong, found_n, runs = {}, 0, 0
+local function teleport_run(tr, tc, k, seed, store_map)
+  math.randomseed(seed)
+  mz_start(store_map, START_R, START_C, true)
+  check(#sent == 1, "(setup) the bot is walking when the sea takes it")
+  sent = {}; clear()
+  fire_trigger("Suddenly you find yourself", nil)
+  local r, c = tr, tc
+  mz_arrive(r, c, k)
+  for _ = 1, 40 do
+    if found_at() or said("could not place them") then break end
+    local d = sent[#sent]
+    local mv = d and MZ_STEP[d]
+    if not mv then break end
+    check(mz_ch(r + mv[1] / 2, c + mv[2] / 2) ~= " ", "(the lost walk only takes real exits)")
+    r, c = r + mv[1], c + mv[2]
+    sent = {}
+    mz_arrive(r, c, k)
+  end
+  return r, c
+end
+for _, k in ipairs({ 2, 1 }) do
+  for i, rc in ipairs(mz_rooms()) do
+    runs = runs + 1
+    local r, c = teleport_run(rc[1], rc[2], k, i * 7 + k, mz_store())
+    local fx, fy = found_at()
+    if fx then
+      found_n = found_n + 1
+      local tx, ty = mz_xy(r, c)
+      if fx ~= tx or fy ~= ty then wrong[#wrong + 1] = string.format("k%d %d,%d: said %d %d, truly %d %d", k, rc[1], rc[2], fx, fy, tx, ty) end
+    end
+  end
+end
+check(#wrong == 0, "a teleport is never placed at the WRONG room (" .. table.concat(wrong, "; ") .. ")")
+check(found_n >= runs * 0.8, string.format("...and nearly always found (%d of %d)", found_n, runs))
+
+-- 60b. One teleport in detail: the bot says what happened, finds the room, and carries on
+--      exploring from where it really is. (7,11) is a room in the thick of the maze: one
+--      picture of it is enough.
+local T_R, T_C = 7, 11                             -- map 5 -3, exits e,w
+local T_INFO = mz_info(T_R, T_C)
+local T_PIC = mz_window(T_R, T_C, 2)
+local T_HDR = table.concat(mz_exits(T_R, T_C), ",")
+math.randomseed(3)
+mz_start(mz_store(), START_R, START_C, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO)
+check(said("teleported inside the maze") and said("looking for this room on the saved map"),
+      "a teleport says the position is unknown and that it is looking")
+check(tostring(state["plugin.3s-chaossea.status"]):find("LOST", 1, true) ~= nil, "the panel says LOST meanwhile")
+roommap(T_PIC)
+header(T_HDR)
+local fx, fy = found_at()
+check(fx == 5 and fy == -3, "a distinctive room is found from its first picture (" .. tostring(fx) .. " " .. tostring(fy) .. ")")
+check(said("bits of evidence"), "...and says how sure it is")
+check(said("carrying on exploring"), "...and the bot carries on by itself")
+sent = {}
+prompt()
+check(sent[1] == "e" or sent[1] == "w", "...its next step is a real exit of the room it is really in (" .. tostring(sent[1]) .. ")")
+
+-- 60c. Landed somewhere the map has never seen: the walk keeps looking, never "finds" a
+--      room it has not mapped, and gives up honestly - paused, with the old advice.
+math.randomseed(5)
+local left_only = function(_, c) return c <= 9 end           -- only the west half explored
+local unk_wrong, unk_found = 0, 0
+for i, rc in ipairs(mz_rooms()) do
+  if rc[2] >= 11 then                                        -- land in the unexplored east
+    local r, c = teleport_run(rc[1], rc[2], 2, 100 + i, mz_store(left_only))
+    local fx2, fy2 = found_at()
+    if fx2 then
+      unk_found = unk_found + 1
+      local tx, ty = mz_xy(r, c)
+      if fx2 ~= tx or fy2 ~= ty or c > 9 then unk_wrong = unk_wrong + 1 end
+    end
+  end
+end
+check(unk_wrong == 0, "landing in unexplored rooms never produces a wrong position (" .. unk_wrong .. ")")
+check(unk_found > 0, "...and walking into the mapped part, it does find itself there (" .. unk_found .. ")")
+-- an island it can never walk out of: a dead-end room, the map holding none of it
+mz_start(mz_store(left_only), START_R, START_C, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+local ISLAND = '{ "exits": { "e": 60494 }, "area": "Unknown", "name": "Layer three of the Sea of Chaos", "num": 60494 }'
+local ISLAND_MAP = themap('"        @-O      "')
+for _ = 1, 40 do
+  room(ISLAND); roommap(ISLAND_MAP); header("e"); prompt()
+  if said("could not place them") then break end
+end
+check(said("walking until it is sure"), "an unknown room starts the search walk")
+check(said("could not place them") and said("cs reset"), "...which gives up after its budget, pointing at 'cs reset'")
+check(said("walked 30 room(s)"), "...and the budget is thirty rooms")
+check(#NOTES == 1 and NOTES[1]:find("position unknown", 1, true) ~= nil, "...and tells the phone, once")
+check(not found_at(), "...without ever claiming a place")
+sent = {}; prompt()
+check(#sent == 0, "...and the bot stays paused")
+
+-- 60d. With Auto off nobody walks for it: it says what it found and waits; you walking
+--      narrows it down and gathers the evidence. (11,1) is the maze's corner: one look is
+--      far from enough, the walk out of it is what decides.
+mz_start(mz_store(), START_R, START_C)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(11, 1, 1)
+check(not found_at(), "a picture without enough behind it is not taken")
+check(said("not yet surely") or said("places on the saved map"), "...and it says so")
+check(said("walk a step and it looks again"), "...and that walking helps")
+check(#sent == 0, "...and with Auto off it does not walk by itself")
+do
+  local r, c = 11, 1
+  for _, d in ipairs({ "e", "n", "e", "e", "n", "n", "e", "e", "s" }) do
+    if found_at() then break end
+    cmd(d)
+    r, c = r + MZ_STEP[d][1], c + MZ_STEP[d][2]
+    mz_arrive(r, c, 1)
+  end
+  local fx3, fy3 = found_at()
+  local tx3, ty3 = mz_xy(r, c)
+  check(fx3 == tx3 and fy3 == ty3, "walking it yourself narrows it to the right room ("
+        .. tostring(fx3) .. " " .. tostring(fy3) .. " vs " .. tx3 .. " " .. ty3 .. ")")
+end
+check(said("after walking"), "...found on the trail, not from one picture")
+check(said("'cs step' or 'cs auto on'"), "...and tells you how to go on")
+
+-- 60e. A refused move while lost changes nothing about where it might be.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(11, 1, 1)                          -- the corner: not enough to be sure
+cmd("w")
+fire_trigger("You cannot go", "west")       -- there is no west there
+clear()
+csg("locate")
+check(said("not yet surely") or said("places on the saved map"),
+      "after a refused move the room is still the one it was, and still matched")
+
+-- 60f. 'cs locate' on demand, and its honest answers.
+mz_start(mz_store(), START_R, START_C)
+clear(); csg("locate")
+check(said("exactly where we think we are"), "locate: the start room is where the bot thinks it is")
+csg("set 0 0 0")                              -- tell it something wrong
+clear(); csg("locate")
+local lx, ly = found_at()
+local sx0, sy0 = mz_xy(START_R, START_C)
+check(lx == sx0 and ly == sy0, "locate: a wrong position is corrected from the room's shape")
+fresh_client(); store.map = mz_store(); dofile(PLUGIN); csg("enable")
+clear(); csg("locate")
+check(said("nothing to match yet"), "locate: before any picture it says it has nothing to match")
+mz_start(mz_store(left_only), START_R, START_C)
+room(mz_info(1, 15)); roommap(mz_window(1, 15, 2)); header(table.concat(mz_exits(1, 15), ","))
+clear(); csg("locate")
+check(said("does not fit anywhere"), "locate: a room the map does not have fits nowhere")
+
+-- 60g. A stuck route checks where it is before re-orienting. The bot believes it is in
+--      the start room; it is really somewhere else (a missed step, say). Nothing on the
+--      frontier: the old answer was a blind step from the wrong place.
+mz_start(mz_store(), START_R, START_C)
+room(T_INFO); roommap(T_PIC); header(T_HDR)
+csg("auto on")
+sent = {}; clear()
+csg("step")
+local sx, sy = mz_xy(START_R, START_C)
+check(said(string.format("fits the saved map at [5 -3 0], not [%d %d 0] - position corrected", sx, sy)),
+      "a stuck route finds the room on the map and corrects the position")
+check(said("from [5 -3 0]"), "...and re-orients from where it really is")
+
+-- 60h. The fit is strict. A stored neighbour at the end of a drawn link that LACKS the
+--      exit rules the place out: with the map's copy of a neighbour damaged, the right
+--      place no longer fits, and nothing else is taken instead.
+do
+  -- the '\\' link between (6,-2) and (7,-3) gone from BOTH rooms' records
+  local dmg = mz_store():gsub("\n0|6|%-2|[^\n]*", "\n0|6|-2|e,s"):gsub("\n0|7|%-3|[^\n]*", "\n0|7|-3|e,s")
+  mz_start(dmg, START_R, START_C)
+  fire_trigger("Suddenly you find yourself", nil)
+  mz_arrive(7, 13, 2)                         -- (6,-3), beside both damaged rooms
+  local hx, hy = found_at()
+  check(not hx, "a neighbour on the map without the drawn link rules the place out")
+end
+
+-- 60i. THE FIT, rule by rule. Each probe stands the bot somewhere off the map and PAUSED,
+--      so what it is shown is only looked at, never written - then asks 'cs locate'.
+local function probe(store_map, info, pic, hdr)
+  fresh_client()
+  store.map = store_map
+  store.pos = "50|50|0"
+  dofile(PLUGIN)
+  csg("enable"); csg("pause")
+  room(info); roommap(pic); header(hdr)
+  clear(); csg("locate")
+end
+probe(mz_store(), T_INFO, T_PIC, T_HDR)
+local px, py = found_at()
+check(px == 5 and py == -3, "probe: the room is placed (control)")
+-- the room's own record must hold every exit the room has...
+probe((mz_store():gsub("\n0|5|%-3|[^\n]*", "\n0|5|-3|e")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: a mapped room missing one of this room's exits is not this room")
+-- ...but a neighbour whose record lacks the way back still agrees (one end is enough)
+probe((mz_store():gsub("\n0|6|%-3|[^\n]*", "\n0|6|-3|n,s")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(px == 5 and py == -3, "fit: a link known from one end only still counts")
+-- two rooms drawn side by side with nothing between them: the map may not link them
+probe((mz_store():gsub("\n0|4|%-4|[^\n]*", "\n0|4|-4|n,s,e"):gsub("\n0|5|%-4|[^\n]*", "\n0|5|-4|s,w")),
+      T_INFO, T_PIC, T_HDR)                    -- (4,-4)-(5,-4): drawn apart, mapped together
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: a link the map has between two rooms drawn apart rules the place out")
+-- the evidence a place needs grows with the map: 20 bits plus log2 of the rooms mapped
+-- on the layer - 54 here, so 25.8, shown rounded
+probe(mz_store(), mz_info(9, 9), mz_window(9, 9, 2), table.concat(mz_exits(9, 9), ","))
+check(said("not yet surely (25.0 of 25.8 bits)"), "a fit a bit short of the evidence is not taken, and says by how much")
+probe(mz_store(), mz_info(5, 13), mz_window(5, 13, 2), table.concat(mz_exits(5, 13), ","))
+px, py = found_at()
+check(px == 6 and py == -2, "...and one past it is")
+-- a picture and exits that are not of the same room are not matched at all
+probe(mz_store(), layer3('{ "n": 60494 }'), themap('"        @-O      "'), "n")
+check(said("nothing to match yet"), "a link drawn from us that is not one of our exits: no match attempted")
+probe(mz_store(), layer3('{ "n": 60494 }'), themap('"      O-@        "'), "n")
+check(said("nothing to match yet"), "...nor a link drawn TO us")
+probe(mz_store(), layer3('{ "n": 60494 }'), themap('"         /       ", "        @        "'), "n")
+check(said("nothing to match yet"), "...nor a diagonal one ('/' up and to the right is ne)")
+
+-- 60j. The layer the server names picks the map layer to search. Two identical layers on
+--      the map, the bot anchored on z -1 = layer three: the room is found on THAT layer.
+local TWO_LAYERS = mz_store(nil, -1) .. "\n" .. mz_store(nil, 0)
+mz_start(TWO_LAYERS, START_R, START_C, false, 2, -1)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(T_R, T_C, 2)
+local lx2, ly2, lz2 = found_at()
+check(lx2 == 5 and ly2 == -3 and lz2 == -1, "the named layer decides which copy fits ("
+      .. tostring(lx2) .. " " .. tostring(ly2) .. " " .. tostring(lz2) .. ")")
+mz_start(TWO_LAYERS, START_R, START_C, false, 2, -1)
+csg("pause")
+room(mz_info(9, 9)); roommap(mz_window(9, 9, 2)); header(table.concat(mz_exits(9, 9), ","))
+clear(); csg("locate")
+check(said("[4 -4 -1], not yet surely (24.9 of 25.8 bits)"),
+      "'cs locate' searches the named layer, and counts only ITS rooms toward the evidence needed")
+
+-- 60k. Found before the layer was ever anchored (the teleport was the first room seen):
+--      the find anchors it, so the panel's layer number is the server's.
+fresh_client(); store.map = mz_store(); store.pos = "4|-2|0"; dofile(PLUGIN)
+csg("enable")
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(T_R, T_C, 2)
+check(found_at() ~= nil, "(found)")
+check(tostring(state["plugin.3s-chaossea.stats"]):match("^3 ") ~= nil,
+      "a find anchors the layer: the panel says layer 3 (" .. tostring(state["plugin.3s-chaossea.stats"]) .. ")")
+
+-- 60l. The prompt can beat Room.Map. Found when the picture lands after it - and since no
+--      prompt follows, the bot steps on by itself.
+mz_start(mz_store(), START_R, START_C, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO); header(T_HDR); prompt()
+roommap(T_PIC)
+px, py = found_at()
+check(px == 5 and py == -3, "a picture arriving after the prompt is still matched at once")
+sent = {}
+fire_timers()
+check(sent[1] == "e" or sent[1] == "w", "...and the bot steps on without waiting for a prompt ("
+      .. tostring(sent[1]) .. ")")
+
+-- 60m. A teleport seen only by Room.Map (no Room.Info: the payload repeated) gets its
+--      exits from the header that follows, and is found from those.
+mz_start(mz_store(), START_R, START_C, true)
+fire_trigger("Suddenly you find yourself", nil)
+roommap(T_PIC)
+header(T_HDR)
+px, py = found_at()
+check(px == 5 and py == -3, "a Room.Map-only teleport is found once the header names the exits")
+
+-- 60m2. Room.Info and Room.Map are enough: found before the header has even printed.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO); roommap(T_PIC)
+px, py = found_at()
+check(px == 5 and py == -3, "found from Room.Info's exits and the picture, header or no header")
+
+-- 60m3. A teleport seen only by Room.Map that is NOT found: the step that was in flight is
+--       dropped with it, so unpausing does not time it out against the wrong room.
+mz_start(mz_store(left_only), START_R, START_C, true)
+fire_trigger("Suddenly you find yourself", nil)
+roommap(mz_window(1, 15, 2)); header(table.concat(mz_exits(1, 15), ","))
+check(not found_at(), "(not found: unmapped)")
+csg("pause")                                   -- you take over
+clear(); tick(); tick(); tick(); tick()
+check(not said("the step is unconfirmed"), "the abandoned step does not outlive the teleport")
+
+-- 60m4. The phone: told when a teleport stays unresolved for ten seconds - and told
+--       again when it is resolved after all.
+mz_start(mz_store(), START_R, START_C, true)
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO)                                   -- and no picture, for a while
+for _ = 1, 11 do tick() end
+check(#NOTES == 1 and NOTES[1]:find("position unknown", 1, true) ~= nil, "a teleport unresolved for 10 s reaches the phone")
+roommap(T_PIC)
+check(found_at() ~= nil and #NOTES == 2 and NOTES[2]:find("found itself", 1, true) ~= nil,
+      "...and so does finding itself after that")
+
+-- 60m5. A refused step while lost is not counted as walked. (9,9) is just short of sure;
+--       north of it, (7,9), settles it.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(9, 9, 2)
+check(not found_at(), "(just short)")
+cmd("e"); fire_trigger("You cannot go", "east")
+cmd("n"); mz_arrive(7, 9, 2)
+px, py = found_at()
+check(px == 4 and py == -3, "(found one room on)")
+check(said("after walking 1 room(s)"), "a refused step does not count as a room walked")
+
+local SAVED_MAZE = MAZE
+-- 60m6. The corridor: GMCP sends nothing that has not changed, so the next room's Room.Map
+--       may never come. Two seconds after its header the last picture stands for it, and
+--       the room is judged - the walk does not stall there.
+MAZE = { "O-O-O-O-O-O-O-O-O-O-O-O-O-O-O-O-O" }
+math.randomseed(11)
+mz_start(mz_store(), 1, 1, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(1, 15, 2)
+local d1 = sent[#sent]
+check(d1 == "e" or d1 == "w", "(the search walk steps)")
+sent = {}
+header(table.concat(mz_exits(1, 15 + (d1 == "e" and 2 or -2)), ",")); prompt()   -- no Room.Info, no Room.Map
+for _ = 1, 5 do tick() end
+check(#sent == 1, "a room whose picture never came is judged on the last one, and the walk goes on")
+-- and a step nothing answers at all - no room, no refusal we know the words of - is given
+-- up after ten seconds and another way tried
+local d2 = sent[1]
+sent = {}
+for _ = 1, 10 do tick() end
+check(#sent == 1 and sent[1] ~= d2, "a step nothing answered is taken back, and another way is tried ("
+      .. tostring(d2) .. " then " .. tostring(sent[1]) .. ")")
+MAZE = SAVED_MAZE
+
+-- 60n. The trail goes cold and starts again: lost in the unexplored east, you walk west
+--      into mapped rooms, and it finds you there.
+mz_start(mz_store(left_only), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(5, 11, 2)                          -- unmapped
+check(not found_at(), "(not found in unmapped rooms)")
+do
+  local r, c = 5, 11
+  for _, d in ipairs({ "w", "w", "n", "n", "w", "s" }) do
+    if found_at() then break end
+    cmd(d)
+    r, c = r + MZ_STEP[d][1], c + MZ_STEP[d][2]
+    mz_arrive(r, c, 2)
+  end
+  local nx, ny = found_at()
+  local tx, ty = mz_xy(r, c)
+  check(nx == tx and ny == ty, "after rooms that fit nowhere, the search starts again and finds you ("
+        .. tostring(nx) .. " " .. tostring(ny) .. " vs " .. tx .. " " .. ty .. ")")
+end
+
+-- 60o. The search walk, in a corridor seen one room deep - where all rooms look alike, and
+--      the walk keeps its direction, waits out fights, and never claims a place.
+MAZE = { "O-O-O-O-O-O-O-O-O" }
+local function corridor_teleport(seed, enemy)
+  math.randomseed(seed)
+  mz_start(mz_store(), 1, 1, true)
+  sent = {}; clear()
+  fire_trigger("Suddenly you find yourself", nil)
+  room(mz_info(1, 7)); roommap(mz_window(1, 7, 1)); header(table.concat(mz_exits(1, 7), ","))
+  if enemy then state["enemy.name"] = "mutant" end
+  prompt()
+end
+corridor_teleport(11)
+local c, reversals, steps, from = 7, 0, {}, {}
+for _ = 1, 40 do
+  local d = sent[#sent]
+  if found_at() or not (d == "e" or d == "w") then break end
+  steps[#steps + 1] = d
+  from[#from + 1] = c
+  c = c + (d == "e" and 2 or -2)
+  sent = {}
+  mz_arrive(1, c, 1)
+end
+for i = 2, #steps do
+  -- turning round where the corridor went on (an end room leaves only the way back)
+  if steps[i] ~= steps[i - 1] and from[i] ~= 1 and from[i] ~= 17 then reversals = reversals + 1 end
+end
+check(#steps >= 10, "the search walk walks the corridor (" .. #steps .. " steps)")
+check(reversals == 0, "...does not double back while the corridor goes on (" .. table.concat(steps, ",") .. ")")
+check(not found_at(), "...and never claims a place among rooms that all look alike")
+-- a fight holds the walk
+corridor_teleport(12, true)
+check(#sent == 0, "the search walk waits while something is hitting us")
+state["enemy.name"] = nil
+prompt()
+check(#sent == 1, "...and walks once it is over")
+-- a refused step is not tried again from the same room
+corridor_teleport(13)
+local first = sent[#sent]
+sent = {}
+fire_trigger("You cannot go", first)
+prompt()
+check(#sent == 1 and sent[1] ~= first, "a refused way is not tried again from the same room ("
+      .. tostring(first) .. " then " .. tostring(sent[1]) .. ")")
+-- the watchdog judges a room whose prompt came before its picture
+math.randomseed(14)
+mz_start(mz_store(), 1, 1, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+room(mz_info(1, 7)); header(table.concat(mz_exits(1, 7), ",")); prompt()
+roommap(mz_window(1, 7, 1))
+check(#sent == 0, "(nothing judged the room yet)")
+for _ = 1, 5 do tick() end
+check(#sent == 1, "the watchdog judges it, and the walk starts")
+MAZE = SAVED_MAZE
+
+-- 60p. No floor or ceiling in the search walk: a room whose only way on is down is where
+--      it stops - a descent is a one-way door.
+mz_start(mz_store(), START_R, START_C, true)
+sent = {}; clear()
+fire_trigger("Suddenly you find yourself", nil)
+room(layer3('{ "d": 60494 }')); roommap(themap('"        v        "')); header("d"); prompt()
+check(not sent_has("d"), "the search walk never takes a way down")
+check(said("walked 0 room(s)"), "...and with nothing else open it stops and says so")
+
+-- 60q. Where the bot already is: a stuck route that fits right here corrects nothing.
+mz_start(mz_store(), START_R, START_C, true)
+check(not said("position corrected"), "a stuck route at the right position is not 'corrected'")
+
+-- 60r. Taking it over yourself ends the search: unpausing, setting the position, or
+--      switching the bot off and on. Unpausing on Auto also walks on: paused arrivals arm
+--      nothing, and the teleported step had used the arming up.
+local function lost_here(walking)
+  mz_start(mz_store(), START_R, START_C, walking)
+  fire_trigger("Suddenly you find yourself", nil)
+  room(mz_info(11, 1)); roommap(mz_window(11, 1, 1)); header(table.concat(mz_exits(11, 1), ","))
+  return tostring(state["plugin.3s-chaossea.status"]):find("LOST", 1, true) ~= nil
+end
+check(lost_here(), "(lost)")
+clear(); csg("pause")
+check(said("no longer looking") and not tostring(state["plugin.3s-chaossea.status"]):find("LOST", 1, true),
+      "unpausing by hand ends the search")
+lost_here(); csg("set 0 0 0")
+check(not tostring(state["plugin.3s-chaossea.status"]):find("LOST", 1, true), "'cs set' ends the search")
+lost_here(); csg("disable"); csg("enable")
+check(not tostring(state["plugin.3s-chaossea.status"]):find("LOST", 1, true), "switching off and on ends it")
+lost_here(true)
+sent = {}
+csg("pause"); fire_timers()
+check(#sent == 1, "unpausing a lost bot on Auto walks on from where the position says")
+
+-- 60s. While lost, a picture that is not of the room the exits came from is not judged.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+clear()
+room(layer3('{ "n": 60494 }')); roommap(themap('"        @-O      "')); prompt()
+check(not said("saved map -") and not said("places on the saved map") and not said("not yet surely"),
+      "a picture disagreeing with the exits gets no verdict")
+
+-- 60t. A wimpy while lost moves the search, never the map: nothing is written where the
+--      bot only thought it was.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(9, 9, 2)                             -- just short of sure
+fire_trigger("Your legs run away with you", "north")
+mz_arrive(7, 9, 2)
+px, py = found_at()
+check(px == 4 and py == -3, "a wimpy while lost carries the search along with it (" .. tostring(px) .. " " .. tostring(py) .. ")")
+check(not said("WIMPY"), "...and is not handled as a retreat from a known room")
+-- the map's (4,-1) - north of where the bot thought it was - keeps its own exits, n and w
+csg("debug_all")
+local rec41
+for _, l in ipairs(printed) do rec41 = rec41 or l:match("%[ 4 %-1 %] : ([%a, ]*)") end
+check(rec41 and rec41:find("n", 1, true) and rec41:find("w", 1, true) and not rec41:find("e", 1, true),
+      "...and the room north of the old position is not overwritten (" .. tostring(rec41) .. ")")
+
+-- 60u. The evidence, to the tenth of a bit. A change to how it is counted shows here first.
+probe(mz_store(), T_INFO, T_PIC, T_HDR)
+check(said("(32.0 bits of evidence)"), "one picture of (7,11): 32.0 bits")
+-- the room's exits beyond what it is known to have: walked in from the south, (9,9)'s
+-- n,s says only that it goes on north
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(9, 9, 2)
+cmd("n"); mz_arrive(7, 9, 2)
+check(said("[4 -3 0] on the saved map (32.2 bits of evidence, after walking 1 room(s))"),
+      "a room walked into adds what its exits say beyond the way back, and the trail keeps the rest")
+
+-- 60v. More of the fit.
+-- a mapped room with an exit this room does not have is not this room either
+probe((mz_store():gsub("\n0|5|%-3|[^\n]*", "\n0|5|-3|e,n,w")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: a mapped room with an exit this room lacks is not this room")
+-- a link known only from the end it runs TO (the west neighbour's record lost its east)
+probe((mz_store():gsub("\n0|4|%-3|[^\n]*", "\n0|4|-3|s")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(px == 5 and py == -3, "fit: a link known only from its far end still counts")
+-- a drawn link whose one mapped end lacks it rules the place out, the other end unmapped
+do
+  local m = mz_store():gsub("\n0|6|%-2|[^\n]*", ""):gsub("\n0|6|%-3|[^\n]*", "\n0|6|-3|s,w")
+  probe(m, T_INFO, T_PIC, T_HDR)
+  px, py = found_at()
+  check(not (px == 5 and py == -3), "fit: a mapped end without the drawn link rules it out, unmapped other end or not")
+end
+-- a gap (rooms drawn apart) linked in only ONE room's record still rules it out - either one
+probe((mz_store():gsub("\n0|4|%-4|[^\n]*", "\n0|4|-4|e,n,s")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: a gap the map links from its west room rules it out")
+probe((mz_store():gsub("\n0|5|%-4|[^\n]*", "\n0|5|-4|s,w")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: ...and from its east room")
+-- a diagonal gap too: (5,-2) and (6,-3) are drawn with nothing between them
+probe((mz_store():gsub("\n0|5|%-2|[^\n]*", "\n0|5|-2|n,ne,se,w")), T_INFO, T_PIC, T_HDR)
+px, py = found_at()
+check(not (px == 5 and py == -3), "fit: ...and a diagonal one")
+-- two places fitting with all the evidence in the world are still two places
+probe(TWO_LAYERS, T_INFO, T_PIC, T_HDR)        -- no layer anchored: both copies fit
+check(said("fits 2 places"), "two places that both fit are not one")
+
+-- 60w. Off the map. (4,-3) unmapped: walking north into it from (9,9), the only candidate
+--      leaves the map - where nothing can be checked, so nothing is certain, however much
+--      the picture there agrees.
+do
+  local m = mz_store():gsub("\n0|4|%-3|[^\n]*", "")
+  mz_start(m, START_R, START_C)
+  fire_trigger("Suddenly you find yourself", nil)
+  mz_arrive(9, 9, 2)
+  clear()
+  cmd("n"); mz_arrive(7, 9, 2)
+  check(not found_at(), "a trail that walks off the map is not certain there")
+  check(said("it may have walked off the saved map"), "...and says why")
+end
+
+-- 60x. A wimpy while lost is a step of the trail: (9,9) is short, dragged south to (11,9),
+--      which alone is shorter still - together they are enough.
+mz_start(mz_store(), START_R, START_C)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(9, 9, 2)
+fire_trigger("Your legs run away with you", "south")
+mz_arrive(11, 9, 2)
+px, py = found_at()
+check(px == 4 and py == -5, "a wimpy while lost carries the trail along (" .. tostring(px) .. " " .. tostring(py) .. ")")
+check(said("after walking 1 room(s)"), "...as a room walked")
+
+-- 60y. The client shows a plugin its own sends (onCommand). The search walk's step coming
+--      back that way must change nothing: the same landing walks and finds the same.
+local function echo_run(echo)
+  math.randomseed(77)
+  mz_start(mz_store(), START_R, START_C, true)
+  if echo then
+    local raw = scrye.send
+    scrye.send = function(t) raw(t) ; cmd(t) end
+  end
+  sent = {}; clear()
+  fire_trigger("Suddenly you find yourself", nil)
+  local r, c = 11, 1
+  mz_arrive(r, c, 1)
+  for _ = 1, 40 do
+    if found_at() or said("could not place them") then break end
+    local d = sent[#sent]
+    if not (d and MZ_STEP[d]) then break end
+    r, c = r + MZ_STEP[d][1], c + MZ_STEP[d][2]
+    sent = {}
+    mz_arrive(r, c, 1)
+  end
+  for _, l in ipairs(printed) do if l:find("this room is at", 1, true) then return l end end
+  return "not found"
+end
+local plain, echoed = echo_run(false), echo_run(true)
+check(plain:find("after walking", 1, true) ~= nil, "(the corner landing is found by walking)")
+check(echoed == plain, "the walk's own step echoed back changes nothing (" .. echoed .. ")")
+
+-- 60z. After the search: nothing of it lingers.
+-- a teleport while lost, its Room.Info suppressed, does not outlive the find
+mz_start(mz_store(), START_R, START_C, true)
+fire_trigger("Suddenly you find yourself", nil)
+mz_arrive(9, 9, 2)                            -- short: the walk steps
+fire_trigger("Suddenly you find yourself", nil)
+roommap(T_PIC); header(T_HDR)                 -- thrown to (7,11): found
+check(found_at() ~= nil, "(found after a second teleport)")
+clear(); sent = {}
+prompt()
+local d3 = sent[1]
+check(d3 == "e" or d3 == "w", "(steps on)")
+roommap(mz_window(T_R, T_C + (d3 == "e" and 2 or -2), 2))
+check(not said("teleported"), "the next step is not taken for a teleport")
+-- a fight flag from before the teleport does not hold the bot after the find
+mz_start(mz_store(), START_R, START_C)
+contents('{ "full": 1, "items": [ { "name": "a mutant", "type": "monster" } ] }')
+prompt()                                      -- 'kill mutant': fighting
+check(sent_has("kill mutant"), "(fighting)")
+csg("auto on")
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO); roommap(T_PIC); header(T_HDR)
+check(found_at() ~= nil, "(found)")
+sent = {}; prompt()
+check(sent[1] == "e" or sent[1] == "w", "a fight from before the teleport does not hold the found bot (" .. tostring(sent[1]) .. ")")
+-- a teleport while PAUSED is forgotten on unpausing, like everything a pause ignores
+mz_start(mz_store(), START_R, START_C, true)
+csg("pause")
+fire_trigger("Suddenly you find yourself", nil)
+roommap(T_PIC); header(T_HDR)
+clear(); sent = {}
+csg("pause")
+for _ = 1, 4 do tick() end ; fire_timers()   -- the step in flight when paused times out first
+local d4 = sent[#sent]
+check(d4 ~= nil, "(walks on after the pause)")
+if d4 and MZ_STEP[d4] then roommap(mz_window(START_R + MZ_STEP[d4][1], START_C + MZ_STEP[d4][2], 2)) end
+check(not said("teleported"), "a teleport seen while paused does not ambush the first step after it")
+
+-- 60zz. A plan in hand when the position is corrected keeps its target. The bot is on its
+--       way to an unexplored exit when 'cs locate' moves it: the exit is still to explore.
+do
+  local m = mz_store():gsub("\n0|8|%-4|[^\n]*", "")          -- (8,-4) unexplored...
+  fresh_client(); store.map = m; store.pos = "4|-2|0"
+  store.frontier = "0|7|-4|e"                                -- ...through (7,-4)'s east exit
+  dofile(PLUGIN)
+  csg("enable")
+  mz_arrive(START_R, START_C, 2)
+  csg("auto on")
+  local d = sent[#sent]
+  check(d and MZ_STEP[d], "(on its way: " .. tostring(d) .. ")")
+  local r, c = START_R + MZ_STEP[d][1], START_C + MZ_STEP[d][2]
+  room(mz_info(r, c)); roommap(mz_window(r, c, 2)); header(table.concat(mz_exits(r, c), ","))
+  csg("set 0 0 0")                                           -- the position goes wrong
+  clear(); csg("locate")
+  check(found_at() ~= nil, "(located)")
+  clear(); csg("step")
+  check(said("-> [8 -4 0]"), "the target the plan was walking to is still the target")
+end
+
+-- 60zz2. Odds and ends of the fit and the trail.
+-- an exit the map has for this room, toward a room the picture does not draw: still not
+-- this room (the map's own record is what the room must match, both ways)
+probe(mz_store(), T_INFO, themap('"      O-@-O      "'), T_HDR)
+check(said("fits 9 places"), "(a small picture of (7,11) fits nine places)")
+probe((mz_store():gsub("\n0|5|%-3|[^\n]*", "\n0|5|-3|e,n,w")), T_INFO, themap('"      O-@-O      "'), T_HDR)
+check(said("fits 8 places"), "...and eight once the map's record of it has an exit it lacks")
+-- a room passed through unjudged (no picture ever came) hands nothing on: the fits of
+-- the room before it are a step behind, and the next room is judged afresh
+MAZE = { "O-O-O-O-O-O-O-O-O-O-O-O-O-O-O-O-O" }
+local function corridor_counts(judge_middle)
+  mz_start(mz_store(), 1, 1)
+  fire_trigger("Suddenly you find yourself", nil)
+  mz_arrive(1, 15, 1)
+  cmd("e")
+  if judge_middle then mz_arrive(1, 17, 1) else header(table.concat(mz_exits(1, 17), ",")); prompt() end
+  clear()
+  cmd("e"); mz_arrive(1, 19, 1)
+  return printed[1] or ""
+end
+local fresh = corridor_counts(false)
+fresh_client(); store.map = mz_store(); store.pos = "50|50|0"; dofile(PLUGIN); csg("enable"); csg("pause")
+room(mz_info(1, 19)); roommap(mz_window(1, 19, 1)); header(table.concat(mz_exits(1, 19), ","))
+clear(); csg("locate")
+local alone = (printed[1] or ""):match("fits (%d+) places")
+check(fresh:match("fits (%d+) places") == alone, "after an unjudged room the next is judged on its own ("
+      .. tostring(fresh:match("fits (%d+) places")) .. " vs " .. tostring(alone) .. ")")
+MAZE = SAVED_MAZE
+-- a mob seen in the room the sea threw us out of is not attacked in the room we land in
+mz_start(mz_store(), START_R, START_C)
+csg("auto on")
+contents('{ "full": 1, "items": [ { "name": "a mutant", "type": "monster" } ] }')   -- seen, not yet fought
+fire_trigger("Suddenly you find yourself", nil)
+room(T_INFO); roommap(T_PIC); header(T_HDR)
+check(found_at() ~= nil, "(found)")
+sent = {}; prompt()
+check(not sent_has("kill mutant"), "a mob from before the teleport is not attacked after it")
+-- the exit-set odds are the LAYER's: another layer full of corridors changes nothing here
+do
+  local corr = {}
+  for i = 0, 29 do corr[#corr + 1] = string.format("0|%d|10|e,w", i) end
+  mz_start(mz_store(nil, -1) .. "\n" .. table.concat(corr, "\n"), START_R, START_C, false, 2, -1)
+  csg("pause")
+  room(mz_info(9, 9)); roommap(mz_window(9, 9, 2)); header(table.concat(mz_exits(9, 9), ","))
+  clear(); csg("locate")
+  check(said("[4 -4 -1], not yet surely (24.9 of 25.8 bits)"), "the odds come from the layer searched")
+  mz_start(mz_store(nil, -1) .. "\n" .. table.concat(corr, "\n"), START_R, START_C, false, 2, -1)
+  fire_trigger("Suddenly you find yourself", nil)
+  clear()
+  mz_arrive(9, 9, 2)
+  check(said("[4 -4 -1], not yet surely (24.9 of 25.8 bits)"), "...in the search as in 'cs locate'")
+end
 
 -- 11. THE PROPERTY. Across the whole suite, the bot never asks the MUD to re-describe
 --     a room: '!glance' produces no Room.Info, so sending it would be asking for silence.

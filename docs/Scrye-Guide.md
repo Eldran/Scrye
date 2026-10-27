@@ -1228,6 +1228,7 @@ On/Off, Step, Auto, Pause, Leave, Reset, Sea# −/+ and New Sea.
 Collects every chat channel and tell into the **Chats** capture pane — one line per message, tagged
 and coloured per channel, with a dim timestamp. The pane starts empty every time Scrye runs, so the
 plugin keeps the last 100 lines itself and replays them **when it loads**, between markers — you
+| `cs locate` | Find the room you are standing in on the saved map and correct the position (GMCP version only; it also does this by itself — see below). |
 come back to the tail of last session rather than a blank pane. Everything is written to the
 plugin's log file too.
 
@@ -1238,6 +1239,18 @@ one you're playing.
 | Command | What it does |
 |---|---|
 | `chat watch <name>` | Watch a name. Any message containing it gets a `*`, a notification and a beep. |
+**When it loses its place (GMCP version, 2.4.0).** A sea is static once made, so the map stays
+right even when the bot's idea of where it stands does not — after the sea teleports you, or when a
+missed step leaves no queued exit reachable. Every maze room has the same number, but not the same
+*shape*: the bot matches the room's Room.Map picture and exits against the saved map of the layer.
+It moves only when exactly one place fits **and** enough evidence stands behind it — a rare exit set
+counts for more than a corridor, and a bigger map needs more, because the room you landed in may not
+be on the map at all and still look like one that is. On Auto it walks to gather that evidence (up to
+30 rooms, writing nothing to the map while it does), tells the phone if it cannot, and waits paused;
+with Auto off it waits, and walking a step yourself narrows it down. `cs locate` asks on demand and
+says how close it is (*"not yet surely (19.3 of 25.8 bits)"*). `cs reset` still starts the map over,
+and unpausing by hand carries on from wherever the position says.
+
 | `chat unwatch <name>` / `chat watched` | Remove one / list them. |
 | `chat notify` | Show every notification setting at once. |
 | `chat notify tells on\|off` | Whether a tell notifies you. Default **on**. (`chat notify tells` on its own reports rather than subscribing.) |
