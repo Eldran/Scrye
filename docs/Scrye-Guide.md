@@ -913,9 +913,26 @@ makes `Unknown` (the label the MUD puts on every stretch of connective realm) re
 of small maps rather than one tangle. Coordinates on screen are a layout recomputed from the links,
 never an identity.
 
-Walks go one confirmed step at a time: the next direction is sent only when the server says you
-reached the room the route expected, and anything unexpected stops the walk. Everything it ever
-sends is a single bare movement word.
+Every step of a walk is confirmed: each arrival is checked against the room the route expected,
+and anything unexpected stops the walk. Everything it ever sends is a single bare movement word
+(or the command of a link you added by hand).
+
+**Fast walk** (1.18.0, on by default) keeps three steps on their way at once instead of waiting
+for each room before sending the next, so a long walk takes about a third of the time. Nothing
+is checked less: arrivals are still matched to their steps in order, and links are learned
+exactly as they would be one step at a time. A link you added by hand is sent on its own, once
+the steps before it have landed. If a step goes wrong — the wrong room, or `You cannot go` —
+the steps already sent behind it still land, and then the walk stops and says where you ended
+up. Switch it with the **Fast walk** button on the Map tab or `mapg fast on|off`. An explore
+always goes one step at a time.
+
+**A fight doesn't stop a walk you asked for** (1.17.0). When something attacks you on the way it
+says so once and keeps walking, since walking on is how you get away. If wimpy runs with you (or
+anything else puts you in a room off the route) it waits two seconds for any step still on its
+way to land, then plans again from wherever you ended up — up to five times a walk, after which
+it stops and says where. An arrival in the middle of a fight that contradicts what an exit is
+known to lead to teaches the map nothing, so a retreat never rewrites a good link. `mapg stop`
+still stops the walk, and an explore (`mapg explore`) still stops the moment a fight starts.
 
 | Command | What it does |
 |---|---|
@@ -930,6 +947,7 @@ sends is a single bare movement word.
 | `mapg path <number>` | Print the route there. Sends nothing. |
 | `mapg go <number>` | Actually walk it. |
 | `mapg stop` | Stop a walk in progress. |
+| `mapg fast on` / `off` / `<n>` | Fast walk: keep *n* steps (default 3, up to 6) on their way at once; `off`, or 1, sends one at a time. The Map tab's **Fast walk** button switches it too. |
 | `mapg explore` | Name the nearest room that still has an unexplored exit, and print the route. |
 | `mapg explore go` | Same, but walk there. |
 | `mapg explore area [N]` | **The sweep**, fenced to the area you're standing in: a route to the nearest room with an unexplored exit, one step through it, and again — one move per confirmed arrival, until nothing unexplored is reachable. A probe that lands in another area steps straight back and the door is remembered as an edge. With `N`, stops after N new rooms. The Map tab's **Explore** button is this. |
@@ -942,8 +960,12 @@ sends is a single bare movement word.
 | `mapg maps <text>` | Filtered by map name **or** by a bordering map's name. |
 | `mapg name` | The current map's name (and what its auto label would be). |
 | `mapg name <text>` | Rename the map you're on. `mapg name -` restores the auto label. |
-| `mapg fav` | Add/remove the current map from the **Favs** tab (max 20). |
+| `mapg fav` / `mapg fav <n>` | Add/remove the room you're in (or room *n*) on the **Favs** tab — a point to run back to; clicking it there walks to that very room (max 20). Since 1.15.0 favourites are rooms, not maps; ones saved before keep the room you stood in. |
+| `mapg note <text>` / `mapg note -` | A note on the room you're in — *"guard hits hard"*, *"lever: pull"* — or remove it. `mapg note #<n> <text>` writes on any room. Shown when you hover the room, in its details line and beside where you stand, and drawn `n` on the map. Kept with the map (every character on the MUD sees it), never in an export. |
+| `mapg notes` | Every room you wrote a note on. |
+| `mapg gap <n>` | No route to a room? Where the map's knowledge breaks between you and it. The same answer comes by itself whenever `mapg go`/`path`, a click or a Favs row finds no route: how many rooms are on each side, the **likeliest breaks** — rooms you can reach that the target's side is known to lead into, and what is wrong with the way back (never walked, not listed — a hidden door for `mapg link` —, marked shifting, found shut, or leading somewhere else) — and the unexplored exits nearest each side. Room names are links that walk there; the rooms are lit `f` on the map and listed on the **Find** tab (`mapg find` clears them). |
 | `mapg level up` / `mapg level down` | Shift the view one level. `mapg level` follows your own level again. |
+| `mapg sections all` / `mapg sections near` | A level can be several places that don't join *on* that level — an area's west and east wings one floor down, each down its own stairs. **near** (the default) draws only the part you're in on your own level, and on another level the part(s) nearest yours by stairs; the status line says how many parts are hidden. **all** draws every part of the level, as before. Remembered. |
 | `mapg redraw` | Lay the current map out again from its links. |
 | `mapg export` | Write the whole map to Scrye's exports folder (`%APPDATA%\Scrye\exports`) as `3s-map-all-<date>.json`, plus a picture of the map you're on as an `.svg` — open it in any browser; hover a room for its number and name. |
 | `mapg export <area>` · `mapg export svg` | Just that area's rooms · just the picture. |
@@ -1019,13 +1041,16 @@ border. From the other side, the same door reads the other way.
 it; **right‑click** offers *Walk there* / *Show route* / *Room details* / *Forget room* (the last is
 `mapg forget` for that square — it sits in the menu, never on a plain click, so a slip of the mouse
 can't erase a room; a whole map goes through the Maps tab's *Forget this map* or `mapg forget map`,
-which ask first). **Right‑click the square you're standing on** and the menu lists that room's
-exits instead — *Mark shifting: s* and so on (or *Unmark shifting* for one already marked). That's
+which ask first). Every room's menu also has *Add note…* (or *Edit note…*) and *Add to favourites* (or *Remove from
+favourites*): the note entry points the **note** box under the details line at that room — type and
+press Enter, an empty box removes the note. With no room clicked, the box is about the room you're
+in. **Right‑click the square you're standing on** and the menu lists that room's
+exits first — *Mark shifting: s* and so on (or *Unmark shifting* for one already marked). That's
 the elevator case: ride the Megacity lift once, right‑click where you stand, mark the way out, and
 the map stops believing whichever floor it named — no need to wait for the second ride that marks it
 automatically, and no room number to look up for `mapg shift`. On the **Maps** and **Favs** tabs,
-clicking a row walks there and right‑clicking gives the first three entries — plus, on the Maps
-tab, *Forget this map*. The Maps tab also has a search box and a rename box for the map you're
+clicking a row walks there and right‑clicking gives the first three entries — plus *Forget this map*
+on the Maps tab and *Remove from favourites* on the Favs tab. The Maps tab also has a search box and a rename box for the map you're
 standing on.
 
 ---
@@ -1203,6 +1228,7 @@ works under either alias.**
 | `cs reset` | Wipe the map and all counters, back to 0 0 0. |
 | `cs set <x> <y> <z>` | Override the believed position (a non‑numeric argument leaves that axis alone). |
 | `cs find <x> <y> <z>` | Print the route to a coordinate. Doesn't walk it. |
+| `cs locate` | Find the room you are standing in on the saved map and correct the position (GMCP version only; it also does this by itself — see below). |
 | `cs kill <name>` | The mob keyword to attack. Default **mutant**. |
 | `cs goal <words>` | Stop‑words — pause when an item in the room matches. Default **cask portal**. |
 | `cs exclude <full mob name>` | Never attack this one. |
@@ -1212,6 +1238,18 @@ works under either alias.**
 | `cs party` / `cs party <names>` / `cs party clear` | The whitelist of names that don't count as "a player is here". Comma‑separated. |
 | `cs notify on` / `cs notify off` | Phone notifications. Default **on**. |
 | `cs debug_all` | Dump the position and every known room. |
+
+**When it loses its place (GMCP version, 2.4.0).** A sea is static once made, so the map stays
+right even when the bot's idea of where it stands does not — after the sea teleports you, or when a
+missed step leaves no queued exit reachable. Every maze room has the same number, but not the same
+*shape*: the bot matches the room's Room.Map picture and exits against the saved map of the layer.
+It moves only when exactly one place fits **and** enough evidence stands behind it — a rare exit set
+counts for more than a corridor, and a bigger map needs more, because the room you landed in may not
+be on the map at all and still look like one that is. On Auto it walks to gather that evidence (up to
+30 rooms, writing nothing to the map while it does), tells the phone if it cannot, and waits paused;
+with Auto off it waits, and walking a step yourself narrows it down. `cs locate` asks on demand and
+says how close it is (*"not yet surely (19.3 of 25.8 bits)"*). `cs reset` still starts the map over,
+and unpausing by hand carries on from wherever the position says.
 
 **New Sea is a button, not a command.** The panel's **New Sea** button loots the cask, retreats,
 sets the sea number and dives again — and it only works while paused, and refuses if the sea is
@@ -1228,7 +1266,6 @@ On/Off, Step, Auto, Pause, Leave, Reset, Sea# −/+ and New Sea.
 Collects every chat channel and tell into the **Chats** capture pane — one line per message, tagged
 and coloured per channel, with a dim timestamp. The pane starts empty every time Scrye runs, so the
 plugin keeps the last 100 lines itself and replays them **when it loads**, between markers — you
-| `cs locate` | Find the room you are standing in on the saved map and correct the position (GMCP version only; it also does this by itself — see below). |
 come back to the tail of last session rather than a blank pane. Everything is written to the
 plugin's log file too.
 
@@ -1239,18 +1276,6 @@ one you're playing.
 | Command | What it does |
 |---|---|
 | `chat watch <name>` | Watch a name. Any message containing it gets a `*`, a notification and a beep. |
-**When it loses its place (GMCP version, 2.4.0).** A sea is static once made, so the map stays
-right even when the bot's idea of where it stands does not — after the sea teleports you, or when a
-missed step leaves no queued exit reachable. Every maze room has the same number, but not the same
-*shape*: the bot matches the room's Room.Map picture and exits against the saved map of the layer.
-It moves only when exactly one place fits **and** enough evidence stands behind it — a rare exit set
-counts for more than a corridor, and a bigger map needs more, because the room you landed in may not
-be on the map at all and still look like one that is. On Auto it walks to gather that evidence (up to
-30 rooms, writing nothing to the map while it does), tells the phone if it cannot, and waits paused;
-with Auto off it waits, and walking a step yourself narrows it down. `cs locate` asks on demand and
-says how close it is (*"not yet surely (19.3 of 25.8 bits)"*). `cs reset` still starts the map over,
-and unpausing by hand carries on from wherever the position says.
-
 | `chat unwatch <name>` / `chat watched` | Remove one / list them. |
 | `chat notify` | Show every notification setting at once. |
 | `chat notify tells on\|off` | Whether a tell notifies you. Default **on**. (`chat notify tells` on its own reports rather than subscribing.) |

@@ -113,6 +113,7 @@ end
 local printed, sent
 local emitted
 local shared
+local timer_secs = {}
 local gmcp_hooks, aliases, timers, connect_hooks, disconnect_hooks, command_hooks
 local event_hooks, watch_hooks
 local idle_hooks
@@ -124,6 +125,7 @@ local every_sent = {}          -- every command sent all suite long, never reset
 
 local function fresh_client(keep_store)
   printed, sent, emitted = {}, {}, {}
+  timer_secs = {}
   gmcp_hooks, aliases, timers, watch_hooks = {}, {}, {}, {}
   triggers = {}
   event_hooks = {}
@@ -132,7 +134,9 @@ local function fresh_client(keep_store)
   repeats = {}
   panel, state = nil, {}
   next_timer = 0
-  if not keep_store then store = {} ; shared = {} end
+  -- fast walk (1.18.0) is on by default; the tests written before it drive one step at a
+  -- time, so a fresh store starts with it off and the fast-walk tests turn it on
+  if not keep_store then store = { fast = "0" } ; shared = {} end
   scrye = {
     id = "3s-map-gmcp",
     print = function(s) printed[#printed + 1] = tostring(s) end,
@@ -166,7 +170,10 @@ local function fresh_client(keep_store)
     setState = function(k, v) state[k] = v end,
     getState = function(k) return state[k] end,
     watch = function(prefix, fn) watch_hooks[#watch_hooks + 1] = { prefix = prefix, fn = fn } end,
-    after = function(_, fn) next_timer = next_timer + 1; timers[next_timer] = fn; return next_timer end,
+    after = function(secs, fn)
+      next_timer = next_timer + 1; timers[next_timer] = fn; timer_secs[next_timer] = secs
+      return next_timer
+    end,
     every = function(_, fn) next_timer = next_timer + 1; repeats[next_timer] = fn; return next_timer end,
     cancel = function(id) if id then timers[id] = nil; repeats[id] = nil end end,
     -- scrye.exports (host API 1.21): a flat folder of named files, like the real one
@@ -881,20 +888,23 @@ do
   local map_tab = panel.tabs[1].widgets[2]
   local mr, mc = find_char("@")
   local menu = map_tab.onRightClick(mc - 1, mr + 1)     -- the room south of us (room 1)
-  check(type(menu) == "table" and #menu == 4, "grid right-click returns a four-entry menu")
+  check(type(menu) == "table" and #menu == 7, "grid right-click returns a seven-entry menu")
   check(menu[1][1] == "Walk there" and menu[1][2] == "mapg go 1",
         "...whose first entry walks by typed command")
   check(menu[2][2] == "mapg path 1" and menu[3][2] == "mapg room 1",
         "...route and details ride the same alias surface")
   check(menu[4][1] == "Forget room" and menu[4][2] == "mapg forget 1",
         "...and the fourth entry forgets that room by typed command (never a left-click)")
-  check(#menu == 4, "with no farmer loaded, nothing of the farmer's is offered")
+  check(menu[5][1] == "-" and menu[6][1] == "Add note..." and menu[6][2] == "mapg note #1"
+        and menu[7][1] == "Add to favourites" and menu[7][2] == "mapg fav 1",
+        "...then, after a separator, a note and a favourite for that room (1.15.0)")
+  check(#menu == 7, "with no farmer loaded, nothing of the farmer's is offered")
   -- the farmer's room rules appear when its panel publishes a status (17 Sep)
   state["plugin.3s-farmer.status"] = "off"
   menu = map_tab.onRightClick(mc - 1, mr + 1)
-  check(#menu == 9 and menu[5][1] == "-" and menu[6][2] == "farm room 1 pass"
-        and menu[7][2] == "farm room 1 avoid" and menu[8][2] == "farm room 1 rest"
-        and menu[9][2] == "farm room 1 -",
+  check(#menu == 12 and menu[8][1] == "-" and menu[9][2] == "farm room 1 pass"
+        and menu[10][2] == "farm room 1 avoid" and menu[11][2] == "farm room 1 rest"
+        and menu[12][2] == "farm room 1 -",
         "with the farmer loaded, its four room rules follow a separator, as typed farm commands")
   state["plugin.3s-farmer.status"] = nil
   -- ...and the rules it publishes colour the rooms: 'A' never entered, 'P' passed through
@@ -918,9 +928,11 @@ do
   -- one "Mark shifting" entry per exit (room 2 has exactly one, s), each the typed
   -- 'mapg shift <room> <dir>' - the elevator mark without looking up a room number.
   local own = map_tab.onRightClick(mc - 1, mr - 1)
-  check(type(own) == "table" and #own == 1, "right-clicking your own room lists its exits")
+  check(type(own) == "table" and #own == 4, "right-clicking your own room lists its exits")
   check(own[1][1] == "Mark shifting: s" and own[1][2] == "mapg shift 2 s",
         "...each entry marking that exit shifting by typed command")
+  check(own[2][1] == "-" and own[3][2] == "mapg note #2" and own[4][2] == "mapg fav 2",
+        "...and then a note and a favourite for it, as for any room")
   check(map_tab.onRightClick(mc + 1, mr - 1) == nil or
         select("#", map_tab.onRightClick(mc + 1, mr - 1)) == 0,
         "empty sea still offers no menu")
@@ -934,7 +946,7 @@ do
   mr, mc = find_char("@")
   own = map_tab.onRightClick(mc - 1, mr - 1)
   local got = {}
-  for _, e in ipairs(own or {}) do got[e[2]] = e[1] end
+  for _, e in ipairs(own or {}) do if e[2] then got[e[2]] = e[1] end end
   check(got["mapg shift 2 w"] == "Mark shifting: w", "a walked-only exit is offered")
   check(got["mapg shift 2 vortex off"] == "Unmark shifting: vortex", "a marked-only exit is offered, as unmark")
   room('{ "num": 2, "name": "Two",   "area": "Test", "exits": { "s": 1 } }')
@@ -1147,11 +1159,10 @@ clear()
 mapg("maps zzz")
 check(said("nothing matches 'zzz'"), "...and says so when nothing does")
 
--- 43g. FAVOURITES. A fourth tab holds up to 20 saved maps: the button toggles the map
---      you stand on (press again to drop - no second control needed), rows walk there
---      like the Maps tab, the list is alphabetical, saved as ROOM numbers with the store
---      (shared, so favourites carry across characters), resolved to whatever map
---      contains the room at display time.
+-- 43g. FAVOURITES (rooms since 1.15.0: points to run back to). A tab holds up to 20: the
+--      button toggles the room you stand in (press again to drop it), 'mapg fav [<room>]'
+--      and a room's right-click do the same for any room, and a row walks to that very
+--      room. Saved with the store (shared, so favourites carry across characters).
 fresh_client() ; load_plugin()
 room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
 cmd("e") ; room('{ "num": 61, "name": "Oven", "area": "Bakery", "exits": { "w": 60 } }')
@@ -1162,39 +1173,66 @@ do
   check(favtab ~= nil and favtab.title == "Favs", "the panel carries a Favs tab")
   local btn = favtab.widgets[2].buttons[1]
   local tbl = favtab.widgets[3]
-  check(btn and btn.text == "Fav this map" and tbl.type == "table"
+  check(btn and btn.text == "Fav this room" and tbl.type == "table"
         and type(tbl.onRowClick) == "function",
         "...with a toggle button and a clickable table")
-  check(state["plugin.3s-map-gmcp.favhint"] == "no favourites yet - stand on a map, press the button",
+  check(state["plugin.3s-map-gmcp.favhint"] == "no favourites yet - stand in a room and press the button, or right-click one",
         "the empty tab says how to fill it")
   clear()
-  btn.action()                               -- favourite Alps, where we stand
-  check(said("favourite 1/20: Alps"), "the button saves the map you stand on")
-  check(state["plugin.3s-map-gmcp.favlist"] == "Alps\t1", "...and the tab lists it")
-  cmd("e") ; room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+  btn.action()                               -- favourite the peak, where we stand
+  check(said("favourite 1/20: 62 Peak [Alps]"), "the button saves the room you stand in")
+  check(state["plugin.3s-map-gmcp.favlist"] == "> 62 Peak\tAlps", "...and the tab lists it, marked as where you are")
   clear()
-  mapg("fav")                                -- the typed command is the same toggle
-  check(said("favourite 2/20"), "'mapg fav' saves from the keyboard too")
+  mapg("fav 61")                             -- any room, by number - the oven, a map away
+  check(said("favourite 2/20: 61 Oven [Bakery]"), "'mapg fav <room>' saves any room")
+  check(state["plugin.3s-map-gmcp.favlist"] == "> 62 Peak\tAlps\n61 Oven\tBakery", "...listed in the order saved")
+  mapg("fav 60")
+  check((state["plugin.3s-map-gmcp.favlist"] or ""):find("60 Road\tUnknown", 1, true) ~= nil,
+        "...two rooms of one map are two favourites now, not one")
+  mapg("note #61")
+  check((state["plugin.3s-map-gmcp.detail"] or ""):find("favourite", 1, true) ~= nil, "a favourite's details line says so")
   do
-    local ml = state["plugin.3s-map-gmcp.favlist"] or ""
-    check(ml:match("^Alps\t1\nUnknown\t1$") ~= nil, "the list is alphabetical")
+    local map_tab = panel.tabs[1].widgets[2]
+    local mr, mc = find_char("@")
+    local own = map_tab.onRightClick(mc - 1, mr - 1)      -- the peak, where we stand: a favourite
+    check(own[#own][1] == "Remove from favourites" and own[#own][2] == "mapg fav 62",
+          "the menu of a favourite offers to remove it")
   end
-  sent = {}
-  tbl.onRowClick("Alps", 1)
-  check(#sent == 1 and sent[1] == "w", "clicking a favourite walks to it")
-  mapg("stop")
+  mapg("go 61")                                -- walking...
   clear()
-  mapg("fav")                                -- standing on the realm: toggles it OFF
-  check(said("no longer a favourite"), "pressing again on a saved map drops it")
-  check(state["plugin.3s-map-gmcp.favlist"] == "Alps\t1", "...leaving the others")
+  tbl.onRowClick("60 Road", 3)
+  check(said("already walking"), "a favourite clicked mid-walk does not start a second walk")
+  mapg("stop")
+  sent = {}
+  tbl.onRowClick("61 Oven", 2)
+  check(#sent == 1 and sent[1] == "e", "clicking a favourite walks to THAT room (" .. tostring(sent[1]) .. ")")
+  check(said("61 Oven (a favourite)"), "...and says where")
+  mapg("stop")
+  local rmenu = tbl.onRowMenu(nil, 2)
+  check(rmenu and rmenu[#rmenu][1] == "Remove from favourites" and rmenu[#rmenu][2] == "mapg fav 61",
+        "a favourite's row menu can drop it")
+  clear()
+  mapg("fav 61")                             -- the same toggle again
+  check(said("no longer a favourite: 61 Oven"), "saving it again drops it")
+  check(not (state["plugin.3s-map-gmcp.favlist"] or ""):find("Oven", 1, true), "...from the list too")
+  -- a favourite whose room is forgotten goes with it - a room re-learned under that number
+  -- later is not quietly a favourite again
+  mapg("forget 60")
+  room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+  check(not (state["plugin.3s-map-gmcp.favlist"] or ""):find("60 Road", 1, true), "a forgotten favourite stays gone")
+  room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  clear() ; mapg("fav 999")
+  check(said("room 999 is not in the store"), "a room the store does not have is refused")
+  clear() ; mapg("fav oven")
+  check(said("mapg fav [<room>]"), "...and a word that is not a room number gets the usage")
   -- favourites survive a restart, with the store
   disconnect()
   fresh_client(true) ; load_plugin()
   room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
-  check((state["plugin.3s-map-gmcp.favlist"] or ""):find("Alps", 1, true) ~= nil,
+  check((state["plugin.3s-map-gmcp.favlist"] or ""):find("62 Peak", 1, true) ~= nil,
         "favourites are saved with the map and come back after a restart")
   -- the cap is real: fill to 20, the 21st is refused
-  for i = 2, 20 do
+  for i = 2, 20 do                             -- (the peak is still one)
     room('{ "num": ' .. (200 + i) .. ', "name": "Spot", "area": "Z' .. i .. '", "exits": { } }')
     mapg("fav")
   end
@@ -1207,6 +1245,17 @@ do
   -- a wipe takes the favourites with it: nothing to dangle
   mapg("wipe") ; mapg("wipe yes")
   check((state["plugin.3s-map-gmcp.favlist"] or "") == "", "a wipe clears the favourites too")
+end
+
+-- 43g1. A favourite is drawn like a place, 'b'.
+fresh_client() ; load_plugin()
+room('{ "num": 1, "name": "One", "area": "Test", "exits": { "n": 2 } }')
+mapg("fav")
+cmd("n") ; room('{ "num": 2, "name": "Two", "area": "Test", "exits": { "s": 1 } }')
+do
+  local rows = grid_rows()
+  local mr, mc = find_char("@")
+  check(rows[mr + 2]:sub(mc, mc) == "b", "a favourite room is drawn 'b' on the map")
 end
 
 -- 43g2. ...even when the panel is OFF at wipe time. With drawing off nothing refreshes,
@@ -1997,7 +2046,7 @@ do
   local map_tab = panel.tabs[1].widgets[2]
   local mr, mc = find_char("@")
   local own = map_tab.onRightClick(mc - 1, mr - 1)
-  check(type(own) == "table" and #own == 1 and own[1][1] == "Unmark shifting: s"
+  check(type(own) == "table" and #own == 4 and own[1][1] == "Unmark shifting: s"
         and own[1][2] == "mapg shift 44346 s off",
         "own-square menu offers to unmark an exit already shifting")
 end
@@ -3079,10 +3128,14 @@ do
   check(sent[1] == "climb rope", "hand-added links survive a reload")
 
   -- the panel's button
+  -- (a bound row since 1.18.0: its labels are state, so the fast-walk button can say on/off)
   local found = false
   for _, tab in ipairs(panel.tabs or {}) do
     for _, w in ipairs(tab.widgets or {}) do
-      for _, b in ipairs(w.buttons or {}) do if b.text == "Link last move" then found = true end end
+      if w.type == "buttonrow" and w.bind then
+        local first = tostring(state[w.bind] or ""):match("^([^\n]*)")
+        if first == "Link last move" then found = true end
+      end
     end
   end
   check(found, "the Map tab has a 'Link last move' button")
@@ -3108,6 +3161,727 @@ do
   check(said("unlinked 'climb rope'"), "'mapg unlink <room> <command>' drops one")
   clear() ; mapg("path 600")
   check(said("no known route"), "...and the route is gone with it")
+end
+
+-- ============================================================
+-- SECTIONS (1.14.0, Joakim 26 Oct 2026: the Ant hole). One level can be several places that
+-- do not join on that level: the west wing one floor down and the east wing one floor down,
+-- each reached by its own stairs. A level shows only the part(s) nearest yours by stairs.
+-- ============================================================
+do
+  local ANT = {
+    [1] = '{ "num": 1, "name": "Ant hole entrance", "area": "Ant hole", "exits": { "w": 2, "e": 3 } }',
+    [2] = '{ "num": 2, "name": "West wing",         "area": "Ant hole", "exits": { "e": 1, "d": 4 } }',
+    [3] = '{ "num": 3, "name": "East wing",         "area": "Ant hole", "exits": { "w": 1, "d": 5 } }',
+    [4] = '{ "num": 4, "name": "West tunnel",       "area": "Ant hole", "exits": { "u": 2, "n": 6, "d": 9 } }',
+    [6] = '{ "num": 6, "name": "West chamber",      "area": "Ant hole", "exits": { "s": 4 } }',
+    [5] = '{ "num": 5, "name": "East tunnel",       "area": "Ant hole", "exits": { "u": 3, "n": 7, "d": 8 } }',
+    [7] = '{ "num": 7, "name": "East chamber",      "area": "Ant hole", "exits": { "s": 5 } }',
+    [8] = '{ "num": 8, "name": "East nest",         "area": "Ant hole", "exits": { "u": 5 } }',
+    [9] = '{ "num": 9, "name": "West nest",         "area": "Ant hole", "exits": { "u": 4 } }',
+  }
+  local function walk_ant(path) for _, n in ipairs(path) do room(ANT[n]) end end
+  local function rooms_drawn() return select(2, grid():gsub("[#%^v%%>!@]", "")) end
+  -- the whole hole explored: entrance, west wing down and down, back, east wing down and down
+  local function explored()
+    fresh_client() ; load_plugin()
+    walk_ant({ 1, 2, 4, 6, 4, 9, 4, 2, 1, 3, 5, 8, 5, 7 })     -- ends in the east chamber
+  end
+  explored()
+  check(rooms_drawn() == 2, "in the east wing's lower floor only the east wing is drawn (" .. rooms_drawn() .. " rooms)")
+  check(status_line():find("1 other section(s) of this level hidden", 1, true) ~= nil,
+        "...and the status says one part of the level is hidden (" .. status_line() .. ")")
+  -- the west chamber would be two rooms west of us: nothing there to hover or click
+  local map_tab = panel.tabs[1].widgets[2]
+  local mr, mc = find_char("@")
+  map_tab.onHover(mc - 1 - 4, mr - 1)
+  check((state["plugin.3s-map-gmcp.peek"] or "") == "", "a hidden section cannot be hovered")
+  -- every part, on request - and remembered
+  clear() ; mapg("sections all")
+  check(said("sections: all"), "'mapg sections all' says so")
+  check(rooms_drawn() == 4, "...and draws the west wing's floor too (" .. rooms_drawn() .. " rooms)")
+  check(not status_line():find("hidden", 1, true), "...with nothing hidden")
+  map_tab.onHover(mc - 1 - 4, mr - 1)
+  check((state["plugin.3s-map-gmcp.peek"] or ""):find("West chamber", 1, true) ~= nil, "...where the west chamber can be hovered")
+  check(store["sections"] == "all", "...and the choice is kept")
+  disconnect()                                           -- the map is saved with it
+  fresh_client(true) ; load_plugin()
+  walk_ant({ 7 })
+  check(rooms_drawn() == 4, "...across a reload")
+  clear() ; mapg("sections near")
+  check(said("sections: near") and rooms_drawn() == 2, "'mapg sections near' goes back to the nearest part")
+  clear() ; mapg("sections")
+  check(said("sections: near"), "'mapg sections' says which it is")
+  clear() ; mapg("sections sideways")
+  check(said("mapg sections all|near"), "...and a wrong word gets the usage")
+  -- from the entrance, the level below shows BOTH wings: one flight of stairs each
+  explored()
+  walk_ant({ 5, 3, 1 })
+  check(rooms_drawn() == 3, "the entrance level is one section: all three rooms")
+  mapg("level down")
+  check(rooms_drawn() == 4 and not status_line():find("hidden", 1, true),
+        "from the entrance, the floor below shows both wings (" .. rooms_drawn() .. " rooms)")
+  -- from the east wing's floor, the floor below that shows the east nest, not the west one
+  explored()
+  walk_ant({ 5 })
+  mapg("level down")
+  check(rooms_drawn() == 1, "from the east wing, the floor below is the east nest alone (" .. rooms_drawn() .. ")")
+  check(status_line():find("1 other section(s) of this level hidden", 1, true) ~= nil, "...the west nest hidden")
+  -- A one-way trapdoor (the west wing's floor has no way back up) still makes the floors
+  -- near - from either side - and a section that is only reached the long way round stays
+  -- hidden. The east chamber has stairs up into a little loft of its own, on the entrance
+  -- level but not joined to the entrance on it.
+  ANT[4] = '{ "num": 4, "name": "West tunnel", "area": "Ant hole", "exits": { "n": 6, "d": 9 } }'
+  ANT[7] = '{ "num": 7, "name": "East chamber", "area": "Ant hole", "exits": { "s": 5, "u": 10 } }'
+  ANT[10] = '{ "num": 10, "name": "Loft", "area": "Ant hole", "exits": { "d": 7 } }'
+  local function trapdoor()
+    fresh_client() ; load_plugin()
+    walk_ant({ 1, 2, 4, 6, 4, 9, 4 })                  -- down the trapdoor into the west wing
+    walk_ant({ 1, 3, 5, 8, 5, 7, 10, 7, 5, 3, 1 })     -- (back up by other means) the east side
+  end
+  trapdoor()
+  mapg("level down")
+  check(rooms_drawn() == 4, "a one-way trapdoor down still puts the west wing one flight below the entrance (" .. rooms_drawn() .. ")")
+  trapdoor()
+  walk_ant({ 2, 4 })
+  mapg("level up")
+  check(rooms_drawn() == 3, "...and from below, the entrance one flight up (" .. rooms_drawn() .. ")")
+  check(status_line():find("1 other section(s) of this level hidden", 1, true) ~= nil,
+        "...with the loft, three flights round, hidden (" .. status_line() .. ")")
+  -- help
+  clear() ; mapg("help")
+  check(said("mapg sections all|near"), "help lists 'mapg sections'")
+end
+
+-- ============================================================
+-- NOTES (1.15.0): your own words about a room - typed, from the note box, or from a
+-- room's right-click menu; shown on hover, in the details line, beside where you stand,
+-- and marked 'n' on the map. Kept with the map; never exported.
+-- ============================================================
+do
+  fresh_client() ; load_plugin()
+  room('{ "num": 1, "name": "One", "area": "Test", "exits": { "n": 2 } }')
+  cmd("n") ; room('{ "num": 2, "name": "Two", "area": "Test", "exits": { "s": 1, "n": 3 } }')
+  cmd("n") ; room('{ "num": 3, "name": "Three", "area": "Test", "exits": { "s": 2 } }')
+  cmd("s") ; room('{ "num": 2, "name": "Two", "area": "Test", "exits": { "s": 1, "n": 3 } }')
+  local map_tab = panel.tabs[1].widgets[2]
+  local box
+  for _, w in ipairs(panel.tabs[1].widgets) do if w.bind == "plugin.3s-map-gmcp.notebox" then box = w end end
+  check(box and box.type == "input" and box.onSubmit, "the Map tab has a note box")
+  -- typed, on the room you stand in
+  clear() ; mapg("note lever behind the throne: pull")
+  check(said("note on 2 Two: lever behind the throne: pull"), "'mapg note <text>' writes on the room you stand in")
+  check((state["plugin.3s-map-gmcp.where"] or ""):find("note: lever behind the throne", 1, true) ~= nil,
+        "...and it shows beside where you stand")
+  check(state["plugin.3s-map-gmcp.notebox"] == "lever behind the throne: pull", "...and in the note box")
+  clear() ; mapg("note")
+  check(said("note on 2 Two: lever"), "'mapg note' reads it back")
+  -- any room, by number; marked 'n' on the map, named on hover
+  clear() ; mapg("note #1 the guard hits hard")
+  check(said("note on 1 One: the guard hits hard"), "'mapg note #<room> <text>' writes on any room")
+  local rows = grid_rows()
+  local mr, mc = find_char("@")
+  check(rows[mr + 2]:sub(mc, mc) == "n", "a room with a note is drawn 'n'")
+  map_tab.onHover(mc - 1, mr + 1)
+  check((state["plugin.3s-map-gmcp.peek"] or ""):find("note: the guard hits hard", 1, true) ~= nil, "...and hovering it shows the note")
+  check((state["plugin.3s-map-gmcp.legend"] or ""):find("has a note", 1, true) ~= nil, "the legend explains 'n'")
+  -- the right-click menu aims the box at the room: a menu cannot ask for text
+  local menu = map_tab.onRightClick(mc - 1, mr + 1)
+  local edit
+  for _, e in ipairs(menu) do if e[2] == "mapg note #1" then edit = e[1] end end
+  check(edit == "Edit note...", "the menu offers to edit a note that exists")
+  menu = map_tab.onRightClick(mc - 1, mr - 3)        -- room 3, no note
+  local add
+  for _, e in ipairs(menu) do if e[2] == "mapg note #3" then add = e[1] end end
+  check(add == "Add note...", "...and to add one where there is none")
+  clear() ; mapg("note #3")
+  check(said("3 Three - no note yet; type in the note box"), "picking it says where to type")
+  check((state["plugin.3s-map-gmcp.detail"] or ""):find("3 Three", 1, true) ~= nil, "...and the details line is about that room")
+  check(state["plugin.3s-map-gmcp.notebox"] == "", "...with the box empty, ready")
+  box.onSubmit("  chest under the bed  ")
+  check(said("note on 3 Three: chest under the bed"), "the box writes on the room the details line is about")
+  check((state["plugin.3s-map-gmcp.detail"] or ""):find("note:@{} chest under the bed", 1, true) ~= nil,
+        "...and the details line shows it")
+  -- the box is not wiped by a redraw while you type, only when the room it is about changes
+  state["plugin.3s-map-gmcp.notebox"] = "half-typed"
+  mapg("redraw")
+  check(state["plugin.3s-map-gmcp.notebox"] == "half-typed", "a redraw leaves what you are typing alone")
+  clear() ; mapg("note #1")
+  check(state["plugin.3s-map-gmcp.notebox"] == "the guard hits hard", "aiming it at another room fills it with that room's note")
+  -- an empty box removes the note; '-' typed does too
+  box.onSubmit("")
+  check(said("note removed from 1 One"), "an empty box removes the note")
+  clear() ; mapg("note #1 -")
+  check(said("no note on 1 One"), "...and there is then nothing to remove")
+  clear() ; mapg("note #99 hello")
+  check(said("room 99 is not in the store"), "a room the store does not have gets no note")
+  -- a cap on length
+  clear() ; mapg("note " .. string.rep("x", 250))
+  check(said("(kept the first 200 characters)"), "a note longer than 200 characters is cut, saying so")
+  clear() ; mapg("note #2")
+  check(said("its note: " .. string.rep("x", 200)) and not said(string.rep("x", 201)), "...to exactly 200")
+  check((shared["rooms"] or ""):find(string.rep("x", 200), 1, true) ~= nil, "a note is saved at once, not at the next flush")
+  -- the list
+  clear() ; mapg("notes")
+  check(said("2 note(s):") and said("2 Two [Test]: xxxx") and said("3 Three [Test]: chest under the bed"),
+        "'mapg notes' lists every room with a note")
+  -- kept with the map, across a restart
+  disconnect()
+  fresh_client(true) ; load_plugin()
+  room('{ "num": 2, "name": "Two", "area": "Test", "exits": { "s": 1, "n": 3 } }')
+  check(state["plugin.3s-map-gmcp.notebox"] == string.rep("x", 200), "with no room clicked, the box is about the room you stand in")
+  cmd("n") ; room('{ "num": 3, "name": "Three", "area": "Test", "exits": { "s": 2 } }')
+  check(state["plugin.3s-map-gmcp.notebox"] == "chest under the bed", "...and follows you into the next")
+  clear() ; mapg("note #3")
+  check(said("its note: chest under the bed"), "notes are saved with the map")
+  -- ...but never exported: they are yours, not the map's
+  clear() ; mapg("export")
+  local file = exports_files[exports_order[#exports_order - 1] or ""] or ""
+  for _, name in ipairs(exports_order) do if name:match("%.json$") then file = exports_files[name] end end
+  check(file:find("Three", 1, true) ~= nil, "(the export has the rooms)")
+  check(file and not file:find("chest under the bed", 1, true), "an export carries no notes")
+  -- a long list says how many more
+  for i = 1, 45 do
+    room('{ "num": ' .. (500 + i) .. ', "name": "Cell", "area": "Jail", "exits": { } }')
+    mapg("note cell " .. i)
+  end
+  clear() ; mapg("notes")
+  check(said("47 note(s):") and said("... and 7 more"), "'mapg notes' lists forty, then says how many more")
+  -- help
+  clear() ; mapg("help")
+  check(said("mapg note <text>") and said("mapg notes"), "help lists the note commands")
+end
+
+-- ============================================================
+-- THE GAP (1.16.0): no route? Where the map's knowledge breaks. Everything you can reach,
+-- everything known to lead to the target, and the rooms between: a room on your side the
+-- far side leads INTO (the way back exists, almost surely - it was never walked), and the
+-- nearest unexplored exits on each side. Printed with links, lit, listed on the Find tab.
+-- ============================================================
+do
+  -- The keep: carried from the tower down into the hall once; the hall's way north - the
+  -- way back up - never walked.
+  local function keep(hall)
+    fresh_client() ; load_plugin()
+    room('{ "num": 3, "name": "Tower", "area": "Keep", "exits": { "s": 2 } }')
+    cmd("s") ; room(hall or '{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1, "n": 0, "e": 0 } }')
+    cmd("s") ; room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 2, "w": 0 } }')
+    clear()
+  end
+  keep()
+  mapg("go 3")
+  check(said("no known route to 3 Tower - the gap"), "no route says it is showing the gap")
+  check(said("you can reach 2 room(s) from here; no other known room leads to it"),
+        "...how much of the map is on each side")
+  check(said("likeliest break: @{accent,click=mapg go 2}2 Hall@{} - @{accent,click=mapg go 3}3 Tower@{}'s s leads into it, and its n has never been walked - walk n from 2 once"),
+        "...the room where it breaks, why, and what to walk - with links that walk there")
+  check(said("unexplored on your side, nearest first: @{accent,click=mapg go 1}1 Gate@{} (w), @{accent,click=mapg go 2}2 Hall@{} (n,e)"),
+        "...and the unexplored exits nearest you")
+  check(#sent == 0, "...and it walks nothing")
+  check(not said("nothing the map knows leads INTO it"), "...and does not claim nothing leads in, with a break in hand")
+  -- lit and listed
+  check((state["plugin.3s-map-gmcp.findhint"] or ""):find("the gap to 3 Tower", 1, true) ~= nil,
+        "the Find tab is about the gap")
+  local list = state["plugin.3s-map-gmcp.findlist"] or ""
+  check(list:find("1 Gate", 1, true) and list:find("2 Hall", 1, true) and not list:find("Tower", 1, true),
+        "...listing the rooms to work from")
+  local rows = grid_rows()
+  local mr, mc = find_char("@")
+  check(rows[mr - 2]:sub(mc, mc) == "f", "...lit on the map")
+  local findtab
+  for _, t in ipairs(panel.tabs) do if t.title == "Find" then findtab = t end end
+  sent = {}
+  findtab.widgets[3].onRowClick("2 Hall", 2)
+  check(sent[1] == "n", "a click on a gap room walks there (" .. tostring(sent[1]) .. ")")
+  mapg("stop")
+  clear() ; mapg("find")
+  check(not (state["plugin.3s-map-gmcp.findhint"] or ""):find("gap", 1, true), "'mapg find' clears the gap off the Find tab")
+
+  -- a door the room does not show
+  keep('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1 } }')
+  mapg("path 3")
+  check(said("but it lists no n - a door it does not show? go by hand to 3, then 'mapg link'"),
+        "a room that lists no way back: a hidden door, and the cure")
+  -- one way only
+  keep('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1, "n": 4 } }')
+  room('{ "num": 4, "name": "Chapel", "area": "Keep", "exits": { } }')
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 2, "w": 0 } }')
+  clear() ; mapg("path 3")
+  check(said("but its n is known to lead to 4, not 3 - one way only?"), "a way back that leads elsewhere: one way only")
+  -- shifting, and shut
+  keep()
+  mapg("shift 2 n")
+  clear() ; mapg("path 3")
+  check(said("but its n is marked shifting - never routed through"), "a shifting way back says so")
+  keep('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1, "n": 0 } }')
+  room('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1, "n": 0 } }')
+  sent = {} ; mapg("explore all")
+  check(sent[1] == "n", "(the sweep probes the hall's n)")
+  fire_trigger("You cannot go") ; mapg("stop")
+  clear() ; mapg("path 3")
+  check(said("but its n was found shut this session"), "a way back found shut this session says so")
+  -- walked, and the listing names no exits at all: the walk is what the map knows
+  fresh_client() ; load_plugin()
+  room('{ "num": 3, "name": "Tower", "area": "Keep", "exits": { "s": 2 } }')
+  cmd("s") ; room('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { } }')
+  cmd("n") ; room('{ "num": 4, "name": "Chapel", "area": "Keep", "exits": { "s": 2 } }')
+  clear() ; mapg("path 3")
+  check(said("but its n is known to lead to 4, not 3"), "a way back only ever walked counts as known")
+  -- a way in that is not a compass direction
+  fresh_client() ; load_plugin()
+  room('{ "num": 3, "name": "Tower", "area": "Keep", "exits": { "out": 2 } }')
+  cmd("out") ; room('{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1 } }')
+  cmd("s") ; room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 2 } }')
+  clear() ; mapg("path 3")
+  check(said("'s out leads into it, but the way back is not known"), "a way in like 'out' has no compass way back to name")
+  -- nothing leads in at all: arrived by a way the map could not read
+  fresh_client() ; load_plugin()
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 0 } }')
+  room('{ "num": 9, "name": "Oubliette", "area": "Keep", "exits": { } }')          -- teleported in
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 0 } }')
+  clear() ; mapg("path 9")
+  check(said("no other known room leads to it"), "a room nothing leads to says so")
+  check(said("nothing the map knows leads INTO it"), "...and what that means")
+  -- unexplored on the far side
+  fresh_client() ; load_plugin()
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { } }')
+  room('{ "num": 5, "name": "Crypt", "area": "Keep", "exits": { "w": 6 } }')
+  cmd("w") ; room('{ "num": 6, "name": "Tomb", "area": "Keep", "exits": { "e": 5, "up": 0 } }')
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { } }')
+  clear() ; mapg("path 5")
+  check(said("1 other known room(s) lead to it"), "rooms known to lead to the target are counted")
+  check(not said("nothing the map knows leads INTO it"), "...so it does not say nothing leads in")
+  check(said("unexplored on its side, nearest first: @{accent,click=mapg go 6}6 Tomb@{} (up)"),
+        "the unexplored exits on the target's side are named too")
+  check(said("nothing on either side") == false, "(there is something to try)")
+  -- nothing to try anywhere
+  fresh_client() ; load_plugin()
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { } }')
+  room('{ "num": 7, "name": "Island", "area": "Keep", "exits": { } }')
+  room('{ "num": 1, "name": "Gate", "area": "Keep", "exits": { } }')
+  clear() ; mapg("path 7")
+  check(said("nothing on either side is left") and said("'mapg link'"), "with nothing to try, it says so - and names 'mapg link'")
+
+  -- A bigger map, to pin the order of things. Your side: a corridor 1-2-3-4 north, with
+  -- unexplored w at 1 and 2 and e at 4. The far side, by how far each is from the target
+  -- 20: 21 (1), 22 and 24 (2), 23 (3), 25 (4) - and the links from it into your side:
+  -- 20 w>3 (cost 2), 22 w>2 and 24 w>2 (3 each), 25 w>1 and 21 w>4 (4 each).
+  fresh_client() ; load_plugin()
+  local W = {
+    '{ "num": 20, "name": "Throne", "area": "Keep", "exits": { "w": 3 } }',
+    '{ "num": 21, "name": "Antechamber", "area": "Keep", "exits": { "s": 20, "w": 4, "e": 0 } }',
+    '{ "num": 22, "name": "Gallery", "area": "Keep", "exits": { "s": 21, "w": 2 } }',
+    '{ "num": 24, "name": "Loggia", "area": "Keep", "exits": { "s": 21, "w": 2 } }',
+    '{ "num": 23, "name": "Stair", "area": "Keep", "exits": { "s": 22 } }',
+    '{ "num": 25, "name": "Garret", "area": "Keep", "exits": { "s": 23, "w": 1, "n": 0 } }',
+    '{ "num": 4, "name": "Ward", "area": "Keep", "exits": { "s": 3, "e": 0 } }',
+    '{ "num": 3, "name": "Yard", "area": "Keep", "exits": { "s": 2, "n": 4 } }',
+    '{ "num": 2, "name": "Hall", "area": "Keep", "exits": { "s": 1, "n": 3, "w": 0 } }',
+    '{ "num": 1, "name": "Gate", "area": "Keep", "exits": { "n": 2, "w": 0 } }',
+  }
+  for _, j in ipairs(W) do room(j) end
+  clear() ; mapg("path 20")
+  local breaks = {}
+  for _, l in ipairs(printed) do
+    local a = l:match("likeliest break: @{accent,click=mapg go (%d+)}")
+    if a then breaks[#breaks + 1] = a end
+  end
+  check(table.concat(breaks, ",") == "3,2,1", "the breaks come cheapest first, each room once, three at most ("
+        .. table.concat(breaks, ",") .. ")")
+  check(said("@{accent,click=mapg go 20}20 Throne@{}'s w leads into it"), "...the cheapest named with the room that leads in")
+  check(said("unexplored on your side, nearest first: @{accent,click=mapg go 1}1 Gate@{} (w), @{accent,click=mapg go 2}2 Hall@{} (w), @{accent,click=mapg go 4}4 Ward@{} (e)"),
+        "your side's unexplored exits, nearest first")
+  check(said("unexplored on its side, nearest first: @{accent,click=mapg go 21}21 Antechamber@{} (e), @{accent,click=mapg go 25}25 Garret@{} (n)"),
+        "...and the target's side, nearest the target first")
+  check(said("5 other known room(s) lead to it"), "...and the count of rooms leading to it")
+  check((state["plugin.3s-map-gmcp.findlist"] or ""):find("3 Yard", 1, true) ~= nil,
+        "a break with nothing unexplored in it is still listed to walk to")
+  -- from the far end of the corridor, nearest first is the other way round
+  room(W[7])                                             -- standing in 4 Ward
+  clear() ; mapg("gap 20")
+  check(said("unexplored on your side, nearest first: @{accent,click=mapg go 4}4 Ward@{} (e), @{accent,click=mapg go 2}2 Hall@{} (w), @{accent,click=mapg go 1}1 Gate@{} (w)"),
+        "nearest first means nearest to where you stand")
+
+  -- 'mapg gap', and a favourite that cannot be reached (the case it was asked for)
+  keep()
+  clear() ; mapg("gap 3")
+  check(said("likeliest break"), "'mapg gap <room>' asks directly")
+  clear() ; mapg("gap 2")
+  check(said("there is a known route to 2 Hall"), "...and says so when there is a route")
+  clear() ; mapg("gap nowhere")
+  check(said("mapg gap <room | place>"), "...and gives the usage for a room it does not know")
+  mapg("fav 3")
+  local favtab
+  for _, t in ipairs(panel.tabs) do if t.title == "Favs" then favtab = t end end
+  clear()
+  favtab.widgets[3].onRowClick("3 Tower", 1)
+  check(said("likeliest break") and said("walk n from 2 once"), "clicking a favourite you cannot reach shows the gap")
+  -- a whole map, from the Maps tab: every room of it is the target, so a room of that
+  -- map leading to another is not "another room leading to it"
+  fresh_client() ; load_plugin()
+  room('{ "num": 20, "name": "Isle",  "area": "Aland", "exits": { "e": 0 } }')
+  room('{ "num": 21, "name": "Cove",  "area": "Aland", "exits": { "s": 20 } }')
+  room('{ "num": 30, "name": "Shore", "area": "Bland", "exits": { "w": 0 } }')
+  clear()
+  panel.tabs[2].widgets[3].onRowClick("Aland", 1)
+  check(said("no known route to the map Aland"), "a map you cannot reach shows the gap to the whole map")
+  check(said("no other known room leads to it"), "...the whole map is the target")
+  check(said("(e)") and said("(w)"), "...with the unexplored exits on both sides")
+  clear() ; mapg("help")
+  check(said("mapg gap <n>"), "help lists 'mapg gap'")
+end
+
+-- 1.17.0. A walk you ASKED for keeps walking through a fight (Joakim, 27 Oct): stopping
+--     in the room where something attacked you is the worst place to be. Wimpy dragging
+--     you off the route re-plans from where it left you, once the dust settles; a fight
+--     never teaches a wrong link; an explore still stops the moment a fight starts.
+do
+  local F1 = '{ "num": 1, "name": "West",   "area": "Fight", "exits": { "e": 2 } }'
+  local F2 = '{ "num": 2, "name": "Mid",    "area": "Fight", "exits": { "w": 1, "e": 3, "n": 5 } }'
+  local F3 = '{ "num": 3, "name": "Mid2",   "area": "Fight", "exits": { "w": 2, "e": 4, "n": 6 } }'
+  local F4 = '{ "num": 4, "name": "East",   "area": "Fight", "exits": { "w": 3 } }'
+  local F5 = '{ "num": 5, "name": "Nook",   "area": "Fight", "exits": { "s": 2, "e": 6 } }'
+  local F6 = '{ "num": 6, "name": "Nook2",  "area": "Fight", "exits": { "w": 5, "s": 3 } }'
+  local F7 = '{ "num": 7, "name": "Pit",    "area": "Fight", "exits": { } }'
+  local HIT = '{ "attacker": "a goblin", "attacker_hp": "healthy", "rounds": 1, "target": "you" }'
+  local function world()
+    fresh_client() ; load_plugin()
+    room(F6) ; room(F5) ; room(F4) ; room(F3) ; room(F2) ; room(F1)
+    clear() ; sent = {} ; emitted = {}
+  end
+
+  -- a fight mid-walk: it says so once and walks on
+  world()
+  mapg("go 4")
+  check(#sent == 1 and sent[1] == "e", "fight walk: the walk sets off (" .. table.concat(sent, ",") .. ")")
+  check(said("a fight does not"), "the walk's opening line says a fight does not stop it")
+  combat(HIT)
+  check(said("something is attacking you - still walking"), "a fight starting mid-walk is announced, not obeyed")
+  check(not said("combat - stopped"), "...the walk is not stopped")
+  clear() ; combat(HIT)
+  check(not said("still walking"), "...and the next combat round does not say it again")
+  arrive(F2)
+  check(#sent == 2 and sent[2] == "e", "...the next step goes out on arrival, mid-fight")
+  arrive(F3) ; arrive(F4)
+  check(said("arrived - 3 step(s), 4 East"), "...and it gets there")
+  check(emitted_count("map.walk.arrived") == 1 and emitted_count("map.walk.stopped") == 0,
+        "...a requester hears arrived, never stopped")
+
+  -- wimpy drags us north out of 2 while the walker's 'e' is still in flight; that 'e' then
+  -- lands from 5 (in 6). Nothing learned from either, and once settled it re-plans from 6.
+  world()
+  mapg("go 4")
+  arrive(F2)
+  check(sent[#sent] == "e", "(walking on from 2)")
+  combat(HIT)
+  check(fire_trigger("Your legs run away with you", "north"), "the wimpy trigger exists")
+  clear()
+  room(F5)                                   -- the retreat
+  check(not said("Walk stopped") and not said("should have reached"), "a wimpy retreat does not stop the walk")
+  check(not said("learned 2") and not said("DISAGREES"), "...and teaches nothing")
+  local n = #sent
+  room(F6)                                   -- the walker's old 'e', landing from 5
+  check(#sent == n, "...nothing is sent while it settles")
+  check(not said("DISAGREES") and not said("learned 5"), "...the stale step's arrival teaches nothing either")
+  fire_timers()                              -- settled
+  check(#sent == n + 1, "...and settling plans once, sending one step (" .. table.concat(sent, ",") .. ")")
+  check(said("knocked off the route in the fight - now in 6 Nook2; 2 step(s) on to 4 East"),
+        "once settled it plans again from where it actually is")
+  check(sent[#sent] == "s", "...and walks it (" .. table.concat(sent, ",") .. ")")
+  arrive(F3) ; arrive(F4)
+  check(said("arrived") and said("4 East"), "...all the way there")
+  -- the links are what they were: 2's e still leads to 3, 5's e to 6
+  clear() ; mapg("path 3")
+  check(said("4 -> 3"), "(path)")
+  world() ; mapg("path 3")
+  check(said("1 -> 3") and not said("Nook"), "2's 'e' was never rewritten to the room wimpy fled to")
+
+  -- wimpy running ALONG the route: the room it lands in is the step's, but the walker's
+  -- own 'e' is still in flight - sending another would put two steps on the wire
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "east")
+  room(F3)                                   -- the retreat, east - where the step was going
+  room(F4)                                   -- the walker's 'e', landing from 3
+  fire_timers()
+  check(#sent == 2, "a retreat along the route still settles first: no extra step (" .. table.concat(sent, ",") .. ")")
+  check(said("arrived") and said("4 East"), "...and the stale step's landing on the target is the arrival")
+
+  -- stopped while it settles: the settle timer does nothing
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "north")
+  room(F5)
+  mapg("stop")
+  local m = #sent
+  fire_timers()
+  check(#sent == m and not said("knocked off"), "a walk stopped while settling stays stopped")
+  -- ...and a NEW walk started before the old settle timer fires is not re-planned by it
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "north")
+  room(F5)
+  mapg("stop") ; mapg("go 1")
+  clear() ; fire_timers()
+  check(not said("knocked off"), "the old walk's settle timer leaves a new walk alone")
+
+  -- the watchdog mid-fight says what is likeliest
+  world()
+  mapg("go 4")
+  combat(HIT)
+  clear() ; fire_timers()
+  check(said("never landed") and said("you are in a fight"), "a step that never lands mid-fight blames the fight")
+
+  -- wimpy with nothing walking: a move you typed and the retreat that beat it are not
+  -- paired, even through an exit the server does not name (so no known end to compare)
+  fresh_client() ; load_plugin()
+  room('{ "num": 10, "name": "Gate", "area": "Fight", "exits": { "e": 0, "n": 0 } }')
+  cmd("e")
+  fire_trigger("Your legs run away with you", "north")
+  clear()
+  room('{ "num": 9, "name": "Yard", "area": "Fight", "exits": { "s": 10 } }')
+  check(not said("learned 10 e> 9"), "a retreat is never paired with the move queued before it")
+
+  -- an exit only ever WALKED (the server shows 0) is known too: a fight cannot rewrite it
+  fresh_client() ; load_plugin()
+  room('{ "num": 11, "name": "Hall", "area": "Fight", "exits": { "e": 0, "n": 13 } }')
+  cmd("e") ; room('{ "num": 12, "name": "Hut", "area": "Fight", "exits": { "w": 11 } }')
+  cmd("w") ; room('{ "num": 11, "name": "Hall", "area": "Fight", "exits": { "e": 0, "n": 13 } }')
+  combat(HIT)
+  clear() ; cmd("e") ; room('{ "num": 13, "name": "Loft", "area": "Fight", "exits": { "s": 11 } }')
+  check(said("mid-fight: 11's 'e' is known to lead to 12, not here"), "a walked-only exit is known to a fight too")
+
+  -- the retreat that lands on the target ends the walk there
+  world()
+  mapg("go 5")
+  check(sent[#sent] == "e", "(walking to 5 by 2)")
+  arrive(F2)
+  check(sent[#sent] == "n", "(and north from 2)")
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "north")
+  room(F5) ; fire_timers()
+  check(said("arrived") and said("5 Nook"), "a retreat that lands on the target is an arrival")
+
+  -- 'You cannot go' while it settles is the old step refused - ignored
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "north")
+  room(F5)
+  clear() ; fire_trigger("You cannot go")
+  check(not said("Walk stopped"), "'You cannot go' while settling is the stale step - ignored")
+  fire_timers()
+  check(said("knocked off the route - now in 5") or said("now in 5 Nook; 3 step(s) on to 4"),
+        "...and the re-plan goes ahead from 5 (" .. table.concat(sent, ",") .. ")")
+  clear() ; fire_trigger("You cannot go")
+  check(said("route is out of date"), "...a refusal after the re-plan is a real one, and stops it")
+
+  -- off the route with no way on: stop and say where
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  fire_trigger("Your legs run away with you", "down")
+  room(F7) ; clear() ; fire_timers()
+  check(said("the fight put us in 7 Pit, and no known route goes on from there to 4"),
+        "a retreat into a room with no known way on stops the walk and says so")
+  check(emitted_count("map.walk.stopped") == 1, "...and a requester hears stopped")
+
+  -- an off-route arrival mid-fight with no wimpy line re-plans too; a fight that keeps
+  -- throwing us about stops after HL.REPLANS of them
+  world()
+  mapg("go 4") ; arrive(F2)
+  combat(HIT)
+  cmd("e") ; room(F5)                        -- landed in 5, not 3: a shove
+  check(said("mid-fight: 2's 'e' is known to lead to 3, not here - nothing learned"),
+        "mid-fight, an arrival that contradicts a known exit teaches nothing")
+  check(not said("DISAGREES"), "...and is not reported as the exit disagreeing")
+  fire_timers()
+  check(said("knocked off the route"), "an off-route arrival mid-fight re-plans")
+  for i = 1, 5 do
+    if sent[#sent] == "s" then room(F6) else room(F5) end   -- never where it asked
+    fire_timers()
+    if i == 4 then
+      check(not said("knocked us off the route 5 times"), "...the fifth re-plan still walks")
+    end
+  end
+  check(said("the fight knocked us off the route 5 times - walk stopped"), "...the sixth knock stops it")
+
+  -- the skipped pairing takes the rest of the queue with it: two moves typed mid-fight,
+  -- the first shoved off course - the second's arrival is not "out of step" news
+  world()
+  room(F2) ; combat(HIT)
+  cmd("e") ; cmd("e")
+  room(F5) ; clear() ; room(F6)
+  check(not said("out of step") and not said("learned"), "a fight's skipped pairing drops the queue behind it")
+
+  -- without a fight an off-route arrival still stops the walk, as it always has
+  world()
+  mapg("go 4") ; arrive(F2)
+  clear() ; cmd("e") ; room(F5)
+  check(said("should have reached 3"), "no fight: an off-route arrival still stops the walk")
+  check(said("DISAGREES"), "...and the exit's disagreement is reported as before")
+
+  -- an explore still stops for a fight
+  world()
+  room('{ "num": 8, "name": "Edge", "area": "Fight", "exits": { "e": 0 } }')
+  mapg("explore all")
+  clear() ; combat(HIT)
+  check(said("combat"), "an explore still stops the moment a fight starts")
+end
+
+-- 1.18.0. Fast walk: a walk keeps HL.fast_n steps on the wire at once instead of one per
+--     round trip. Every arrival is still checked against its step, in order; each step is
+--     queued from the room the ROUTE sends it from (the echoes all come back before the
+--     first one lands), so links are learned exactly as one at a time; a hand-added door
+--     is a barrier; a step that goes wrong lets the rest of the burst land before stopping.
+do
+  local function R(n, ex) return string.format('{ "num": %d, "name": "R%d", "area": "Fast", "exits": %s }', n, n, ex) end
+  local L = {
+    R(21, '{ "e": 22 }'), R(22, '{ "w": 21, "e": 23 }'), R(23, '{ "w": 22, "e": 24, "n": 29 }'),
+    R(24, '{ "w": 23, "e": 25 }'), R(25, '{ "w": 24, "e": 26 }'), R(26, '{ "w": 25 }'),
+  }
+  local R29 = R(29, '{ "s": 23, "e": 30 }')
+  local R30 = R(30, '{ "w": 29 }')
+  local echoed = 0
+  -- the host echoes every command that goes to the MUD, ours included
+  local function echo() while echoed < #sent do echoed = echoed + 1 ; cmd(sent[echoed]) end end
+  local function world(fast)
+    fresh_client() ; load_plugin()
+    room(R30) ; room(R29)
+    for i = 6, 1, -1 do room(L[i]) end
+    if fast then mapg("fast on") end
+    clear() ; sent = {} ; echoed = 0 ; emitted = {}
+  end
+
+  world(true)
+  mapg("go 26")
+  check(#sent == 3 and sent[1] == "e" and sent[3] == "e", "fast walk: three steps go out at once (" .. table.concat(sent, ",") .. ")")
+  check(said("fast walk: 3 steps at a time"), "...and the walk says so")
+  echo()
+  check(not said("you moved yourself"), "...their echoes are the walk's own, not you moving")
+  room(L[2]) ; check(#sent == 4, "...each arrival tops the burst up by one")
+  echo() ; room(L[3]) ; echo() ; room(L[4]) ; echo()
+  check(#sent == 5, "...never past the end of the route")
+  room(L[5]) ; room(L[6])
+  check(said("arrived - 5 step(s), 26 R26"), "...and it arrives")
+  clear() ; mapg("status")
+  check(said("out-of-step 0"), "...with every arrival paired with its own step")
+  check(said("links walked 5"), "...and every link learned, as one at a time would")
+
+  -- one step lands wrong with two more behind it: they land too, then it stops
+  world(true)
+  mapg("go 26") ; echo()
+  room(L[2]) ; echo()                        -- steps 2, 3, 4 on the wire
+  clear() ; room(R29)                         -- step 2 went north, somehow
+  check(not said("Walk stopped"), "a wrong arrival mid-burst waits for the rest of the burst")
+  room(R30)                                   -- the burst's next 'e', from 29
+  fire_timers()
+  check(said("step 2 ('e') should have reached 23 R23, but we are in 29 R29. Walk stopped - the 2 step(s) already sent after it landed too: you are in 30 R30."),
+        "...then stops, saying where the rest of it left you")
+  check(emitted_count("map.walk.stopped") == 1, "...a requester hears stopped once")
+
+  -- 'You cannot go' for the first of three: the other two were sent from here as well
+  world(true)
+  mapg("go 26") ; echo()
+  clear() ; fire_trigger("You cannot go")
+  check(not said("Walk stopped"), "a refusal mid-burst waits for the rest of it too")
+  fire_trigger("You cannot go") ; fire_trigger("You cannot go")
+  check(not said("Walk stopped"), "...and the rest refused as well is part of the same settling")
+  fire_timers()
+  check(said("'You cannot go' - step 1 ('e') was refused; the route is out of date. Walk stopped - the 2 step(s)"),
+        "...then stops and says so")
+
+  -- a move you type mid-burst is still yours, and still stops it
+  world(true)
+  mapg("go 26") ; echo()
+  clear() ; cmd("n")
+  check(said("you moved yourself"), "a move you type during a fast walk stops it")
+
+  -- a hand-added door is a barrier: sent alone, and nothing after it until it lands
+  world(true)
+  mapg("link 22 29 climb rope")
+  clear() ; sent = {} ; echoed = 0
+  mapg("go 30")
+  local route = table.concat(sent, ",")
+  check(sent[1] == "e" and #sent == 1, "a hand-added door waits for the steps before it to land (" .. route .. ")")
+  echo() ; room(L[2])
+  check(#sent == 2 and sent[2] == "climb rope", "...goes out alone when they have (" .. table.concat(sent, ",") .. ")")
+  echo() ; room(R29)
+  check(#sent == 3 and sent[3] == "e", "...and the steps after it go out once it lands")
+  echo() ; room(R30)
+  check(said("arrived"), "...all the way")
+
+  -- wimpy mid-burst: everything still on the wire lands, then it plans again - with a burst
+  world(true)
+  mapg("go 26") ; echo()
+  room(L[2]) ; echo()                        -- steps 2, 3, 4 on the wire
+  combat('{ "attacker": "a goblin", "attacker_hp": "healthy", "rounds": 1, "target": "you" }')
+  fire_trigger("Your legs run away with you", "north")
+  room(R29)                                   -- the retreat
+  local longest = 0
+  for id in pairs(timers) do longest = math.max(longest, timer_secs[id] or 0) end
+  check(longest == 4, "...settling waits longer with a burst on the wire: 2 s + 1 per extra step (" .. longest .. ")")
+  local n = #sent
+  room(R30)                                   -- one of the burst's 'e's, from 29
+  check(#sent == n, "a retreat mid-burst sends nothing while the burst lands")
+  fire_timers()
+  check(said("knocked off the route in the fight - now in 30 R30; 5 step(s) on to 26"), "...then plans again from where it all left us")
+  check(#sent == n + 3, "...and the new route goes out three at a time (" .. table.concat(sent, ",", n + 1) .. ")")
+  clear() ; mapg("status")
+  local before = tonumber(table.concat(printed, "\n"):match("out%-of%-step (%d+)"))
+  echo() ; room(R29) ; echo() ; room(L[3]) ; echo() ; room(L[4]) ; room(L[5]) ; room(L[6])
+  check(said("arrived"), "...and arrives")
+  clear() ; mapg("status")
+  check(tonumber(table.concat(printed, "\n"):match("out%-of%-step (%d+)")) == before,
+        "...its steps queued from the room the NEW route starts in (out-of-step unchanged)")
+
+  -- off: one at a time again; the Map tab's button switches it and says which it is
+  world(true)
+  local row
+  for _, tab in ipairs(panel.tabs or {}) do
+    for _, w in ipairs(tab.widgets or {}) do
+      if w.type == "buttonrow" and w.bind and tostring(state[w.bind] or ""):find("Fast walk", 1, true) then row = w end
+    end
+  end
+  check(row and state[row.bind]:find("Fast walk: on", 1, true), "the Map tab has a Fast walk button that says it is on")
+  row.action("Fast walk: on", 3)
+  check(state[row.bind]:find("Fast walk: off", 1, true) and store["fast"] == "0", "pressing it turns fast walk off, and that is kept")
+  mapg("go 26")
+  check(#sent == 1, "with it off a walk sends one step at a time again")
+  mapg("stop")
+  row.action("Fast walk: off", 3)
+  check(state[row.bind]:find("Fast walk: on", 1, true) and store["fast"] == "1", "...pressing it again turns it back on")
+  clear() ; row.action("Link last move", 1)
+  check(said("mapg link") and not said("fast walk"), "the row's first button is still Link last move")
+  clear() ; row.action("Hand links", 2)
+  check(said("no hand-added links"), "...and its second Hand links")
+
+  -- 'mapg fast <n>': how many at once (1-6), and a reload keeps both
+  world(true)
+  mapg("fast 5")
+  check(store["fast_n"] == "5", "'mapg fast 5' sets five at once")
+  fresh_client(true) ; load_plugin()
+  for i = 6, 1, -1 do room(L[i]) end
+  sent = {} ; mapg("go 26")
+  check(#sent == 5, "...and a reload keeps it (" .. #sent .. ")")
+  mapg("stop")
+  mapg("fast 99") ; check(store["fast_n"] == "6", "...capped at six")
+  mapg("fast 1") ; check(store["fast"] == "0", "...and one at a time is off")
+  mapg("fast on") ; check(store["fast_n"] == "3", "...so 'on' after it goes back to three")
+  clear() ; mapg("fast sideways")
+  check(said("mapg fast on|off|<steps 1-6>"), "...anything else gets the usage")
+  clear() ; mapg("help")
+  check(said("mapg fast on|off|<n>"), "help lists 'mapg fast'")
+
+  -- an explore still goes one step at a time, fast walk or not
+  fresh_client() ; load_plugin() ; mapg("fast on")
+  room(X1) ; cmd("e") ; room(X2) ; cmd("e") ; room(X3) ; cmd("w") ; room(X2) ; cmd("w") ; room(X1)
+  clear() ; sent = {}
+  mapg("explore all")
+  check(#sent == 1, "an explore's route goes one step at a time even with fast walk on")
 end
 
 print(string.format("%d passed, %d failed", pass, fail))
