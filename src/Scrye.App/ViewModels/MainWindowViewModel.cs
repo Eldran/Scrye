@@ -645,6 +645,29 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
         bool renamed = !Editor.IsNew && !string.Equals(Editor.OriginalName, name, System.StringComparison.Ordinal);
+        // A new layer, or a rename, into a name that is already someone's folder would write
+        // over THAT profile (a new character called like an existing one replaced it). Refuse
+        // before anything is written - moved rules included.
+        if (Editor.IsNew || renamed)
+        {
+            bool taken;
+            try
+            {
+                taken = _store.NameTaken(Editor.TargetKind, Editor.TargetKind == LayerKind.Mud ? null : Editor.ParentMud,
+                                         Editor.ParentAccount, name, Editor.IsNew ? null : Editor.OriginalName);
+            }
+            catch (System.Exception ex) when (ex is System.ArgumentException or System.IO.IOException
+                                                  or System.UnauthorizedAccessException)
+            {
+                RaiseToast("Not saved", ex.Message);
+                return;
+            }
+            if (taken)
+            {
+                RaiseToast("Not saved", ProfileStore.TakenMessage(Editor.TargetKind, name));
+                return;
+            }
+        }
         // rules moved off this layer land on their new ones first (see ApplyMoves)
         if (!ApplyMoves(Editor.Moves)) return;
         ProfileLayer layer = Editor.ToLayer();

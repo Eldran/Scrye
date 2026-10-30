@@ -324,6 +324,10 @@ Settings resolve through a four‑layer cascade, from most general to most speci
 
 Deeper layers win for single values (theme, font), and collections (triggers, aliases, macros, variables) are merged across layers. This means you can set something once globally and override it for one character. The **Global** layer is edited in **Settings**; MUD/Account/Character layers are edited from the world/profile UI.
 
+A MUD, account or character can't be created or renamed with a name that's already in use there
+(an account and a character directly on the MUD share one set of names): Save says so and writes
+nothing, rather than replacing the profile that has the name.
+
 **Where a rule reaches.** Where you add a trigger, alias, timer, sequence or macro decides who
 it runs for:
 

@@ -240,9 +240,72 @@ public sealed class ProfileStore
     public void RenameCharacter(string mud, string? account, string from, string to) =>
         MoveDir(CharacterDir(mud, account, from), CharacterDir(mud, account, to));
 
+    /// <summary>
+    /// Is <paramref name="name"/> already someone's folder - another MUD, or (on a MUD) another
+    /// account or account-less character, which share one folder; or (in an account) another
+    /// character? Ask before creating a layer or renaming one: saving into a taken folder
+    /// writes over the profile that lives there. <paramref name="current"/> is the layer's
+    /// name now when renaming, so a rename that only changes the case of its own folder is
+    /// not "taken" on a case-blind file system.
+    /// </summary>
+    public bool NameTaken(LayerKind kind, string? mud, string? account, string name, string? current = null)
+    {
+        string Dir(string n) => kind switch
+        {
+            LayerKind.Mud => MudDir(n),
+            LayerKind.Account => AccountDir(mud!, n),
+            _ => CharacterDir(mud!, account, n),
+        };
+        return Taken(current is null ? null : Dir(current), Dir(name));
+    }
+
+    /// <summary>The words for "what is already called that" in a refusal.</summary>
+    public static string TakenMessage(LayerKind kind, string name) => kind switch
+    {
+        LayerKind.Mud => $"there is already a MUD called '{name}' - pick another name",
+        LayerKind.Account => $"'{name}' is already an account or character on this MUD - pick another name",
+        _ => $"'{name}' is already taken here (by a character, or an account on this MUD) - pick another name",
+    };
+
+    private static bool Taken(string? from, string to)
+    {
+        if (!Directory.Exists(to)) return false;
+        return from is null || !SameFolder(from, to);
+    }
+
+    /// <summary>Two spellings of ONE folder: equal ignoring case, and the parent does not list
+    /// <paramref name="to"/>'s spelling as a folder of its own - a case-blind file system
+    /// (Windows) answers for "3Scapes" with the "3scapes" that is there. On a case-sensitive one
+    /// two such folders can both exist, and then they are two.</summary>
+    private static bool SameFolder(string from, string to)
+    {
+        string f = Path.GetFullPath(from), t = Path.GetFullPath(to);
+        if (!string.Equals(f, t, StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(f, t, StringComparison.Ordinal)) return true;
+        string name = Path.GetFileName(t);
+        foreach (string d in Directory.GetDirectories(Path.GetDirectoryName(t)!))
+            if (string.Equals(Path.GetFileName(d), name, StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    /// <summary>Rename a layer's folder. A name already taken by another folder REFUSES
+    /// (IOException): it used to do nothing, and the save that followed wrote this layer over
+    /// the one already living there. A change of case alone goes through a temporary name, so
+    /// a case-blind file system really renames it.</summary>
     private static void MoveDir(string from, string to)
     {
-        if (Directory.Exists(from) && !Directory.Exists(to)) Directory.Move(from, to);
+        if (!Directory.Exists(from)) return;
+        if (Taken(from, to))
+            throw new IOException($"'{Path.GetFileName(to)}' is already taken - pick another name");
+        if (Directory.Exists(to))
+        {
+            // the same folder, spelled with other capitals: via a temporary name
+            string tmp = from + ".renaming-" + Guid.NewGuid().ToString("N")[..8];
+            Directory.Move(from, tmp);
+            Directory.Move(tmp, to);
+            return;
+        }
+        Directory.Move(from, to);
     }
 
     /// <summary>Resolve a bare MUD (no account/character): [global, mud].</summary>
