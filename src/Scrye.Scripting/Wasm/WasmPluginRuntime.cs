@@ -758,6 +758,8 @@ public sealed class WasmPluginRuntime : IPluginRuntime
                 ? ce.GetDouble() : 0,
             Width = w.TryGetProperty("width", out JsonElement we) && we.ValueKind == JsonValueKind.Number
                 ? (int)we.GetDouble() : 0,
+            Height = w.TryGetProperty("height", out JsonElement he) && he.ValueKind == JsonValueKind.Number
+                ? (int)he.GetDouble() : 0,
             Columns = columns,
             Separator = Str(w, "separator"),
             Labels = Str(w, "labels"),

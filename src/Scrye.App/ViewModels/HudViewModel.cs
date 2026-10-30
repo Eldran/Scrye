@@ -522,6 +522,37 @@ public sealed class HudViewModel : IDisposable
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
             }
+            case "scene3d":
+            {
+                // API 1.24: a map in 3D, with its first child as the 2D stand-in - drawn while
+                // the bound scene is empty (the plugin's 2D setting), and the companion's only view.
+                object? standIn = w.Children is { Count: > 0 } kids
+                    ? BuildWidget(pluginId, kids[0], subs, panelFg) : null;
+                var vm = new Scene3DWidgetViewModel(w.Palette, w.Height, standIn);
+                // Clicks, hovers and right-clicks go through the CHOICE path as (id, index): a
+                // point's id is a name from a dynamic set, which is what that path carries.
+                if (!string.IsNullOrEmpty(w.Action))
+                {
+                    string actionId = w.Action;
+                    vm.ClickCommand = new RelayCommand<string>(id =>
+                        _invokeChoice?.Invoke(pluginId, actionId, id, 1, null));
+                }
+                if (!string.IsNullOrEmpty(w.HoverAction))
+                {
+                    string hoverId = w.HoverAction;
+                    vm.HoverCommand = new RelayCommand<string>(id =>
+                        _invokeChoice?.Invoke(pluginId, hoverId, id, 0, null));
+                }
+                if (!string.IsNullOrEmpty(w.ContextAction))
+                {
+                    string contextId = w.ContextAction;
+                    vm.ContextCommand = new RelayCommand<string>(id =>
+                        _invokeChoice?.Invoke(pluginId, contextId, id, 1, menu => vm.PendingMenu = menu));
+                    vm.MenuChoice = new RelayCommand<string>(cmd => _runCommand?.Invoke(cmd, false));
+                }
+                BindText(w.Bind, s => vm.SceneText = s, subs);
+                return vm;
+            }
             default: // "label"
             {
                 var vm = new LabelWidgetViewModel(textColor) { Text = w.Text ?? "" };
@@ -1391,6 +1422,102 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
     /// label and icon-ink caches on a PaletteProperty swap, which is exactly the reset a
     /// scheme change needs.</summary>
     public void ReTheme() => Palette = ResolvePalette(_paletteSpec);
+}
+
+/// <summary>
+/// A <c>scene3d</c> widget (plugin API 1.24): the bound JSON scene drawn by
+/// <c>Controls.Scene3DView</c>, or - while the scene is empty - its 2D stand-in, an ordinary
+/// widget view-model (<see cref="StandIn"/>) rendered by the usual templates. The plugin
+/// switches between the two by binding a scene or an empty string; nothing is rebuilt.
+/// </summary>
+public sealed class Scene3DWidgetViewModel : ViewModelBase, IReThemable
+{
+    private readonly IReadOnlyDictionary<string, string>? _paletteSpec;   // original strings, for re-theme
+
+    /// <summary>The 2D stand-in's view-model, or null when the widget declared none.</summary>
+    public object? StandIn { get; }
+
+    /// <summary>The view's height in pixels (WidgetSpec.Height, default 320).</summary>
+    public double Height { get; }
+
+    public System.Windows.Input.ICommand? ClickCommand { get; set; }
+    public System.Windows.Input.ICommand? HoverCommand { get; set; }
+    public System.Windows.Input.ICommand? ContextCommand { get; set; }
+    public System.Windows.Input.ICommand? MenuChoice { get; set; }
+
+    private IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? _pendingMenu;
+    /// <summary>The right-click callback's returned menu, pushed as a fresh list per menu.</summary>
+    public IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? PendingMenu
+    {
+        get => _pendingMenu;
+        set => SetField(ref _pendingMenu, value);
+    }
+
+    private Dictionary<char, Avalonia.Media.Color> _palette;
+    public Dictionary<char, Avalonia.Media.Color> Palette
+    {
+        get => _palette;
+        private set => SetField(ref _palette, value);
+    }
+
+    private Scrye.Core.Plugins.Scene3D _scene = Scrye.Core.Plugins.Scene3D.Empty;
+    /// <summary>The parsed scene; <see cref="Scrye.Core.Plugins.Scene3D.Empty"/> while there is none.</summary>
+    public Scrye.Core.Plugins.Scene3D Scene
+    {
+        get => _scene;
+        private set
+        {
+            if (!SetField(ref _scene, value)) return;
+            OnPropertyChanged(nameof(Has3D));
+            OnPropertyChanged(nameof(Show2D));
+        }
+    }
+
+    /// <summary>True while there is a scene to draw: the 3D view shows and the stand-in hides.</summary>
+    public bool Has3D => !_scene.IsEmpty;
+    /// <summary>True while the 2D stand-in is on show (no scene, and there is a stand-in).</summary>
+    public bool Show2D => _scene.IsEmpty && StandIn is not null;
+
+    private string _sceneText = "";
+    /// <summary>The bound JSON. Parsed once per change; an unchanged string is not re-parsed.</summary>
+    public string SceneText
+    {
+        get => _sceneText;
+        set
+        {
+            value ??= "";
+            if (value == _sceneText) return;
+            _sceneText = value;
+            Scene = Scrye.Core.Plugins.Scene3D.Parse(value);
+        }
+    }
+
+    public Scene3DWidgetViewModel(IReadOnlyDictionary<string, string>? palette, int height, object? standIn)
+    {
+        _paletteSpec = palette;
+        _palette = ResolvePalette(palette);
+        Height = height > 0 ? System.Math.Clamp(height, 80, 2000) : 320;
+        StandIn = standIn;
+    }
+
+    private static Dictionary<char, Avalonia.Media.Color> ResolvePalette(
+        IReadOnlyDictionary<string, string>? palette)
+    {
+        var resolved = new Dictionary<char, Avalonia.Media.Color>();
+        if (palette is not null)
+            foreach ((string key, string val) in palette)
+                if (key.Length >= 1 && HudColor.Resolve(val) is { } c)
+                    resolved[key[0]] = c;
+        return resolved;
+    }
+
+    /// <summary>A new palette instance (the view drops its brush caches on the swap), and the
+    /// stand-in re-themes with it.</summary>
+    public void ReTheme()
+    {
+        Palette = ResolvePalette(_paletteSpec);
+        (StandIn as IReThemable)?.ReTheme();
+    }
 }
 
 /// <summary>A progress bar widget bound to a current value and a maximum. An optional

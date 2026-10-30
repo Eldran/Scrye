@@ -2428,6 +2428,139 @@ do
   check(said("[4 -4 -1], not yet surely (24.9 of 25.8 bits)"), "...in the search as in 'cs locate'")
 end
 
+-- 2.5.0. The 3D view: on a Scrye with plugin API 1.24 the sea map is a scene3d widget with
+--     the 2D grid as its stand-in, and 'cs view 3d' (or the 3D button) sends every layer at
+--     once - rooms, links (a way down drawn '|'), the frontier targets, start and you. The
+--     2D grid is drawn regardless: the phone shows that one. Older Scrye: nothing changes.
+do
+  local SP = "plugin.3s-chaossea.scene3d"
+  local function scene() return decode(state[SP] or "") end
+  local function find_type(node, want)
+    if type(node) ~= "table" then return nil end
+    if node.type == want then return node end
+    for _, v in pairs(node) do
+      local hit = find_type(v, want)
+      if hit then return hit end
+    end
+    return nil
+  end
+
+  fresh_client() ; dofile(PLUGIN)
+  check(find_type(panel, "scene3d") == nil and find_type(panel, "colorgrid") ~= nil,
+        "3D: with no scrye.api the sea map is the 2D grid it always was")
+  check(find_button(panel, "3D") == nil, "...and there is no 3D button")
+  clear() ; csg("view 3d")
+  check(said("needs a Scrye with plugin API 1.24"), "...'cs view 3d' says what it needs")
+  fresh_client() ; scrye.api = "1.23" ; dofile(PLUGIN)
+  check(find_type(panel, "scene3d") == nil, "...and 1.23 is not enough")
+
+  fresh_client() ; scrye.api = "1.24" ; dofile(PLUGIN)
+  local w = find_type(panel, "scene3d")
+  check(w and w.bind == SP and w.height == 280, "3D: on API 1.24 the sea map is a scene3d widget")
+  check(w and w.widgets and w.widgets[1].type == "colorgrid" and w.widgets[1].bind == "plugin.3s-chaossea.map",
+        "...with the 2D sea map as its stand-in")
+  check(w.palette["@"] == "#6BEF75" and w.palette["|"] == "#3BAECE", "...the map's colours, a way down in the down-exit cyan")
+  check(find_button(panel, "3D") and find_button(panel, "Reset view"), "...and a 3D button with a Reset view beside it")
+  check(find_button(panel, "New Sea") and find_button(panel, "Loop"), "...the buttons before it all still there")
+
+  csg("enable")
+  room(L3_NS) ; arm()
+  check((state[SP] or "") == "", "3D: 2D by default - no scene sent")
+  find_button(panel, "3D").action()
+  check(store["view3d"] == "1" and find_button(panel, "3D ON") ~= nil, "the 3D button turns it on, kept, and lights up")
+  local sc = scene()
+  check(sc and sc.nodes and #sc.nodes >= 1, "a scene is sent")
+  local you, fronts = nil, 0
+  for i, n in ipairs(sc.nodes) do
+    if n[5] == "@" then you = i - 1 end
+    if n[5] == "f" then fronts = fronts + 1 ; check(n[6] == 0.6, "a frontier target is a small point") end
+  end
+  check(you == sc.focus and sc.level == 0, "you are the focus, your layer the bright one")
+  check(fronts == 2, "both unexplored ways (n and s) are frontier targets (" .. fronts .. ")")
+  check(#sc.links == 2, "...each linked to the room it is reached from")
+
+  csg("step") ; room(L3_NS) ; arm()
+  sc = scene()
+  local at = {}
+  for i, n in ipairs(sc.nodes) do at[n[5]] = at[n[5]] or { i = i - 1, n = n } end
+  check(at["S"] and at["@"] and at["@"].n[3] == -1, "after a step: the start room and you, one south")
+  check(sc.focus == at["@"].i, "...the focus follows you")
+  local linked = false
+  for _, l in ipairs(sc.links) do
+    if (l[1] == at["S"].i and l[2] == at["@"].i) or (l[2] == at["S"].i and l[1] == at["@"].i) then linked = (l[3] == "-") end
+  end
+  check(linked, "...linked flat to where you came from")
+  check(state["plugin.3s-chaossea.map"] ~= nil and state["plugin.3s-chaossea.map"]:find("@", 1, true), "the 2D map is still drawn")
+
+  -- unchanged: not re-sent
+  local v0 = sc.view
+  state[SP] = "UNTOUCHED"
+  csg("view 3d")
+  check(state[SP] == "UNTOUCHED", "an unchanged sea is not sent again")
+  -- Reset view: the camera token moves, so the scene goes out again
+  find_button(panel, "Reset view").action()
+  check(scene() and scene().view == v0 + 1, "Reset view resets the camera")
+
+  -- down a layer: a vertical link
+  fresh_client() ; scrye.api = "1.24" ; store["view3d"] = "1" ; dofile(PLUGIN)
+  csg("enable")
+  room('{ "exits": { "d": 0 }, "area": "Unknown", "name": "Layer three of the Sea of Chaos", "num": 60494 }') ; arm()
+  csg("step")
+  check(sent_has("d"), "(the only way is down)")
+  room('{ "exits": { "u": 60494 }, "area": "Unknown", "name": "Layer four of the Sea of Chaos", "num": 60494 }') ; arm()
+  sc = scene()
+  check(sc and sc.level == -1, "a reload kept 3D on; down a layer, the bright layer follows you")
+  local vert = false
+  for _, l in ipairs(sc and sc.links or {}) do if l[3] == "|" then vert = true end end
+  check(vert, "...and the way down is a vertical '|' link")
+  local zs = {}
+  for _, n in ipairs(sc and sc.nodes or {}) do zs[n[4]] = true end
+  check(zs[0] and zs[-1], "...with both layers in the scene")
+
+  -- placed rooms (the 46a trick): a down exit is 'v'; two frontier exits aiming at the
+  -- same square make one target; a frontier exit aiming at a square that HAS a room makes
+  -- none there (the server says unwalked, but the point would sit on the room)
+  fresh_client() ; scrye.api = "1.24" ; store["view3d"] = "1" ; dofile(PLUGIN)
+  csg("enable")
+  local function L3(ex) return '{ "exits": ' .. ex .. ', "area": "Unknown", "name": "Layer three of the Sea of Chaos", "num": 60494 }' end
+  csg("set 5 5 0") ; room(L3('{ "d": 0 }')) ; arm()
+  csg("set 0 1 0") ; room(L3('{ "s": 60494 }')) ; arm()
+  csg("set 0 0 0") ; room(L3('{ "n": 0, "se": 0 }')) ; arm()
+  csg("set 0 -1 0") ; room(L3('{ "e": 0 }')) ; arm()
+  csg("set 9 9 0") ; room(L3('{ "w": 60494 }')) ; arm()
+  local here_at = {}
+  for _, n in ipairs(scene().nodes) do
+    local k = n[2] .. "," .. n[3]
+    here_at[k] = here_at[k] or {}
+    table.insert(here_at[k], n[5])
+  end
+  check(here_at["5,5"] and here_at["5,5"][1] == "v", "a room with a way down is 'v' in 3D too")
+  check(here_at["1,-1"] and #here_at["1,-1"] == 1 and here_at["1,-1"][1] == "f",
+        "two frontier exits aiming at one square make one target")
+  check(#here_at["0,1"] == 1 and here_at["0,1"][1] == "#", "a frontier exit aiming at a known room puts no target on it")
+  local between = 0
+  local idx = {}
+  for i, n in ipairs(scene().nodes) do idx[n[2] .. "," .. n[3] .. "," .. n[5]] = i - 1 end
+  for _, l in ipairs(scene().links) do
+    local a, b = idx["0,0,S"], idx["0,1,#"]
+    if (l[1] == a and l[2] == b) or (l[1] == b and l[2] == a) then between = between + 1 end
+  end
+  check(between == 1, "a two-way link is drawn once (" .. between .. ")")
+  find_button(panel, "3D ON").action()
+  check(find_button(panel, "3D") ~= nil and (state[SP] or "") == "", "the 3D button, pressed while on, turns it off")
+  find_button(panel, "3D").action()
+
+  -- off again
+  clear() ; csg("view 2d")
+  check((state[SP] or "") == "" and store["view3d"] == "0" and find_button(panel, "3D") ~= nil,
+        "'cs view 2d' clears the scene and the button goes back")
+  check(said("view: 2D"), "...and says so")
+  clear() ; csg("view upside")
+  check(said("cs view 2d|3d"), "anything else gets the usage")
+  clear() ; csg("")
+  check(said("cs view 2d|3d"), "the help lists 'cs view'")
+end
+
 -- 11. THE PROPERTY. Across the whole suite, the bot never asks the MUD to re-describe
 --     a room: '!glance' produces no Room.Info, so sending it would be asking for silence.
 local glanced = false

@@ -45,6 +45,18 @@ public sealed record MenuEntry(string Label, string? Command)
 /// <item><c>table</c> — the same rows split into columns by <see cref="Separator"/>, with
 /// optional <see cref="Columns"/> headers and per-column <see cref="Align"/>. Columns are
 /// measured to their widest cell.</item>
+/// <item><c>scene3d</c> (API 1.24) — a map seen in 3D: points (rooms) and lines (links) the
+/// user can turn, tilt, zoom and pan. <see cref="Bind"/> holds the scene as JSON (the format
+/// is documented on <c>Scrye.Core.Plugins.Scene3D</c>); <see cref="Palette"/> colours points
+/// and lines by character, like a colorgrid; <see cref="Height"/> sets its height. Its one
+/// child in <see cref="Children"/> (a <c>widgets</c> list in script) is its 2D STAND-IN: drawn
+/// instead whenever the bound scene is empty - which is how a plugin offers a 2D/3D setting
+/// without rebuilding its panel - and always on hosts that do not draw 3D (the companion).
+/// <c>onClick</c>, <c>onHover</c> and <c>onRightClick</c> report a point's id through the
+/// choice path as (id, index): a click and a right-click give index 1, a hover 0, and moving
+/// off the points hovers "". A right-click may return a menu, as a colorgrid's may. State
+/// at a path whose last segment is <c>scene3d</c> is desktop-only: it is not sent to the
+/// companion, so bind the scene to such a path (<c>plugin.&lt;id&gt;.scene3d</c>).</item>
 /// </list>
 ///
 /// <para><b>Row clicks (API 1.15).</b> A <c>list</c> or <c>table</c> whose script sets an
@@ -128,6 +140,11 @@ public sealed record WidgetSpec
     /// its Set button, and the labels of the sized inputs in one panel share a column, so a
     /// stack of settings lines up. Hosts clamp it to 1-80; text-only hosts ignore it.</summary>
     public int Width { get; init; }
+
+    /// <summary><c>scene3d</c> only (API 1.24): the 3D view's height in pixels - 0 means the
+    /// default (320). It takes the panel's full width. Hosts clamp it to 80-2000; hosts that
+    /// draw the 2D stand-in instead (the companion) ignore it.</summary>
+    public int Height { get; init; }
 
     /// <summary>For <c>table</c>: optional header labels. When set, a header row is drawn and the
     /// column count is taken from here; extra fields in a data row are ignored and missing ones

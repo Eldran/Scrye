@@ -56,8 +56,13 @@ public sealed class CompanionHub
     }
 
     /// <summary>Publish a state-tree change. Called from the session loop via
-    /// <c>StateStore.Changed</c>.</summary>
-    public void PublishState(StateUpdateMessage update) => Broadcast(update.SessionId, update);
+    /// <c>StateStore.Changed</c>. Desktop-only state (a 3D scene, API 1.24) is not sent: see
+    /// <see cref="StateUpdateMessage.IsDesktopOnly"/>.</summary>
+    public void PublishState(StateUpdateMessage update)
+    {
+        if (StateUpdateMessage.IsDesktopOnly(update.Path)) return;
+        Broadcast(update.SessionId, update);
+    }
 
     /// <summary>Publish lines a trigger routed into a capture pane. A separate stream from
     /// <see cref="PublishOutput"/> because a captured line may also be gagged from the main

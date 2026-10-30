@@ -41,6 +41,29 @@ public class CompanionHubTests
     }
 
     [Fact]
+    public void AThreeDSceneStaysOnTheDesktop()
+    {
+        // API 1.24: the phone draws a scene3d widget's 2D stand-in, so the scene's JSON -
+        // re-sent on every step - would cross its link only to be thrown away
+        var hub = new CompanionHub(new FakeSource());
+        CompanionSubscriber sub = hub.Add("a", false);
+        sub.Subscribe(World);
+
+        hub.PublishState(new StateUpdateMessage(World, "plugin.3s-map-gmcp.scene3d", StateKind.String, "{}"));
+        hub.PublishState(new StateUpdateMessage(World, "plugin.3s-map-gmcp.SCENE3D", StateKind.String, "{}"));
+        Assert.False(sub.Outbound.TryRead(out _));
+
+        // ...and nothing else is caught by it: only a path whose LAST segment is scene3d
+        hub.PublishState(new StateUpdateMessage(World, "plugin.3s-map-gmcp.grid", StateKind.String, "#"));
+        hub.PublishState(new StateUpdateMessage(World, "plugin.3s-map-gmcp.scene3d.x", StateKind.String, "1"));
+        hub.PublishState(new StateUpdateMessage(World, "plugin.3s-map-gmcp.myscene3d", StateKind.String, "1"));
+        var paths = new List<string>();
+        while (sub.Outbound.TryRead(out object? got)) paths.Add(((StateUpdateMessage)got!).Path);
+        Assert.Equal(new[] { "plugin.3s-map-gmcp.grid", "plugin.3s-map-gmcp.scene3d.x", "plugin.3s-map-gmcp.myscene3d" }, paths);
+        Assert.True(StateUpdateMessage.IsDesktopOnly("scene3d"));
+    }
+
+    [Fact]
     public void ASubscriberWithNoSessionReceivesNothing()
     {
         var hub = new CompanionHub(new FakeSource());

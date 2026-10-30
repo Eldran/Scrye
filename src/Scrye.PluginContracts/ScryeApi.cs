@@ -227,7 +227,20 @@ public static class ScryeApi
     //      inputs share one column so a stack of settings lines up. The Trade Auto tab is why:
     //      a dozen number boxes each the full width of the panel. Additive: an older host
     //      ignores the field and stretches as before.
-    public static readonly Version Current = new(1, 23);
+    // 1.24 The `scene3d` widget: a map in 3D - points and links the user turns, tilts, zooms
+    //      and pans - bound to a JSON scene, coloured by a palette like a colorgrid, `height`
+    //      pixels tall, with a 2D stand-in as its one child (`widgets = { colorgrid }`). The
+    //      stand-in is drawn whenever the scene is empty, which is the plugin's 2D/3D switch,
+    //      and always on the companion. Clicks, hovers and right-clicks report a point's id
+    //      through the choice path; a right-click may return a menu. State at a path ending in
+    //      `.scene3d` stays off the companion's wire. And `scrye.api`, the API version this
+    //      host speaks ("1.24"), so a plugin can build the new widget where it exists and its
+    //      old panel where it does not - an older host has no scrye.api at all.
+    //
+    //      The mapper is why: a level is a flat grid, and an ant hole is floors on floors.
+    //      Additive: a pre-1.24 host would draw an unknown widget as a blank label, so plugins
+    //      check scrye.api before using it.
+    public static readonly Version Current = new(1, 24);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

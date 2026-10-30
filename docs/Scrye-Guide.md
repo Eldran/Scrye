@@ -926,6 +926,17 @@ the steps already sent behind it still land, and then the walk stops and says wh
 up. Switch it with the **Fast walk** button on the Map tab or `mapg fast on|off`. An explore
 always goes one step at a time.
 
+**The 3D view** (1.19.0, needs Scrye with plugin API 1.24). `mapg view 3d`, or the **3D**
+button on the Map tab, shows every level of the map you're on at once: rooms as points at their
+places on the map, stairs as vertical lines, an unexplored exit as a small `?` and a door to
+another map as a small `>`. Drag to turn it, drag up or down to tilt it, Shift+drag to pan, scroll
+to zoom, and double-click empty space (or press **Center**) to reset the view. The level you stand
+on is drawn bright and the others dimmed; **Up**/**Down** brighten another level instead. Hover,
+click and right-click work as on the flat map (the hover line, the details and route, the
+walk-there menu). Each level shows the same section(s) the flat map would (`mapg sections`). While
+3D is on, a short how-to for these controls sits above the note box; it goes away in 2D. The
+mobile companion always shows the flat map. `mapg view 2d` goes back.
+
 **A fight doesn't stop a walk you asked for** (1.17.0). When something attacks you on the way it
 says so once and keeps walking, since walking on is how you get away. If wimpy runs with you (or
 anything else puts you in a room off the route) it waits two seconds for any step still on its
@@ -947,6 +958,7 @@ still stops the walk, and an explore (`mapg explore`) still stops the moment a f
 | `mapg path <number>` | Print the route there. Sends nothing. |
 | `mapg go <number>` | Actually walk it. |
 | `mapg stop` | Stop a walk in progress. |
+| `mapg view 2d` / `3d` | The map flat, one level at a time, or every level at once in 3D (needs Scrye with plugin API 1.24; the Map tab's **3D** button too). The phone always shows 2D. |
 | `mapg fast on` / `off` / `<n>` | Fast walk: keep *n* steps (default 3, up to 6) on their way at once; `off`, or 1, sends one at a time. The Map tab's **Fast walk** button switches it too. |
 | `mapg explore` | Name the nearest room that still has an unexplored exit, and print the route. |
 | `mapg explore go` | Same, but walk there. |
@@ -1237,6 +1249,7 @@ works under either alias.**
 | `cs seanum <n>` | The sea number New Sea will use (1–120). Default **1**. |
 | `cs party` / `cs party <names>` / `cs party clear` | The whitelist of names that don't count as "a player is here". Comma‑separated. |
 | `cs notify on` / `cs notify off` | Phone notifications. Default **on**. |
+| `cs view 2d` / `cs view 3d` | The sea map one layer at a time, or every layer at once in 3D: rooms, links, a way down as a vertical line, the frontier targets, the start and you. Drag to turn, Shift+drag to pan, scroll to zoom; **Reset view** on the panel puts the camera back. Needs Scrye with plugin API 1.24 (the panel's **3D** button too); the phone always shows 2D. |
 | `cs debug_all` | Dump the position and every known room. |
 
 **When it loses its place (GMCP version, 2.4.0).** A sea is static once made, so the map stays
@@ -2208,7 +2221,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.23.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.24.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -2241,7 +2254,9 @@ described in `ScryeApi.cs`; **1.20 adds `lines` on `scrye.addTrigger`**, trigger
 block of lines (see [Rules](#rules)); **1.21 adds `scrye.exports`**, a file a plugin may write
 and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-keeps--scryeexports-121));
 **1.22 adds `solo` on `scrye.addPanel`**, a panel that stays out of books;
-**1.23 adds `width` on `input`**, a field N characters wide beside its Set button.
+**1.23 adds `width` on `input`**, a field N characters wide beside its Set button;
+**1.24 adds the `scene3d` widget**, a map in 3D with a 2D stand-in (see the
+[widget reference](#hud-widget-reference)), and `scrye.api`, the API version as a string.
 
 ## Permissions
 
@@ -2321,6 +2336,7 @@ Everything runs on the session's loop thread, so your script never re‑enters c
 | Call | Description |
 |---|---|
 | `scrye.print(text)` | Echo a line to the local output, tagged with your plugin id. |
+| `scrye.api` | *(1.24)* The plugin API version this Scrye speaks, as a string (`"1.24"`). Older hosts have no `scrye.api`, so `if scrye.api then` is the test for "1.24 or newer". Lua and JavaScript. |
 | `scrye.send(text)` | Send a command to the MUD. |
 | `scrye.log(text)` | Append a line to your plugin's log file. |
 
@@ -2524,6 +2540,34 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
 | `barlist` | A list of labelled bars from one bound value — a compact way to show several quantities against a common maximum. Rows are `label \t caption \t value \t max \t refined [\t tooltip [\t stages]]`; anything else in the bound value draws as plain text, so headers still work. | `bind`; `color` |
 | `row` | A horizontal container *(1.8)*: its children lay out side by side at their measured widths, the escape hatch from the panel's vertical stack. | `widgets = { ... }` (ordinary widget tables) |
+| `scene3d` | *(1.24)* A map in 3D: points and the lines between them, which the user turns (drag), tilts (drag up/down), pans (Shift+drag or middle drag) and zooms (wheel); a double-click on empty space resets the view. Its one child is its **2D stand-in**, drawn whenever the bound scene is empty — that is how a plugin offers a 2D/3D setting without rebuilding its panel — and always on the mobile companion. | `bind` (the scene, JSON — bind it to a path ending in `.scene3d`, which is kept off the companion's link), `palette` (char → colour, as for `colorgrid`), `height = N` (px, default 320), `widgets = { <the 2D stand-in> }`, `onClick = function(id, index) ... end`, `onHover = function(id, index) ... end` (`""` when the pointer leaves the points), `onRightClick = function(id, index) ... end` (may return a menu, as on a `colorgrid`) |
+
+**The `scene3d` scene** is a JSON object; every field is optional and anything malformed is
+dropped rather than refused:
+
+```
+{ "nodes": [ [id, x, y, z, "c", size], ... ],  -- x east, y north, z up (a level); size 1 = normal
+  "links": [ [i, j, "c"], ... ],               -- i, j: 0-based indexes into nodes
+  "focus": i,       -- the node the view follows (you); a new focus drops the user's pan
+  "level": z,       -- nodes on other levels are dimmed
+  "view": n,        -- change it to reset the camera (a Center button)
+  "zscale": 3 }     -- how far apart levels are drawn, in grid steps
+```
+
+A node's `id` is what the callbacks hear (`""` = not clickable); `"c"` is a palette character.
+The view is orthographic, so rooms at the back are the same size as rooms at the front.
+
+```lua
+local P = "plugin." .. scrye.id .. "."
+local grid = { type = "colorgrid", bind = P .. "grid", palette = PAL, weave = true }
+scrye.addPanel{ title = "Map", widgets = {
+  scrye.api and { type = "scene3d", bind = P .. "scene3d", palette = PAL, height = 300,
+                  onClick = function(id) walk_to(tonumber(id)) end,
+                  widgets = { grid } }
+             or grid } }
+-- 3D on: scrye.setState(P .. "scene3d", scrye.json.encode{ nodes = ..., links = ..., focus = ... })
+-- 3D off: scrye.setState(P .. "scene3d", "")   -- the grid shows again
+```
 
 Notes:
 

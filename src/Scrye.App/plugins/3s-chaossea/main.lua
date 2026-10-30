@@ -182,6 +182,16 @@ local function stay_in_room()
 end
 -- what the buttons last showed, so the panel is only rebuilt when it would look different
 local panel_on, panel_auto, panel_paused, panel_loop = nil, nil, nil, nil
+-- The 3D view (2.5.0): on/off (persisted), whether this Scrye can draw it at all (plugin
+-- API 1.24 brought both the scene3d widget and scrye.api), the camera-reset token, the
+-- last scene sent, and what the panel was last built with.
+local V3 = { on = false, has = false, token = 0, last = "", panel = nil }
+do
+  local maj, min = tostring(scrye.api or ""):match("^(%d+)%.(%d+)")
+  maj, min = tonumber(maj), tonumber(min)
+  V3.has = maj ~= nil and (maj > 1 or (maj == 1 and min >= 24))
+  V3.on = V3.has and scrye.store.get("view3d") == "1"
+end
 
 -- the original drew ":: CSS ::" in red/grey/red before every message
 local function note(s) scrye.print("@{#FD2083,bold}::@{} @{#4BE4FF}CSS@{} @{#FD2083,bold}::@{} " .. s) end
@@ -2271,6 +2281,98 @@ local function cs_set_loop(on)
   cs_draw()
 end
 
+-- ---------- the 3D view (2.5.0) ----------
+-- Every layer of the sea at once, as the host's scene3d widget draws it: a point per
+-- mapped room at its grid position (z is the layer, so a way down is a line down), the
+-- links between rooms that know each other, the frontier targets the bot will walk to,
+-- the start room and you - the 2D map's letters and colours. Sent only while the 3D view
+-- is on, and only when it changed; the 2D map is drawn regardless, because the phone
+-- always shows that one.
+function V3.publish()
+  if not V3.on then
+    if V3.last ~= "" then V3.last = "" ; scrye.setState(P .. "scene3d", "") end
+    return
+  end
+  local nodes, links, index = {}, {}, {}
+  local function key(x, y, z) return x .. "|" .. y .. "|" .. z end
+  -- rooms, in a stable order so an unchanged sea is an unchanged string
+  local zs = {}
+  for z in pairs(rooms) do zs[#zs + 1] = z end
+  table.sort(zs)
+  for _, z in ipairs(zs) do
+    local xs = {}
+    for x in pairs(rooms[z]) do xs[#xs + 1] = x end
+    table.sort(xs)
+    for _, x in ipairs(xs) do
+      local ys = {}
+      for y in pairs(rooms[z][x]) do ys[#ys + 1] = y end
+      table.sort(ys)
+      for _, y in ipairs(ys) do
+        local room = rooms[z][x][y]
+        local ch = "#"
+        if room.exits.d or room.exits.down then ch = "v" end
+        if x == 0 and y == 0 and z == 0 then ch = "S" end
+        if x == pos.x and y == pos.y and z == pos.z then ch = "@" end
+        index[key(x, y, z)] = #nodes
+        nodes[#nodes + 1] = { "", x, y, z, ch }
+      end
+    end
+  end
+  local seen = {}
+  for k, i in pairs(index) do
+    local n = nodes[i + 1]
+    local room = rooms[n[4]][n[2]][n[3]]
+    for dir in pairs(room.exits) do
+      local t = moved({ x = n[2], y = n[3], z = n[4] }, dir)
+      local j = t and index[key(t.x, t.y, t.z)]
+      if j then                          -- (an exit never leads to its own square)
+        local a, b = math.min(i, j), math.max(i, j)
+        if not seen[a .. ":" .. b] then
+          seen[a .. ":" .. b] = true
+          links[#links + 1] = { a, b, t.z ~= n[4] and "|" or "-" }
+        end
+      end
+    end
+  end
+  -- the frontier: where the bot will go next, small, off the room it is reached from
+  local fronts = {}
+  for _, e in ipairs(frontier) do
+    local t = moved({ x = e.x, y = e.y, z = e.z }, e.dir)
+    local from = index[key(e.x, e.y, e.z)]
+    if t and from and not index[key(t.x, t.y, t.z)] and not fronts[key(t.x, t.y, t.z)] then
+      fronts[key(t.x, t.y, t.z)] = true
+      nodes[#nodes + 1] = { "", t.x, t.y, t.z, "f", 0.6 }
+      links[#links + 1] = { from, #nodes - 1, "-" }
+    end
+  end
+  table.sort(links, function(p, q) return p[1] < q[1] or (p[1] == q[1] and p[2] < q[2]) end)
+  local json = scrye.json.encode({ nodes = nodes, links = links,
+    focus = index[key(pos.x, pos.y, pos.z)] or -1, level = pos.z, view = V3.token, zscale = 2.5 })
+  if json ~= V3.last then
+    V3.last = json
+    scrye.setState(P .. "scene3d", json)
+  end
+end
+
+-- 'cs view 2d|3d' and the panel's 3D button. The phone always shows the 2D map.
+function V3.view(rest)
+  rest = tostring(rest or ""):lower()
+  if rest == "3d" or rest == "2d" then
+    if rest == "3d" and not V3.has then
+      note("the 3D view needs a Scrye with plugin API 1.24 or newer - this one speaks "
+           .. (scrye.api and tostring(scrye.api) or "an older one"))
+      return
+    end
+    V3.on = rest == "3d"
+    scrye.store.set("view3d", V3.on and "1" or "0")
+    cs_draw()
+  elseif rest ~= "" then
+    note("cs view 2d|3d") ; return
+  end
+  note(V3.on and "view: 3D - every layer at once; drag to turn, Shift+drag to pan, the wheel zooms, double-click resets (the phone shows 2D)"
+       or "view: 2D ('cs view 3d' for every layer at once)")
+end
+
 -- ---------- HUD panel state (replaces the miniwindow) ----------
 local COLS, ROWS = 20, 16   -- same viewport as the original 280x224 @ 14px cells
 
@@ -2284,8 +2386,8 @@ cs_draw = function()
   -- watchdog tick, and replacing the panel at that rate would be wasteful and visibly
   -- twitchy for a picture that has not changed.
   if build_panel and (enabled ~= panel_on or auto ~= panel_auto or paused ~= panel_paused
-                      or loop ~= panel_loop) then
-    panel_on, panel_auto, panel_paused, panel_loop = enabled, auto, paused, loop
+                      or loop ~= panel_loop or V3.on ~= V3.panel) then
+    panel_on, panel_auto, panel_paused, panel_loop, V3.panel = enabled, auto, paused, loop, V3.on
     build_panel()
   end
 
@@ -2361,6 +2463,7 @@ cs_draw = function()
     grid[#grid + 1] = table.concat(row)
   end
   scrye.setState(P .. "map", table.concat(grid, "\n"))
+  V3.publish()
   mark_dirty()
 end
 
@@ -2370,26 +2473,51 @@ end
 -- eat something you were half-way through typing.
 local LIT  = "#6BEF75"   -- armed: the same green the map draws you in
 local HELD = "#DA950B"   -- deliberately held: the frontier amber
+local MAP_PALETTE = {
+  ["."] = "#080A0C",   -- unknown / wall (map background)
+  ["#"] = "#856D52",   -- explored room (soft tan)
+  ["v"] = "#3BAECE",   -- room with a down exit (cyan)
+  ["f"] = "#DA950B",   -- frontier target (amber: still to explore)
+  ["S"] = "#FFFFFF",   -- start room 0 0 0
+  ["@"] = "#6BEF75",   -- you (neon green)
+  ["-"] = "#5A4A38",   -- a link (3D view: the room tan, darker)
+  ["|"] = "#3BAECE",   -- a way down (3D view: the down-exit cyan)
+}
+
+-- The map widget: the 2D grid, or - on a Scrye that can draw it - the 3D view with the
+-- grid as its 2D stand-in (drawn while the scene is empty, and always on the phone).
+function V3.widget(grid)
+  if not V3.has then return grid end
+  return { type = "scene3d", bind = P .. "scene3d", height = 280, palette = MAP_PALETTE,
+           widgets = { grid } }
+end
+
+-- The panel's widgets, with the 3D buttons added at the end where the host can draw 3D (a
+-- nil in the middle of the list would end it there).
+function V3.with_buttons(list)
+  if V3.has then
+    list[#list + 1] = { type = "buttonrow", buttons = {
+      { text = V3.on and "3D ON" or "3D", color = V3.on and LIT or nil,
+        action = function() V3.view(V3.on and "2d" or "3d") end },
+      -- the camera back to its starting angle, the whole sea in view
+      { text = "Reset view", action = function() V3.token = V3.token + 1 ; cs_draw() end },
+    } }
+  end
+  return list
+end
 
 build_panel = function()
 scrye.addPanel{
   title = "3S Chaos Sea",
   width = 300,
   accent = "#0B9DB3",          -- signature: chaos-sea teal (validated accent set)
-  widgets = {
+  widgets = V3.with_buttons{
     { type = "value", text = "", bind = P .. "status", color = "info" },      -- semantic: status line
     { type = "value", text = "layer ", bind = P .. "stats" },
     -- Marker colours are OKLCH-stepped and validated all-pairs on the map surface
     -- (worst pair ΔE 13.0 under simulated colour-blindness); labels draws the marker
     -- letters on their tiles, so the markers never rely on colour alone.
-    { type = "colorgrid", bind = P .. "map", labels = "@fvS", palette = {
-        ["."] = "#080A0C",   -- unknown / wall (map background)
-        ["#"] = "#856D52",   -- explored room (soft tan)
-        ["v"] = "#3BAECE",   -- room with a down exit (cyan)
-        ["f"] = "#DA950B",   -- frontier target (amber: still to explore)
-        ["S"] = "#FFFFFF",   -- start room 0 0 0
-        ["@"] = "#6BEF75",   -- you (neon green)
-      } },
+    V3.widget({ type = "colorgrid", bind = P .. "map", labels = "@fvS", palette = MAP_PALETTE }),
     -- legend, each entry in its own map color
     { type = "label", text = "@ you",       color = "#6BEF75" },
     { type = "label", text = "f frontier",  color = "#DA950B" },
@@ -2457,8 +2585,12 @@ function cs_interface(args)
       .. (loop and "on" or "off") .. ")")
     note("  cs party <names>      group members to ignore (comma separated; 'clear' to reset)")
     note("  cs pause              hold everything / continue (also the Pause button)")
+    note("  cs view 2d|3d         the map one layer at a time, or every layer at once in 3D (now: "
+      .. (V3.on and "3D" or "2D") .. ")")
     note("  cs notify on|off      buzz the phone when the bot pauses or runs out (now: "
       .. (notify_on and "on" or "off") .. ")")
+  elseif args == "view" or args:match("^view ") then
+    V3.view(args:match("^view%s*(.*)$"))
   elseif args == "loop on" or args == "loop off" then
     cs_set_loop(args == "loop on")
   elseif args == "loop" then

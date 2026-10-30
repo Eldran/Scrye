@@ -230,7 +230,17 @@ local moves   = {}        -- queued { dir, from, at } awaiting a Room.Info
 -- 200-local limit. typed = the commands typed since the last arrival (newest last);
 -- last_hop = { from, to, cmds }, the last arrival and what was typed before it.
 local HL = { typed = {}, last_hop = nil, MAX = 80, REPLANS = 5, SETTLE = 2,
-             fast = true, fast_n = 3, FAST_MAX = 6 }
+             fast = true, fast_n = 3, FAST_MAX = 6,
+             -- the 3D view (1.19.0): on/off (persisted), whether this Scrye can draw it at
+             -- all, the camera-reset token Center bumps, and the last scene sent
+             view3d = false, has3d = false, view_token = 0, scene_last = "" }
+-- Can this Scrye draw a scene3d widget? scrye.api arrived with it (plugin API 1.24); an
+-- older host has none, and gets the 2D map it always had.
+do
+  local maj, min = tostring(scrye.api or ""):match("^(%d+)%.(%d+)")
+  maj, min = tonumber(maj), tonumber(min)
+  HL.has3d = maj ~= nil and (maj > 1 or (maj == 1 and min >= 24))
+end
 -- Where exit `dir` of room `r` is known to lead: walked beats told; nil when neither says.
 function HL.known_end(r, dir, told)
   local w = r.walked and tonumber(r.walked[dir])
@@ -1283,11 +1293,104 @@ local function current_layout()
 end
 
 -- ---------- drawing ----------
+-- What a room is drawn as - the 2D grid's tile and the 3D view's colour alike. ctx holds
+-- what is read once per drawing: the farmer's rules, the favourites, the route's rooms.
+function HL.room_char(L, num, p, ctx)
+  local r = rooms[num]
+  local up, down, door = false, false, false
+  for _, dir in ipairs(sorted_dirs(r.exits)) do
+    if dir == "u" then up = true elseif dir == "d" then down = true
+    elseif not DELTA[dir] then door = true end
+  end
+  for _, e in ipairs(neighbours(r)) do
+    if rooms[e.to] and not L.set[e.to] then door = true end   -- leads off this map
+  end
+  local ch = "#"
+  if up and down then ch = "%" elseif up then ch = "^" elseif down then ch = "v" end
+  if door then ch = ">" end
+  if p.off then ch = "!" end        -- the layout could not honour its links
+  if r.note then ch = "n" end
+  if find_hits[num] then ch = "f" end
+  if place_of(num) or ctx.is_fav[num] then ch = "b" end
+  local rule = ctx.rules[num]
+  if rule == "avoid" then ch = "A" elseif rule == "pass" then ch = "P"
+  elseif rule == "rest" then ch = "R" end
+  -- the overlays, most telling on top: a route under the sight marks, the sight
+  -- marks under nothing - a room the server shows monsters in is drawn so even when
+  -- it is the route's end, because that is the fact the route was chosen for
+  if ctx.route_cells[num] then ch = ctx.route_cells[num] end
+  if los then
+    if los.players[num] then ch = "p" elseif los.mobs[num] then ch = "m" end
+  end
+  return ch
+end
+
+-- The 3D view's scene (1.19.0, Joakim 27 Oct 2026: "lets do option 3"): every level of
+-- the map you stand on at once, as the host's scene3d widget draws it - rooms at their
+-- layout position (x east, y north, z the level), the links between them, an unexplored
+-- exit as a small '?' stub and a door to another map as a small '>' you can click. Each
+-- level shows the same section(s) the 2D map would show of it ('mapg sections'). Sent
+-- only while the 3D view is on; the 2D grid is drawn regardless, because the companion
+-- (the phone) always shows the 2D map. Re-sent only when it changed.
+function HL.scene_publish(L, me, ctx)
+  if not HL.view3d then              -- (only ever on where the host can draw it)
+    if HL.scene_last ~= "" then HL.scene_last = "" ; scrye.setState(P .. "scene3d", "") end
+    return
+  end
+  local shown_z = {}
+  local function on_show(num)
+    local p = L.at[num]
+    if shown_z[p.z] == nil then shown_z[p.z] = shown_sections(L, p.z) or false end
+    local show = shown_z[p.z]
+    return not show or show[L.sec[num]] == true
+  end
+  local nums = {}
+  for num in pairs(L.at) do if on_show(num) then nums[#nums + 1] = num end end
+  table.sort(nums)
+  local nodes, links, index, seen = {}, {}, {}, {}
+  for _, num in ipairs(nums) do
+    local p = L.at[num]
+    index[num] = #nodes                          -- 0-based, as the scene counts
+    nodes[#nodes + 1] = { tostring(num), p.x, p.y, p.z, num == here and "@" or HL.room_char(L, num, p, ctx) }
+  end
+  local function stub(num, dv, f, id, ch, size)
+    local p = L.at[num]
+    nodes[#nodes + 1] = { id, p.x + dv[1] * f, p.y + dv[2] * f, p.z + dv[3] * f, ch, size }
+    links[#links + 1] = { index[num], #nodes - 1, "-" }
+  end
+  for _, num in ipairs(nums) do
+    local r, p = rooms[num], L.at[num]
+    for _, e in ipairs(neighbours(r)) do
+      local j = index[e.to]
+      if j then
+        local a, b = math.min(index[num], j), math.max(index[num], j)
+        local key = a .. ":" .. b
+        if a ~= b and not seen[key] then
+          seen[key] = true
+          links[#links + 1] = { a, b, L.at[e.to].z ~= p.z and "|" or "-" }
+        end
+      elseif rooms[e.to] and not L.set[e.to] and DELTA[e.dir] then
+        stub(num, DELTA[e.dir], 0.6, tostring(e.to), ">", 0.6)   -- a door to another map
+      end
+    end
+    for _, dir in ipairs(frontier_dirs(r)) do
+      if DELTA[dir] then stub(num, DELTA[dir], 0.5, "", "?", 0.4) end
+    end
+  end
+  local json = scrye.json.encode({ nodes = nodes, links = links, focus = index[here] or -1,
+                                   level = view_z or me.z, view = HL.view_token, zscale = 2.5 })
+  if json ~= HL.scene_last then
+    HL.scene_last = json
+    scrye.setState(P .. "scene3d", json)
+  end
+end
+
 draw = function()
   if not drawing then return end
   local L = current_layout()
   if not L then
     scrye.setState(P .. "grid", "")
+    if HL.scene_last ~= "" then HL.scene_last = "" ; scrye.setState(P .. "scene3d", "") end
     scrye.setState(P .. "status", here and "no layout yet" or "not anywhere yet")
     -- The Maps and Favs tabs are lists, not layouts: they must not go stale just
     -- because there is nothing to draw a grid FROM - a wipe lands exactly here, and
@@ -1350,37 +1453,14 @@ draw = function()
       end
     end
   end
+  local ctx = { rules = rules, is_fav = is_fav, route_cells = route_cells }
   local show, hidden = shown_sections(L, z)
   L.shown = {}          -- the rooms this drawing shows, for hover and click
   for num, p in pairs(L.at) do
     if p.z == z and (not show or show[L.sec[num]]) then
       L.shown[num] = true
       local r = rooms[num]
-      local up, down, door = false, false, false
-      for _, dir in ipairs(sorted_dirs(r.exits)) do
-        if dir == "u" then up = true elseif dir == "d" then down = true
-        elseif not DELTA[dir] then door = true end
-      end
-      for _, e in ipairs(neighbours(r)) do
-        if rooms[e.to] and not L.set[e.to] then door = true end   -- leads off this map
-      end
-      local ch = "#"
-      if up and down then ch = "%" elseif up then ch = "^" elseif down then ch = "v" end
-      if door then ch = ">" end
-      if p.off then ch = "!" end        -- the layout could not honour its links
-      if r.note then ch = "n" end
-      if find_hits[num] then ch = "f" end
-      if place_of(num) or is_fav[num] then ch = "b" end
-      if rules[num] == "avoid" then ch = "A" elseif rules[num] == "pass" then ch = "P"
-      elseif rules[num] == "rest" then ch = "R" end
-      -- the overlays, most telling on top: a route under the sight marks, the sight
-      -- marks under nothing - a room the server shows monsters in is drawn so even when
-      -- it is the route's end, because that is the fact the route was chosen for
-      if route_cells[num] then ch = route_cells[num] end
-      if los then
-        if los.players[num] then ch = "p" elseif los.mobs[num] then ch = "m" end
-      end
-      put(p.x, p.y, ch, false)
+      put(p.x, p.y, HL.room_char(L, num, p, ctx), false)
 
       for _, dir in ipairs(sorted_dirs(r.exits)) do
         local dv = DELTA[dir]
@@ -1417,6 +1497,7 @@ draw = function()
   local lines = {}
   for row = 1, TROWS do lines[row] = table.concat(grid[row]) end
   scrye.setState(P .. "grid", table.concat(lines, "\n"))
+  HL.scene_publish(L, me, ctx)
 
   local maps = all_maps()
   local label = L.area
@@ -3001,6 +3082,7 @@ scrye.addAlias{
       draw()
       note("level " .. (view_z or mine) .. (view_z and " (use 'mapg level' to come back)" or ""))
     elseif verb == "fast" then HL.fast_cmd(rest)
+    elseif verb == "view" then HL.view_cmd(rest)
     elseif verb == "sections" then
       if rest == "all" or rest == "near" then
         all_sections = rest == "all"
@@ -3064,6 +3146,7 @@ scrye.addAlias{
       note("mapg name <text>  call this map something you will recognise ('mapg name -' undoes it)")
       note("mapg level up|down   look at another level; 'mapg level' comes back")
       note("mapg sections all|near   draw every part of a level, or (default) only the part(s) nearest yours")
+      note("mapg view 2d|3d   the map flat, one level at a time, or every level at once in 3D (the Map tab's 3D button)")
       note("mapg redraw       lay the current map out again from the links")
       note("mapg export       the whole map as a file to share, plus a picture of this map (SVG)")
       note("mapg export <area> just that area's rooms; 'mapg export svg' just the picture")
@@ -3105,10 +3188,17 @@ local function peek(col, row)
   local cell = L.cells[key]
   if cell and L.shown and not L.shown[cell] then cell = nil end   -- a section not drawn
   local num = cell or (L.marks and L.marks[key])
-  if not num or not rooms[num] then scrye.setState(P .. "peek", ""); return nil end
+  return HL.peek_room(num, cell ~= nil)
+end
+
+-- The hover line for a room: the 2D grid's cell and the 3D view's point alike. on_map is
+-- false for the room behind a door to another map (a '>' marker).
+function HL.peek_room(num, on_map)
+  local L = layout
+  if not L or not num or not rooms[num] then scrye.setState(P .. "peek", ""); return nil end
   local r = rooms[num]
   local bits = { tostring(num), name_of(num) }
-  if not cell then bits[#bits + 1] = "[" .. area_of(r) .. " - another map]" end
+  if not on_map then bits[#bits + 1] = "[" .. area_of(r) .. " - another map]" end
   local ex = {}
   for _, e in ipairs(neighbours(r)) do ex[#ex + 1] = e.dir end
   if #ex > 0 then bits[#bits + 1] = "exits " .. table.concat(ex, ",") end
@@ -3267,9 +3357,133 @@ fav_toggle = function(num)
   note(string.format("favourite %d/%d: %s", #favs, FAV_CAP, what))
 end
 
+-- ---------- the map widget: the 2D grid, and the 3D view around it (1.19.0) ----------
+-- A click on a room: the details line for it, and the route there lit (never walked).
+function HL.click_room(num)
+  if not num or not rooms[num] then return end
+  show_detail(num)                               -- the details line, for any room
+  if num ~= here then path_to(num) end           -- prints and lights it; never walks it
+end
+
+-- The right-click menu (API 1.18): every entry is a command AS YOU WOULD TYPE IT,
+-- so it goes through mapg's own aliases - same caution, same narration, and a
+-- pre-1.18 host that ignores the return simply has no menu, nothing breaks.
+-- 'Forget room' lives here and not on a left-click: dropping a room takes a
+-- deliberate two-step (open the menu, pick the entry), so a slip of the mouse
+-- over the map can never erase what took walking to learn.
+function HL.menu_for(num)
+  if not num or not rooms[num] then return nil end
+  -- A note and a favourite, for any room - including the one you stand in. A menu
+  -- cannot ask for text, so the note entry aims the Map tab's note box at the room.
+  local r = rooms[num]
+  local mine = { { r.note and "Edit note..." or "Add note...", "mapg note #" .. num } }
+  local faved = false
+  for _, f in ipairs(favs) do if f == num then faved = true end end
+  mine[#mine + 1] = { faved and "Remove from favourites" or "Add to favourites", "mapg fav " .. num }
+  if num == here then
+    local menu = shift_menu(num) or {}
+    if #menu > 0 then menu[#menu + 1] = { "-" } end
+    for _, e in ipairs(mine) do menu[#menu + 1] = e end
+    return menu
+  end
+  local menu = { { "Walk there",   "mapg go "     .. num },
+                 { "Show route",   "mapg path "   .. num },
+                 { "Room details", "mapg room "   .. num },
+                 { "Forget room",  "mapg forget " .. num } }
+  menu[#menu + 1] = { "-" }
+  for _, e in ipairs(mine) do menu[#menu + 1] = e end
+  -- The farmer's room rules, when the farmer is loaded (its panel publishes a
+  -- status key): typed 'farm room' commands, so a farmer that is not there gets
+  -- nothing offered rather than a 'What?' from the MUD.
+  if (scrye.getState("plugin.3s-farmer.status") or "") ~= "" then
+    menu[#menu + 1] = { "-" }
+    menu[#menu + 1] = { "Farmer: pass through only", "farm room " .. num .. " pass" }
+    menu[#menu + 1] = { "Farmer: never enter",       "farm room " .. num .. " avoid" }
+    menu[#menu + 1] = { "Farmer: rest here",         "farm room " .. num .. " rest" }
+    menu[#menu + 1] = { "Farmer: clear rule",        "farm room " .. num .. " -" }
+  end
+  return menu
+end
+
+-- The 3D view's colours: the 2D palette, but a plain room is drawn in the text colour
+-- rather than dimmed (in 3D a room is a point in space, not a tile on a dark grid), and
+-- links in the dim colour so the rooms stand out from them.
+-- (Built in a function: this chunk is at Lua's 200-local limit, and a loop's variables count.)
+HL.PALETTE3D = (function()
+  local t = {}
+  for k, v in pairs(PALETTE) do t[k] = v end
+  t["#"] = "text" ; t["-"] = "dim" ; t["|"] = "info"
+  return t
+end)()
+
+function HL.map_widget()
+  local grid = { type = "colorgrid", bind = P .. "grid", palette = PALETTE, labels = TILE_MARKS,
+    icons = TILE_ICONS, weave = true,
+    onHover = function(col, row) peek(col, row) end,
+    onClick = function(col, row) HL.click_room(peek(col, row)) end,
+    onRightClick = function(col, row) return HL.menu_for(peek(col, row)) end }
+  if not HL.has3d then return grid end
+  -- the 3D view (host API 1.24) with the grid as its 2D stand-in: the host draws the grid
+  -- while the scene is empty (the 2D setting), and the phone always draws the grid
+  local function num_of(id) return tonumber(id) end
+  return { type = "scene3d", bind = P .. "scene3d", height = 300, palette = HL.PALETTE3D,
+    onHover = function(id)
+      local num = num_of(id)
+      HL.peek_room(num, num ~= nil and layout ~= nil and layout.set[num] ~= nil)
+    end,
+    onClick = function(id) HL.click_room(num_of(id)) end,
+    onRightClick = function(id) return HL.menu_for(num_of(id)) end,
+    widgets = { grid } }
+end
+
+-- 'mapg view 2d|3d' (and the Map tab's 3D button): which the desktop shows. The phone
+-- always shows the 2D map. Kept per character, like the other settings.
+function HL.view_cmd(rest)
+  rest = tostring(rest or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  if rest == "3d" or rest == "2d" then
+    if rest == "3d" and not HL.has3d then
+      note("the 3D view needs a Scrye with plugin API 1.24 or newer - this one speaks "
+           .. (scrye.api and tostring(scrye.api) or "an older one"))
+      return
+    end
+    HL.view3d = rest == "3d"
+    scrye.store.set("view3d", HL.view3d and "1" or "0")
+    HL.tools_label()
+    draw()
+  elseif rest ~= "" then
+    note("mapg view 2d|3d") ; return
+  end
+  note(HL.view3d
+    and "view: 3D - drag to turn, Shift+drag to pan, the wheel zooms, double-click resets; Center recentres (the phone shows 2D)"
+    or "view: 2D ('mapg view 3d' for every level at once in 3D)")
+end
+
 -- ---------- fast walk (1.18.0) ----------
 function HL.tools_label()
-  scrye.setState(P .. "tools", "Link last move\nHand links\nFast walk: " .. (HL.fast and "on" or "off"))
+  scrye.setState(P .. "tools", "Link last move\nHand links\nFast walk: " .. (HL.fast and "on" or "off")
+    .. "\n3D: " .. (HL.view3d and "on" or "off"))
+  HL.help3d()
+end
+
+-- How to drive the 3D view, on the Map tab above the note box while 3D is on, and gone
+-- (an empty text widget takes no room) while it is off (Joakim, 30 Oct 2026). Short lines:
+-- the text widget does not wrap, and the panel is 280 px wide. Bound under a path ending
+-- in ".scene3d", which the host keeps off the phone - the phone always shows the flat map,
+-- so the how-to would only mislead there.
+HL.HELP3D = table.concat({
+  "@{accent,bold}3D view@{}",
+  "drag: turn and tilt",
+  "Shift+drag or middle-drag: pan",
+  "wheel: zoom",
+  "double-click empty space: reset",
+  "hover a room: name and exits",
+  "click a room: details, route",
+  "right-click a room: its menu",
+  "Up/Down: light another level",
+  "Center: your level, start angle",
+}, "\n")
+function HL.help3d()
+  scrye.setState(P .. "help.scene3d", HL.view3d and HL.HELP3D or "")
 end
 
 -- 'mapg fast' says how it is; on/off switch it (the Map tab's button too); a number sets
@@ -3302,55 +3516,7 @@ scrye.addPanel{
   tabs = {
     { title = "Map", widgets = {
       { type = "label", bind = P .. "status", color = "dim" },
-      { type = "colorgrid", bind = P .. "grid", palette = PALETTE, labels = TILE_MARKS,
-        icons = TILE_ICONS, weave = true,
-        onHover = function(col, row) peek(col, row) end,
-        onClick = function(col, row)
-          local num = peek(col, row)
-          if not num then return end
-          show_detail(num)                               -- the details line, for any room
-          if num ~= here then path_to(num) end           -- prints and lights it; never walks it
-        end,
-        -- The right-click menu (API 1.18): every entry is a command AS YOU WOULD TYPE IT,
-        -- so it goes through mapg's own aliases - same caution, same narration, and a
-        -- pre-1.18 host that ignores the return simply has no menu, nothing breaks.
-        -- 'Forget room' lives here and not on a left-click: dropping a room takes a
-        -- deliberate two-step (open the menu, pick the entry), so a slip of the mouse
-        -- over the map can never erase what took walking to learn.
-        onRightClick = function(col, row)
-          local num = peek(col, row)
-          if not num then return end
-          -- A note and a favourite, for any room - including the one you stand in. A menu
-          -- cannot ask for text, so the note entry aims the Map tab's note box at the room.
-          local r = rooms[num]
-          local mine = { { r.note and "Edit note..." or "Add note...", "mapg note #" .. num } }
-          local faved = false
-          for _, f in ipairs(favs) do if f == num then faved = true end end
-          mine[#mine + 1] = { faved and "Remove from favourites" or "Add to favourites", "mapg fav " .. num }
-          if num == here then
-            local menu = shift_menu(num) or {}
-            if #menu > 0 then menu[#menu + 1] = { "-" } end
-            for _, e in ipairs(mine) do menu[#menu + 1] = e end
-            return menu
-          end
-          local menu = { { "Walk there",   "mapg go "     .. num },
-                         { "Show route",   "mapg path "   .. num },
-                         { "Room details", "mapg room "   .. num },
-                         { "Forget room",  "mapg forget " .. num } }
-          menu[#menu + 1] = { "-" }
-          for _, e in ipairs(mine) do menu[#menu + 1] = e end
-          -- The farmer's room rules, when the farmer is loaded (its panel publishes a
-          -- status key): typed 'farm room' commands, so a farmer that is not there gets
-          -- nothing offered rather than a 'What?' from the MUD.
-          if (scrye.getState("plugin.3s-farmer.status") or "") ~= "" then
-            menu[#menu + 1] = { "-" }
-            menu[#menu + 1] = { "Farmer: pass through only", "farm room " .. num .. " pass" }
-            menu[#menu + 1] = { "Farmer: never enter",       "farm room " .. num .. " avoid" }
-            menu[#menu + 1] = { "Farmer: rest here",         "farm room " .. num .. " rest" }
-            menu[#menu + 1] = { "Farmer: clear rule",        "farm room " .. num .. " -" }
-          end
-          return menu
-        end },
+      HL.map_widget(),
       { type = "buttonrow", buttons = {
         { text = "Up",     action = function()
             local L = current_layout() ; if not L then return end
@@ -3358,7 +3524,9 @@ scrye.addPanel{
         { text = "Down",   action = function()
             local L = current_layout() ; if not L then return end
             view_z = (view_z or L.at[here].z) - 1 ; draw() end },
-        { text = "Center", action = function() view_z = nil ; draw() end },
+        -- Center: back to your own level - and in 3D, the camera back to its starting angle
+        { text = "Center", action = function()
+            view_z = nil ; HL.view_token = HL.view_token + 1 ; draw() end },
         { text = "Explore", action = function() explore_start(true) end },
         { text = "Stop",   action = function()
             -- a sweep is always mid-walk (probe or route), so walk_stop is the whole
@@ -3373,11 +3541,13 @@ scrye.addPanel{
       { type = "buttonrow", bind = P .. "tools", action = function(_, idx)
           if idx == 1 then HL.link_cmd("")
           elseif idx == 2 then HL.links_list()
-          elseif idx == 3 then HL.fast_cmd(HL.fast and "off" or "on") end
+          elseif idx == 3 then HL.fast_cmd(HL.fast and "off" or "on")
+          elseif idx == 4 then HL.view_cmd(HL.view3d and "2d" or "3d") end
         end },
       { type = "value", text = "", bind = P .. "where" },
       { type = "value", text = "", bind = P .. "peek" },
       { type = "text", bind = P .. "detail" },       -- the room you clicked, with links
+      { type = "text", bind = P .. "help.scene3d", color = "dim" },   -- how to drive 3D, while it is on
       -- the note of the room the details line is about (or where you stand): Enter saves,
       -- an empty box removes it
       { type = "input", text = "note", bind = P .. "notebox",
@@ -3921,6 +4091,7 @@ explore_hp = tonumber(scrye.store.get("explore_hp")) or explore_hp
 drawing = scrye.store.get("drawing") ~= "0"
 all_sections = scrye.store.get("sections") == "all"
 HL.fast = scrye.store.get("fast") ~= "0"
+HL.view3d = HL.has3d and scrye.store.get("view3d") == "1"
 HL.fast_n = math.max(1, math.min(HL.FAST_MAX, math.floor(tonumber(scrye.store.get("fast_n")) or HL.fast_n)))
 HL.tools_label()
 load()

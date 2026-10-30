@@ -791,6 +791,13 @@ function buildWidget(panelId, w, panelFg) {
       return e;
     }
 
+    // scene3d (API 1.24): the phone always shows the 2D stand-in, the widget's first child -
+    // the scene itself is desktop-only state and never arrives here.
+    case 'scene3d': {
+      const kid = (w.children || [])[0];
+      return kid ? buildWidget(panelId, kid, panelFg) : el('div');
+    }
+
     // row (API 1.8): children side by side — the Sea chart + its resolve box. Wrapping is
     // allowed because a phone is narrower than the panel the author sized against.
     case 'row': {

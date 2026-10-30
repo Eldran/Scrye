@@ -171,7 +171,8 @@ public sealed class AppSessionSource : ICompanionSessionSource
     {
         var state = new List<StateUpdateMessage>();
         foreach (KeyValuePair<string, StateValue> kv in w.GameState.Snapshot())
-            state.Add(new StateUpdateMessage(sessionId, kv.Key, kv.Value.Kind, kv.Value.Text));
+            if (!StateUpdateMessage.IsDesktopOnly(kv.Key))      // a 3D scene stays on the desktop
+                state.Add(new StateUpdateMessage(sessionId, kv.Key, kv.Value.Kind, kv.Value.Text));
 
         var panels = new List<HudPanelMessage>();
         foreach (KeyValuePair<string, PanelSpec> kv in w.Hud.PanelSpecs)

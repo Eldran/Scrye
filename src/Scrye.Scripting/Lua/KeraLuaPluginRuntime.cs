@@ -379,6 +379,12 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         l.PushString(Id);
         l.SetField(-2, "id");
 
+        // scrye.api (1.24): the plugin API version this host speaks, as "1.24" - so a plugin
+        // can offer a newer widget where it exists and its old panel where it does not. A
+        // host older than 1.24 has no scrye.api at all, which says the same thing.
+        l.PushString(ScryeApi.CurrentText);
+        l.SetField(-2, "api");
+
         // scrye.data.<key> — manifest-declared files, parsed once at construction (the
         // plugin folder is read-only to the plugin; nothing to re-read).
         BuildData(l);
@@ -989,6 +995,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         int width = cl.Type(-1) == LuaType.Number ? (int)cl.ToNumber(-1) : 0;
         cl.Pop(1);
 
+        // scene3d view height in pixels (API 1.24): height = 320
+        RawField(cl, w, "height");
+        int height = cl.Type(-1) == LuaType.Number ? (int)cl.ToNumber(-1) : 0;
+        cl.Pop(1);
+
         return new WidgetSpec
         {
             Type = Field(cl, w, "type") ?? "label",
@@ -1004,6 +1015,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Images = imageMap,
             Cell = cellMax,
             Width = width,
+            Height = height,
             Columns = columns,
             Separator = Field(cl, w, "separator"),
             Labels = Field(cl, w, "labels"),

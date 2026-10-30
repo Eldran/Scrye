@@ -286,6 +286,9 @@ public sealed class JsPluginRuntime : IPluginRuntime
     {
         id = Id,
 
+        // scrye.api (1.24): the plugin API version this host speaks ("1.24"); absent before
+        api = ScryeApi.CurrentText,
+
         // scrye.data.<key> — the manifest's declared data files, already parsed
         data = BuildData(),
 
@@ -664,9 +667,12 @@ public sealed class JsPluginRuntime : IPluginRuntime
             _actions[contextId] = context;
             _buildingActions?.Add(contextId);
         }
-        // buttonrow children: buttons = [ {text, action}, ... ]
+        // buttonrow children: buttons = [ {text, action}, ... ]; a container's (row, and the
+        // scene3d widget's 2D stand-in, API 1.24): widgets = [ ... ]
         JsValue btns = Get(w, "buttons");
         List<WidgetSpec>? children = btns.IsObject() ? ToWidgetList(btns, depth + 1) : null;
+        if (children is null && Get(w, "widgets") is { } kids && kids.IsObject())
+            children = ToWidgetList(kids, depth + 1);
         return new WidgetSpec
         {
             Type = Str(w, "type") ?? "label",
@@ -679,6 +685,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Weave = Get(w, "weave") is { } wv && wv.IsBoolean() && wv.AsBoolean(),
             Palette = ToPalette(Get(w, "palette")),
             Width = Get(w, "width") is { } wd && wd.IsNumber() ? (int)wd.AsNumber() : 0,
+            Height = Get(w, "height") is { } hg && hg.IsNumber() ? (int)hg.AsNumber() : 0,
             Columns = ToStringList(Get(w, "columns")),
             Separator = Str(w, "separator"),
             Labels = Str(w, "labels"),

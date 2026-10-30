@@ -518,6 +518,82 @@ public sealed class PluginRuntimeApiTests : IDisposable
         Assert.Equal("Smurfland 2@5", host.State["picked"]);
     }
 
+    // ---- scene3d (API 1.24) ---------------------------------------------------
+
+    /// <summary>A scene3d widget reaches the host with its height, its palette, its 2D stand-in
+    /// as the one child, and three callbacks that ride the CHOICE path with a point's id - so
+    /// a right-click can still answer with a menu. And scrye.api says which API this is, which
+    /// is how a plugin knows to offer the widget at all.</summary>
+    [Fact]
+    public void Scene3DCarriesItsStandInHeightAndCallbacks()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("scene", """
+            scrye.setState("api", tostring(scrye.api))
+            scrye.addPanel{
+              title = "Map",
+              widgets = { { type = "scene3d", bind = "plugin.scene.scene3d", height = 240,
+                            palette = { ["#"] = "#808080" },
+                            onClick = function(id, i) scrye.setState("click", id .. "@" .. i) end,
+                            onHover = function(id, i) scrye.setState("hover", id .. "@" .. i) end,
+                            onRightClick = function(id) return { { "Walk to " .. id, "go " .. id } } end,
+                            widgets = { { type = "colorgrid", bind = "plugin.scene.grid", weave = true } } } },
+            }
+            """, host);
+
+        Assert.Equal(ScryeApi.CurrentText, host.State["api"]);
+        WidgetSpec w = Assert.Single(Assert.Single(host.Panels).Widgets);
+        Assert.Equal("scene3d", w.Type);
+        Assert.Equal(240, w.Height);
+        Assert.Equal("plugin.scene.scene3d", w.Bind);
+        Assert.Equal("#808080", w.Palette!["#"]);
+        WidgetSpec standIn = Assert.Single(w.Children!);
+        Assert.Equal("colorgrid", standIn.Type);
+        Assert.True(standIn.Weave);
+
+        rt.InvokeChoice(w.Action!, "4021", 1);
+        Assert.Equal("4021@1", host.State["click"]);
+        rt.InvokeChoice(w.HoverAction!, "", 0);
+        Assert.Equal("@0", host.State["hover"]);
+        IReadOnlyList<MenuEntry>? menu = rt.InvokeChoice(w.ContextAction!, "4021", 1);
+        Assert.Equal(new MenuEntry("Walk to 4021", "go 4021"), Assert.Single(menu!));
+    }
+
+    [Fact]
+    public void AWidgetWithoutAHeightCarriesZero()
+    {
+        var host = new FakeHost();
+        LoadLua("noheight", """scrye.addPanel{ title = "M", widgets = { { type = "scene3d", bind = "s" } } }""", host);
+        WidgetSpec w = Assert.Single(Assert.Single(host.Panels).Widgets);
+        Assert.Equal(0, w.Height);
+        Assert.Null(w.Children);
+    }
+
+    /// <summary>The JS runtime speaks it too: height, the stand-in from <c>widgets</c>, and
+    /// scrye.api.</summary>
+    [Fact]
+    public void JsScene3DCarriesItsStandInAndHeight()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("jsscene", """
+            scrye.setState("api", String(scrye.api));
+            scrye.addPanel({
+              title: "Map",
+              widgets: [ { type: "scene3d", bind: "s.scene3d", height: 200,
+                           onClick: function (id, i) { scrye.setState("click", id + "@" + i); },
+                           widgets: [ { type: "colorgrid", bind: "g" } ] } ],
+            });
+            """, lang: "js"), host);
+        rt.Load();
+
+        Assert.Equal(ScryeApi.CurrentText, host.State["api"]);
+        WidgetSpec w = Assert.Single(Assert.Single(host.Panels).Widgets);
+        Assert.Equal(200, w.Height);
+        Assert.Equal("colorgrid", Assert.Single(w.Children!).Type);
+        rt.InvokeChoice(w.Action!, "7", 1);
+        Assert.Equal("7@1", host.State["click"]);
+    }
+
     // ---- JS parity ------------------------------------------------------------
 
     [Fact]

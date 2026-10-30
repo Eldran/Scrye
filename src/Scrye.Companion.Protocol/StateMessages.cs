@@ -30,6 +30,16 @@ public sealed record StateUpdateMessage(
 
     public static StateUpdateMessage From(string sessionId, in StateChange change) =>
         new(sessionId, change.Path, change.Value.Kind, change.Value.Text, change.Removed);
+
+    /// <summary>
+    /// State the companion never receives (plugin API 1.24): a path whose last segment is
+    /// <c>scene3d</c>. That is where a <c>scene3d</c> widget's scene lives, and the companion
+    /// draws the widget's 2D stand-in instead - so a 3D map's JSON, re-sent on every step,
+    /// would cross the phone's link only to be thrown away. Case-blind, like the StateStore.
+    /// </summary>
+    public static bool IsDesktopOnly(string path) =>
+        path.Equals("scene3d", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".scene3d", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>A HUD panel's declarative spec, streamed on build and replaced on rebuild.

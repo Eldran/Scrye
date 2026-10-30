@@ -490,6 +490,22 @@
                                                                                 MenuChoiceCommand="{Binding MenuChoice}"
                                                                                 Weave="{Binding Weave}" Margin="0,3" />
                                                     </DataTemplate>
+                                                    <!-- scene3d (API 1.24): the 3D view while the plugin binds a scene; its
+                                                         2D stand-in (any widget, drawn by these same templates) while it
+                                                         binds none - the plugin's 2D/3D switch, with nothing rebuilt. -->
+                                                    <DataTemplate DataType="vm:Scene3DWidgetViewModel">
+                                                        <Panel Margin="0,3">
+                                                            <controls:Scene3DView IsVisible="{Binding Has3D}"
+                                                                                  Scene="{Binding Scene}" Palette="{Binding Palette}"
+                                                                                  ViewHeight="{Binding Height}"
+                                                                                  ClickCommand="{Binding ClickCommand}"
+                                                                                  HoverCommand="{Binding HoverCommand}"
+                                                                                  ContextCommand="{Binding ContextCommand}"
+                                                                                  PendingMenu="{Binding PendingMenu}"
+                                                                                  MenuChoiceCommand="{Binding MenuChoice}" />
+                                                            <ContentControl IsVisible="{Binding Show2D}" Content="{Binding StandIn}" />
+                                                        </Panel>
+                                                    </DataTemplate>
                                                     <DataTemplate DataType="vm:BarListWidgetViewModel">
                                                         <controls:BarListView Rows="{Binding Rows}" Margin="0,3" />
                                                     </DataTemplate>

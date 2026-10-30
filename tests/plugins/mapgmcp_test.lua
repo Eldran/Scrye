@@ -3884,5 +3884,212 @@ do
   check(#sent == 1, "an explore's route goes one step at a time even with fast walk on")
 end
 
+-- 1.19.0. The 3D view: on a Scrye with plugin API 1.24 (scrye.api) the map is a scene3d
+--     widget with the 2D grid as its stand-in; 'mapg view 3d' (or the Map tab's 3D button)
+--     sends every level of the map as a scene - rooms, links, '?' stubs for unexplored
+--     exits, '>' stubs for doors to other maps - while the grid is still drawn for the
+--     phone. On an older Scrye nothing changes.
+do
+  local SP = "plugin.3s-map-gmcp.scene3d"
+  local function scene() return decode(state[SP] or "") end
+  local function load3d(keep)
+    fresh_client(keep) ; scrye.api = "1.24" ; load_plugin()
+  end
+  -- 1 Hall, east to 2 Yard (whose north is unexplored, east leads into another area), up
+  -- to 3 Loft; 9 Gate is in another area
+  local H1 = '{ "num": 1, "name": "Hall", "area": "Keep", "exits": { "e": 2, "u": 3 } }'
+  local H2 = '{ "num": 2, "name": "Yard", "area": "Keep", "exits": { "w": 1, "n": 0, "e": 9 } }'
+  local H3 = '{ "num": 3, "name": "Loft", "area": "Keep", "exits": { "d": 1 } }'
+  local H9 = '{ "num": 9, "name": "Gate", "area": "Moor", "exits": { "w": 2 } }'
+  local function world()
+    room(H9) ; cmd("w") ; room(H2) ; cmd("w") ; room(H1) ; cmd("u") ; room(H3) ; cmd("d") ; room(H1)
+  end
+  local function map_widget()
+    for _, w in ipairs(panel.tabs[1].widgets) do
+      if w.type == "scene3d" or w.type == "colorgrid" then return w end
+    end
+  end
+
+  -- an older Scrye: the plain grid, and 'mapg view 3d' explains
+  fresh_client() ; load_plugin() ; world()
+  check(map_widget().type == "colorgrid", "with no scrye.api the map is the 2D grid it always was")
+  clear() ; mapg("view 3d")
+  check(said("needs a Scrye with plugin API 1.24"), "...and 'mapg view 3d' says what it needs")
+  check(state[SP] == nil, "...sending nothing")
+  check((state["plugin.3s-map-gmcp.help.scene3d"] or "") == "", "...and no 3D how-to on the Map tab")
+
+  -- 1.23 is not enough: scrye.api older than 1.24 is still the plain grid
+  fresh_client() ; scrye.api = "1.23" ; load_plugin() ; world()
+  check(map_widget().type == "colorgrid", "an API older than 1.24 keeps the 2D grid")
+  fresh_client() ; scrye.api = "2.0" ; load_plugin() ; world()
+  check(map_widget().type == "scene3d", "...and a newer major has it")
+
+  -- API 1.24: the grid inside a scene3d widget, 2D by default
+  load3d() ; world()
+  local w = map_widget()
+  check(w.type == "scene3d" and w.bind == SP, "on API 1.24 the map is a scene3d widget bound to .scene3d")
+  check(w.widgets and #w.widgets == 1 and w.widgets[1].type == "colorgrid" and w.widgets[1].weave,
+        "...with the woven 2D grid as its stand-in")
+  check(w.height == 300 and w.palette["#"] == "text" and w.palette["@"] == "accent", "...300 px tall, rooms in the text colour")
+  check((state[SP] or "") == "", "2D by default: no scene is sent")
+  local tools
+  for _, x in ipairs(panel.tabs[1].widgets) do
+    if x.type == "buttonrow" and x.bind and tostring(state[x.bind] or ""):find("3D:", 1, true) then tools = x end
+  end
+  check(tools and state[tools.bind]:find("3D: off", 1, true), "the Map tab's tools row has a 3D button that says off")
+
+  -- the how-to (30 Oct): a text widget right above the note box, empty (so taking no room)
+  -- while 3D is off, and bound where the phone - which shows the flat map - never gets it
+  local HP = "plugin.3s-map-gmcp.help.scene3d"
+  local ws, hi, ni = panel.tabs[1].widgets
+  for i, x in ipairs(ws) do
+    if x.bind == HP then hi = i end
+    if x.type == "input" and x.bind == "plugin.3s-map-gmcp.notebox" then ni = i end
+  end
+  check(hi and ni and hi == ni - 1 and ws[hi].type == "text", "the 3D how-to sits right above the note box")
+  check(HP:sub(-8) == ".scene3d", "...bound under .scene3d, which is kept off the phone")
+  check((state[HP] or "") == "", "...and is empty while the view is 2D")
+
+  -- on: the scene
+  clear() ; mapg("view 3d")
+  check(said("view: 3D"), "'mapg view 3d' switches it on and says how to drive it")
+  check(state[tools.bind]:find("3D: on", 1, true) and store["view3d"] == "1", "...the button says on, and it is kept")
+  do
+    local h = state[HP] or ""
+    check(h:find("drag: turn", 1, true) and h:find("pan", 1, true) and h:find("wheel: zoom", 1, true)
+          and h:find("right-click a room", 1, true), "3D on: the how-to says how to turn, pan, zoom and use the rooms")
+    local widest = 0
+    for line in (h:gsub("@{[^}]*}", "") .. "\n"):gmatch("([^\n]*)\n") do widest = math.max(widest, #line) end
+    check(widest <= 32, "...in lines short enough for the 280 px panel (widest " .. widest .. ")")
+  end
+  local sc = scene()
+  check(sc and sc.nodes, "a scene is sent")
+  local by = {}
+  for i, n in ipairs(sc.nodes) do by[n[1]] = { i = i - 1, n = n } end
+  check(by["1"] and by["2"] and by["3"], "every level of the map is in it: hall, yard and the loft above")
+  check(by["9"] and by["9"].n[5] == ">" and by["9"].n[6] == 0.6, "the door into another area is a small '>' named for the room behind it")
+  check(by["1"].n[5] == "@" and sc.focus == by["1"].i, "you are '@' and the focus")
+  check(by["3"].n[4] == by["1"].n[4] + 1 and by["3"].n[2] == by["1"].n[2] and by["3"].n[3] == by["1"].n[3],
+        "the loft is one level up, straight above the hall")
+  check(by["2"].n[2] == by["1"].n[2] + 1, "the yard is one step east")
+  local stub
+  for _, n in ipairs(sc.nodes) do if n[5] == "?" then stub = n end end
+  check(stub and stub[1] == "" and stub[6] == 0.4 and stub[3] > by["2"].n[3], "the yard's unexplored north is a small unclickable '?' north of it")
+  local function linked(a, b, ch)
+    for _, l in ipairs(sc.links) do
+      if ((l[1] == a and l[2] == b) or (l[1] == b and l[2] == a)) and (not ch or l[3] == ch) then return true end
+    end
+    return false
+  end
+  check(linked(by["1"].i, by["2"].i, "-"), "the hall and the yard are linked, once")
+  check(linked(by["1"].i, by["3"].i, "|"), "the stairs are a vertical '|' link")
+  local n12 = 0
+  for _, l in ipairs(sc.links) do
+    if (l[1] == by["1"].i and l[2] == by["2"].i) or (l[1] == by["2"].i and l[2] == by["1"].i) then n12 = n12 + 1 end
+  end
+  check(n12 == 1, "...a two-way link is drawn once, not twice")
+  check(sc.level == 0 and sc.zscale == 2.5, "the level you stand on is the bright one; levels 2.5 apart")
+  check(grid() ~= "", "the 2D grid is still drawn - the phone shows it")
+
+  -- the scene is re-sent only when it changed
+  state[SP] = "UNTOUCHED"
+  mapg("redraw")
+  check(state[SP] == "UNTOUCHED", "a redraw with nothing changed sends nothing")
+  cmd("e") ; room(H2)
+  sc = scene()
+  check(sc and sc.nodes, "moving sends the new scene")
+  by = {}
+  for i, n in ipairs(sc.nodes) do by[n[1]] = { i = i - 1, n = n } end
+  check(by["2"].n[5] == "@" and sc.focus == by["2"].i and by["1"].n[5] ~= "@", "...with you where you now are")
+
+  -- Up looks at the level above: the scene's bright level follows it
+  local up
+  for _, x in ipairs(panel.tabs[1].widgets) do
+    if x.type == "buttonrow" and x.buttons then for _, b in ipairs(x.buttons) do if b.text == "Up" then up = b end end end
+  end
+  up.action()
+  check(scene().level == 1, "Up brightens the level above in 3D")
+  -- Center: your own level again, and the camera reset (the view token moves)
+  local v0 = scene().view
+  local center
+  for _, x in ipairs(panel.tabs[1].widgets) do
+    if x.type == "buttonrow" and x.buttons then for _, b in ipairs(x.buttons) do if b.text == "Center" then center = b end end end
+  end
+  center.action()
+  check(scene().level == 0 and scene().view == v0 + 1, "Center comes back to your level and resets the camera")
+
+  -- the 3D callbacks: hover names a room, click shows it, right-click is the same menu
+  clear() ; w.onHover("3")
+  check((state["plugin.3s-map-gmcp.peek"] or ""):find("3  Loft", 1, true), "hovering a room in 3D names it")
+  w.onHover("9")
+  check((state["plugin.3s-map-gmcp.peek"] or ""):find("another map", 1, true), "...the door's room is named as another map")
+  w.onHover("")
+  check((state["plugin.3s-map-gmcp.peek"] or "") == "", "...and moving off clears it")
+  w.onClick("1")
+  check((state["plugin.3s-map-gmcp.detail"] or ""):find("Hall", 1, true) and said("2 -> 1"), "clicking a room in 3D shows it and lights the route")
+  local menu = w.onRightClick("3")
+  check(menu and menu[1][1] == "Walk there" and menu[1][2] == "mapg go 3", "right-clicking a room in 3D gives the same menu")
+  check(w.onRightClick("") == nil and w.onRightClick("nope") == nil, "...and nothing for no room")
+  state["plugin.3s-map-gmcp.detail"] = "KEPT" ; clear()
+  local ok = pcall(w.onClick, "")
+  check(ok and state["plugin.3s-map-gmcp.detail"] == "KEPT" and #printed == 0, "a click on empty space does nothing")
+  ok = pcall(w.widgets[1].onClick, 1, 1)
+  check(ok and state["plugin.3s-map-gmcp.detail"] == "KEPT", "...nor does one on an empty cell of the 2D grid")
+
+  -- sections: a level's hidden part stays out of the 3D view too. The ant hole: from the
+  -- entrance hall (21) west to 22 and east to 23, each with stairs down to its own wing -
+  -- 24 under the west, 25 under the east - and the wings never meet down there.
+  do
+    local A = '{ "num": 21, "name": "Mouth", "area": "Ants", "exits": { "w": 22, "e": 23 } }'
+    local B = '{ "num": 22, "name": "West",  "area": "Ants", "exits": { "e": 21, "d": 24 } }'
+    local C = '{ "num": 23, "name": "East",  "area": "Ants", "exits": { "w": 21, "d": 25 } }'
+    local D = '{ "num": 24, "name": "WDeep", "area": "Ants", "exits": { "u": 22 } }'
+    local F = '{ "num": 25, "name": "EDeep", "area": "Ants", "exits": { "u": 23 } }'
+    room(A) ; cmd("w") ; room(B) ; cmd("d") ; room(D) ; cmd("u") ; room(B) ; cmd("e") ; room(A)
+    cmd("e") ; room(C) ; cmd("d") ; room(F)
+    local ids = {}
+    for _, n in ipairs(scene().nodes) do ids[n[1]] = true end
+    check(ids["25"] and ids["23"] and ids["21"] and ids["22"], "in the east wing the levels above are all there")
+    check(not ids["24"], "...but not the west wing's lower floor: the same section rule as 2D")
+    mapg("sections all")
+    ids = {}
+    for _, n in ipairs(scene().nodes) do ids[n[1]] = true end
+    check(ids["24"], "'mapg sections all' puts it in")
+    mapg("sections near")
+    cmd("u") ; room(C) ; cmd("w") ; room(A) ; cmd("w") ; room(B) ; cmd("w")
+    room(H1)                               -- (walked off; back in the keep for the rest)
+  end
+
+  -- the button switches it back; 2D clears the scene
+  tools.action("3D: on", 4)
+  check((state[SP] or "") == "" and state[tools.bind]:find("3D: off", 1, true) and store["view3d"] == "0",
+        "the 3D button switches back to 2D, clearing the scene")
+  check((state[HP] or "") == "", "...and hides the how-to again")
+  tools.action("3D: off", 4)
+  check(scene() and scene().nodes, "...and on again")
+
+  -- kept across a reload
+  mapg("save")
+  load3d(true) ; room(H2)
+  check(scene() and scene().nodes, "a reload keeps the 3D view on")
+  check((state[HP] or ""):find("drag: turn", 1, true), "...and its how-to with it")
+  clear() ; mapg("view sideways")
+  check(said("mapg view 2d|3d"), "anything else gets the usage")
+  clear() ; mapg("help")
+  check(said("mapg view 2d|3d"), "help lists 'mapg view'")
+  clear() ; mapg("view")
+  check(said("view: 3D"), "'mapg view' says which it is")
+
+  -- a map wiped from under the 3D view: the scene goes with it
+  mapg("wipe") ; mapg("wipe yes")
+  check((state[SP] or "") == "", "wiping the map clears the 3D scene")
+  world()
+
+  -- 'mapg draw off' stops the scene with the grid
+  mapg("draw off")
+  state[SP] = "UNTOUCHED" ; cmd("w") ; room(H1)
+  check(state[SP] == "UNTOUCHED", "with the panel off no scene is sent either")
+end
+
 print(string.format("%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)
