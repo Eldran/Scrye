@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -82,6 +83,17 @@ public class OutputView : Control
     // trim from an ordinary add, because both leave Count looking much the same.
     private long _lastBase;
 
+    // Where each buffer was read up to, for a view that comes back to it (RemembersPlace).
+    // Weak on the buffer, so a closed world's place goes with it. Shared by every view: the
+    // world tabs recycle ONE set of panes, so the place has to outlive the view that took it.
+    private static readonly ConditionalWeakTable<ScrollbackBuffer, StrongBox<ScrollPlace>> Places = new();
+    // A place (or "the newest line") is waiting to be put back once the new buffer is laid
+    // out. Until then the ScrollViewer still holds the offset of the LAST buffer, and what it
+    // says about following means nothing - see ScrollViewerOnPropertyChanged.
+    private bool _restoring;
+    private bool _restoreHooked;
+    private readonly Action _followTail;
+
     // text selection, in (line, column) content coordinates
     private (int line, int col)? _selAnchor;
     private (int line, int col)? _selCaret;
@@ -131,6 +143,7 @@ public class OutputView : Control
     public OutputView()
     {
         Focusable = true;   // needed so Ctrl+C reaches OnKeyDown
+        _followTail = () => { if (_stickToBottom && !_restoring) ScrollToBottom(); };
         BuildContextMenu();
     }
 
@@ -152,6 +165,15 @@ public class OutputView : Control
 
     public bool IsFollowingTail => _stickToBottom;
     public int PendingLines => _pendingLines;
+
+    /// <summary>
+    /// Keep this view's place in each buffer it shows, and go back to it when the buffer comes
+    /// back (Joakim, 30 Oct 2026: switching between connected characters threw the chat pane
+    /// back to the start of the session). Following the newest line comes back following it;
+    /// scrolled back to read comes back to the same line. Off, or a buffer never shown here
+    /// before: the newest line. The split's live tail leaves it off - it always shows the end.
+    /// </summary>
+    public bool RemembersPlace { get; set; }
 
     private void SetFollowing(bool value)
     {
@@ -176,6 +198,7 @@ public class OutputView : Control
         set
         {
             ScrollbackBuffer? old = _source;
+            if (!ReferenceEquals(old, value)) SavePlace(old);
             if (!SetAndRaise(SourceProperty, ref _source, value)) return;
             if (old is not null) old.Changed -= OnSourceChanged;
             if (_source is not null) _source.Changed += OnSourceChanged;
@@ -184,7 +207,69 @@ public class OutputView : Control
             SetPendingLines(0);
             InvalidateMeasure();
             InvalidateVisual();
+            if (_source is not null) RequestRestore();
         }
+    }
+
+    /// <summary>Remember where this view is in <paramref name="buffer"/> (the one it is showing,
+    /// about to stop showing). Not while a restore is still waiting: the offset then belongs to
+    /// the buffer before, and the place kept from last time is the right one.</summary>
+    private void SavePlace(ScrollbackBuffer? buffer)
+    {
+        if (!RemembersPlace || buffer is null || _scrollViewer is null || _restoring) return;
+        ScrollPlace place = ScrollPlace.Capture(_stickToBottom, _scrollViewer.Offset.Y, _lineHeight,
+                                                _lastBase, _lastCount, _pendingLines);
+        if (Places.TryGetValue(buffer, out StrongBox<ScrollPlace>? box)) box.Value = place;
+        else Places.Add(buffer, new StrongBox<ScrollPlace>(place));
+    }
+
+    /// <summary>
+    /// Put the view back where it was in this buffer - or at the newest line - at the end of
+    /// the first layout pass that has the buffer's extent in it, and only once the view is
+    /// actually SHOWN: a hidden pane is not measured, and a restore against the last buffer's
+    /// extent (or a fresh pane's 0) gets clamped there for good - which is the original bug
+    /// again the moment the panes are turned back on. Done in LayoutUpdated rather than a
+    /// Background post so the first frame drawn is already in the right place.
+    ///
+    /// <para>The restore wins over a find match bound in the same switch (TerminalPane's
+    /// Source binding comes first); paging or jumping by hand cancels it.</para>
+    /// </summary>
+    private void RequestRestore()
+    {
+        _restoring = true;
+        if (!_restoreHooked)
+        {
+            _restoreHooked = true;
+            LayoutUpdated += OnLayoutUpdatedRestore;    // kept across detach/attach by Avalonia
+        }
+        InvalidateMeasure();                            // so a layout pass is sure to come
+    }
+
+    private void OnLayoutUpdatedRestore(object? sender, EventArgs e) => ApplyRestore();
+
+    private void CancelRestore()
+    {
+        _restoring = false;
+        if (!_restoreHooked) return;
+        _restoreHooked = false;
+        LayoutUpdated -= OnLayoutUpdatedRestore;
+    }
+
+    private void ApplyRestore()
+    {
+        if (!_restoring || _source is null) { CancelRestore(); return; }
+        // not shown (detached, a hidden pane zone, no height yet): wait for the pass that shows it
+        if (_scrollViewer is null || !IsEffectivelyVisible || _scrollViewer.Viewport.Height <= 0) return;
+        ScrollPlace place = RemembersPlace && Places.TryGetValue(_source, out StrongBox<ScrollPlace>? kept)
+            ? kept.Value
+            : new ScrollPlace(Following: true, TopLine: 0, TotalAtSave: 0, PendingAtSave: 0);
+        var (y, follow, pending) = place.Restore(_source.BaseSequence, _source.Count,
+                                                 _lineHeight, _scrollViewer.Viewport.Height);
+        _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, y);   // still _restoring: the watcher keeps out
+        CancelRestore();                                                 // done: unhook
+        SetFollowing(follow);
+        if (!follow) SetPendingLines(pending);
+        InvalidateVisual();
     }
 
     public FontFamily FontFamily { get => GetValue(FontFamilyProperty); set => SetValue(FontFamilyProperty, value); }
@@ -196,6 +281,9 @@ public class OutputView : Control
         _scrollViewer = this.FindAncestorOfType<ScrollViewer>();
         if (_scrollViewer is not null)
             _scrollViewer.PropertyChanged += ScrollViewerOnPropertyChanged;
+        // A view built fresh (a world tab or chat tab shown again) used to sit at offset 0 -
+        // the start of the session - until the next line arrived to scroll it down.
+        if (_source is not null) RequestRestore();
         // scheme switches must repaint the custom-drawn surface even with no new output
         Services.ThemeService.Changed += InvalidateVisual;
     }
@@ -203,6 +291,7 @@ public class OutputView : Control
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         Services.ThemeService.Changed -= InvalidateVisual;
+        SavePlace(_source);
         if (_scrollViewer is not null)
             _scrollViewer.PropertyChanged -= ScrollViewerOnPropertyChanged;
         _scrollViewer = null;
@@ -213,7 +302,9 @@ public class OutputView : Control
     {
         if (e.Property == ScrollViewer.OffsetProperty)
         {
-            SetFollowing(IsAtBottom());
+            // mid-switch the offset is the last buffer's (or being clamped to the new one's
+            // extent): following is decided by ApplyRestore, not by where that happens to land
+            if (!_restoring) SetFollowing(IsAtBottom());
             InvalidateVisual();   // redraw the newly-visible band
         }
     }
@@ -255,7 +346,9 @@ public class OutputView : Control
         if (_stickToBottom)
         {
             // scroll to the tail once the new extent has been laid out
-            Dispatcher.UIThread.Post(ScrollToBottom, DispatcherPriority.Background);
+            // (still following then: a restore that lands scrolled back, or a scroll up in
+            // between, must not be yanked to the bottom by a post made before it)
+            Dispatcher.UIThread.Post(_followTail, DispatcherPriority.Background);
         }
         else
         {
@@ -263,7 +356,7 @@ public class OutputView : Control
             // not move. Left alone, the text you were reading silently jumps forward by a
             // whole chunk — which is what "I scrolled back, left it, and it reset" is.
             // So the reading position travels with the content.
-            if (trimmed > 0 && _scrollViewer is not null && _lineHeight > 0)
+            if (trimmed > 0 && !_restoring && _scrollViewer is not null && _lineHeight > 0)
             {
                 double y = Math.Max(0, _scrollViewer.Offset.Y - trimmed * _lineHeight);
                 _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, y);
@@ -285,6 +378,7 @@ public class OutputView : Control
         double step = Math.Max(_lineHeight, vp - _lineHeight);   // one line of overlap
         double target = Math.Clamp(_scrollViewer.Offset.Y + direction * step,
                                    0, Math.Max(0, ExtentHeight - vp));
+        CancelRestore();                                // a key pressed by hand beats a restore
         if (direction < 0) SetFollowing(false);
         _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, target);
         InvalidateVisual();
@@ -293,6 +387,7 @@ public class OutputView : Control
     /// <summary>Jump back to the newest line and resume following the tail.</summary>
     public void ScrollToEnd()
     {
+        CancelRestore();
         SetFollowing(true);
         ScrollToBottom();
         InvalidateVisual();
@@ -302,6 +397,7 @@ public class OutputView : Control
     public void ScrollToTop()
     {
         if (_scrollViewer is null) return;
+        CancelRestore();
         SetFollowing(false);
         _scrollViewer.Offset = new Vector(_scrollViewer.Offset.X, 0);
         InvalidateVisual();

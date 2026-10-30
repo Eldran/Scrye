@@ -88,6 +88,9 @@ public class TerminalPane : Grid
     {
         RowDefinitions = new RowDefinitions("*,Auto");
 
+        // the history keeps its place in each buffer (switching worlds or chat tabs comes back
+        // to it); the tail is a live feed and always shows the end
+        _history.RemembersPlace = true;
         _historyScroll = new ScrollViewer
         {
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,

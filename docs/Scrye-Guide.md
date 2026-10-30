@@ -50,6 +50,7 @@ this steps aside.
 ## The main window
 
 - **Output pane** — the MUD's text, with ANSI colors, MXP links, and clickable command links. It has its own scrollback; scroll up to read history, and it snaps back to the bottom on new output.
+  Each world's output and chat panes keep their place when you switch to another character's tab and back: at the newest line if that is where you were, or at the line you were reading if you had scrolled up (with the lines that came in meanwhile counted on the **▼ new lines** chip).
   Drag to select, then **Ctrl+C** or right-click to copy. The menu also offers **Copy as ANSI** and **Copy as HTML**, which keep the colours — useful for pasting a fight into a forum or a bug report. **Ctrl+A** selects the whole scrollback.
 - **Command line** — type a command and press **Enter** to send it. Handy keys:
   - **Up / Down** — walk back and forth through the whole command history. The same command
