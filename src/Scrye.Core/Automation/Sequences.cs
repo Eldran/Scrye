@@ -55,6 +55,12 @@ public sealed record SequenceSpec
     public double StepTimeoutSeconds { get; init; } = 2.0;
     public double StepDelaySeconds { get; init; } = 0.5;
 
+    /// <summary>The characters this sequence is for, comma-separated ("Eldran, Nille"); null or
+    /// empty = every character the layer it sits on reaches. A sequence for someone else is left
+    /// out when the chain resolves, as if it were not on the layer at all. See
+    /// <see cref="Scrye.Core.Profiles.RuleScope"/>.</summary>
+    public string? OnlyFor { get; init; }
+
     public SequenceDef ToDef() => SequenceParser.Parse(Name, Source, PromptGated) with
     {
         StepTimeoutSeconds = StepTimeoutSeconds <= 0 ? 2.0 : StepTimeoutSeconds,

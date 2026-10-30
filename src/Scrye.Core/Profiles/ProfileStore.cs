@@ -274,7 +274,86 @@ public sealed class ProfileStore
         if (!string.IsNullOrEmpty(account))
             AddIfExists(chain, AccountFile(mud, account));
         AddIfExists(chain, CharacterFile(mud, account, character));
-        return ProfileResolver.Resolve(chain);
+        // the character by its folder name - the one a rule's OnlyFor is written against, and
+        // right even when the file's own Name predates a rename
+        return ProfileResolver.Resolve(chain, character);
+    }
+
+    // ---- where rules live (OnlyFor's companion: moving a rule between layers) ----
+
+    /// <summary>Every layer a rule can live on, in the order a picker shows them: Global, then
+    /// per MUD the MUD, its accounts each followed by their characters, then the characters
+    /// directly on the MUD.</summary>
+    public IReadOnlyList<RuleHome> RuleHomes()
+    {
+        var homes = new List<RuleHome> { RuleHome.Global };
+        foreach (string mud in ListMuds())
+        {
+            homes.Add(new RuleHome(LayerKind.Mud, mud));
+            foreach (string account in ListAccounts(mud))
+            {
+                homes.Add(new RuleHome(LayerKind.Account, mud, account));
+                foreach (string ch in ListCharacters(mud, account))
+                    homes.Add(new RuleHome(LayerKind.Character, mud, account, ch));
+            }
+            foreach (string ch in ListCharacters(mud))
+                homes.Add(new RuleHome(LayerKind.Character, mud, null, ch));
+        }
+        return homes;
+    }
+
+    /// <summary>The characters a layer reaches - its own, an account's, a MUD's (on accounts
+    /// and directly on it), or every one for Global - for telling the user what names an
+    /// OnlyFor there can use.</summary>
+    public IReadOnlyList<string> CharactersUnder(RuleHome home) => home.Kind switch
+    {
+        LayerKind.Character => new[] { home.Character! },
+        LayerKind.Account => ListCharacters(home.Mud!, home.Account),
+        LayerKind.Mud => ListAccounts(home.Mud!).SelectMany(a => ListCharacters(home.Mud!, a))
+                             .Concat(ListCharacters(home.Mud!)).Distinct(StringComparer.OrdinalIgnoreCase)
+                             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray(),
+        _ => ListMuds().SelectMany(m => CharactersUnder(new RuleHome(LayerKind.Mud, m)))
+                       .Distinct(StringComparer.OrdinalIgnoreCase)
+                       .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToArray(),
+    };
+
+    /// <summary>The layer at <paramref name="home"/>, or a new empty one of that kind when it
+    /// has no file yet.</summary>
+    public ProfileLayer LoadHome(RuleHome home) => home.Kind switch
+    {
+        LayerKind.Global => File.Exists(GlobalPath) ? LoadFile(GlobalPath) : new ProfileLayer { Kind = LayerKind.Global, Name = "global" },
+        LayerKind.Mud => LoadMud(home.Mud!) ?? new ProfileLayer { Kind = LayerKind.Mud },
+        LayerKind.Account => LoadAccount(home.Mud!, home.Account!) ?? new ProfileLayer { Kind = LayerKind.Account },
+        _ => LoadCharacter(home.Mud!, home.Account, home.Character!) ?? new ProfileLayer { Kind = LayerKind.Character },
+    };
+
+    public void SaveHome(RuleHome home, ProfileLayer layer)
+    {
+        switch (home.Kind)
+        {
+            case LayerKind.Global: SaveGlobal(layer); break;
+            case LayerKind.Mud: SaveMud(home.Mud!, layer); break;
+            case LayerKind.Account: SaveAccount(home.Mud!, home.Account!, layer); break;
+            default: SaveCharacter(home.Mud!, home.Account, home.Character!, layer); break;
+        }
+    }
+
+    /// <summary>
+    /// Add each rule to its new home and save those layers - one load and one write per
+    /// layer, however many rules land on it. Only the ADDING happens here: the caller removes
+    /// the rules from where they were by saving that layer afterwards. In that order a failure
+    /// part-way costs a duplicate (the rule is in both places), never the rule.
+    /// </summary>
+    public IReadOnlyList<RuleMoved> MoveRules(IEnumerable<(RuleHome Home, object Rule)> moves)
+    {
+        var results = new List<RuleMoved>();
+        foreach (IGrouping<RuleHome, (RuleHome Home, object Rule)> group in moves.GroupBy(m => m.Home))
+        {
+            ProfileLayer layer = LoadHome(group.Key);
+            foreach ((RuleHome home, object rule) in group) results.Add(RuleMove.Add(layer, home, rule));
+            SaveHome(group.Key, layer);
+        }
+        return results;
     }
 
     private void AddIfExists(List<ProfileLayer> chain, string path)

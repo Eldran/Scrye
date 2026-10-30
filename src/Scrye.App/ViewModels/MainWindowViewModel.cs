@@ -166,10 +166,80 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string DeleteLabel { get => _deleteLabel; private set => SetField(ref _deleteLabel, value); }
 
     private WorldEditorViewModel? _editor;
-    public WorldEditorViewModel? Editor { get => _editor; set => SetField(ref _editor, value); }
+    public WorldEditorViewModel? Editor
+    {
+        get => _editor;
+        set
+        {
+            if (!SetField(ref _editor, value) || value is null) return;
+            // the Move to… picker: every layer but this one
+            RuleHome? own = value.Home;
+            value.Moves.SetTargets(SafeHomes(), own, own is null ? System.Array.Empty<string>() : SafeCharacters(own));
+        }
+    }
 
     private GlobalSettingsViewModel? _settings;
-    public GlobalSettingsViewModel? Settings { get => _settings; set => SetField(ref _settings, value); }
+    public GlobalSettingsViewModel? Settings
+    {
+        get => _settings;
+        set
+        {
+            if (!SetField(ref _settings, value) || value is null) return;
+            value.Moves.SetTargets(SafeHomes(), RuleHome.Global, SafeCharacters(RuleHome.Global));
+        }
+    }
+
+    // The profile tree as move targets. A folder that cannot be listed costs the picker its
+    // entries, never the form - opening an editor must not throw.
+    private IReadOnlyList<RuleHome> SafeHomes()
+    {
+        try { return _store.RuleHomes(); }
+        catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException
+                                              or System.ArgumentException)
+        { return System.Array.Empty<RuleHome>(); }
+    }
+
+    private IReadOnlyList<string> SafeCharacters(RuleHome home)
+    {
+        try { return _store.CharactersUnder(home); }
+        catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException
+                                              or System.ArgumentException)
+        { return System.Array.Empty<string>(); }
+    }
+
+    /// <summary>
+    /// Put the rules a form moved out onto their new layers - FIRST, before the form saves its
+    /// own layer without them, so a failure part-way costs a duplicate and never the rule. True
+    /// when there was nothing to do or it all landed; false (and says why) when the form must
+    /// not be saved. The queue is emptied on success, so a second Save cannot move them again.
+    /// </summary>
+    private bool ApplyMoves(RuleMoveBox moves)
+    {
+        if (moves.Pending.Count == 0) return true;
+        // One layer at a time, each dropped from the queue as it lands: if a later layer fails,
+        // the retry must not add the ones that already arrived a second time.
+        var done = new List<RuleMoved>();
+        foreach (IGrouping<RuleHome, (RuleHome Home, object Rule)> group in moves.Pending.GroupBy(p => p.Home).ToList())
+        {
+            try { done.AddRange(_store.MoveRules(group)); }
+            catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException
+                                                  or System.ArgumentException or System.IO.InvalidDataException)
+            {
+                RaiseToast("Not saved", $"Couldn't move rules to {group.Key.Label}: {ex.Message}"
+                    + (done.Count > 0 ? $" ({done.Count} already moved; Save again finishes the rest)" : ""));
+                return false;
+            }
+            moves.Drop(group.Key);
+        }
+        moves.Clear();
+        var renamed = done.Where(d => d.Renamed).Select(d => $"'{d.Name}' ({d.Home.Label})").ToList();
+        var replaced = done.Where(d => d.Replaced).Select(d => $"{d.Name} ({d.Home.Label})").ToList();
+        string detail = done.Count == 1 ? $"Moved to {done[0].Home.Label}." : $"{done.Count} rules moved.";
+        if (renamed.Count > 0) detail += " A rule there had the same name, so it is now " + string.Join(", ", renamed) + ".";
+        if (replaced.Count > 0) detail += " It replaced the macro already on " + string.Join(", ", replaced) + ".";
+        RaiseToast("Rules moved", detail);
+        return true;
+    }
 
     // ---- "a new Scrye is out" -------------------------------------------------------
     // Checked once, a few seconds after start, and again whenever the version line at the
@@ -574,8 +644,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             RaiseToast("Not saved", $"'{name}' can't be used as a name: {why}");
             return;
         }
-        ProfileLayer layer = Editor.ToLayer();
         bool renamed = !Editor.IsNew && !string.Equals(Editor.OriginalName, name, System.StringComparison.Ordinal);
+        // rules moved off this layer land on their new ones first (see ApplyMoves)
+        if (!ApplyMoves(Editor.Moves)) return;
+        ProfileLayer layer = Editor.ToLayer();
 
         // A typed password goes to the OS credential store; the layer only keeps the key.
         if (!string.IsNullOrEmpty(Editor.Password) && CredentialStore.Available)
@@ -630,6 +702,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         // the layer that exists rather than the one that was being created. Without this a
         // second Save would re-run the rename from a stale OriginalName.
         Editor.MarkSaved(name);
+        // the form now edits the layer as saved - renamed, or no longer new - so offer the
+        // layers as they now are (a rename moved every account and character under it)
+        RuleHome? home = Editor.Home;
+        Editor.Moves.SetTargets(SafeHomes(), home, home is null ? System.Array.Empty<string>() : SafeCharacters(home));
 
         if (close) Editor = null;
         else RaiseToast("Saved", $"{name} saved. The form is still open — Done closes it.");
@@ -643,6 +719,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void SaveSettings(bool close)
     {
         if (Settings is null) return;
+        if (!ApplyMoves(Settings.Moves)) return;   // moved rules land first (see ApplyMoves)
         ProfileLayer layer = Settings.ToLayer();
         try { _store.SaveGlobal(layer); }
         catch (System.Exception ex) when (ex is System.IO.IOException or System.UnauthorizedAccessException

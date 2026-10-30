@@ -8,12 +8,17 @@ namespace Scrye.Core.Profiles;
 /// Scalars: the deepest layer that sets a value wins (null inherits). Collections:
 /// union across layers keyed by name; a deeper layer with the same name overrides,
 /// and a layer's <see cref="ProfileLayer.Suppress"/> names drop inherited entries
-/// BEFORE that layer's own additions.
+/// BEFORE that layer's own additions. A rule whose <c>OnlyFor</c> does not name the
+/// chain's character is left out, as if it were not on its layer (see <see cref="RuleScope"/>).
 /// </summary>
 public static class ProfileResolver
 {
-    public static EffectiveProfile Resolve(IReadOnlyList<ProfileLayer> chain)
+    /// <summary>Fold <paramref name="chain"/>. <paramref name="character"/> is who the chain is
+    /// for, for rules narrowed with OnlyFor; null takes the name of the chain's Character layer,
+    /// and a chain with none (an account, a bare MUD) has nobody, so narrowed rules stay out.</summary>
+    public static EffectiveProfile Resolve(IReadOnlyList<ProfileLayer> chain, string? character = null)
     {
+        character ??= chain.LastOrDefault(l => l.Kind == LayerKind.Character)?.Name;
         var world = new WorldProfile();
         string? font = null, theme = null, user = null, passwordRef = null;
         double? fontSize = null;
@@ -75,11 +80,18 @@ public static class ProfileResolver
                 sequences.Remove(name); variables.Remove(name);
                 plugins.RemoveAll(p => string.Equals(p, name, StringComparison.Ordinal));
             }
-            foreach (TriggerDef t in layer.Triggers) triggers[Key(t.Name, ref anon)] = t;
-            foreach (AliasDef a in layer.Aliases) aliases[Key(a.Name, ref anon)] = a;
-            foreach (TimerDef tm in layer.Timers) timers[Key(tm.Name, ref anon)] = tm;
-            foreach (SequenceSpec s in layer.Sequences) sequences[Key(s.Name, ref anon)] = s;
-            foreach (MacroDef mc in layer.Macros) if (!string.IsNullOrWhiteSpace(mc.Key)) macros[mc.Key.Trim()] = mc;
+            // a rule narrowed to other characters is not on this chain at all (RuleScope)
+            foreach (TriggerDef t in layer.Triggers)
+                if (RuleScope.Allows(t.OnlyFor, character)) triggers[Key(t.Name, ref anon)] = t;
+            foreach (AliasDef a in layer.Aliases)
+                if (RuleScope.Allows(a.OnlyFor, character)) aliases[Key(a.Name, ref anon)] = a;
+            foreach (TimerDef tm in layer.Timers)
+                if (RuleScope.Allows(tm.OnlyFor, character)) timers[Key(tm.Name, ref anon)] = tm;
+            foreach (SequenceSpec s in layer.Sequences)
+                if (RuleScope.Allows(s.OnlyFor, character)) sequences[Key(s.Name, ref anon)] = s;
+            foreach (MacroDef mc in layer.Macros)
+                if (!string.IsNullOrWhiteSpace(mc.Key) && RuleScope.Allows(mc.OnlyFor, character))
+                    macros[mc.Key.Trim()] = mc;
             foreach (string pid in layer.Plugins)
                 if (!string.IsNullOrWhiteSpace(pid) && !plugins.Contains(pid.Trim())) plugins.Add(pid.Trim());
             foreach (KeyValuePair<string, string> kv in layer.Variables) variables[kv.Key] = kv.Value;

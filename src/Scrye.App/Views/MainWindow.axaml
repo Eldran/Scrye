@@ -1248,17 +1248,32 @@
                         <TabItem Header="Triggers">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Editor.AddTriggerCommand}" />
-                                        <Button Content="Remove" Command="{Binding Editor.RemoveTriggerCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyTriggerLuaCommand}"
-                                                ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Editor.AddTriggerCommand}" />
+                                            <Button Content="Remove" Command="{Binding Editor.RemoveTriggerCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Editor.CopyTriggerLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Editor.MoveTriggerCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected trigger to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Editor.Moves.Targets}" SelectedItem="{Binding Editor.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Editor.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Editor.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Editor.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Editor.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TriggerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Editor.TriggerList.Rows}" SelectedItem="{Binding Editor.TriggerList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1329,6 +1344,9 @@
                                                     <TextBox Text="{Binding SequenceText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this rule runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
                                                     <TextBlock Text="Capture to pane (routes matched line; empty = none)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1386,17 +1404,32 @@
                         <TabItem Header="Aliases">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Editor.AddAliasCommand}" />
-                                        <Button Content="Remove" Command="{Binding Editor.RemoveAliasCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyAliasLuaCommand}"
-                                                ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Editor.AddAliasCommand}" />
+                                            <Button Content="Remove" Command="{Binding Editor.RemoveAliasCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Editor.CopyAliasLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Editor.MoveAliasCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected alias to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Editor.Moves.Targets}" SelectedItem="{Binding Editor.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Editor.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Editor.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Editor.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Editor.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.AliasList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Editor.AliasList.Rows}" SelectedItem="{Binding Editor.AliasList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1461,6 +1494,9 @@
                                                     <TextBox Text="{Binding SequenceText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this rule runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
@@ -1486,17 +1522,32 @@
                         <TabItem Header="Timers">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Editor.AddTimerCommand}" />
-                                        <Button Content="Remove" Command="{Binding Editor.RemoveTimerCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Editor.CopyTimerLuaCommand}"
-                                                ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Editor.AddTimerCommand}" />
+                                            <Button Content="Remove" Command="{Binding Editor.RemoveTimerCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Editor.CopyTimerLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Editor.MoveTimerCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected timer to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Editor.Moves.Targets}" SelectedItem="{Binding Editor.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Editor.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Editor.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Editor.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Editor.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.TimerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Editor.TimerList.Rows}" SelectedItem="{Binding Editor.TimerList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1552,6 +1603,9 @@
                                             </Grid>
                                             <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Group}" />
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this timer runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>
@@ -1562,15 +1616,30 @@
                         <TabItem Header="Sequences">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Editor.AddSequenceCommand}" />
-                                        <Button Content="Remove" Command="{Binding Editor.RemoveSequenceCommand}" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Editor.AddSequenceCommand}" />
+                                            <Button Content="Remove" Command="{Binding Editor.RemoveSequenceCommand}" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Editor.MoveSequenceCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected sequence to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Editor.Moves.Targets}" SelectedItem="{Binding Editor.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Editor.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Editor.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Editor.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Editor.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Editor.SequenceList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Editor.SequenceList.Rows}" SelectedItem="{Binding Editor.SequenceList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1615,6 +1684,9 @@
                                                     <TextBox Text="{Binding DelayText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this sequence runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <TextBlock Text="Separate steps with ; or new lines. Repeat with  x3  or  *3. Delay with  wait 2 / pause 1.5."
                                                        Foreground="{DynamicResource ScryeTextDim}" FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         </StackPanel>
@@ -1665,7 +1737,9 @@
                     BorderThickness="1" CornerRadius="8" Padding="18">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top" Text="{Binding Settings.Title}" FontWeight="SemiBold" FontSize="16"
-                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,8" />
+                               Foreground="{DynamicResource ScryeAccent}" Margin="0,0,0,2" />
+                    <TextBlock DockPanel.Dock="Top" Text="{Binding Settings.Subtitle}" FontSize="11" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ScryeTextDim}" Margin="0,0,0,8" />
 
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="8"
                                 HorizontalAlignment="Right" Margin="0,12,0,0">
@@ -1751,17 +1825,32 @@
                         <TabItem Header="Triggers">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Settings.AddTriggerCommand}" />
-                                        <Button Content="Remove" Command="{Binding Settings.RemoveTriggerCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyTriggerLuaCommand}"
-                                                ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Settings.AddTriggerCommand}" />
+                                            <Button Content="Remove" Command="{Binding Settings.RemoveTriggerCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Settings.CopyTriggerLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected trigger as plugin code (scrye.addTrigger) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Settings.MoveTriggerCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected trigger to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Settings.Moves.Targets}" SelectedItem="{Binding Settings.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Settings.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Settings.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Settings.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Settings.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TriggerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Settings.TriggerList.Rows}" SelectedItem="{Binding Settings.TriggerList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1832,6 +1921,9 @@
                                                     <TextBox Text="{Binding SequenceText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this rule runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
                                                 <StackPanel Grid.Column="0" Margin="0,0,6,0">
                                                     <TextBlock Text="Capture to pane (routes matched line; empty = none)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
@@ -1889,17 +1981,32 @@
                         <TabItem Header="Aliases">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Settings.AddAliasCommand}" />
-                                        <Button Content="Remove" Command="{Binding Settings.RemoveAliasCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyAliasLuaCommand}"
-                                                ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Settings.AddAliasCommand}" />
+                                            <Button Content="Remove" Command="{Binding Settings.RemoveAliasCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Settings.CopyAliasLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected alias as plugin code (scrye.addAlias) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Settings.MoveAliasCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected alias to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Settings.Moves.Targets}" SelectedItem="{Binding Settings.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Settings.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Settings.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Settings.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Settings.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.AliasList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Settings.AliasList.Rows}" SelectedItem="{Binding Settings.AliasList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -1964,6 +2071,9 @@
                                                     <TextBox Text="{Binding SequenceText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this rule runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <StackPanel Orientation="Horizontal" Spacing="14" Margin="0,2">
                                                 <CheckBox Content="Keep evaluating" IsChecked="{Binding KeepEvaluating}" />
                                                 <CheckBox Content="One-shot" IsChecked="{Binding OneShot}" />
@@ -1989,17 +2099,32 @@
                         <TabItem Header="Timers">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Settings.AddTimerCommand}" />
-                                        <Button Content="Remove" Command="{Binding Settings.RemoveTimerCommand}" />
-                                        <Button Content="Copy Lua" Command="{Binding Settings.CopyTimerLuaCommand}"
-                                                ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Settings.AddTimerCommand}" />
+                                            <Button Content="Remove" Command="{Binding Settings.RemoveTimerCommand}" />
+                                            <Button Content="Copy Lua" Command="{Binding Settings.CopyTimerLuaCommand}"
+                                                    ToolTip.Tip="Copy the selected timer as plugin code (scrye.every, or scrye.after for a one-shot) - paste it into a plugin's main.lua" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Settings.MoveTimerCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected timer to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Settings.Moves.Targets}" SelectedItem="{Binding Settings.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Settings.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Settings.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Settings.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Settings.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.TimerList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Settings.TimerList.Rows}" SelectedItem="{Binding Settings.TimerList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -2055,6 +2180,9 @@
                                             </Grid>
                                             <TextBlock Text="Group" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" />
                                             <TextBox Text="{Binding Group}" />
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this timer runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                         </StackPanel>
                                     </ScrollViewer>
                                 </Border>
@@ -2065,15 +2193,30 @@
                         <TabItem Header="Sequences">
                             <Grid ColumnDefinitions="220,*" Margin="0,8,0,0">
                                 <DockPanel Grid.Column="0" Margin="0,0,10,0">
-                                    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                        <Button Content="Add" Command="{Binding Settings.AddSequenceCommand}" />
-                                        <Button Content="Remove" Command="{Binding Settings.RemoveSequenceCommand}" />
+                                    <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <Button Content="Add" Command="{Binding Settings.AddSequenceCommand}" />
+                                            <Button Content="Remove" Command="{Binding Settings.RemoveSequenceCommand}" />
+                                        </StackPanel>
+                                        <!-- Move to...: the rule leaves this list now and lands on the picked layer on Save -->
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Content="Move" Command="{Binding Settings.MoveSequenceCommand}" Margin="4,0,0,0"
+                                                    ToolTip.Tip="Move the selected sequence to the layer picked here. It leaves this list now and is added there when you save; Cancel puts it back." />
+                                            <ComboBox ItemsSource="{Binding Settings.Moves.Targets}" SelectedItem="{Binding Settings.Moves.Target}"
+                                                      PlaceholderText="move to..." HorizontalAlignment="Stretch" FontSize="11" />
+                                        </DockPanel>
+                                        <TextBlock Text="{Binding Settings.Moves.Status}" FontSize="10" TextWrapping="Wrap"
+                                                   Foreground="{DynamicResource ScryeAccent}"
+                                                   IsVisible="{Binding Settings.Moves.Status, Converter={x:Static conv:StringConverters.IsNotNullOrEmpty}}" />
+                                        <TextBlock Text="{Binding Settings.Moves.CharactersHint}" FontSize="10" TextWrapping="Wrap"
+                                                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Settings.Moves.CharactersHint}"
+                                                   Foreground="{DynamicResource ScryeTextDim}" />
                                     </StackPanel>
                                     <TextBox DockPanel.Dock="Top" Text="{Binding Settings.SequenceList.Filter}"
                                              PlaceholderText="filter by name, pattern or group" FontSize="11"
                                              Margin="0,0,0,4" />
                                     <ListBox ItemsSource="{Binding Settings.SequenceList.Rows}" SelectedItem="{Binding Settings.SequenceList.Selected}"
-                                             Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                             Height="320" Background="{DynamicResource ScryeInsetBg}">
                                         <ListBox.DataTemplates>
                                         <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                              owns the selection the detail pane follows; the button is what collapses it. -->
@@ -2118,6 +2261,9 @@
                                                     <TextBox Text="{Binding DelayText}" />
                                                 </StackPanel>
                                             </Grid>
+                                            <TextBlock Text="Only for (characters)" Foreground="{DynamicResource ScryeTextDim}" FontSize="11" Margin="0,4,0,0" />
+                                            <TextBox Text="{Binding OnlyFor}" PlaceholderText="everyone - or names, comma-separated: Eldran, Nille"
+                                                     ToolTip.Tip="Empty: this sequence runs for every character this layer reaches. Name characters (comma-separated) and it runs for them only - for everyone else it is left out, as if it were not here. The tab must be connected from a character in the sidebar for a name to match." />
                                             <TextBlock Text="Separate steps with ; or new lines. Repeat with  x3  or  *3. Delay with  wait 2 / pause 1.5."
                                                        Foreground="{DynamicResource ScryeTextDim}" FontSize="10" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         </StackPanel>
@@ -2169,18 +2315,20 @@
                         <TabItem Header="Macros">
                             <DockPanel Margin="0,8,0,0">
                                 <StackPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                                    <TextBlock Text="Bind a key to a command. Key examples: F1, Ctrl+K, Shift+F2, NumPad1, NumPlus / NumMinus (numpad + and -). Send box: one command per line; ${var} expands."
+                                    <TextBlock Text="Bind a key to a command. Key examples: F1, Ctrl+K, Shift+F2, NumPad1, NumPlus / NumMinus (numpad + and -). Send box: one command per line; ${var} expands. The third box limits a macro to some characters (comma-separated names)."
                                                Foreground="{DynamicResource ScryeTextDim}" FontSize="11" TextWrapping="Wrap" />
                                 </StackPanel>
-                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" Margin="0,6,0,0">
-                                    <Button Content="Add" Command="{Binding Settings.AddMacroCommand}" />
-                                    <Button Content="Remove" Command="{Binding Settings.RemoveMacroCommand}" />
+                                <StackPanel DockPanel.Dock="Bottom" Spacing="4" Margin="0,6,0,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Button Content="Add" Command="{Binding Settings.AddMacroCommand}" />
+                                        <Button Content="Remove" Command="{Binding Settings.RemoveMacroCommand}" />
+                                    </StackPanel>
                                 </StackPanel>
                                 <TextBox DockPanel.Dock="Top" Text="{Binding Settings.MacroList.Filter}"
                                          PlaceholderText="filter by name, pattern or group" FontSize="11"
                                          Margin="0,0,0,4" />
                                 <ListBox ItemsSource="{Binding Settings.MacroList.Rows}" SelectedItem="{Binding Settings.MacroList.Selected}"
-                                         Height="392" Background="{DynamicResource ScryeInsetBg}">
+                                         Height="320" Background="{DynamicResource ScryeInsetBg}">
                                     <ListBox.DataTemplates>
                                     <!-- A group heading. It is an ordinary row in the same list so that ONE ListBox
                                          owns the selection the detail pane follows; the button is what collapses it. -->
@@ -2198,12 +2346,15 @@
                                     </DataTemplate>
 
                                         <DataTemplate DataType="vm:MacroRowViewModel">
-                                            <Grid ColumnDefinitions="120,*,Auto" Margin="0,1">
+                                            <Grid ColumnDefinitions="120,*,120,Auto" Margin="0,1">
                                                 <TextBox Grid.Column="0" Text="{Binding Key}" PlaceholderText="F1" Margin="0,0,4,0" />
                                                 <TextBox Grid.Column="1" Text="{Binding Send}" PlaceholderText="command to send"
                                                          AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="30" MaxHeight="80"
                                                          VerticalContentAlignment="Top" Margin="4,0,4,0" />
-                                                <CheckBox Grid.Column="2" Content="On" IsChecked="{Binding Enabled}"
+                                                <TextBox Grid.Column="2" Text="{Binding OnlyFor}" PlaceholderText="everyone"
+                                                         ToolTip.Tip="Only for these characters (comma-separated); empty = everyone"
+                                                         Margin="4,0,4,0" />
+                                                <CheckBox Grid.Column="3" Content="On" IsChecked="{Binding Enabled}"
                                                           VerticalAlignment="Center" Margin="4,0,0,0" />
                                             </Grid>
                                         </DataTemplate>

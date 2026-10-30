@@ -53,6 +53,11 @@ public abstract class RuleRowViewModel : ViewModelBase
     private string _sequenceText = "100";
     public string SequenceText { get => _sequenceText; set => SetField(ref _sequenceText, value); }
 
+    private string _onlyFor = "";
+    /// <summary>The characters this rule is for, comma-separated; empty = everyone the layer
+    /// reaches (RuleScope).</summary>
+    public string OnlyFor { get => _onlyFor; set => SetField(ref _onlyFor, value); }
+
     protected int SequenceValue => int.TryParse(SequenceText, out int v) ? v : 100;
     protected string? OrNull(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
 
@@ -131,6 +136,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         HighlightWholeLine = d.HighlightWholeLine;
         LinesText = d.Lines > 1 ? d.Lines.ToString() : "";
         RepeatOnLine = d.RepeatOnLine;
+        OnlyFor = d.OnlyFor ?? "";
     }
 
     private bool _repeatOnLine;
@@ -185,6 +191,7 @@ public sealed class TriggerRowViewModel : RuleRowViewModel
         HighlightFore = OrNull(HighlightColor), HighlightBack = OrNull(HighlightBack),
         HighlightWholeLine = HighlightWholeLine,
         Lines = LinesValue,
+        OnlyFor = Scrye.Core.Profiles.RuleScope.Normalize(OnlyFor),
     };
 }
 
@@ -199,6 +206,7 @@ public sealed class AliasRowViewModel : RuleRowViewModel
         Enabled = d.Enabled; KeepEvaluating = d.KeepEvaluating; OneShot = d.OneShot;
         SendTo = d.SendTo; Send = d.Send ?? ""; Variable = d.Variable ?? ""; Script = d.Script ?? "";
         Group = d.Group ?? ""; SequenceText = d.Sequence.ToString();
+        OnlyFor = d.OnlyFor ?? "";
     }
 
     public AliasDef ToDef() => new()
@@ -207,6 +215,7 @@ public sealed class AliasRowViewModel : RuleRowViewModel
         Enabled = Enabled, KeepEvaluating = KeepEvaluating, OneShot = OneShot,
         Sequence = SequenceValue, Group = OrNull(Group),
         SendTo = SendTo, Send = OrNull(Send), Variable = OrNull(Variable), Script = OrNull(Script),
+        OnlyFor = Scrye.Core.Profiles.RuleScope.Normalize(OnlyFor),
     };
 }
 
@@ -229,6 +238,10 @@ public sealed class SequenceRowViewModel : ViewModelBase
     private string _delayText = "0.5";
     public string DelayText { get => _delayText; set => SetField(ref _delayText, value); }
 
+    private string _onlyFor = "";
+    /// <summary>The characters this sequence is for, comma-separated; empty = everyone.</summary>
+    public string OnlyFor { get => _onlyFor; set => SetField(ref _onlyFor, value); }
+
     public SequenceRowViewModel() { }
 
     public SequenceRowViewModel(SequenceSpec s)
@@ -236,6 +249,7 @@ public sealed class SequenceRowViewModel : ViewModelBase
         Name = s.Name; Source = s.Source; PromptGated = s.PromptGated;
         TimeoutText = s.StepTimeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         DelayText = s.StepDelaySeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        OnlyFor = s.OnlyFor ?? "";
     }
 
     public SequenceSpec ToSpec()
@@ -248,6 +262,7 @@ public sealed class SequenceRowViewModel : ViewModelBase
         {
             Name = Name.Trim(), Source = Source ?? "", PromptGated = PromptGated,
             StepTimeoutSeconds = to, StepDelaySeconds = dl,
+            OnlyFor = Scrye.Core.Profiles.RuleScope.Normalize(OnlyFor),
         };
     }
 }
@@ -284,6 +299,10 @@ public sealed class TimerRowViewModel : ViewModelBase
     private string _group = "";
     public string Group { get => _group; set => SetField(ref _group, value); }
 
+    private string _onlyFor = "";
+    /// <summary>The characters this timer is for, comma-separated; empty = everyone.</summary>
+    public string OnlyFor { get => _onlyFor; set => SetField(ref _onlyFor, value); }
+
     public TimerRowViewModel() { }
 
     public TimerRowViewModel(TimerDef d)
@@ -292,6 +311,7 @@ public sealed class TimerRowViewModel : ViewModelBase
         Enabled = d.Enabled; OneShot = d.OneShot;
         SendTo = d.SendTo; Send = d.Send ?? ""; Variable = d.Variable ?? ""; Script = d.Script ?? "";
         Group = d.Group ?? "";
+        OnlyFor = d.OnlyFor ?? "";
     }
 
     public TimerDef ToDef()
@@ -305,6 +325,7 @@ public sealed class TimerRowViewModel : ViewModelBase
             Variable = string.IsNullOrWhiteSpace(Variable) ? null : Variable,
             Script = string.IsNullOrWhiteSpace(Script) ? null : Script,
             Group = string.IsNullOrWhiteSpace(Group) ? null : Group,
+            OnlyFor = Scrye.Core.Profiles.RuleScope.Normalize(OnlyFor),
         };
     }
 }
@@ -316,8 +337,12 @@ public sealed class MacroRowViewModel : ViewModelBase
 
     public MacroRowViewModel(MacroDef d)
     {
-        Key = d.Key; Send = d.Send; Enabled = d.Enabled;
+        Key = d.Key; Send = d.Send; Enabled = d.Enabled; OnlyFor = d.OnlyFor ?? "";
     }
+
+    private string _onlyFor = "";
+    /// <summary>The characters this macro is for, comma-separated; empty = everyone.</summary>
+    public string OnlyFor { get => _onlyFor; set => SetField(ref _onlyFor, value); }
 
     private string _key = "";
     /// <summary>Key gesture, e.g. "F1", "Ctrl+K", "NumPad1".</summary>
@@ -330,5 +355,9 @@ public sealed class MacroRowViewModel : ViewModelBase
     private bool _enabled = true;
     public bool Enabled { get => _enabled; set => SetField(ref _enabled, value); }
 
-    public MacroDef ToDef() => new() { Key = Key.Trim(), Send = Send, Enabled = Enabled };
+    public MacroDef ToDef() => new()
+    {
+        Key = Key.Trim(), Send = Send, Enabled = Enabled,
+        OnlyFor = Scrye.Core.Profiles.RuleScope.Normalize(OnlyFor),
+    };
 }

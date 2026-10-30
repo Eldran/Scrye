@@ -96,6 +96,12 @@ public sealed record TriggerDef
         return Math.Clamp(Math.Max(lines, spans), 1, MaxLines);
     }
 
+    /// <summary>The characters this rule is for, comma-separated ("Eldran, Nille"); null or
+    /// empty = every character the layer it sits on reaches. A rule for someone else is left
+    /// out when the chain resolves, as if it were not on the layer at all. See
+    /// <see cref="Scrye.Core.Profiles.RuleScope"/>.</summary>
+    public string? OnlyFor { get; init; }
+
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }
 }
@@ -122,6 +128,12 @@ public sealed record AliasDef
     public string? Variable { get; init; }
     public string? Script { get; init; }
 
+    /// <summary>The characters this rule is for, comma-separated ("Eldran, Nille"); null or
+    /// empty = every character the layer it sits on reaches. A rule for someone else is left
+    /// out when the chain resolves, as if it were not on the layer at all. See
+    /// <see cref="Scrye.Core.Profiles.RuleScope"/>.</summary>
+    public string? OnlyFor { get; init; }
+
     public string? Source { get; init; }
 }
 
@@ -140,6 +152,12 @@ public sealed record TimerDef
     public string? Variable { get; init; }
     public string? Script { get; init; }
 
+    /// <summary>The characters this rule is for, comma-separated ("Eldran, Nille"); null or
+    /// empty = every character the layer it sits on reaches. A rule for someone else is left
+    /// out when the chain resolves, as if it were not on the layer at all. See
+    /// <see cref="Scrye.Core.Profiles.RuleScope"/>.</summary>
+    public string? OnlyFor { get; init; }
+
     public string? Source { get; init; }
 }
 
@@ -157,6 +175,12 @@ public sealed record MacroDef
     public string Send { get; init; } = "";
 
     public bool Enabled { get; init; } = true;
+
+    /// <summary>The characters this rule is for, comma-separated ("Eldran, Nille"); null or
+    /// empty = every character the layer it sits on reaches. A rule for someone else is left
+    /// out when the chain resolves, as if it were not on the layer at all. See
+    /// <see cref="Scrye.Core.Profiles.RuleScope"/>.</summary>
+    public string? OnlyFor { get; init; }
 
     /// <summary>Profile layer this came from (cascade bookkeeping; informational).</summary>
     public string? Source { get; init; }

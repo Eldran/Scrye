@@ -155,6 +155,23 @@ public sealed class WorldEditorViewModel : ViewModelBase
     public RelayCommand AddSequenceCommand { get; }
     public RelayCommand RemoveSequenceCommand { get; }
 
+    /// <summary>The "Move to…" picker shared by every rule tab (RuleMoveBox). The host fills its
+    /// targets when it opens the form, and applies what it queued when the form is saved.</summary>
+    public RuleMoveBox Moves { get; } = new();
+    public RelayCommand MoveTriggerCommand { get; }
+    public RelayCommand MoveAliasCommand { get; }
+    public RelayCommand MoveTimerCommand { get; }
+    public RelayCommand MoveSequenceCommand { get; }
+
+    /// <summary>The layer this form edits, as a move target - null while it is new (it has no
+    /// file yet, so it is not among the targets either).</summary>
+    public RuleHome? Home => IsNew ? null : TargetKind switch
+    {
+        LayerKind.Mud => new RuleHome(LayerKind.Mud, OriginalName),
+        LayerKind.Account => new RuleHome(LayerKind.Account, ParentMud, OriginalName),
+        _ => new RuleHome(LayerKind.Character, ParentMud, ParentAccount, OriginalName),
+    };
+
     public WorldEditorViewModel(string name, ProfileLayer? layer, bool isNew,
                                 LayerKind kind = LayerKind.Mud,
                                 string? parentMud = null, string? parentAccount = null)
@@ -242,6 +259,31 @@ public sealed class WorldEditorViewModel : ViewModelBase
             Sequences.Add(row); SelectedSequence = row;
         });
         RemoveSequenceCommand = new RelayCommand(() => { if (SelectedSequence is not null) Sequences.Remove(SelectedSequence); });
+
+        // Move: off this form now, onto the picked layer when the form is saved. The list keeps
+        // a removed row as its selection (the detail pane would go on showing it), so the row
+        // must still BE in the list - a second press must not queue it twice - and the
+        // selection is cleared once it is gone.
+        MoveTriggerCommand = new RelayCommand(() =>
+        {
+            if (SelectedTrigger is { } r && Triggers.Contains(r) && Moves.Queue(r.ToDef(), "trigger", r.Name))
+            { Triggers.Remove(r); SelectedTrigger = null; }
+        });
+        MoveAliasCommand = new RelayCommand(() =>
+        {
+            if (SelectedAlias is { } r && Aliases.Contains(r) && Moves.Queue(r.ToDef(), "alias", r.Name))
+            { Aliases.Remove(r); SelectedAlias = null; }
+        });
+        MoveTimerCommand = new RelayCommand(() =>
+        {
+            if (SelectedTimer is { } r && Timers.Contains(r) && Moves.Queue(r.ToDef(), "timer", r.Name))
+            { Timers.Remove(r); SelectedTimer = null; }
+        });
+        MoveSequenceCommand = new RelayCommand(() =>
+        {
+            if (SelectedSequence is { } r && Sequences.Contains(r) && Moves.Queue(r.ToSpec(), "sequence", r.Name))
+            { Sequences.Remove(r); SelectedSequence = null; }
+        });
     }
 
     private static string UniqueName<T>(string stem, ObservableCollection<T> rows, System.Func<T, string> nameOf)

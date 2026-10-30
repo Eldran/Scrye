@@ -324,6 +324,36 @@ Settings resolve through a four‑layer cascade, from most general to most speci
 
 Deeper layers win for single values (theme, font), and collections (triggers, aliases, macros, variables) are merged across layers. This means you can set something once globally and override it for one character. The **Global** layer is edited in **Settings**; MUD/Account/Character layers are edited from the world/profile UI.
 
+**Where a rule reaches.** Where you add a trigger, alias, timer, sequence or macro decides who
+it runs for:
+
+| Added in | Runs for |
+|---|---|
+| **Settings** (the Global layer) | every world — every character on every account and MUD |
+| a MUD's **Edit** | everyone on that MUD |
+| an account's **Edit** | every character in that account |
+| a character's **Edit** | that character only |
+
+**Only for — some characters, not all.** Every rule has an **Only for** box (macros have it as
+the third box on their row). Leave it empty and the rule reaches everyone its layer does; type
+character names, comma‑separated (`Eldran, Nille`), and it runs for those characters only. So a
+trigger for two of your three characters goes on the account with *Only for: Eldran, Nille* —
+one copy, not two. Names are matched case‑blind and whole. For everyone else the rule is simply
+not there: it doesn't run, and it doesn't replace a same‑named rule from a shallower layer. A
+tab connected from an account (or a bare MUD) rather than a character has nobody to match, so
+narrowed rules stay off it. Under each rule list the editor names the characters its layer
+reaches, so you can see what to type.
+
+**Moving a rule.** Under each trigger, alias, timer and sequence list there is a **move to…**
+picker and a **Move** button: pick a layer — Global, a MUD, an account or one character — and
+press Move, and the selected rule leaves this list. Nothing is written until you **Save**: then the rule is added to its new
+layer first, and this layer is saved without it, so it can never be lost on the way (if a save
+fails part‑way you get a copy in both places, not none). **Cancel** puts it back. If the new
+layer already has a rule with that name, the moved one becomes `name (2)`. Macros stay in
+Settings — the profile editor has no Macros tab to show one moved elsewhere — so limit a macro
+with its **Only for** box instead. Settings says at the top that everything in it applies to
+every world.
+
 ## Automation
 
 - **Triggers** — match lines of MUD output (plain text or regex) and react: send commands and/or run script. A trigger can send **multiple commands** — separate them so each goes on its own line.

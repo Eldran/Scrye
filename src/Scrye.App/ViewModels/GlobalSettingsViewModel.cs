@@ -31,6 +31,12 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
 
     public string Title => "Global Settings";
 
+    /// <summary>What everything here reaches - said plainly, because a rule made here runs on
+    /// every character you have.</summary>
+    public string Subtitle =>
+        "Everything here applies to every world - every MUD, account and character. For a rule on "
+        + "one character, edit that character in the sidebar, give the rule an 'Only for', or move it there.";
+
     // ---- appearance ----
     /// <summary>Shown for the empty/default font setting (the built-in fallback chain).</summary>
     public const string DefaultFontLabel = "Default (Cascadia Mono)";
@@ -159,6 +165,14 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
     public RelayCommand AddMacroCommand { get; }
     public RelayCommand RemoveMacroCommand { get; }
 
+    /// <summary>The "Move to…" picker shared by every rule tab (RuleMoveBox). The host fills its
+    /// targets when it opens the form, and applies what it queued when the form is saved.</summary>
+    public RuleMoveBox Moves { get; } = new();
+    public RelayCommand MoveTriggerCommand { get; }
+    public RelayCommand MoveAliasCommand { get; }
+    public RelayCommand MoveTimerCommand { get; }
+    public RelayCommand MoveSequenceCommand { get; }
+
     public GlobalSettingsViewModel(ProfileLayer layer)
     {
         _layer = layer;
@@ -246,6 +260,31 @@ public sealed class GlobalSettingsViewModel : ViewModelBase
             Sequences.Add(row); SelectedSequence = row;
         });
         RemoveSequenceCommand = new RelayCommand(() => { if (SelectedSequence is not null) Sequences.Remove(SelectedSequence); });
+
+        // Move: off this form now, onto the picked layer when the form is saved. The list keeps
+        // a removed row as its selection (the detail pane would go on showing it), so the row
+        // must still BE in the list - a second press must not queue it twice - and the
+        // selection is cleared once it is gone.
+        MoveTriggerCommand = new RelayCommand(() =>
+        {
+            if (SelectedTrigger is { } r && Triggers.Contains(r) && Moves.Queue(r.ToDef(), "trigger", r.Name))
+            { Triggers.Remove(r); SelectedTrigger = null; }
+        });
+        MoveAliasCommand = new RelayCommand(() =>
+        {
+            if (SelectedAlias is { } r && Aliases.Contains(r) && Moves.Queue(r.ToDef(), "alias", r.Name))
+            { Aliases.Remove(r); SelectedAlias = null; }
+        });
+        MoveTimerCommand = new RelayCommand(() =>
+        {
+            if (SelectedTimer is { } r && Timers.Contains(r) && Moves.Queue(r.ToDef(), "timer", r.Name))
+            { Timers.Remove(r); SelectedTimer = null; }
+        });
+        MoveSequenceCommand = new RelayCommand(() =>
+        {
+            if (SelectedSequence is { } r && Sequences.Contains(r) && Moves.Queue(r.ToSpec(), "sequence", r.Name))
+            { Sequences.Remove(r); SelectedSequence = null; }
+        });
 
         AddVariableCommand = new RelayCommand(() =>
         {
