@@ -65,7 +65,7 @@ What's there today:
 - **Connection** — TCP with TLS, telnet negotiation, MCCP compression, automatic reconnect with backoff (and a Reconnect button that keeps the tab's scrollback once it gives up), and optional auto-login with the password kept in the OS credential store.
 - **Protocols** — ANSI (16 / 256 / truecolour), MXP with clickable command links, GMCP, MSP sound, and MIP — with `.gmcp` and `.mxp` reports of what the server actually sends.
 - **Multi-world** — several worlds connected at once as tabs, each with its own scrollback, automation and plugins. Optionally broadcast a command to all of them.
-- **Automation** — triggers (plain or regex), aliases, timers, sequences, highlights, and keyboard macros, with an event debugger and a state inspector for working out why a rule did or didn't fire.
+- **Automation** — triggers (plain or regex), aliases, timers, sequences, highlights, and keyboard macros, with an event debugger and a state inspector for working out why a rule did or didn't fire. A trigger, alias, timer, sequence or macro can run for every character, one account, or just the characters you name.
 - **Profiles** — a four-layer cascade (Global → MUD → Account → Character). Single values take the deepest layer that sets them; collections merge across layers.
 - **Scripting** — a Lua console (`/…` in the command line) and a `world.*` API, running on the session loop so ordering stays deterministic.
 - **Plugins** — Lua, JavaScript and WebAssembly plugins with a manifest, per-character opt-in, live reload, persistent per-world storage, and declarative HUD panels. An in-app **catalogue** installs and updates them from the release, checksum-verified, and Scrye tells you at startup when a plugin you use has a newer version.
@@ -162,14 +162,14 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 }
 ```
 
-The **plugin API is versioned independently of the client** (currently 1.23, and versioned as the
+The **plugin API is versioned independently of the client** (currently 1.24, and versioned as the
 `Scrye.PluginContracts` assembly), so a plugin declares what it needs and an incompatible build
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
 
 Plugins are loaded from `plugins/` next to the executable and from your user plugins folder (`%APPDATA%/Scrye/plugins` on Windows, `~/.config/Scrye/plugins` on Linux and macOS), and are enabled per character. The ones that ship with Scrye, nearly all for [3Scapes](https://www.3scapes.org/):
 
-- **Getting around** — `3s-map-gmcp`, the automapper (rooms by the number the server gives them, with an auto-explore sweep); `3s-farmer`, an area farming bot that also searches an area for a player; `3s-stepper`, recorded routes; `3s-chaossea`, the chaos-sea bot, with `3s-pathfinder` doing its path search in Rust compiled to WebAssembly; and `3k-chaossea`, the classic bot kept for 3K-3Kingdoms.
+- **Getting around** — `3s-map-gmcp`, the automapper (rooms by the number the server gives them, with an auto-explore sweep, fast walk and a 3D view of every level); `3s-farmer`, an area farming bot that also searches an area for a player; `3s-stepper`, recorded routes; `3s-chaossea`, the chaos-sea bot, with `3s-pathfinder` doing its path search in Rust compiled to WebAssembly; and `3k-chaossea`, the classic bot kept for 3K-3Kingdoms.
 - **Guild HUDs** — the Viking guild as four plugins (`3s-viking-status-gmcp` for the settlement, `3s-viking-world` for the fleet, `3s-viking-kingdom` for the dynasty, `3s-viking-fx` for effect timers) plus `3s-raid-gmcp`, the auto-raider; and one each for Changeling, Cyborg, Gentech, Juggernaut and Mage, and `3s-merc` for a hired mercenary.
 - **Everyday** — `3s-chat`, every channel and tell in one capture pane with name watching; `3s-vitals`, compact gauges.
 
