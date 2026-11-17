@@ -872,6 +872,37 @@ public class GmcpTests
     }
 
     [Fact]
+    public void The_report_shows_the_newest_different_payloads_as_well_as_the_first()
+    {
+        // Craft.Structures opens with sixteen catalogue chunks and repeats them every few
+        // minutes. The one payload that mattered -- the building that finished an hour in --
+        // was the seventeenth different one: counted, and past the twelve the report printed.
+        var a = new GmcpAudit { Negotiated = true };
+        for (int i = 0; i < 30; i++) a.Observe("Craft.Structures", "{\"chunk\":" + i + "}");
+        a.Observe("Craft.Structures", "{\"bldgs\":[\"Strip Mines\"]}");
+        a.Observe("Craft.Structures", "{\"chunk\":3}");          // a repeat is not news
+        string md = string.Join("\n", a.FieldReport("3Scapes"));
+
+        Assert.Contains("31 different payload(s), first 12 and newest 12", md);
+        Assert.Contains("{\"chunk\":0}", md);                     // the head is still there
+        Assert.Contains("{\"bldgs\":[\"Strip Mines\"]}", md);     // ...and so is what came last
+        Assert.DoesNotContain("{\"chunk\":15}", md);              // the middle is what is left out
+        Assert.Equal("{\"bldgs\":[\"Strip Mines\"]}", a.RecentDistinct("Craft.Structures")[^1]);
+    }
+
+    [Fact]
+    public void A_package_with_few_different_payloads_is_printed_whole()
+    {
+        var a = new GmcpAudit { Negotiated = true };
+        for (int i = 0; i < 24; i++) a.Observe("Craft.Skills", "{\"chunk\":" + i + "}");
+        string md = string.Join("\n", a.FieldReport("3Scapes"));
+
+        Assert.Contains("24 different payload(s)</summary>", md);
+        Assert.DoesNotContain("Newest", md);
+        for (int i = 0; i < 24; i++) Assert.Contains("{\"chunk\":" + i + "}", md);
+    }
+
+    [Fact]
     public void A_pipe_in_the_data_is_carried_across_rather_than_corrupted()
     {
         // Room.Map has '|' as a legend KEY and as its value, and draws its rows with it. The

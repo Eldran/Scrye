@@ -40,6 +40,11 @@ public sealed class GmcpAudit
         // so a walk through three areas showed one. What the feed looked like is a different
         // question from what the feed DID, and the second is the one worth capturing.
         public readonly List<string> Distinct = new();
+        // The LAST few different payloads to appear. Distinct is first-come and capped, and the
+        // report prints only its head -- so for a package that opens with a long catalogue
+        // (Craft.Structures, Craft.Skills) the one payload that changed an hour in was counted
+        // and never shown. The head says what the feed looks like; this says what it did last.
+        public readonly Queue<string> Recent = new();
         // Fingerprints (64-bit FNV-1a) of every payload seen, not the payloads themselves:
         // Char.Vitals differs almost every round, and keeping each one verbatim for the whole
         // session grew without bound. Capped too; past the cap the count is a floor ("N+").
@@ -63,6 +68,11 @@ public sealed class GmcpAudit
     /// session walks through and small enough to be free; when it is reached the report says
     /// so rather than quietly showing a partial picture.</summary>
     private const int MaxDistinct = 200;
+
+    /// <summary>How many different payloads the report prints from each end: the first this
+    /// many to appear, and the last this many. A package with no more than twice this is
+    /// printed whole.</summary>
+    public const int ReportEnd = 12;
 
     // Ordinal, not OrdinalIgnoreCase: two spellings of a package name is exactly the kind of
     // thing this is here to make visible, so they must not be silently folded together.
@@ -149,6 +159,8 @@ public sealed class GmcpAudit
             if (e.DistinctSeen.Count >= MaxDistinctTracked) e.DistinctCapped = true;
             if (e.Distinct.Count < MaxDistinct) e.Distinct.Add(json);
             else e.Truncated = true;
+            e.Recent.Enqueue(json);
+            if (e.Recent.Count > ReportEnd) e.Recent.Dequeue();
             Shape.Observe(package, json);   // a payload never seen before may carry a field never seen before
         }
     }
@@ -172,6 +184,12 @@ public sealed class GmcpAudit
             if (string.Equals(kv.Key, package, StringComparison.OrdinalIgnoreCase)) return kv.Value;
         return null;
     }
+
+    /// <summary>The last different payloads to appear for a package (at most
+    /// <see cref="ReportEnd"/>), oldest first. Unlike <see cref="Distinct"/> this keeps moving
+    /// after the first two hundred, so it always ends on the newest shape seen.</summary>
+    public IReadOnlyList<string> RecentDistinct(string package) =>
+        Find2(package) is { } e ? e.Recent.ToArray() : Array.Empty<string>();
 
     public void Reset()
     {
@@ -583,14 +601,29 @@ public sealed class GmcpAudit
             IReadOnlyList<string> all = Distinct(p.Package);
             if (all.Count > 1)
             {
-                int show = Math.Min(all.Count, 12);
+                // Both ends, not just the head: the first few say what the feed looks like,
+                // the last few say what changed -- and a package that opens with a catalogue
+                // puts everything that happened afterwards past any head you could print.
+                // Short enough, and it is printed whole.
+                bool whole = all.Count <= 2 * ReportEnd;
+                int show = whole ? all.Count : ReportEnd;
+                IReadOnlyList<string> recent = whole ? Array.Empty<string>() : RecentDistinct(p.Package);
                 lines.Add($"<details><summary>{all.Count} different payload(s)"
-                          + (all.Count > show ? $", first {show}" : "") + "</summary>");
+                          + (whole ? "" : $", first {show} and newest {recent.Count}") + "</summary>");
                 lines.Add("");
                 lines.Add("```json");
                 for (int i = 0; i < show; i++) lines.Add(all[i]);
                 lines.Add("```");
                 lines.Add("");
+                if (recent.Count > 0)
+                {
+                    lines.Add($"Newest {recent.Count}, oldest first:");
+                    lines.Add("");
+                    lines.Add("```json");
+                    foreach (string r in recent) lines.Add(r);
+                    lines.Add("```");
+                    lines.Add("");
+                }
                 lines.Add("</details>");
                 lines.Add("");
             }
