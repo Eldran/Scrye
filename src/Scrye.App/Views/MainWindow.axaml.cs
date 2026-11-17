@@ -43,6 +43,11 @@ public partial class MainWindow : Window
         // first, which is what a MUD client's page keys are for.
         AddHandler(InputElement.KeyDownEvent, OnPagingKeyDown,
                    Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // Ctrl+Tab / Ctrl+Shift+Tab switch world tabs. TUNNEL for the same reason as paging:
+        // the command line has the keyboard nearly always, and its own Tab is word
+        // completion - coming down the tree is the only way to get there first.
+        AddHandler(InputElement.KeyDownEvent, OnWorldSwitchKeyDown,
+                   Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // "click anywhere and just start typing" (MUSHclient / Mudlet). Bubble, and on
         // RELEASE rather than press: a press handler would move focus out from under a
         // drag-selection in the output while it was still being made.
@@ -190,6 +195,28 @@ public partial class MainWindow : Window
         // switch worlds, and having to click a second time before you can type is the exact
         // annoyance this whole thing is about.
         return true;
+    }
+
+    /// <summary>
+    /// Ctrl+Tab: the next connected world tab; Ctrl+Shift+Tab: the previous one. Both wrap, so
+    /// with two characters connected either key toggles between them. The new world's command
+    /// line gets the keyboard, exactly as when its tab is clicked.
+    ///
+    /// <para>The key is swallowed even when there is only one tab: left alone it would reach
+    /// the command line as a Tab and complete a word, which is not what Ctrl+Tab was pressed
+    /// for. An open overlay keeps the keyboard, as everywhere else.</para>
+    /// </summary>
+    private void OnWorldSwitchKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Handled || e.Key != Key.Tab) return;
+        if (e.KeyModifiers != KeyModifiers.Control
+            && e.KeyModifiers != (KeyModifiers.Control | KeyModifiers.Shift)) return;
+        if (DataContext is not MainWindowViewModel vm) return;
+        if (OverlayOpen(vm)) return;
+
+        e.Handled = true;
+        int step = e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1;
+        if (vm.CycleWorld(step) is WorldViewModel world) FocusCommandInput(world);
     }
 
     /// <summary>Window-level keys: F11 toggles fullscreen; otherwise fire a keyboard macro

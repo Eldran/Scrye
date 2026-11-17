@@ -72,6 +72,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Step to the next (<paramref name="step"/> = 1) or previous (-1) connected world tab,
+    /// wrapping at the ends - Ctrl+Tab and Ctrl+Shift+Tab. With two characters connected that
+    /// is a toggle between them, which is what it is for. Returns the world now showing, or
+    /// null when there is nothing to switch to (fewer than two tabs).
+    /// </summary>
+    public WorldViewModel? CycleWorld(int step)
+    {
+        if (Worlds.Count < 2) return null;
+        int at = Active is null ? -1 : Worlds.IndexOf(Active);
+        int next = at < 0 ? 0 : ((at + step) % Worlds.Count + Worlds.Count) % Worlds.Count;
+        Active = Worlds[next];
+        return Active;
+    }
+
     /// <summary>Input-broadcast: deliver a command to every connected world tab.</summary>
     private void SendBroadcast(string text)
     {

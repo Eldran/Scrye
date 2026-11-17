@@ -83,6 +83,10 @@ this steps aside.
   **▼ back to bottom** chip is the exception among buttons — it hands the keyboard back,
   because "take me back to live" is the moment you want to be typing.
 - **F11** — fullscreen on and off.
+- **Ctrl+Tab** — switch to the next connected world tab; **Ctrl+Shift+Tab** to the previous
+  one. Both wrap around, so with two characters connected either key flips between them. The
+  world you land on has the keyboard, ready to type. (These two keys are the client's: a macro
+  bound to Ctrl+Tab will not fire.)
 - **Esc** in Settings, the profile editor or Quick Connect is **Cancel** (nothing is saved).
   **Enter** in Quick Connect connects. While one of them is open your macros are off, so typing
   in its fields only ever types.
