@@ -233,7 +233,10 @@ local HL = { typed = {}, last_hop = nil, MAX = 80, REPLANS = 5, SETTLE = 2,
              fast = true, fast_n = 3, FAST_MAX = 6,
              -- the 3D view (1.19.0): on/off (persisted), whether this Scrye can draw it at
              -- all, the camera-reset token Center bumps, and the last scene sent
-             view3d = false, has3d = false, view_token = 0, scene_last = "" }
+             view3d = false, has3d = false, view_token = 0, scene_last = "" ,
+             -- favourites' names (1.20.0): room -> your name for it; the room the Favs tab's
+             -- name box names (aimed by a row's "Name..."), and the room it was last filled for
+             favnames = {}, FAVNAME_MAX = 30, favname_aim = nil, favname_box_for = false }
 -- Can this Scrye draw a scene3d widget? scrye.api arrived with it (plugin API 1.24); an
 -- older host has none, and gets the 2D map it always had.
 do
@@ -498,10 +501,181 @@ local function resolve_room(text)
   return nil
 end
 
+-- ---------- one map, many characters (1.21.0) ----------
+-- The map file is shared by every character on the host, but each session holds its OWN
+-- copy in memory and used to write that copy over the file whole. With two characters
+-- open, the one standing still saved its login-time map every time a room was re-sent -
+-- and the other's exploring was gone. Now every write carries a revision (REV_KEY, a
+-- second key in the same file write); a session that sees a revision it did not write
+-- reads the file and MERGES it before it writes, and checks once a second so another
+-- character's new rooms show up while you play. The merge, against `nums` (the rooms
+-- the file held when this session last read or wrote it):
+--   a room only in the file      -> new from elsewhere, taken - unless it is in `nums`,
+--                                   which means it was forgotten HERE: stays forgotten
+--   a room only here             -> new here, kept - unless it is in `nums`, which means
+--                                   it was forgotten THERE (or wiped): dropped, except
+--                                   the room you stand in
+--   a room in both               -> field by field: links, shifting marks, edges and doors
+--                                   added by hand join up (this side's wins a conflict, and
+--                                   a known destination beats a withheld 0), visits take
+--                                   the larger count, a note fills an empty one
+--   names, favourites, places    -> taken from the file unless this session changed them
+--                                   since it last synced (then this session's go out)
+HL.REV_KEY = "rooms.rev"
+HL.sync = { rev = nil, nums = {}, meta = "", n = 0, id = tostring({}):match("(%x+)$") or "s" }
+
+-- A saved room record -> (num, room, links pruned); the shape load() has always read.
+function HL.room_from(r)
+  local num = tonumber(r.num)
+  if not num then return nil end
+  local room = { name = tostring(r.name or ""), area = tostring(r.area or ""),
+                 exits = type(r.exits) == "table" and r.exits or {},
+                 walked = type(r.walked) == "table" and r.walked or {},
+                 visits = tonumber(r.visits) or 0 }
+  -- only kept when non-empty, so an old save (no such fields) loads unchanged
+  if type(r.shift) == "table" and next(r.shift) ~= nil then room.shift = r.shift end
+  if type(r.vary) == "table" and next(r.vary) ~= nil then room.vary = r.vary end
+  if type(r.edge) == "table" and next(r.edge) ~= nil then room.edge = r.edge end
+  if type(r.custom) == "table" and next(r.custom) ~= nil then room.custom = r.custom end
+  if type(r.note) == "string" and r.note ~= "" then room.note = r.note:sub(1, NT.MAX) end
+  -- drop links learned in a direction the room's listing does not name (see unlisted)
+  local pruned = 0
+  for d in pairs(room.walked) do
+    if unlisted(room, d) then room.walked[d] = nil ; pruned = pruned + 1 end
+  end
+  return num, room, pruned
+end
+
+-- Names, favourites (with their names) and places as a saved file holds them, read the
+-- way load() always read them: caps applied, a name for a room that is no favourite dropped.
+function HL.meta_from(data)
+  local m = { names = {}, favs = {}, favnames = {}, places = {} }
+  for _, n in ipairs(type(data.names) == "table" and data.names or {}) do
+    local seed = tonumber(n.seed)
+    if seed and type(n.name) == "string" and n.name ~= "" then m.names[seed] = n.name end
+  end
+  for _, f in ipairs(type(data.favs) == "table" and data.favs or {}) do
+    local num = tonumber(f)
+    if num and #m.favs < FAV_CAP then m.favs[#m.favs + 1] = num end
+  end
+  for _, fn in ipairs(type(data.favnames) == "table" and data.favnames or {}) do
+    local num, name = tonumber(fn.num), type(fn.name) == "string" and fn.name or ""
+    if num and name ~= "" then
+      for _, f in ipairs(m.favs) do
+        if f == num then m.favnames[num] = name:sub(1, HL.FAVNAME_MAX) break end
+      end
+    end
+  end
+  for _, pl in ipairs(type(data.places) == "table" and data.places or {}) do
+    local num, name = tonumber(pl.num), tostring(pl.name or "")
+    if num and name ~= "" and #m.places < PLACE_CAP then m.places[#m.places + 1] = { name = name, num = num } end
+  end
+  return m
+end
+function HL.meta_now() return { names = mapnames, favs = favs, favnames = HL.favnames, places = places } end
+-- One string per state of the meta, to tell "changed here since the last sync" cheaply.
+function HL.meta_sig(m)
+  local p, seeds = {}, {}
+  for seed in pairs(m.names) do seeds[#seeds + 1] = seed end
+  table.sort(seeds)
+  for _, s in ipairs(seeds) do p[#p + 1] = "m" .. s .. "=" .. m.names[s] end
+  for _, f in ipairs(m.favs) do p[#p + 1] = "f" .. f .. "=" .. (m.favnames[f] or "") end
+  for _, pl in ipairs(m.places) do p[#p + 1] = "p" .. pl.num .. "=" .. pl.name end
+  return table.concat(p, "\n")
+end
+-- Take it in place: other code holds these tables, so they are emptied and refilled.
+function HL.meta_apply(m)
+  for k in pairs(mapnames) do mapnames[k] = nil end
+  for k, v in pairs(m.names) do mapnames[k] = v end
+  for i = #favs, 1, -1 do favs[i] = nil end
+  for i, v in ipairs(m.favs) do favs[i] = v end
+  HL.favnames = m.favnames
+  for i = #places, 1, -1 do places[i] = nil end
+  for i, v in ipairs(m.places) do places[i] = v end
+end
+
+-- Fold room `theirs` into room `mine`; true if mine changed.
+function HL.merge_room(mine, theirs)
+  local changed = false
+  for _, f in ipairs({ "exits", "walked", "shift", "vary", "edge", "custom" }) do
+    if type(theirs[f]) == "table" then
+      for k, v in pairs(theirs[f]) do
+        local cur = mine[f] and mine[f][k]
+        local cn, vn = tonumber(cur), tonumber(v)
+        if cur == nil or (f ~= "custom" and cn == 0 and vn and vn ~= 0) then
+          mine[f] = mine[f] or {}
+          mine[f][k] = v ; changed = true
+        end
+      end
+    end
+  end
+  if (theirs.visits or 0) > (mine.visits or 0) then mine.visits = theirs.visits ; changed = true end
+  if not mine.note and theirs.note then mine.note = theirs.note ; changed = true end
+  return changed
+end
+
+-- Fold a saved file into the map in memory (the rules above). Returns rooms added, rooms
+-- dropped, and whether anything else changed.
+function HL.absorb(data)
+  local S = HL.sync
+  local base, theirs = S.nums, {}
+  local added, dropped, changed = 0, 0, false
+  for _, r in ipairs(type(data.rooms) == "table" and data.rooms or {}) do
+    local num, room = HL.room_from(r)
+    if num then
+      theirs[num] = true
+      if rooms[num] then
+        if HL.merge_room(rooms[num], room) then changed = true end
+      elseif not base[num] then
+        rooms[num] = room ; known = known + 1 ; added = added + 1
+      end
+    end
+  end
+  for num in pairs(base) do
+    if not theirs[num] and rooms[num] and num ~= here then
+      rooms[num] = nil ; known = known - 1 ; dropped = dropped + 1
+    end
+  end
+  local m = HL.meta_from(data)
+  local msig = HL.meta_sig(m)
+  if HL.meta_sig(HL.meta_now()) == S.meta and msig ~= S.meta then
+    HL.meta_apply(m) ; changed = true
+  end
+  S.nums, S.meta = theirs, msig
+  if added + dropped > 0 or changed then forget_adjacency() end
+  return added, dropped, changed
+end
+
+-- Has another session written since we last read or wrote? Then take its work in.
+-- Cheap when nothing changed: one small key. An unreadable file is left alone here, as
+-- load() leaves it (and not re-read every second).
+function HL.sync_in()
+  local S = HL.sync
+  local rev = WORLD.get(HL.REV_KEY)
+  if rev == S.rev then return 0, 0, false end
+  S.rev = rev
+  local raw = WORLD.get(STORE_KEY)
+  local data = { rooms = {} }                 -- no file at all: wiped elsewhere
+  if raw ~= nil then
+    local ok, d = pcall(scrye.json.decode, raw)
+    if not ok or type(d) ~= "table" or type(d.rooms) ~= "table" then return 0, 0, false end
+    data = d
+  end
+  return HL.absorb(data)
+end
+
+-- A new revision for a write of ours: unique to this session.
+function HL.next_rev()
+  HL.sync.n = HL.sync.n + 1
+  return HL.sync.id .. "." .. HL.sync.n
+end
+
 local function save(force)
+  HL.sync_in()      -- another character's rooms first, so this write carries them too
   if not (dirty or force) then return end
-  local list = {}
+  local list, nums = {}, {}
   for num, r in pairs(rooms) do
+    nums[num] = true
     list[#list + 1] = { num = num, name = r.name, area = r.area,
                         exits = r.exits, walked = r.walked, visits = r.visits,
                         shift = r.shift, vary = r.vary, edge = r.edge, custom = r.custom,
@@ -511,8 +685,19 @@ local function save(force)
   for seed, nm in pairs(mapnames) do names[#names + 1] = { seed = seed, name = nm } end
   local pls = {}
   for _, pl in ipairs(places) do pls[#pls + 1] = { name = pl.name, num = pl.num } end
-  WORLD.set(STORE_KEY, scrye.json.encode{ ver = STORE_VER, rooms = list, names = names,
-                                          favs = favs, places = pls })
+  -- favourites' names as a list: a JSON object's keys would come back as strings
+  local fns = {}
+  for _, num in ipairs(favs) do
+    if HL.favnames[num] then fns[#fns + 1] = { num = num, name = HL.favnames[num] } end
+  end
+  local doc = scrye.json.encode{ ver = STORE_VER, rooms = list, names = names,
+                                 favs = favs, favnames = fns, places = pls }
+  local rev = HL.next_rev()
+  -- one file write for both, where the host has setMany (API 1.6): a reader never sees
+  -- the new map under the old revision
+  if WORLD.setMany then WORLD.setMany({ [STORE_KEY] = doc, [HL.REV_KEY] = rev })
+  else WORLD.set(STORE_KEY, doc) ; WORLD.set(HL.REV_KEY, rev) end
+  HL.sync.rev, HL.sync.nums, HL.sync.meta = rev, nums, HL.meta_sig(HL.meta_now())
   dirty = false
   return #list
 end
@@ -528,6 +713,7 @@ local function load()
       note("map moved to the MUD-shared store - every character on this world sees it now")
     end
   end
+  HL.sync.rev = WORLD.get(HL.REV_KEY)
   local raw = WORLD.get(STORE_KEY)
   if not raw then return end
   local ok, data = pcall(scrye.json.decode, raw)
@@ -536,43 +722,21 @@ local function load()
     note("  'mapg save' will overwrite it once you are happy to lose whatever was there")
     return
   end
-  local pruned = 0
+  local pruned, nums = 0, {}
   for _, r in ipairs(data.rooms) do
-    local num = tonumber(r.num)
+    local num, room, p = HL.room_from(r)
     if num then
-      rooms[num] = { name = tostring(r.name or ""), area = tostring(r.area or ""),
-                     exits = type(r.exits) == "table" and r.exits or {},
-                     walked = type(r.walked) == "table" and r.walked or {},
-                     visits = tonumber(r.visits) or 0 }
-      -- only kept when non-empty, so an old save (no such fields) loads unchanged
-      if type(r.shift) == "table" and next(r.shift) ~= nil then rooms[num].shift = r.shift end
-      if type(r.vary) == "table" and next(r.vary) ~= nil then rooms[num].vary = r.vary end
-      if type(r.edge) == "table" and next(r.edge) ~= nil then rooms[num].edge = r.edge end
-      if type(r.custom) == "table" and next(r.custom) ~= nil then rooms[num].custom = r.custom end
-      if type(r.note) == "string" and r.note ~= "" then rooms[num].note = r.note:sub(1, NT.MAX) end
-      -- drop links learned in a direction the room's listing does not name (see unlisted)
-      for d in pairs(rooms[num].walked) do
-        if unlisted(rooms[num], d) then rooms[num].walked[d] = nil ; pruned = pruned + 1 end
-      end
-      known = known + 1
+      if not rooms[num] then known = known + 1 end
+      rooms[num] = room ; nums[num] = true
+      pruned = pruned + p
     end
   end
   if pruned > 0 then
     dirty = true
     note(string.format("dropped %d learned link(s) in directions their rooms have no exit for - mis-paired moves, not exits", pruned))
   end
-  for _, n in ipairs(type(data.names) == "table" and data.names or {}) do
-    local seed = tonumber(n.seed)
-    if seed and type(n.name) == "string" and n.name ~= "" then mapnames[seed] = n.name end
-  end
-  for _, f in ipairs(type(data.favs) == "table" and data.favs or {}) do
-    local num = tonumber(f)
-    if num and #favs < FAV_CAP then favs[#favs + 1] = num end
-  end
-  for _, pl in ipairs(type(data.places) == "table" and data.places or {}) do
-    local num, name = tonumber(pl.num), tostring(pl.name or "")
-    if num and name ~= "" and #places < PLACE_CAP then places[#places + 1] = { name = name, num = num } end
-  end
+  HL.meta_apply(HL.meta_from(data))
+  HL.sync.nums, HL.sync.meta = nums, HL.meta_sig(HL.meta_now())
 end
 
 -- 'mapg place <name> [<n>]' and the Places box: bookmark a room under a name. A name
@@ -2310,10 +2474,16 @@ local function wipe(confirmed)
   moves = {}
   mapnames = {}
   favs = {}                       -- favourites of maps that no longer exist would dangle
+  HL.favnames = {} ; HL.favname_aim = nil
   stats = { told = 0, walked = 0, contradictions = 0, desyncs = 0, new = 0 }
   wipe_armed = false
   dirty = false
   WORLD.delete(STORE_KEY)         -- delete, not save-empty: nothing left behind
+  -- a new revision over no file: every other character's mapper drops the wiped rooms
+  -- (keeping only what it found since and has not saved yet) instead of writing them back
+  local rev = HL.next_rev()
+  WORLD.set(HL.REV_KEY, rev)
+  HL.sync.rev, HL.sync.nums, HL.sync.meta = rev, {}, ""
   scrye.store.delete(STORE_KEY)   -- and the pre-shared backup goes too: a wipe means gone
   forget_adjacency()
   draw()
@@ -3051,6 +3221,7 @@ scrye.addAlias{
         else note(string.format("no note on %d %s - 'mapg note <text>' writes one", t, name_of(t))) end
       else NT.set(here, rest) end
     elseif verb == "notes"    then NT.list()
+    elseif verb == "favname"  then HL.favname_cmd(rest)
     elseif verb == "gap"      then
       local n = resolve_room(rest)
       if not n then note("mapg gap <room | place> - what separates you from a room the map has no route to")
@@ -3137,6 +3308,7 @@ scrye.addAlias{
       note("mapg map          which map you are on and what it borders")
       note("mapg maps [text]  every map, alphabetically - text filters by name or border")
       note("mapg fav [<n>]    save/unsave this room (or room n) as a favourite - the Favs tab walks back to it (max 20)")
+      note("mapg favname <name>   name the favourite you stand in; 'mapg favname #<n> <name>' any ('-' removes it)")
       note("mapg note <text>  a note on the room you stand in ('-' removes it); 'mapg note #<n> <text>' any room")
       note("mapg notes        every room you wrote a note on - and right-click any room on the map for both")
       note("mapg gap <n>      no route to a room? where the map's knowledge breaks, and what to walk to fix it")
@@ -3238,7 +3410,10 @@ show_detail = function(num)
   local pls = places_of(num)
   if #pls > 0 then bits[#bits + 1] = "@{info}place: " .. esc(table.concat(pls, ", ")) .. "@{}" end
   for _, f in ipairs(favs) do
-    if f == num then bits[#bits + 1] = "@{info}favourite@{}" break end
+    if f == num then
+      bits[#bits + 1] = HL.favnames[num] and ("@{info}favourite: " .. esc(HL.favnames[num]) .. "@{}") or "@{info}favourite@{}"
+      break
+    end
   end
   L[#L + 1] = table.concat(bits, "  ")
   if r.note then L[#L + 1] = "@{value}note:@{} " .. esc(r.note) end
@@ -3327,7 +3502,7 @@ local function fav_go(index)
   if not num or not rooms[num] then note("that favourite is not in the store any more") ; return end
   if walk then note("already walking - 'mapg stop' first") ; return end
   local steps = route_to(num)
-  if steps then walk_begin(steps, string.format("%d %s (a favourite)", num, name_of(num))) end
+  if steps then walk_begin(steps, HL.fav_label(num) .. " (a favourite)") end
 end
 
 -- 'mapg fav [<room>]', the Favs tab's button and a room's right-click menu: toggle a ROOM
@@ -3343,6 +3518,7 @@ fav_toggle = function(num)
   for i, n in ipairs(favs) do
     if n == num then
       table.remove(favs, i)
+      HL.favnames[num] = nil       -- (an aim at it lapses by itself: HL.favname_target)
       dirty = true ; draw()
       note("no longer a favourite: " .. what)
       return
@@ -3355,6 +3531,74 @@ fav_toggle = function(num)
   favs[#favs + 1] = num
   dirty = true ; draw()
   note(string.format("favourite %d/%d: %s", #favs, FAV_CAP, what))
+end
+
+-- ---------- favourites' names (1.20.0, Joakim 4 Nov 2026) ----------
+-- Your own name for a favourite room - "bank", "healer", "quest giver" - shown first on its
+-- Favs row, in its details line and when a walk there starts. 'mapg favname', or the name
+-- box on the Favs tab: it names the favourite a row's "Name..." aimed it at, else the one
+-- you stand in. Kept with the favourites (so shared like them) and dropped with one.
+function HL.is_fav(num)
+  for _, f in ipairs(favs) do if f == num then return true end end
+  return false
+end
+
+-- The favourite the name box is about: the one aimed at, while it is still a favourite;
+-- else the room you stand in, if it is one; else none.
+function HL.favname_target()
+  if HL.favname_aim and HL.is_fav(HL.favname_aim) then return HL.favname_aim end
+  if here and HL.is_fav(here) then return here end
+  return nil
+end
+
+-- "62 Peak", or "bank (62 Peak)" once named: how a favourite is spoken of
+function HL.fav_label(num)
+  local nm = HL.favnames[num]
+  return nm and string.format("%s (%d %s)", nm, num, name_of(num)) or string.format("%d %s", num, name_of(num))
+end
+
+function HL.favname_set(num, text)
+  if not num or not HL.is_fav(num) then
+    note(num and rooms[num] and string.format("%d %s is not a favourite - 'mapg fav %d' saves it first", num, name_of(num), num)
+         or "no favourite to name - right-click one on the Favs tab and pick Name..., or stand in one")
+    return
+  end
+  text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+  if text == "" or text == "-" then
+    if not HL.favnames[num] then note(string.format("favourite %d %s has no name", num, name_of(num))) ; return end
+    HL.favnames[num] = nil
+    note(string.format("name removed from favourite %d %s", num, name_of(num)))
+  else
+    if #text > HL.FAVNAME_MAX then
+      note(string.format("(kept the first %d characters)", HL.FAVNAME_MAX))
+      text = text:sub(1, HL.FAVNAME_MAX)
+    end
+    HL.favnames[num] = text
+    note(string.format("favourite %d %s is now called '%s'", num, name_of(num), text))
+  end
+  dirty = true ; save() ; HL.favname_box_for = false ; draw()
+end
+
+-- 'mapg favname [#<room>] [<name> | -]'
+function HL.favname_cmd(rest)
+  local num, text = rest:match("^#(%d+)%s*(.*)$")
+  if num then
+    num = tonumber(num)
+    if text == "" then
+      -- aim the box at it: the row menu's way in, since a menu cannot ask for text
+      if not HL.is_fav(num) then HL.favname_set(num, "") return end
+      HL.favname_aim = num ; HL.favname_box_for = false ; draw()
+      note(string.format("%d %s - %s; type a name in the box on the Favs tab and press Enter"
+        .. " (an empty box removes it)", num, name_of(num),
+        HL.favnames[num] and ("now called '" .. HL.favnames[num] .. "'") or "no name yet"))
+    else HL.favname_set(num, text) end
+  elseif rest == "" then
+    note("mapg favname <name>            name the favourite you stand in")
+    note("mapg favname #<room> <name>    name any favourite ('-' removes the name)")
+  else
+    -- typed, it is about where you stand; the box is about the one it was aimed at
+    HL.favname_set((here and HL.is_fav(here)) and here or HL.favname_target(), rest)
+  end
 end
 
 -- ---------- the map widget: the 2D grid, and the 3D view around it (1.19.0) ----------
@@ -3379,6 +3623,7 @@ function HL.menu_for(num)
   local mine = { { r.note and "Edit note..." or "Add note...", "mapg note #" .. num } }
   local faved = false
   for _, f in ipairs(favs) do if f == num then faved = true end end
+  if faved then mine[#mine + 1] = { "Name favourite...", "mapg favname #" .. num } end
   mine[#mine + 1] = { faved and "Remove from favourites" or "Add to favourites", "mapg fav " .. num }
   if num == here then
     local menu = shift_menu(num) or {}
@@ -3604,7 +3849,7 @@ scrye.addPanel{
         -- it. Twenty slots. The rows below walk there, exactly like the Maps tab.
         { text = "Fav this room", action = function() fav_toggle(here) end },
       } },
-      { type = "table", bind = P .. "favlist", columns = { "Room", "Map" }, align = "ll",
+      { type = "table", bind = P .. "favlist", columns = { "Name", "Room", "Map" }, align = "lll",
         onRowClick = function(_, index) fav_go(index) end,
         onRowMenu = function(_, index)
           local num = favlist_nums[index]
@@ -3612,9 +3857,15 @@ scrye.addPanel{
           return { { "Walk there",   "mapg go "   .. num },
                    { "Show route",   "mapg path " .. num },
                    { "Room details", "mapg room " .. num },
+                   { "Name...",      "mapg favname #" .. num },
                    { "-" },
                    { "Remove from favourites", "mapg fav " .. num } }
         end },
+      -- Name a favourite (1.20.0): the line says which one the box names - right-click a row
+      -- and pick Name... to aim it at that one; Enter saves, an empty box removes the name
+      { type = "label", bind = P .. "favnamehint", color = "dim" },
+      { type = "input", text = "name", bind = P .. "favnamebox",
+        onSubmit = function(text) HL.favname_set(HL.favname_target(), text) end },
     } },
     { title = "Find", widgets = {
       { type = "label", bind = P .. "findhint", color = "dim" },
@@ -3885,12 +4136,25 @@ refresh_favlist = function(maps)
       local lbl = ""
       for _, m in ipairs(maps) do if m.set[num] then lbl = m.label break end end
       favlist_nums[#favlist_nums + 1] = num
-      rows[#rows + 1] = string.format("%s%d %s\t%s", num == here and "> " or "", num, name_of(num):sub(1, 22), lbl)
+      rows[#rows + 1] = string.format("%s\t%s%d %s\t%s", HL.favnames[num] or "", num == here and "> " or "",
+                                      num, name_of(num):sub(1, 22), lbl)
     else
       dirty = true                 -- a favourite of a forgotten room: quietly let it go
+      HL.favnames[num] = nil       -- and its name with it
     end
   end
   favs = keep
+  -- the name box: which favourite it names, and its name in the box - filled only when
+  -- that favourite changes, so a redraw never wipes what you are typing
+  do
+    local t = HL.favname_target()
+    scrye.setState(P .. "favnamehint", t and ("name for " .. t .. " " .. name_of(t):sub(1, 22) .. ":")
+      or (#keep > 0 and "to name one: right-click it, Name..." or ""))
+    if t ~= HL.favname_box_for then
+      HL.favname_box_for = t
+      scrye.setState(P .. "favnamebox", t and HL.favnames[t] or "")
+    end
+  end
   scrye.setState(P .. "favlist", table.concat(rows, "\n"))
   scrye.setState(P .. "favhint",
     #rows == 0 and "no favourites yet - stand in a room and press the button, or right-click one"
@@ -4103,7 +4367,12 @@ load()
 -- flush still runs every FLUSH_SECS; it just rides the finer clock.
 flush_timer = scrye.every(1, function()
   now = now + 1
-  if now % FLUSH_SECS == 0 then save() end
+  if now % FLUSH_SECS == 0 then save()
+  else
+    -- another character on this world saved: its rooms appear here now, not at next login
+    local added, dropped, changed = HL.sync_in()
+    if added + dropped > 0 or changed then draw() end
+  end
   if fighting and (now - cc_at) >= 8 then fighting = false end
   if exploring then
     local low = under_hp_floor()

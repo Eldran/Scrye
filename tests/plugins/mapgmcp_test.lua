@@ -1181,11 +1181,11 @@ do
   clear()
   btn.action()                               -- favourite the peak, where we stand
   check(said("favourite 1/20: 62 Peak [Alps]"), "the button saves the room you stand in")
-  check(state["plugin.3s-map-gmcp.favlist"] == "> 62 Peak\tAlps", "...and the tab lists it, marked as where you are")
+  check(state["plugin.3s-map-gmcp.favlist"] == "\t> 62 Peak\tAlps", "...and the tab lists it, marked as where you are")
   clear()
   mapg("fav 61")                             -- any room, by number - the oven, a map away
   check(said("favourite 2/20: 61 Oven [Bakery]"), "'mapg fav <room>' saves any room")
-  check(state["plugin.3s-map-gmcp.favlist"] == "> 62 Peak\tAlps\n61 Oven\tBakery", "...listed in the order saved")
+  check(state["plugin.3s-map-gmcp.favlist"] == "\t> 62 Peak\tAlps\n\t61 Oven\tBakery", "...listed in the order saved")
   mapg("fav 60")
   check((state["plugin.3s-map-gmcp.favlist"] or ""):find("60 Road\tUnknown", 1, true) ~= nil,
         "...two rooms of one map are two favourites now, not one")
@@ -1245,6 +1245,135 @@ do
   -- a wipe takes the favourites with it: nothing to dangle
   mapg("wipe") ; mapg("wipe yes")
   check((state["plugin.3s-map-gmcp.favlist"] or "") == "", "a wipe clears the favourites too")
+end
+
+-- 43g0. NAMED FAVOURITES (1.20.0, 4 Nov 2026): a favourite can carry your own name for it -
+--      'mapg favname', or the Favs tab's name box (aimed by a row's Name...). The name is
+--      the row's first column, in the details line and the walk's narration; it is saved
+--      with the favourites and goes when the favourite does.
+fresh_client() ; load_plugin()
+room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+cmd("e") ; room('{ "num": 61, "name": "Oven", "area": "Bakery", "exits": { "w": 60 } }')
+cmd("w") ; room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+cmd("w") ; room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+do
+  local FL, HINT, BOX = "plugin.3s-map-gmcp.favlist", "plugin.3s-map-gmcp.favnamehint", "plugin.3s-map-gmcp.favnamebox"
+  local favtab = panel.tabs[3]
+  local tbl, hint_w, box_w
+  for i, w in ipairs(favtab.widgets) do
+    if w.bind == FL then tbl = w end
+    if w.bind == HINT then hint_w = i end
+    if w.bind == BOX then box_w = w end
+  end
+  check(tbl and #tbl.columns == 3 and tbl.columns[1] == "Name", "names: the Favs table has a Name column first")
+  check(hint_w and favtab.widgets[hint_w].type == "label" and favtab.widgets[hint_w + 1] == box_w and box_w.type == "input",
+        "names: under it, a line saying which favourite the box names, and the box")
+  check((state[HINT] or "") == "", "names: no favourites, nothing to say")
+  mapg("fav")                                  -- the peak, where we stand
+  mapg("fav 61")
+  check(state[HINT] == "name for 62 Peak:", "names: the box names the favourite you stand in (" .. tostring(state[HINT]) .. ")")
+  clear() ; box_w.onSubmit("  lookout ")
+  check(said("favourite 62 Peak is now called 'lookout'"), "names: the box names it, trimmed")
+  check(state[FL] == "lookout\t> 62 Peak\tAlps\n\t61 Oven\tBakery", "names: ...first on its row (" .. tostring(state[FL]):gsub("\n", "|") .. ")")
+  check(state[BOX] == "lookout", "names: ...and the box shows it")
+  -- the row menu aims the box at another favourite
+  local rm = tbl.onRowMenu(nil, 2)
+  local named
+  for _, e in ipairs(rm) do if e[1] == "Name..." then named = e[2] end end
+  check(named == "mapg favname #61", "names: a row's menu offers Name...")
+  clear() ; mapg(named:sub(6))
+  check(said("61 Oven - no name yet; type a name in the box"), "names: ...which aims the box and says so")
+  check(state[HINT] == "name for 61 Oven:" and state[BOX] == "", "names: the line and the box follow it")
+  box_w.onSubmit("bakery")
+  check(state[FL]:find("bakery\t61 Oven\tBakery", 1, true), "names: the box names that one")
+  -- the details line and the walk say the name
+  mapg("note #61")
+  check((state["plugin.3s-map-gmcp.detail"] or ""):find("favourite: bakery", 1, true), "names: the details line says it")
+  sent = {} ; clear()
+  tbl.onRowClick(nil, 2)
+  check(said("bakery (61 Oven) (a favourite)"), "names: a walk there says it")
+  mapg("stop")
+  -- the map's right-click menu offers it for a favourite, not for any room
+  do
+    local map_tab = panel.tabs[1].widgets[2]
+    local mr, mc = find_char("@")
+    local own = map_tab.onRightClick(mc - 1, mr - 1)
+    local has = false
+    for _, e in ipairs(own) do if e[2] == "mapg favname #62" then has = true end end
+    check(has, "names: a favourite's map menu offers Name favourite...")
+  end
+  -- typed: by number, cleared with '-', refused for a room that is no favourite
+  clear() ; mapg("favname #61 -")
+  check(said("name removed from favourite 61 Oven"), "names: '-' removes a name")
+  check(state[FL]:find("\t61 Oven\tBakery", 1, true) and not state[FL]:find("bakery\t", 1, true), "names: ...from the row too")
+  clear() ; mapg("favname #61 -")
+  check(said("has no name"), "names: removing a name that is not there says so")
+  clear() ; mapg("favname #60 road")
+  check(said("60 Road is not a favourite - 'mapg fav 60' saves it first"), "names: a room that is no favourite is refused")
+  clear() ; mapg("favname #60")
+  check(said("60 Road is not a favourite"), "names: ...and the box is not aimed at it")
+  check(state[HINT] == "name for 61 Oven:", "names: ...it stays on the one it was on")
+  -- a redraw does not wipe what is half typed in the box
+  state[BOX] = "half typ"
+  cmd("e") ; room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+  check(state[BOX] == "half typ", "names: moving about does not wipe the box while it names the same favourite")
+  cmd("w") ; room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  clear() ; mapg("favname #61 " .. string.rep("x", 40))
+  check(said("kept the first 30 characters") and state[FL]:find(string.rep("x", 30) .. "\t", 1, true)
+        and not state[FL]:find(string.rep("x", 31), 1, true), "names: a name is at most 30 characters")
+  clear() ; mapg("favname")
+  check(said("mapg favname <name>"), "names: 'mapg favname' alone gives the usage")
+  clear() ; mapg("favname summit")
+  check(said("favourite 62 Peak is now called 'summit'"), "names: typed, it names where you stand")
+  -- an empty box removes the name of the favourite it names
+  mapg("favname #62")
+  clear() ; box_w.onSubmit("")
+  check(said("name removed from favourite 62 Peak") and not state[FL]:find("summit", 1, true), "names: an empty box removes the name")
+  mapg("favname #62 summit")
+  -- saved with the favourites, across a restart
+  mapg("save") ; disconnect()
+  fresh_client(true) ; load_plugin()
+  room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  check((state[FL] or ""):find("summit\t> 62 Peak", 1, true) and (state[FL] or ""):find(string.rep("x", 30) .. "\t61 Oven", 1, true),
+        "names: they come back after a restart")
+  for _, w in ipairs(panel.tabs[3].widgets) do if w.bind == BOX then box_w = w end end   -- the reloaded panel's box
+  -- a dropped favourite takes its name with it: favourite it again and it has none
+  mapg("fav 62") ; mapg("fav 62")
+  check((state[FL] or ""):find("\t> 62 Peak", 1, true) and not (state[FL] or ""):find("summit", 1, true),
+        "names: dropping a favourite drops its name")
+  -- with no favourite here and none aimed at, the box names nothing and says how to pick one
+  mapg("fav 62")
+  clear() ; box_w.onSubmit("x")
+  check(said("no favourite to name"), "names: with nothing to name, the box says how to pick one")
+  check(state[HINT] == "to name one: right-click it, Name...", "names: ...and so does the line")
+  -- the box aimed at a favourite whose room is then forgotten falls back to where you stand
+  mapg("fav 60") ; mapg("favname #60 crossing") ; mapg("favname #60")
+  check(state[HINT] == "name for 60 Road:", "names: (aimed at the crossing)")
+  mapg("forget 60")
+  check(state[HINT] == "to name one: right-click it, Name...", "names: a forgotten favourite's aim lapses (where you stand is no favourite)")
+  room('{ "num": 60, "name": "Road", "area": "Unknown", "exits": { "e": 61, "w": 62 } }')
+  room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  mapg("fav 60")
+  check(not (state[FL] or ""):find("crossing", 1, true), "names: ...and the name went with the forgotten room")
+  mapg("fav 60")
+  -- a name saved for a room that is no favourite (an older client's store) is not taken up
+  mapg("save") ; disconnect()
+  do
+    local st = scrye.json.decode(shared["rooms"])
+    st.favnames = st.favnames or {}
+    st.favnames[#st.favnames + 1] = { num = 60, name = "stray" }
+    shared["rooms"] = scrye.json.encode(st)
+  end
+  fresh_client(true) ; load_plugin()
+  room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  mapg("fav 60")
+  check(not (state[FL] or ""):find("stray", 1, true), "names: a stored name for a room that is no favourite is not loaded")
+  -- a wipe takes the names too
+  mapg("fav 62") ; mapg("favname #62 summit")
+  mapg("wipe") ; mapg("wipe yes")
+  room('{ "num": 62, "name": "Peak", "area": "Alps", "exits": { "e": 60 } }')
+  mapg("fav 62")
+  check(not (state[FL] or ""):find("summit", 1, true), "names: a wipe takes the names with the favourites")
 end
 
 -- 43g1. A favourite is drawn like a place, 'b'.
@@ -4090,6 +4219,88 @@ do
   state[SP] = "UNTOUCHED" ; cmd("w") ; room(H1)
   check(state[SP] == "UNTOUCHED", "with the panel off no scene is sent either")
 end
+
+-- ============================================================
+-- ONE MAP, MANY CHARACTERS (1.21.0): two characters on the same world logged in at once
+-- are two sessions over ONE shared file. Each used to write its own copy over the file
+-- whole, so the one standing still saved its login-time map and the other's exploring
+-- was gone. Now a write that finds a revision it did not make merges first.
+do
+  local function session()
+    return { scrye = scrye, gmcp = gmcp_hooks, aliases = aliases, cmds = command_hooks,
+             repeats = repeats, disc = disconnect_hooks, events = event_hooks, store = store }
+  end
+  local function use(s)
+    scrye, gmcp_hooks, aliases, command_hooks = s.scrye, s.gmcp, s.aliases, s.cmds
+    repeats, disconnect_hooks, event_hooks, store = s.repeats, s.disc, s.events, s.store
+    clear()
+  end
+  local function saved_nums()
+    local out = {}
+    for _, r in ipairs(decode(shared["rooms"] or '{"rooms":[]}').rooms or {}) do out[tonumber(r.num)] = true end
+    return out
+  end
+  local function R(num, exits) return string.format(
+    '{ "num": %d, "name": "Room %d", "area": "Shared", "exits": { %s } }', num, num, exits or "") end
+
+  fresh_client() ; load_plugin()
+  room(GATEHOUSE) ; mapg("save")
+  local A = session()
+  fresh_client(true) ; store = { fast = "0" } ; load_plugin()   -- a second character, its own prefs
+  local B = session()
+  check(said("1 room(s) known"), "share: the second character starts from the first one's map")
+
+  -- B explores and saves; then A, which loaded before any of it, finds a room and flushes
+  room(R(9001, '"e": 9002')) ; cmd("e") ; room(R(9002, '"w": 9001')) ; mapg("save")
+  use(A)
+  room(R(8001))
+  for _ = 1, 15 do tick() end
+  local s = saved_nums()
+  check(s[8001], "share: the flush happened (the test is not vacuous)")
+  check(s[9001] and s[9002] and s[50942], "share: a character's flush keeps what the other explored meanwhile")
+  mapg("room 9002")
+  check(said("Room 9002"), "share: ...and that character now knows those rooms itself")
+
+  -- live: B maps a room and saves; A sees it within a second, without a save of its own
+  use(B) ; room(R(9003)) ; mapg("save")
+  use(A) ; tick()
+  mapg("room 9003")
+  check(said("Room 9003"), "share: another character's new room shows up within a second")
+
+  -- a room found but not yet saved survives the other side's write
+  use(B) ; room(R(9004))
+  use(A) ; mapg("place gate 50942") ; mapg("save")
+  use(B) ; tick() ; mapg("save")
+  s = saved_nums()
+  check(s[9004] and s[9003], "share: a room not yet saved survives the other character's write")
+  mapg("places")
+  check(said("gate"), "share: a place made on one character reaches the other")
+
+  -- forgetting on one side sticks: the other neither keeps it nor writes it back
+  use(A) ; mapg("forget 9001") ; mapg("save")
+  use(B) ; tick()
+  mapg("room 9001")
+  check(said("not in the store"), "share: a room forgotten on one character is dropped on the other")
+  mapg("save")
+  check(not saved_nums()[9001], "share: ...and is not written back")
+  -- ...even when the other writes first, before seeing the forget
+  use(A) ; mapg("forget 9002")
+  use(B) ; room(R(9003)) ; mapg("save")            -- B still has 9002 and writes it
+  use(A) ; mapg("save")
+  check(not saved_nums()[9002], "share: a forget is not undone by the other character's older copy")
+  mapg("room 9002")
+  check(said("not in the store"), "share: ...in memory either")
+
+  -- a wipe on one character empties the other, keeping only where it stands
+  use(B) ; tick()                                   -- B is caught up: only the wipe can tell it
+  use(A) ; mapg("wipe") ; mapg("wipe yes")
+  use(B) ; tick() ; mapg("rooms")
+  check(said("1 room(s)"), "share: a wipe reaches the other character, which keeps only the room it is in")
+  mapg("save")
+  s = saved_nums()
+  check(s[9003] and not s[9004] and not s[50942] and not s[8001], "share: ...and it does not write the wiped map back")
+end
+fresh_client() ; load_plugin()
 
 print(string.format("%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)
