@@ -14,8 +14,8 @@ public sealed class AutomationEngine
     // Order: insertion stamp, the tie-break that keeps equal-Sequence rules in the order they
     // were added (List.Sort is unstable past 16 items). Retired: removed from the live list,
     // so a pass over a snapshot skips it.
-    private sealed class Trig { public TriggerDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public int Lines = 1; public long Order; public bool Retired; }
-    private sealed class Als { public AliasDef Def = null!; public CompiledPattern Pattern = null!; public bool Enabled; public long Order; }
+    private sealed class Trig { public TriggerDef Def = null!; public RulePattern Pattern = null!; public bool Enabled; public int Lines = 1; public long Order; public bool Retired; }
+    private sealed class Als { public AliasDef Def = null!; public RulePattern Pattern = null!; public bool Enabled; public long Order; }
     private sealed class Tmr { public TimerDef Def = null!; public bool Enabled; public double Elapsed; public bool Retired; }
 
     private readonly List<Trig> _triggers = new();
@@ -99,8 +99,7 @@ public sealed class AutomationEngine
         _triggers.Add(new Trig
         {
             Def = def, Lines = lines, Enabled = def.Enabled, Order = _nextOrder++,
-            Pattern = new CompiledPattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1,
-                                          matchTimeout: CompiledPattern.UserMatchTimeout),
+            Pattern = new RulePattern(def.Pattern, def.IsRegex, def.IgnoreCase, multiLine: lines > 1),
         });
         // Stable: Sequence, then insertion order - which equal-Sequence rule wins must not be random.
         _triggers.Sort((a, b) => a.Def.Sequence != b.Def.Sequence ? a.Def.Sequence.CompareTo(b.Def.Sequence) : a.Order.CompareTo(b.Order));
@@ -121,13 +120,13 @@ public sealed class AutomationEngine
     // a repeating trigger: asked for, and on one line (a window spans lines; it fires once)
     private static bool Repeats(Trig t) => t.Def.RepeatOnLine && t.Lines <= 1;
 
-    private MatchResult? MatchTrigger(Trig t, string line, bool buffered, out int newestStart)
-        => _recent.Match(t.Pattern, t.Lines, line, out newestStart, pushed: buffered);
+    private MatchResult? MatchTrigger(Trig t, CompiledPattern pattern, string line, bool buffered, out int newestStart)
+        => _recent.Match(pattern, t.Lines, line, out newestStart, pushed: buffered);
 
     public void AddAlias(AliasDef def)
     {
         RemoveAlias(def.Name);
-        _aliases.Add(new Als { Def = def, Pattern = Compile(def.Pattern, def.IsRegex, def.IgnoreCase), Enabled = def.Enabled, Order = _nextOrder++ });
+        _aliases.Add(new Als { Def = def, Pattern = new RulePattern(def.Pattern, def.IsRegex, def.IgnoreCase), Enabled = def.Enabled, Order = _nextOrder++ });
         _aliases.Sort((a, b) => a.Def.Sequence != b.Def.Sequence ? a.Def.Sequence.CompareTo(b.Def.Sequence) : a.Order.CompareTo(b.Order));   // stable, as triggers
     }
 
@@ -206,9 +205,10 @@ public sealed class AutomationEngine
             Trig t = pass[i];
             if (!t.Enabled || t.Retired) continue;   // disabled, or removed by an earlier rule's script
 
+            CompiledPattern pattern = Live(t.Pattern, "trigger", t.Def.Name, ctx);
             MatchResult? m;
             int newestStart;
-            try { m = MatchTrigger(t, line, buffered: true, out newestStart); }
+            try { m = MatchTrigger(t, pattern, line, buffered: true, out newestStart); }
             catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
             {
                 SlowPattern("trigger", t.Def.Name, ctx);
@@ -227,7 +227,7 @@ public sealed class AutomationEngine
             if (Repeats(t) && !t.Def.OneShot)
             {
                 IReadOnlyList<MatchResult> more;
-                try { more = t.Pattern.Matches(line, TriggerDef.MaxRepeats); }
+                try { more = pattern.Matches(line, TriggerDef.MaxRepeats); }
                 catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
                 {
                     SlowPattern("trigger", t.Def.Name, ctx);
@@ -259,8 +259,9 @@ public sealed class AutomationEngine
             Trig t = _triggers[i];
             if (!t.Enabled) continue;
 
+            CompiledPattern pattern = Live(t.Pattern, "trigger", t.Def.Name, ctx: null);
             MatchResult? m;
-            try { m = MatchTrigger(t, line, buffered: false, out _); }
+            try { m = MatchTrigger(t, pattern, line, buffered: false, out _); }
             catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { continue; }   // too slow: no hit
             if (m is null) continue;
 
@@ -270,7 +271,7 @@ public sealed class AutomationEngine
             if (Repeats(t) && !t.Def.OneShot)
             {
                 IReadOnlyList<MatchResult> more;
-                try { more = t.Pattern.Matches(line, TriggerDef.MaxRepeats); }
+                try { more = pattern.Matches(line, TriggerDef.MaxRepeats); }
                 catch (System.Text.RegularExpressions.RegexMatchTimeoutException) { more = Array.Empty<MatchResult>(); }
                 for (int k = 1; k < more.Count; k++)
                     hits.Add(new AutomationHit(AutomationHitKind.Trigger, t.Def.Name, t.Def.Group, line,
@@ -301,7 +302,7 @@ public sealed class AutomationEngine
             if (!a.Enabled || !_aliases.Contains(a)) continue;   // disabled, or already retired
 
             MatchResult? m;
-            try { m = a.Pattern.Match(input); }
+            try { m = Live(a.Pattern, "alias", a.Def.Name, ctx).Match(input); }
             catch (System.Text.RegularExpressions.RegexMatchTimeoutException)
             {
                 SlowPattern("alias", a.Def.Name, ctx);
@@ -570,8 +571,20 @@ public sealed class AutomationEngine
         return string.Join("; ", parts);
     }
 
-    private static CompiledPattern Compile(string pattern, bool isRegex, bool ignoreCase) =>
-        new(pattern, isRegex, ignoreCase, matchTimeout: CompiledPattern.UserMatchTimeout);
+    /// <summary>A rule's pattern with its <c>${variables}</c> as they are now. A <c>${!list}</c>
+    /// whose value is not valid regex is reported once, when it goes bad, and the rule stays
+    /// quiet until the value changes. <paramref name="ctx"/> null: the dry run, which leaves
+    /// the report for the next real pass.</summary>
+    private CompiledPattern Live(RulePattern p, string kind, string name, IWorldActions? ctx)
+    {
+        CompiledPattern c = p.Current(_vars);
+        if (ctx is not null && p.TakeError() is { } error)
+        {
+            try { ctx.Echo($"[{kind}] '{name}': a variable in its pattern is not valid regex ({error}); it matches nothing until the variable changes."); }
+            catch { /* reporting must not break the pass */ }
+        }
+        return c;
+    }
 
     // Rules whose pattern ran over UserMatchTimeout, said once each: the rule is skipped on
     // that line or command and the rest of the pass goes on.

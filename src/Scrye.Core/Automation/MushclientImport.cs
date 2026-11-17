@@ -96,6 +96,31 @@ public sealed class MushclientImport
         return own.Trim().Length == 0 ? "" : own;
     }
 
+    /// <summary>MUSHclient's "expand variables" spelling in Scrye's: <c>@name</c> becomes
+    /// <c>${name}</c> (the value matched literally, as MUSHclient escapes it), <c>@!name</c>
+    /// becomes <c>${!name}</c> (the value as regex), <c>@@</c> a plain <c>@</c>. An <c>@</c>
+    /// with no name after it stays as it is.</summary>
+    internal static string ScryeVariables(string text)
+    {
+        if (text.IndexOf('@') < 0) return text;
+        var sb = new StringBuilder(text.Length + 8);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (c != '@' || i + 1 >= text.Length) { sb.Append(c); continue; }
+            if (text[i + 1] == '@') { sb.Append('@'); i++; continue; }
+            int j = i + 1;
+            bool raw = text[j] == '!';
+            if (raw) j++;
+            if (j >= text.Length || !char.IsAsciiLetter(text[j])) { sb.Append(c); continue; }
+            int start = j;
+            while (j < text.Length && (char.IsAsciiLetterOrDigit(text[j]) || text[j] == '_')) j++;
+            sb.Append(raw ? "${!" : "${").Append(text, start, j - start).Append('}');
+            i = j - 1;
+        }
+        return sb.ToString();
+    }
+
     /// <summary>A name Scrye can use as an identity. MUSHclient rules may be unnamed, and
     /// Scrye merges rules across profile layers BY NAME, so two blank names would be one
     /// rule. Falls back to the group plus a number, and never returns a duplicate.</summary>
@@ -182,7 +207,8 @@ public sealed class MushclientImport
         }
 
         string script = Attr(e, "script").Trim();
-        string send = SendText(e);
+        bool expand = Flag(e, "expand_variables");
+        string send = expand ? ScryeVariables(SendText(e)) : SendText(e);
         bool gag = Flag(e, "omit_from_output") || sendTo == 14;
 
         if (to == SendTo.Script || script.Length > 0)
@@ -209,16 +235,16 @@ public sealed class MushclientImport
             return;
         }
 
-        if (Flag(e, "expand_variables"))
+        if (expand)
             Warnings.Add(new ImportNote("trigger", label,
-                "used @variables; rewrite them as ${name} and check the variables came across"));
+                "used @variables; they now read ${name} - check the variables came across"));
         if (e.Attribute("ignore_case") is null && Flag(e, "regexp"))
             Warnings.Add(new ImportNote("trigger", label, "had no ignore_case setting; imported case-SENSITIVE"));
 
         Triggers.Add(new TriggerDef
         {
             Name = UniqueName(Attr(e, "name"), "trigger"),
-            Pattern = Attr(e, "match"),
+            Pattern = expand ? ScryeVariables(Attr(e, "match")) : Attr(e, "match"),
             IsRegex = Flag(e, "regexp"),
             IgnoreCase = Flag(e, "ignore_case"),
             Enabled = Flag(e, "enabled", whenAbsent: true),
@@ -284,21 +310,22 @@ public sealed class MushclientImport
             return;
         }
 
-        string send = SendText(e);
+        bool expand = Flag(e, "expand_variables");
+        string send = expand ? ScryeVariables(SendText(e)) : SendText(e);
         if (send.Length == 0)
         {
             Skipped.Add(new ImportNote("alias", label, "has nothing to send"));
             return;
         }
 
-        if (Flag(e, "expand_variables"))
+        if (expand)
             Warnings.Add(new ImportNote("alias", label,
-                "used @variables; rewrite them as ${name} and check the variables came across"));
+                "used @variables; they now read ${name} - check the variables came across"));
 
         Aliases.Add(new AliasDef
         {
             Name = UniqueName(Attr(e, "name"), "alias"),
-            Pattern = Attr(e, "match"),
+            Pattern = expand ? ScryeVariables(Attr(e, "match")) : Attr(e, "match"),
             IsRegex = Flag(e, "regexp"),
             IgnoreCase = Flag(e, "ignore_case"),
             Enabled = Flag(e, "enabled", whenAbsent: true),

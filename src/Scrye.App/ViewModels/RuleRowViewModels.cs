@@ -85,12 +85,18 @@ public abstract class RuleRowViewModel : ViewModelBase
         {
             string input = (TestInput ?? "").Replace("\r\n", "\n");
             int n = TestLines;
+            // The editor has no live variables: a ${name} in the pattern stands for any value
+            // here, and the result says so.
+            IReadOnlyList<string> vars = PatternVariables.Names(Pattern, IsRegex);
+            CompiledPattern Make(bool multiLine) => vars.Count == 0
+                ? new CompiledPattern(Pattern, IsRegex, IgnoreCase, multiLine)
+                : CompiledPattern.WithVariables(Pattern, IsRegex, IgnoreCase, PatternVariables.AnyValue, multiLine);
             MatchResult? m;
             if (n <= 1)
             {
                 // a one-line rule sees one line: the last of a pasted block
                 int nl = input.LastIndexOf('\n');
-                m = new CompiledPattern(Pattern, IsRegex, IgnoreCase).Match(nl < 0 ? input : input[(nl + 1)..]);
+                m = Make(multiLine: false).Match(nl < 0 ? input : input[(nl + 1)..]);
             }
             else
             {
@@ -98,11 +104,12 @@ public abstract class RuleRowViewModel : ViewModelBase
                 int take = Math.Min(n, lines.Length);
                 string joined = string.Join("\n", lines, lines.Length - take, take);
                 int newest = joined.Length - lines[^1].Length;
-                m = new CompiledPattern(Pattern, IsRegex, IgnoreCase, multiLine: true).MatchWindow(joined, newest);
+                m = Make(multiLine: true).MatchWindow(joined, newest);
             }
             if (m is null) { TestResult = "✗ no match"; return; }
             string expanded = Template.Expand(Send, m, new VariableStore());
             string wilds = m.Wildcards.Count > 0 ? "   wildcards: [" + string.Join(", ", m.Wildcards) + "]" : "";
+            if (vars.Count > 0) wilds += "   (" + string.Join(", ", vars.Select(v => "${" + v + "}")) + " taken as any value)";
             TestResult = SendTo switch
             {
                 SendTo.Variable => $"✓ match → set {Variable}={expanded}{wilds}",

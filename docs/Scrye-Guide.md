@@ -238,7 +238,8 @@ What does **not** cross is listed, with the reason, rather than imported half-wo
 Three things are imported but flagged in the report: multi-line triggers (they come across
 with their line count; Scrye fires one once, when the block's last line arrives, where
 MUSHclient can fire it again while the block is still in its window), rules using `@variable`
-expansion (rewrite them as `${name}`), and regex rules with no `ignore_case` setting, which come across
+expansion (converted for you: `@name` becomes `${name}` and `@!name` becomes `${!name}`, in the
+pattern and in the send; check that the variables themselves came across), and regex rules with no `ignore_case` setting, which come across
 case-sensitive because in this format an absent flag is a real answer. Colour triggers print
 the colour they produced beside the number it came from, so you can check one against
 MUSHclient's own swatch before keeping the rest.
@@ -370,6 +371,43 @@ every world.
 - **A time limit on your patterns.** A regular expression can be written so that it takes practically forever on some lines — `(a+)+$` is the classic, and it is easy to bring one in from MUSHclient without noticing. A trigger or alias whose pattern takes more than 250 ms on a line is skipped for that line (the rest still run), and Scrye says once which rule it was. Rewrite it; until then it simply never matches the lines it chokes on.
 
 These are all editable in Settings (Global) or per world/character.
+
+### Variables in a pattern
+
+A trigger or alias pattern can name a variable, and the rule then follows whatever the
+variable holds:
+
+| Pattern | Send | |
+|---|---|---|
+| `${targ} arrives.` | `kill ${targ}` | attacks your current target, whoever that is |
+| `rr ${tank}` | `rescue ${tank}` | an alias that only fires for the current tank |
+| `${!friends} pokes you.` | `heal %0` | with `friends` set to `Eldran\|Bjorn` |
+
+- **`${name}`** is the value matched **as plain text**. A target called `a.b*` matches
+  `a.b*`, not "a, any character, b, anything". Wildcards keep their numbers: in
+  `${targ} hits * for *.`, `%1` and `%2` are still the two stars.
+- **`${!name}`** is the value read **as regex**, grouped, so a list like `Eldran|Bjorn` means
+  "either of these names". Put it in brackets to capture which one matched:
+  `^(${!friends}) pokes you\.$` gives you the name in `%1`.
+- **An unset or empty variable matches nothing.** The rule stays quiet until the variable has
+  a value. Matching an empty name would be worse: an unanchored regex `${targ} arrives` would
+  fire for everyone the moment you cleared the target.
+- **It changes straight away.** Set the variable from another trigger (*Send to: Variable*),
+  from a script (`world.SetVariable`, `scrye.setVariable`) or in Settings, and the very next
+  line is matched against the new value. Patterns are only recompiled when one of their own
+  variables changes, so variables that change all the time (MIP's `hp`, MXP's `${mxp.hp}`)
+  cost nothing to rules that don't use them.
+- **A `${!list}` that isn't valid regex** (an unbalanced bracket, say) makes the rule match
+  nothing. Scrye says so once in the output and the rule picks up again when the value is fixed.
+- **Ignore case** covers the value too: `${targ}` set to `bob` matches `BOB arrives.`.
+- A variable name starts with a letter or `_` and can contain letters, digits, `_` and `.`.
+  Anything else after a `$` is left alone, so a regex `$` anchor, or `\${targ}` to match that
+  text literally, still works.
+
+The editor's **Test** box has no live variables, so there each `${name}` stands for any value,
+and the result says so. Plugin triggers (`scrye.addTrigger`) don't expand variables in their
+patterns: a plugin matches more widely and compares in its handler, and **Copy Lua** says this
+in a note when you copy a rule that uses them.
 
 ### Triggers over several lines
 

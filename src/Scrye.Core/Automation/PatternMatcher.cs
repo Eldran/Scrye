@@ -69,10 +69,21 @@ public sealed class CompiledPattern
     /// <see cref="RegexMatchTimeoutException"/> instead of freezing the session loop.</param>
     public CompiledPattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false,
                            TimeSpan? matchTimeout = null)
+        : this(SourceOf(pattern, isRegex), ignoreCase, multiLine, matchTimeout) { }
+
+    /// <param name="source">The finished regex, or null for a pattern that never matches.</param>
+    private CompiledPattern(string? source, bool ignoreCase, bool multiLine, TimeSpan? matchTimeout)
     {
         RegexOptions opts = RegexOptions.CultureInvariant;
         if (ignoreCase) opts |= RegexOptions.IgnoreCase;
         if (multiLine) opts |= RegexOptions.Multiline;
+        _never = source is null;
+        source ??= "(?!)";
+        _regex = matchTimeout is { } timeout ? new Regex(source, opts, timeout) : new Regex(source, opts);
+    }
+
+    private static string? SourceOf(string pattern, bool isRegex)
+    {
         // a pattern typed in a text box on Windows may carry \r\n; the lines it matches do not
         pattern = pattern.Replace("\r\n", "\n");
         // An EMPTY pattern matches nothing, ever. Left to the regex engine it would do the
@@ -81,10 +92,21 @@ public sealed class CompiledPattern
         // editor seeds a new row with a name and no pattern) fired on everything you typed,
         // which reads from the outside as "the alias name triggers it". A rule with no
         // pattern has nothing to say yet; it stays quiet until it has one.
-        _never = pattern.Length == 0;
-        string source = isRegex ? pattern : WildcardToRegex(pattern);
-        _regex = matchTimeout is { } timeout ? new Regex(source, opts, timeout) : new Regex(source, opts);
+        if (pattern.Length == 0) return null;
+        return isRegex ? pattern : WildcardToRegex(pattern);
     }
+
+    /// <summary>A pattern that matches nothing.</summary>
+    public static CompiledPattern Never { get; } = new((string?)null, false, false, null);
+
+    /// <summary>Compile a pattern whose <c>${name}</c> / <c>${!name}</c> references are filled
+    /// in by <paramref name="fragment"/> (see <see cref="PatternVariables"/>). When any
+    /// reference has no value the result is <see cref="Never"/>-like: it matches nothing.
+    /// Throws <see cref="ArgumentException"/> when the filled-in regex is not valid.</summary>
+    public static CompiledPattern WithVariables(string pattern, bool isRegex, bool ignoreCase,
+                                                Func<string, bool, string?> fragment,
+                                                bool multiLine = false, TimeSpan? matchTimeout = null)
+        => new(PatternVariables.ToRegex(pattern, isRegex, fragment), ignoreCase, multiLine, matchTimeout);
 
     public MatchResult? Match(string input)
     {
@@ -135,14 +157,18 @@ public sealed class CompiledPattern
     {
         var sb = new StringBuilder(pattern.Length + 4);
         sb.Append('^');
-        foreach (char c in pattern)
-        {
-            if (c == '*') sb.Append("(.*?)");
-            else if (c == '?') sb.Append('.');
-            else sb.Append(Regex.Escape(c.ToString()));
-        }
+        foreach (char c in pattern) AppendWildcard(sb, c);
         sb.Append('$');
         return sb.ToString();
+    }
+
+    /// <summary>One character of a wildcard pattern, as regex: <c>*</c> a lazy capture,
+    /// <c>?</c> any one character, everything else literal.</summary>
+    internal static void AppendWildcard(StringBuilder sb, char c)
+    {
+        if (c == '*') sb.Append("(.*?)");
+        else if (c == '?') sb.Append('.');
+        else sb.Append(Regex.Escape(c.ToString()));
     }
 }
 
@@ -192,5 +218,175 @@ public static class Template
             sb.Append(c);
         }
         return sb.ToString();
+    }
+}
+
+/// <summary>
+/// Variables inside a trigger or alias PATTERN. <c>${name}</c> stands for the variable's
+/// current value, matched literally (a name with a dot or a star in it is still that name);
+/// <c>${!name}</c> takes the value as a piece of regex, wrapped in <c>(?:...)</c> so a list
+/// such as <c>Eldran|Bjorn</c> is one alternative. Same meaning in wildcard and regex patterns.
+///
+/// <para>A reference to a variable that is unset or empty makes the whole pattern match
+/// nothing. The other reading - the reference turns into nothing - is the dangerous one: an
+/// unanchored <c>${targ} arrives</c> would fire for anyone who arrives the moment the target
+/// is cleared.</para>
+///
+/// <para>Names start with a letter or <c>_</c> and go on with letters, digits, <c>_</c> and
+/// <c>.</c> (so <c>${mxp.hp}</c> works). Anything else after a <c>$</c> - a regex <c>$</c>
+/// anchor, a quantifier like <c>${2}</c>, an escaped <c>\$</c> in a regex - is left alone.</para>
+/// </summary>
+public static class PatternVariables
+{
+    /// <summary>The variables a pattern refers to, each once, in order of first use.</summary>
+    public static IReadOnlyList<string> Names(string? pattern, bool isRegex)
+    {
+        var names = new List<string>();
+        if (string.IsNullOrEmpty(pattern)) return names;
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            if (isRegex && pattern[i] == '\\') { i++; continue; }
+            if (TryToken(pattern, i, out string name, out _, out int end))
+            {
+                if (!names.Contains(name)) names.Add(name);
+                i = end;
+            }
+        }
+        return names;
+    }
+
+    public static bool Uses(string? pattern, bool isRegex) => Names(pattern, isRegex).Count > 0;
+
+    /// <summary>The regex a pattern compiles to with its references filled in by
+    /// <paramref name="fragment"/>(name, raw), or null - match nothing - when the pattern is
+    /// empty or any reference comes back null.</summary>
+    public static string? ToRegex(string pattern, bool isRegex, Func<string, bool, string?> fragment)
+    {
+        pattern = pattern.Replace("\r\n", "\n");
+        if (pattern.Length == 0) return null;
+        var sb = new StringBuilder(pattern.Length + 16);
+        if (!isRegex) sb.Append('^');
+        for (int i = 0; i < pattern.Length; i++)
+        {
+            if (TryToken(pattern, i, out string name, out bool raw, out int end))
+            {
+                string? f = fragment(name, raw);
+                if (f is null) return null;
+                sb.Append(f);
+                i = end;
+                continue;
+            }
+            char c = pattern[i];
+            if (!isRegex) { CompiledPattern.AppendWildcard(sb, c); continue; }
+            sb.Append(c);
+            if (c == '\\' && i + 1 < pattern.Length) sb.Append(pattern[++i]);   // \$ stays \$
+        }
+        if (!isRegex) sb.Append('$');
+        return sb.ToString();
+    }
+
+    /// <summary>Fill references from live variables: unset or empty is null (no match),
+    /// <c>${x}</c> the value escaped, <c>${!x}</c> the value as regex.</summary>
+    public static Func<string, bool, string?> From(VariableStore vars) => (name, raw) =>
+    {
+        string? v = vars.Get(name);
+        if (string.IsNullOrEmpty(v)) return null;
+        return raw ? "(?:" + v + ")" : Regex.Escape(v);
+    };
+
+    /// <summary>Any value at all - for checking a pattern without the variables (the rule
+    /// editor's test box, the up-front syntax check).</summary>
+    public static readonly Func<string, bool, string?> AnyValue = (_, _) => "(?:.+?)";
+
+    private static bool TryToken(string p, int i, out string name, out bool raw, out int end)
+    {
+        name = ""; raw = false; end = i;
+        if (p[i] != '$' || i + 2 >= p.Length || p[i + 1] != '{') return false;
+        int j = i + 2;
+        if (p[j] == '!') { raw = true; j++; }
+        int start = j;
+        if (j >= p.Length || !(char.IsAsciiLetter(p[j]) || p[j] == '_')) return false;
+        while (j < p.Length && (char.IsAsciiLetterOrDigit(p[j]) || p[j] == '_' || p[j] == '.')) j++;
+        if (j >= p.Length || p[j] != '}') return false;
+        name = p[start..j];
+        end = j;
+        return true;
+    }
+}
+
+/// <summary>
+/// A user rule's pattern as the automation engine holds it. Without variables it is compiled
+/// once. With them it is recompiled when one of ITS variables changes value - checked against
+/// <see cref="VariableStore.Version"/> first, so a store that did not move costs one compare.
+/// </summary>
+public sealed class RulePattern
+{
+    private readonly string _pattern;
+    private readonly bool _isRegex, _ignoreCase, _multiLine;
+    private readonly string[] _names;
+    private readonly string?[] _values;
+    private long _version = -1;
+    private CompiledPattern _compiled;
+
+    /// <exception cref="ArgumentException">The pattern is not a valid regex - whatever its
+    /// variables hold - so it is refused when the rule is added, as before.</exception>
+    public RulePattern(string pattern, bool isRegex, bool ignoreCase, bool multiLine = false)
+    {
+        _pattern = pattern ?? "";
+        _isRegex = isRegex; _ignoreCase = ignoreCase; _multiLine = multiLine;
+        _names = PatternVariables.Names(_pattern, isRegex).ToArray();
+        _values = new string?[_names.Length];
+        if (_names.Length == 0)
+        {
+            _compiled = new CompiledPattern(_pattern, isRegex, ignoreCase, multiLine, CompiledPattern.UserMatchTimeout);
+            return;
+        }
+        CompiledPattern.WithVariables(_pattern, isRegex, ignoreCase, PatternVariables.AnyValue, multiLine);
+        _compiled = CompiledPattern.Never;   // every value unknown until the first Current
+    }
+
+    public IReadOnlyList<string> Variables => _names;
+
+    private string? _error;
+
+    /// <summary>Why the last recompile failed - a <c>${!name}</c> value that is not valid
+    /// regex - handed out once and then cleared, so it is reported once per bad value.</summary>
+    public string? TakeError()
+    {
+        string? e = _error;
+        _error = null;
+        return e;
+    }
+
+    /// <summary>The pattern as it stands with the variables' values right now. When a
+    /// <c>${!name}</c> value makes the regex invalid it matches nothing until that value
+    /// changes, and <see cref="TakeError"/> says why.</summary>
+    public CompiledPattern Current(VariableStore vars)
+    {
+        if (_names.Length == 0 || vars.Version == _version) return _compiled;
+        _version = vars.Version;
+
+        bool changed = false;
+        for (int i = 0; i < _names.Length; i++)
+        {
+            string? v = vars.Get(_names[i]);
+            if (string.Equals(v, _values[i], StringComparison.Ordinal)) continue;
+            _values[i] = v;
+            changed = true;
+        }
+        if (!changed) return _compiled;
+
+        _error = null;
+        try
+        {
+            _compiled = CompiledPattern.WithVariables(_pattern, _isRegex, _ignoreCase, PatternVariables.From(vars),
+                                                      _multiLine, CompiledPattern.UserMatchTimeout);
+        }
+        catch (ArgumentException ex)
+        {
+            _compiled = CompiledPattern.Never;
+            _error = ex.Message;
+        }
+        return _compiled;
     }
 }

@@ -29,6 +29,7 @@ public static class RuleLua
         if (t.OneShot) notes.Add("one-shot - a plugin rule cannot remove itself");
         if (t.RepeatOnLine) notes.Add("'repeat on line' - a plugin rule fires once per line");
         if (t.Sequence != 100) notes.Add($"sequence {t.Sequence} - plugin triggers run in the order they are added");
+        PatternVariablesNote(t.Pattern, t.IsRegex, notes);
 
         var sb = new StringBuilder();
         Header(sb, "trigger", t.Name, t.Group, notes);
@@ -52,6 +53,7 @@ public static class RuleLua
         var notes = new List<string>();
         if (!a.Enabled) notes.Add("it is switched off in the profile - a plugin rule is always on");
         if (a.KeepEvaluating) notes.Add("'keep evaluating' - a plugin alias consumes the line");
+        PatternVariablesNote(a.Pattern, a.IsRegex, notes);
         if (a.OneShot) notes.Add("one-shot - a plugin rule cannot remove itself");
         if (a.Sequence != 100) notes.Add($"sequence {a.Sequence} - plugin aliases run in the order they are added");
 
@@ -97,6 +99,15 @@ public static class RuleLua
         if (!string.IsNullOrWhiteSpace(group)) sb.Append(" (group ").Append(OneLine(group!)).Append(')');
         sb.Append(", copied from Scrye's rule editor\n");
         foreach (string n in notes) sb.Append("-- note: ").Append(n).Append('\n');
+    }
+
+    // A plugin rule's pattern is compiled once, as written: ${x} there is the text "${x}".
+    private static void PatternVariablesNote(string pattern, bool regex, List<string> notes)
+    {
+        IReadOnlyList<string> names = PatternVariables.Names(pattern, regex);
+        if (names.Count > 0)
+            notes.Add("its pattern uses ${" + string.Join("}, ${", names) + "} - a plugin pattern does not follow"
+                      + " variables; match more widely and compare in run with scrye.getVariable");
     }
 
     private static void Pattern(StringBuilder sb, string pattern, bool regex, bool ignoreCase)
