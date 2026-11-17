@@ -1,0 +1,23 @@
+{
+  "id": "3s-craft",
+  "name": "3S Crafting",
+  "version": "0.3.0",
+  "author": "Joakim",
+  "description": "A HUD for the crafting system, fed by the Craft.* GMCP packages (3Scapes only, any guild). Status: storage, souls, the production queue, what is ready to collect, which skills have the xp to train, every building under construction with a live countdown, every building there is with its tier (T0 for the ones not built: click one for 'cbuild info <name>', right-click for a menu that builds or upgrades it with 'cbuild build <name> confirm'), realm levels and drop standing, and your bonuses. Skills: all 36 with trained rank, banked xp, the training price and whether they are locked. Tokens: every tier in every realm. Market: the open token exchanges. Recipes: the catalogue by building ('crafthud recipes <building>' prints one). Raw: anything that has arrived non-empty and is not understood yet, under the server's own names - the system is days old and most of its lists have only ever been seen empty. 'crafthud' prints the Status page. Reads the feed; the only commands it can cause are the two you click on a building. Built from four captures (Keyser, 16-17 Nov 2026).",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.19 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "state.write",
+    "timers.manage",
+    "aliases.manage",
+    "ui.panels"
+  ],
+  "enabled": true
+}
