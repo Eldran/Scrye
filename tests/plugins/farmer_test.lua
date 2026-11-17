@@ -1561,6 +1561,48 @@ fire_timers() ; tick()
 check(not swung_other(), "mid-fight: a quiet moment does not switch to another mob")
 check(not said("giving up on Small cur"), "mid-fight: ...and the live target is not given up on")
 
+-- 36d. THE REAL SHAPE (Joakim, 8 Nov 2026, Southern Walkway floor 40: it opened on Dagger
+--      Jack and a few rounds later "You turn to attack Red Veil"). Char.Combat starts a
+--      fight - and every NEW attacker joining it - at rounds 0 with the attacker's name and
+--      HP (the 23 Oct capture: rounds 0, then 1, 2...). Reading rounds 0 as "no fight"
+--      called a live fight over, or never engaged the hunt, and the next 'kill' went out.
+local function fight_real()
+  fresh_client() ; load_plugin()
+  explore()
+  farm("start")
+  contents(TWO)
+  prompt()                                 -- kill cur
+  sent = {} ; clear()
+end
+fight_real()
+for _ = 1, 12 do
+  combat('{ "target": "you", "rounds": 0, "attacker": "Small cur", "attacker_hp": 95 }') ; tick()
+end
+fire_timers() ; tick()
+check(not swung_other(), "rounds 0 with a named attacker is a fight: no second 'kill' (" .. table.concat(sent, ",") .. ")")
+check(not said("giving up on Small cur"), "...and the target it is fighting is not given up on")
+fight_real()
+combat('{ "target": "you", "rounds": 1, "attacker": "Small cur", "attacker_hp": 90 }')
+combat('{ "target": "you", "rounds": 2, "attacker": "Small cur", "attacker_hp": 80 }')
+clear()
+combat('{ "target": "you", "rounds": 0, "attacker": "Vile abhorrence", "attacker_hp": 100 }')   -- joins in
+check(not said("combat over"), "a second attacker joining at rounds 0 does not end the fight")
+for _ = 1, 4 do tick() end
+fire_timers() ; tick()
+check(not swung_other(), "...and does not pull a 'kill' onto it (" .. table.concat(sent, ",") .. ")")
+-- the real end is still an end
+sent = {}
+combat('{ "target": "", "rounds": 0, "attacker": "", "attacker_hp": 0 }')
+fire_timers()
+check(sent[1] == "kill cur", "the empty payload still ends the fight: the hunt goes on (" .. table.concat(sent, ",") .. ")")
+-- ...and so does a terminal that keeps the name but reports the HP at 0
+fight_real()
+combat('{ "target": "you", "rounds": 3, "attacker": "Small cur", "attacker_hp": 20 }')
+sent = {}
+combat('{ "target": "you", "rounds": 0, "attacker": "Small cur", "attacker_hp": 0 }')
+fire_timers()
+check(sent[1] == "kill cur" or sent[1] == "kill abhorrence", "a named terminal at 0 HP ends the fight too (" .. table.concat(sent, ",") .. ")")
+
 -- a second mob joining in: still the first one until it is dead
 fight_two()
 combat('{ "attacker": "Vile abhorrence", "rounds": 1, "target": "you" }')
@@ -2665,6 +2707,90 @@ clear() ; boxes.limit.onSubmit("45m")
 check(said("run limit: 45 minute(s)"), "the limit box is 'farm limit'")
 clear() ; boxes.panic.onSubmit("flee")
 check(said("at the panic floor: 'flee'"), "the panic box is 'farm panic'")
+
+-- 59b. WHAT THE SETTINGS ARE NOW (2 Nov 2026: the patrol rested after kills at the HP
+--      floor's default 50%, and no box said it was on). A dim line over each box says
+--      what it is set to now, "(default)" while it is the default, and follows a change.
+fresh_client() ; load_plugin()
+do
+  local H = "plugin.3s-farmer.hint_"
+  local function hint(k) return state[H .. k] or "" end
+  local ws = pw()
+  local over = 0
+  for i, w in ipairs(ws) do
+    local k = w.type == "input" and w.bind and w.bind:match("^plugin%.3s%-farmer%.set_(%w+)$")
+    if k and k ~= "delay" and ws[i - 1] and ws[i - 1].type == "label" and ws[i - 1].bind == H .. k then over = over + 1 end
+  end
+  check(over == 6, "settings: each of the six boxes has its 'now' line right above it (" .. over .. ")")
+  check(hint("hp") == "now: rest under 50% until 50% (default)", "settings: the HP floor shows its default 50% (" .. hint("hp") .. ")")
+  check(hint("pace") == "now: fast (default)", "settings: pace shows fast, the default")
+  check(hint("sp") == "now: off (default)", "settings: the SP floor shows off")
+  check(hint("rest") == "now: Seid off, 30s rests (default)",
+        "settings: the Seid rest shows off, and how long a rest is")
+  check(hint("limit") == "now: none (default)" and hint("panic") == "now: none (default)", "settings: limit and panic show none")
+  farm("hp 30 10 60")
+  check(hint("hp") == "now: rest under 30% until 60%, panic 10%", "settings: 'farm hp' updates its line (" .. hint("hp") .. ")")
+  farm("hp 0 0 0")
+  check(hint("hp") == "now: off", "settings: 'farm hp 0' shows it off")
+  farm("hp 50 10 0")
+  check(not hint("hp"):find("(default)", 1, true), "settings: 50% with a panic floor is not the default")
+  farm("hp 50 0 70")
+  check(hint("hp") == "now: rest under 50% until 70%", "settings: ...nor is 50% with a higher resume")
+  farm("hp 50 0 0")
+  check(hint("hp"):find("(default)", 1, true), "settings: ...and back at 50 it is the default again")
+  farm("sp 20 40")
+  check(hint("sp") == "now: rest under 20% until 40%", "settings: 'farm sp' updates its line")
+  farm("sp 20 0")
+  check(hint("sp") == "now: rest under 20% until 20%", "settings: an SP resume of 0 rests until the floor")
+  farm("rest 0 20")
+  check(hint("rest") == "now: Seid off, 20s rests", "settings: a shorter rest is not the default")
+  farm("rest 40 30")
+  check(hint("rest") == "now: under Seid 40, 30s rests", "settings: a Seid floor is not the default, even at 30s")
+  farm("rest 40 20")
+  check(hint("rest") == "now: under Seid 40, 20s rests", "settings: 'farm rest' updates its line")
+  farm("pace 3")
+  check(hint("pace") == "now: a step every 3s", "settings: 'farm pace' updates its line")
+  farm("limit 45m") ; farm("limit 50k")
+  check(hint("limit") == "now: 45 min or 50 kills", "settings: 'farm limit' updates its line")
+  farm("limit -")
+  check(hint("limit") == "now: none (default)", "settings: ...and '-' clears it")
+  farm("panic flee")
+  check(hint("panic") == "now: 'flee'", "settings: 'farm panic' updates its line")
+  fresh_client(true) ; load_plugin()
+  check(hint("hp"):find("(default)", 1, true) and hint("rest") == "now: under Seid 40, 20s rests"
+        and hint("panic") == "now: 'flee'", "settings: the lines are right straight after a reload")
+end
+
+-- 59c. NEVER IN ONE AREA, FROM THE PANEL (2 Nov 2026). Under this area's excludes a box
+--      adds one by hand, like the never-list's box; a line over the table names the area.
+fresh_client() ; load_plugin()
+do
+  local ws = pw()
+  local hi, ti, bi
+  for i, w in ipairs(ws) do
+    if w.bind == "plugin.3s-farmer.exhint" then hi = i end
+    if w.bind == "plugin.3s-farmer.exlist" then ti = i end
+    if w.bind == "plugin.3s-farmer.exbox" then bi = i end
+  end
+  check(hi and ti and bi and hi == ti - 1 and bi == ti + 1 and ws[hi].type == "label" and ws[bi].type == "input",
+        "area excludes: a line names the area over the table, and a box sits under it")
+  local box = ws[bi]
+  check((state["plugin.3s-farmer.exhint"] or "") == "per area - stand in one first", "area excludes: with no area yet the line says where to stand")
+  clear() ; box.onSubmit("small cur")
+  check(said("not standing in a named area"), "area excludes: ...and the box says why it cannot add")
+  explore()
+  check((state["plugin.3s-farmer.exhint"] or "") == "only in Farmland:",
+        "area excludes: standing in the area, the line names it")
+  state["plugin.3s-farmer.exbox"] = "  Small Cur "          -- what the box holds as you press Enter
+  clear() ; box.onSubmit("  Small Cur ")
+  check(said("excluded in Farmland: small cur"), "area excludes: the box excludes in this area, trimmed and lowercased")
+  check((state["plugin.3s-farmer.exlist"] or "") == "small cur", "area excludes: ...the table shows it")
+  check((state["plugin.3s-farmer.exbox"] or "") == "", "area excludes: ...and the box clears itself")
+  box.onSubmit("   ")
+  check((state["plugin.3s-farmer.exlist"] or "") == "small cur", "area excludes: a blank box adds nothing")
+  clear() ; farm("never")
+  check(said("never-list empty") and not said("small cur"), "area excludes: it is not on the never-list - other areas still fight it")
+end
 
 -- 60. KILLS OFF PATROL (22 Sep). Following someone else's bot, your killing blows still
 --     go in the log and the tally; the patrol's own counter and the fight timing do not.

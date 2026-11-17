@@ -1246,9 +1246,18 @@ end
 local function on_combat(json)
   local ok, c = pcall(scrye.json.decode, json)
   if not ok or type(c) ~= "table" then return end
-  -- BOTH attacker and live rounds: a terminal that keeps the attacker's name but zeroes
-  -- the rounds is a fight report, not a fight.
-  local active = tostring(c.attacker or "") ~= "" and (tonumber(c.rounds) or 0) > 0
+  -- A named attacker is a fight. Rounds count per ATTACKER and start at 0: the 23 Oct
+  -- capture opens every fight - and every new attacker joining one - at rounds 0 with the
+  -- attacker's name and HP, then 1, 2... 1.11 and earlier wanted rounds > 0, so a fight's
+  -- first seconds (and a second mob joining in) read as no fight: the hunt never engaged,
+  -- the watchdog gave the live target up and 'kill' went out at the next mob (Joakim,
+  -- 8 Nov 2026: "You turn to attack Red Veil" mid-fight with Dagger Jack). The end is the
+  -- empty payload; a terminal that keeps the name but reports its HP dead/0 is an end too,
+  -- and a fight that just goes quiet ends on the shelf life (CC_STALE).
+  local hp = c.attacker_hp
+  local dead = hp == 0 or hp == "0" or tostring(hp or ""):lower() == "dead"
+  local active = tostring(c.attacker or "") ~= ""
+    and ((tonumber(c.rounds) or 0) > 0 or not dead)
   CC.seen = true
   CC.active = active
   if active then CC.at = now end
@@ -1706,7 +1715,7 @@ farm_cmd = function(args)
       local n = tonumber(rest)
       if rest:lower() == "fast" then n = 0 end
       if not n or n < 0 then note("farm pace <seconds> - currently " .. (C.pace == 0 and "0 (fast)" or C.pace) .. "; 0 = fast") return end
-      C.pace = math.floor(n) ; dirty = true ; save()
+      C.pace = math.floor(n) ; dirty = true ; save() ; draw()
       if C.pace == 0 then note("pace: fast - each step as soon as the room has shown (its prompt)")
       else note("pace: one step every " .. C.pace .. "s (after each arrival)") end
     elseif verb == "delay" or verb == "breath" then
@@ -1762,7 +1771,7 @@ farm_cmd = function(args)
         C.rest_below, C.rest_secs = tonumber(below), math.max(5, tonumber(secs))
         if C.rest_below == 0 then note("resting off")
         else note(string.format("resting %ds whenever Seid drops under %d", C.rest_secs, C.rest_below)) end
-        dirty = true ; save()
+        dirty = true ; save() ; draw()
       end
     elseif verb == "hp" then
       local start_, panic, resume = rest:match("^(%d+)%s+(%d+)%s+(%d+)$")
@@ -1777,7 +1786,7 @@ farm_cmd = function(args)
         note("  if set, then the rest room - or the patrol stops if there is none. A rest ends at resume%. 0 = off")
       else
         C.hp_start, C.hp_panic, C.hp_resume = math.min(100, tonumber(start_)), math.min(100, tonumber(panic)), math.min(100, tonumber(resume))
-        dirty = true ; save()
+        dirty = true ; save() ; draw()
         note(string.format("HP floors: start below %s, panic below %s, rest until %s",
              C.hp_start > 0 and (C.hp_start .. "%") or "off", C.hp_panic > 0 and (C.hp_panic .. "%") or "off",
              C.hp_resume > 0 and (C.hp_resume .. "%") or "start%"))
@@ -1792,7 +1801,7 @@ farm_cmd = function(args)
              sp and (sp .. "%") or "unknown - no usable char.vitals.sp/maxsp"))
       else
         C.sp_start, C.sp_resume = math.min(100, tonumber(floor)), math.min(100, tonumber(resume))
-        dirty = true ; save()
+        dirty = true ; save() ; draw()
         note(string.format("SP floor: rest below %s, until %s",
              C.sp_start > 0 and (C.sp_start .. "%") or "off", C.sp_resume > 0 and (C.sp_resume .. "%") or "floor%"))
       end
@@ -1943,7 +1952,7 @@ farm_cmd = function(args)
              .. (C.panic_cmd ~= "" and ("'" .. C.panic_cmd .. "'") or "none") .. "); 'farm panic -' clears")
       else
         C.panic_cmd = rest == "-" and "" or rest
-        dirty = true ; save()
+        dirty = true ; save() ; draw()
         note(C.panic_cmd ~= "" and ("at the panic floor: '" .. C.panic_cmd .. "'") or "panic command cleared")
       end
     elseif verb == "room" then
@@ -2563,6 +2572,29 @@ draw = function()
     for i, cmd in ipairs(C.after) do rows[#rows + 1] = string.format("%d. %s", i, cmd) end
     scrye.setState(P .. "afterlist", #rows > 0 and table.concat(rows, "\n") or "(none - type a command below: get all from corpse)")
     scrye.setState(P .. "delayhint", string.format("after each kill: wait %gs for your own triggers, then the commands above, then the next mob", C.breath))
+    -- What each Settings box is set to NOW, defaults included (Joakim, 2 Nov 2026: the HP
+    -- floor's 50% made the patrol rest after a kill, and no box said it was on)
+    -- (short: the panel is 220 px wide unless resized, and a label does not wrap)
+    local def = " (default)"
+    scrye.setState(P .. "hint_pace", C.pace == 0 and "now: fast" .. def or string.format("now: a step every %ds", C.pace))
+    local hp_now = C.hp_start > 0
+      and string.format("now: rest under %d%% until %d%%", C.hp_start, math.max(C.hp_start, C.hp_resume))
+      or "now: off"
+    if C.hp_panic > 0 then hp_now = hp_now .. string.format(", panic %d%%", C.hp_panic) end
+    if C.hp_start == 50 and C.hp_panic == 0 and C.hp_resume == 0 then hp_now = hp_now .. def end
+    scrye.setState(P .. "hint_hp", hp_now)
+    scrye.setState(P .. "hint_sp", C.sp_start > 0
+      and string.format("now: rest under %d%% until %d%%", C.sp_start, math.max(C.sp_start, C.sp_resume))
+      or "now: off" .. def)
+    scrye.setState(P .. "hint_rest", (C.rest_below > 0
+      and string.format("now: under Seid %d, %ds rests", C.rest_below, C.rest_secs)
+      or string.format("now: Seid off, %ds rests", C.rest_secs))
+      .. ((C.rest_below == 0 and C.rest_secs == 30) and def or ""))
+    local lim = {}
+    if C.limit_secs > 0 then lim[#lim + 1] = (C.limit_secs // 60) .. " min" end
+    if C.limit_kills > 0 then lim[#lim + 1] = C.limit_kills .. " kills" end
+    scrye.setState(P .. "hint_limit", #lim > 0 and ("now: " .. table.concat(lim, " or ")) or "now: none" .. def)
+    scrye.setState(P .. "hint_panic", C.panic_cmd ~= "" and ("now: '" .. C.panic_cmd .. "'") or "now: none" .. def)
     local nl = noloot_here()
     scrye.setState(P .. "nolootlist", nl and table.concat(nl, "\n")
       or (S.lock and "(every kill in " .. S.lock .. " gets them)" or "(per area - stand in a named area)"))
@@ -2615,6 +2647,7 @@ draw = function()
   scrye.setState(P .. "partylist", #PT > 0 and table.concat(PT, "\n") or "(nobody - any player in a room parks the fists; click a player's row to add them)")
   scrye.setState(P .. "exlist", ex and table.concat(ex, "\n")
                  or (S.lock and "(nothing excluded in " .. S.lock .. ")" or "(per area - stand in a named area)"))
+  scrye.setState(P .. "exhint", S.lock and ("only in " .. S.lock .. ":") or "per area - stand in one first")
   -- room rules, sorted by number: row index -> rule_rows[index] for the click
   rule_rows = {}
   for num in pairs(RR) do rule_rows[#rule_rows + 1] = num end
@@ -2761,11 +2794,20 @@ build_panel = function(m)
           text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
           if text ~= "" then party_add(text) ; scrye.setState(P .. "partybox", "") end
         end },
+      -- This area's excludes: never attacked HERE, attacked everywhere else. The label names
+      -- the area (the one you stand in, or the one being farmed); the box adds one by hand
+      -- (Joakim, 2 Nov 2026), like the never-list's - 'farm exclude', substring match.
+      { type = "label", bind = P .. "exhint", color = "dim" },
       { type = "table", bind = P .. "exlist", columns = { "Excluded in this area (click to allow)" },
         onRowClick = function(_, index)
           local ex = excludes_here()
           local name = ex and ex[index]
           if name then include(name) end
+        end },
+      { type = "input", text = "exclude <name> (this area only)", bind = P .. "exbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+          if text ~= "" then scrye.setState(P .. "exbox", "") ; exclude(text) end
         end },
       -- Fight order and the always-list (round three): the mobs fought first in this area,
       -- and the ones fought even with a stranger in the room.
@@ -2826,11 +2868,18 @@ build_panel = function(m)
       -- Settings, as boxes: each is the typed command with its arguments, so the panel and
       -- the commands cannot disagree; the box shows the current value once set.
       { type = "label", text = "settings (Enter applies; same as the typed commands)", color = "dim" },
+      -- each with a line over it saying what it is set to now, defaults included (2 Nov)
+      { type = "label", bind = P .. "hint_pace", color = "dim" },
       { type = "input", text = "pace <s>", bind = P .. "set_pace", onSubmit = function(t) farm_cmd("pace " .. tostring(t or "")) end },
+      { type = "label", bind = P .. "hint_hp", color = "dim" },
       { type = "input", text = "hp <start> <panic> <resume>", bind = P .. "set_hp", onSubmit = function(t) farm_cmd("hp " .. tostring(t or "")) end },
+      { type = "label", bind = P .. "hint_sp", color = "dim" },
       { type = "input", text = "sp <floor> <resume>", bind = P .. "set_sp", onSubmit = function(t) farm_cmd("sp " .. tostring(t or "")) end },
+      { type = "label", bind = P .. "hint_rest", color = "dim" },
       { type = "input", text = "rest <seid> <secs>", bind = P .. "set_rest", onSubmit = function(t) farm_cmd("rest " .. tostring(t or "")) end },
+      { type = "label", bind = P .. "hint_limit", color = "dim" },
       { type = "input", text = "limit 45m | 50k | -", bind = P .. "set_limit", onSubmit = function(t) farm_cmd("limit " .. tostring(t or "")) end },
+      { type = "label", bind = P .. "hint_panic", color = "dim" },
       { type = "input", text = "panic <cmd> | -", bind = P .. "set_panic", onSubmit = function(t) farm_cmd("panic " .. tostring(t or "")) end },
       -- Room rules, set from the map's right-click menu ('Farmer: never enter' / 'Farmer:
       -- pass through only' - typed 'farm room <n> ...' commands); a row click clears one.
