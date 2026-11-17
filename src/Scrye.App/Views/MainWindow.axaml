@@ -285,12 +285,44 @@
 
                                         <Grid Grid.Column="0">
                                             <Grid.RowDefinitions>
-                                                <RowDefinition Height="*" />
+                                                <RowDefinition Height="{Binding TopPanesRowHeight}" />
+                                                <RowDefinition Height="Auto" />
+                                                <!-- the output keeps some height with panes above AND below it -->
+                                                <RowDefinition Height="*" MinHeight="80" />
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="{Binding PanesRowHeight}" />
                                             </Grid.RowDefinitions>
 
-                                            <controls:TerminalPane Grid.Row="0" Background="{DynamicResource ScryeOutputBg}"
+                                            <!-- top pane zone, above the output (2 Nov 2026; right-click a tab to move/float/close) -->
+                                            <TabControl Grid.Row="0" IsVisible="{Binding TopZoneVisible}" Padding="0"
+                                                        ItemsSource="{Binding TopPanes}" SelectedItem="{Binding SelectedTopPane}">
+                                                <TabControl.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:CapturePaneViewModel">
+                                                        <StackPanel Orientation="Horizontal" Spacing="6" Background="Transparent">
+                                                            <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                                            <Border Background="{DynamicResource ScryeBadgeBg}" CornerRadius="8" Padding="6,0"
+                                                                    IsVisible="{Binding HasUnread}" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Unread}" FontSize="11" Foreground="White" />
+                                                            </Border>
+                                                        </StackPanel>
+                                                    </DataTemplate>
+                                                </TabControl.ItemTemplate>
+                                                <TabControl.ContentTemplate>
+                                                    <DataTemplate x:DataType="vm:CapturePaneViewModel">
+                                                        <controls:TerminalPane Background="{DynamicResource ScryeOutputBg}"
+                                                                               Source="{Binding Buffer}"
+                                                                               FontFamily="{Binding FontFamily}"
+                                                                               FontSize="{Binding FontSize}"
+                                                                               ShowTimestamps="{Binding ShowTimestamps}"
+                                                                           CommandLinkClicked="OnCommandLinkClicked" />
+                                                    </DataTemplate>
+                                                </TabControl.ContentTemplate>
+                                            </TabControl>
+
+                                            <GridSplitter Grid.Row="1" Height="4" IsVisible="{Binding TopZoneVisible}"
+                                                          ResizeDirection="Rows" Background="Transparent" />
+
+                                            <controls:TerminalPane Grid.Row="2" Background="{DynamicResource ScryeOutputBg}"
                                                                    Source="{Binding Scrollback}"
                                                                    FontFamily="{Binding OutputFontFamily}"
                                                                    FontSize="{Binding OutputFontSize}"
@@ -300,11 +332,11 @@
                                                                    ShowTimestamps="{Binding ShowTimestamps}"
                                                                    CommandLinkClicked="OnCommandLinkClicked" />
 
-                                            <GridSplitter Grid.Row="1" Height="4" IsVisible="{Binding ShowPanes}"
+                                            <GridSplitter Grid.Row="3" Height="4" IsVisible="{Binding BottomZoneVisible}"
                                                           ResizeDirection="Rows" Background="Transparent" />
 
                                             <!-- bottom pane zone (right-click a tab to move/float/close) -->
-                                            <TabControl Grid.Row="2" IsVisible="{Binding ShowPanes}" Padding="0"
+                                            <TabControl Grid.Row="4" IsVisible="{Binding BottomZoneVisible}" Padding="0"
                                                         ItemsSource="{Binding BottomPanes}" SelectedItem="{Binding SelectedBottomPane}">
                                                 <TabControl.ItemTemplate>
                                                     <DataTemplate x:DataType="vm:CapturePaneViewModel">

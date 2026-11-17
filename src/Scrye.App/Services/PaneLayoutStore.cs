@@ -9,7 +9,7 @@ namespace Scrye.App.Services;
 public sealed class PaneLayoutEntry
 {
     public string Name { get; set; } = "";
-    public string Dock { get; set; } = "Bottom";   // Bottom | Right | Floating
+    public string Dock { get; set; } = "Bottom";   // Bottom | Right | Floating | Top
 }
 
 /// <summary>A dragged HUD panel's saved placement (canvas coordinates, plus the

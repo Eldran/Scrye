@@ -99,14 +99,16 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Find-in-scrollback bar (Ctrl+F): searches this world's output.</summary>
     public FindViewModel Find { get; }
 
-    /// <summary>All capture panes regardless of zone (bottom tabs, right tabs, floating
-    /// windows). Auto-created on first routed line or restored from the saved layout.</summary>
+    /// <summary>All capture panes regardless of zone (top tabs, bottom tabs, right tabs,
+    /// floating windows). Auto-created on first routed line or restored from the saved layout.</summary>
     private readonly List<CapturePaneViewModel> _allPanes = new();
     private readonly Dictionary<CapturePaneViewModel, Window> _floatWindows = new();
     private bool _restoringLayout;   // suppress saves while applying a loaded layout
 
     public System.Collections.ObjectModel.ObservableCollection<CapturePaneViewModel> BottomPanes { get; } = new();
     public System.Collections.ObjectModel.ObservableCollection<CapturePaneViewModel> RightPanes { get; } = new();
+    /// <summary>Panes docked ABOVE the output (Joakim, 2 Nov 2026: the Chats pane at the top).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<CapturePaneViewModel> TopPanes { get; } = new();
 
     private CapturePaneViewModel? _selectedBottomPane;
     public CapturePaneViewModel? SelectedBottomPane
@@ -116,6 +118,17 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         {
             if (SetField(ref _selectedBottomPane, value) && value is not null)
                 value.Unread = 0;   // viewing the tab clears its badge
+        }
+    }
+
+    private CapturePaneViewModel? _selectedTopPane;
+    public CapturePaneViewModel? SelectedTopPane
+    {
+        get => _selectedTopPane;
+        set
+        {
+            if (SetField(ref _selectedTopPane, value) && value is not null)
+                value.Unread = 0;
         }
     }
 
@@ -131,20 +144,56 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     private bool _showPanes;
-    /// <summary>Bottom pane-zone visibility ("Panes" toggle). Auto-opens when the
-    /// first bottom pane appears; the row height collapses when hidden.</summary>
+    /// <summary>The "Panes" toggle: shows or hides the pane zones above and below the output.
+    /// Auto-opens when the first pane docks there and closes when the last one leaves; each
+    /// zone's row collapses when it is hidden (<see cref="UpdateZones"/>).</summary>
     public bool ShowPanes
     {
         get => _showPanes;
         set
         {
-            if (SetField(ref _showPanes, value))
+            if (SetField(ref _showPanes, value)) UpdateZones();
+        }
+    }
+
+    private bool _bottomZoneVisible;
+    /// <summary>The bottom zone: shown with the toggle while it holds a pane - or while no
+    /// zone does, so the toggle on its own still opens the (empty) pane area as it always did.</summary>
+    public bool BottomZoneVisible
+    {
+        get => _bottomZoneVisible;
+        private set
+        {
+            // the row is sized only when the zone appears or goes, so a height dragged with
+            // the splitter survives a pane moving in or out while the zone stays shown
+            if (SetField(ref _bottomZoneVisible, value))
                 PanesRowHeight = value ? new GridLength(190) : new GridLength(0);
         }
     }
 
+    private bool _topZoneVisible;
+    /// <summary>The top zone: shown with the toggle while a pane is docked there.</summary>
+    public bool TopZoneVisible
+    {
+        get => _topZoneVisible;
+        private set
+        {
+            if (SetField(ref _topZoneVisible, value))
+                TopPanesRowHeight = value ? new GridLength(190) : new GridLength(0);
+        }
+    }
+
+    private void UpdateZones()
+    {
+        BottomZoneVisible = _showPanes && (BottomPanes.Count > 0 || TopPanes.Count == 0);
+        TopZoneVisible = _showPanes && TopPanes.Count > 0;
+    }
+
     private GridLength _panesRowHeight = new(0);
     public GridLength PanesRowHeight { get => _panesRowHeight; set => SetField(ref _panesRowHeight, value); }
+
+    private GridLength _topPanesRowHeight = new(0);
+    public GridLength TopPanesRowHeight { get => _topPanesRowHeight; set => SetField(ref _topPanesRowHeight, value); }
 
     private bool _rightVisible;
     /// <summary>Right pane-zone visibility (auto: shown while any pane is docked right).</summary>
@@ -177,16 +226,19 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
     }
 
     /// <summary>Move a pane into a zone: detach it everywhere, then attach to the target.
-    /// Closing a floating pane's window re-docks it to the bottom zone.</summary>
+    /// Closing a floating pane's window re-docks it where it was docked before it floated.</summary>
     private void PlacePane(CapturePaneViewModel pane, PaneDock dock)
     {
         BottomPanes.Remove(pane);
         RightPanes.Remove(pane);
+        TopPanes.Remove(pane);
         if (_floatWindows.Remove(pane, out Window? open)) open.Close();   // removed first: Closed won't re-dock
         if (ReferenceEquals(SelectedBottomPane, pane)) SelectedBottomPane = BottomPanes.Count > 0 ? BottomPanes[0] : null;
         if (ReferenceEquals(SelectedRightPane, pane)) SelectedRightPane = RightPanes.Count > 0 ? RightPanes[0] : null;
+        if (ReferenceEquals(SelectedTopPane, pane)) SelectedTopPane = TopPanes.Count > 0 ? TopPanes[0] : null;
 
         pane.Dock = dock;
+        if (dock != PaneDock.Floating) pane.LastDocked = dock;
         switch (dock)
         {
             case PaneDock.Bottom:
@@ -198,12 +250,18 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 RightPanes.Add(pane);
                 SelectedRightPane ??= pane;
                 break;
+            case PaneDock.Top:
+                TopPanes.Add(pane);
+                SelectedTopPane ??= pane;
+                if (!ShowPanes) ShowPanes = true;
+                break;
             case PaneDock.Floating:
                 OpenFloatWindow(pane);
                 break;
         }
-        if (BottomPanes.Count == 0 && ShowPanes) ShowPanes = false;
+        if (BottomPanes.Count == 0 && TopPanes.Count == 0 && ShowPanes) ShowPanes = false;
         RightVisible = RightPanes.Count > 0;
+        UpdateZones();
     }
 
     private void MovePane(CapturePaneViewModel pane, PaneDock dock)
@@ -218,12 +276,15 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
         _closedPanes.Add(pane.Name);      // so a declaring plugin does not re-create it next start
         BottomPanes.Remove(pane);
         RightPanes.Remove(pane);
+        TopPanes.Remove(pane);
         if (_floatWindows.Remove(pane, out Window? open)) open.Close();
         if (ReferenceEquals(SelectedBottomPane, pane)) SelectedBottomPane = BottomPanes.Count > 0 ? BottomPanes[0] : null;
         if (ReferenceEquals(SelectedRightPane, pane)) SelectedRightPane = RightPanes.Count > 0 ? RightPanes[0] : null;
+        if (ReferenceEquals(SelectedTopPane, pane)) SelectedTopPane = TopPanes.Count > 0 ? TopPanes[0] : null;
         _allPanes.Remove(pane);
-        if (BottomPanes.Count == 0 && ShowPanes) ShowPanes = false;
+        if (BottomPanes.Count == 0 && TopPanes.Count == 0 && ShowPanes) ShowPanes = false;
         RightVisible = RightPanes.Count > 0;
+        UpdateZones();
         SaveLayout();
     }
 
@@ -260,10 +321,10 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             // Detach the output views from the pane's buffer: they subscribe to it, and the
             // buffer outlives this window, so leaving Source set would keep them alive.
             terminal.Source = null;
-            // user closed the window: bring the pane home to the bottom zone
+            // user closed the window: bring the pane home to the zone it floated from
             if (_floatWindows.Remove(pane) && _allPanes.Contains(pane))
             {
-                PlacePane(pane, PaneDock.Bottom);
+                PlacePane(pane, pane.LastDocked);
                 SaveLayout();
             }
         };
@@ -1447,7 +1508,8 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             }
             bool visible = pane.Dock == PaneDock.Floating
                 || ReferenceEquals(pane, SelectedBottomPane)
-                || ReferenceEquals(pane, SelectedRightPane);
+                || ReferenceEquals(pane, SelectedRightPane)
+                || ReferenceEquals(pane, SelectedTopPane);
             if (!visible) pane.Unread++;
         }
 

@@ -4,8 +4,9 @@ using Scrye.Core.Text;
 namespace Scrye.App.ViewModels;
 
 /// <summary>Where a capture pane lives: tabbed under the output, tabbed on the
-/// right side, or floating in its own window.</summary>
-public enum PaneDock { Bottom, Right, Floating }
+/// right side, floating in its own window, or tabbed above the output (Top - added last,
+/// so the names stored in a saved layout keep meaning what they meant).</summary>
+public enum PaneDock { Bottom, Right, Floating, Top }
 
 /// <summary>
 /// One named capture pane (created by a trigger's "capture to pane" or
@@ -29,6 +30,7 @@ public sealed class CapturePaneViewModel : ViewModelBase
 
     public RelayCommand MoveBottomCommand { get; }
     public RelayCommand MoveRightCommand { get; }
+    public RelayCommand MoveTopCommand { get; }
     public RelayCommand FloatCommand { get; }
     public RelayCommand CloseCommand { get; }
 
@@ -39,6 +41,7 @@ public sealed class CapturePaneViewModel : ViewModelBase
         FontSize = fontSize;
         MoveBottomCommand = new RelayCommand(() => MoveRequested?.Invoke(this, PaneDock.Bottom));
         MoveRightCommand = new RelayCommand(() => MoveRequested?.Invoke(this, PaneDock.Right));
+        MoveTopCommand = new RelayCommand(() => MoveRequested?.Invoke(this, PaneDock.Top));
         FloatCommand = new RelayCommand(() => MoveRequested?.Invoke(this, PaneDock.Floating));
         CloseCommand = new RelayCommand(() => CloseRequested?.Invoke(this));
     }
@@ -46,6 +49,10 @@ public sealed class CapturePaneViewModel : ViewModelBase
     private PaneDock _dock = PaneDock.Bottom;
     /// <summary>Current zone; set by the world's PlacePane (persisted in the layout).</summary>
     public PaneDock Dock { get => _dock; set => SetField(ref _dock, value); }
+
+    /// <summary>The zone it was last docked in (not Floating): where closing its float window
+    /// puts it back - a pane floated from the top goes back to the top. Session only.</summary>
+    public PaneDock LastDocked { get; set; } = PaneDock.Bottom;
 
     private int _unread;
     public int Unread

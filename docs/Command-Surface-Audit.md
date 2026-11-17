@@ -21,7 +21,7 @@ Scrye accepts with no plugins loaded.
 |---|---|---|
 | `/<lua>` | **Lua console.** Runs Lua on the session loop, e.g. `/world.AddAlias("greet", "hi *", "say hello %1")`. The one privileged prefix — gated by origin, so a phone can't run it unless granted. | **Documented** — its own guide section, with the eight `world.*` calls, the sandbox, and why it alone is gated. |
 | `F11` | Toggle fullscreen. | **Documented** in the main-window key list. |
-| Right-click a pane tab | Move to bottom / right / float as window / close. | **Documented** in Capture panes. A ⋮ affordance on the tab is still worth considering — right-click remains the only route. |
+| Right-click a pane tab | Move to top / bottom / right / float as window / close. | **Documented** in Capture panes. A ⋮ affordance on the tab is still worth considering — right-click remains the only route. |
 
 ### 2. Documented, but no way to do it from the UI
 

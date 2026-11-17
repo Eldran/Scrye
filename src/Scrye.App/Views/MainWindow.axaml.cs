@@ -286,6 +286,7 @@ public partial class MainWindow : Window
         }
 
         var menu = new ContextMenu();
+        menu.Items.Add(Item("Move to top", () => pane.MoveTopCommand.Execute(null)));
         menu.Items.Add(Item("Move to bottom", () => pane.MoveBottomCommand.Execute(null)));
         menu.Items.Add(Item("Move to right side", () => pane.MoveRightCommand.Execute(null)));
         menu.Items.Add(Item("Float as window", () => pane.FloatCommand.Execute(null)));

@@ -871,7 +871,7 @@ support varies across clients. And **escape anything a player can influence** (`
 
 ## Capture panes
 
-A **capture pane** is a separate scrolling pane that collects specific lines — for example, all chat channels and tells routed into one "Chats" pane. Plugins (and triggers) can route lines into named panes. Show and hide the pane area with the **Panes** toggle in the bottom bar.
+A **capture pane** is a separate scrolling pane that collects specific lines — for example, all chat channels and tells routed into one "Chats" pane. Plugins (and triggers) can route lines into named panes. Show and hide the pane areas — above and below the output — with the **Panes** toggle in the bottom bar.
 
 Panes appear on their own. A plugin that captures into one declares it in its manifest, so enabling the plugin creates the pane there and then — you don't have to open the Panes area and wait for something to arrive. A pane a trigger routes into is created the first time a line lands in it. Either way the layout is remembered per world, so it comes back where you left it.
 
@@ -879,11 +879,11 @@ Panes appear on their own. A plugin that captures into one declares it in its ma
 
 **Right-click a pane's tab** for the things you can't do any other way:
 
-- **Move to bottom** / **Move to right side** — dock the pane along the bottom or down the right edge.
+- **Move to top** / **Move to bottom** / **Move to right side** — dock the pane above the output, along the bottom, or down the right edge. The top area appears when a pane is moved there (and goes when the last one leaves); drag the line between it and the output to make it taller or shorter.
 - **Float as window** — pop it out into its own window, handy on a second monitor.
 - **Close pane**.
 
-A floated pane can be re-docked from the same menu on its tab once it's back.
+Closing a floated pane's window puts it back where it was docked before (top, bottom or right).
 
 ## Plugins
 
