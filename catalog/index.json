@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "v1.10.9",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.10.9/src/Scrye.App/plugins/",
-  "generated": "2026-11-17T18:00:43Z",
+  "ref": "7f724bc25a64ea440a9ebb632d3efe63be797a4c",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/7f724bc25a64ea440a9ebb632d3efe63be797a4c/src/Scrye.App/plugins/",
+  "generated": "2026-11-18T13:29:07Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -156,9 +156,9 @@
     {
       "id": "3s-craft",
       "name": "3S Crafting",
-      "version": "0.3.0",
+      "version": "0.9.0",
       "author": "Joakim",
-      "description": "A HUD for the crafting system, fed by the Craft.* GMCP packages (3Scapes only, any guild). Status: storage, souls, the production queue, what is ready to collect, which skills have the xp to train, every building under construction with a live countdown, every building there is with its tier (T0 for the ones not built: click one for 'cbuild info <name>', right-click for a menu that builds or upgrades it with 'cbuild build <name> confirm'), realm levels and drop standing, and your bonuses. Skills: all 36 with trained rank, banked xp, the training price and whether they are locked. Tokens: every tier in every realm. Market: the open token exchanges. Recipes: the catalogue by building ('crafthud recipes <building>' prints one). Raw: anything that has arrived non-empty and is not understood yet, under the server's own names - the system is days old and most of its lists have only ever been seen empty. 'crafthud' prints the Status page. Reads the feed; the only commands it can cause are the two you click on a building. Built from four captures (Keyser, 16-17 Nov 2026).",
+      "description": "A HUD for the crafting system, fed by the Craft.* GMCP packages (3Scapes only, any guild). Status: storage, souls, the production queue, what is ready to collect, which skills have the xp to train, every building under construction with a live countdown, builds that are pending and what they need, every building there is with its tier (T0 for the ones not built: click one for 'cbuild info <name>', right-click for a menu that builds or upgrades it with 'cbuild build <name> confirm'), realm levels and drop standing, and your bonuses. Skills: all 36 grouped by realm (Chaos red, Fantasy purple, Science blue, any-realm yellow - the buildings wear the same colours, and each tier T0-T5 has a colour of its own) with trained rank, banked xp, the training price and whether they are locked. Tokens: every tier in every realm. Market: the open token exchanges. Recipes: the catalogue by building ('crafthud recipes <building>' prints one). Raw: anything that has arrived non-empty and is not understood yet, under the server's own names - the system is days old and most of its lists have only ever been seen empty. 'crafthud' prints the Status page. Reads the feed; the only commands it can cause are the ones you click: a building's name (cbuild info, and build or upgrade from its right-click menu) and a skill's name (chelp, and ctrain from its right-click menu). Built from four captures (Keyser, 16-17 Nov 2026).",
       "mudIds": [
         "*"
       ],
@@ -175,16 +175,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "7558d0528076b63354c29952eafd594f59a95eab3e0651bf01dc601b504c0f53",
-          "size": 37388
+          "sha256": "04acaca19e659aa70c6e262ac701b0d588ceb0c7da856f963fd21ad03dfebaf9",
+          "size": 43259
         },
         {
           "path": "plugin.json",
-          "sha256": "b0dada791095c1bb2576e33108ed5d7a9890c265c3bf2aefd969910856411c4e",
-          "size": 1450
+          "sha256": "e352e815c41e68fae3b1913222a39a495c6b497a5965eee685b8ed567a3e5633",
+          "size": 1787
         }
       ],
-      "totalSize": 38838
+      "totalSize": 45046
     },
     {
       "id": "3s-cyborg",
