@@ -23,7 +23,12 @@
 -- on a bare Craft.Event id (2), a token delta wiping the other realms (3), the
 -- skill chunks replacing instead of joining (7). 0.2.0: T0 buildings dropped (4), a
 -- build menu on a building under construction (1), a bare rclick= fallback (3), an
--- upgrade menu at T5 (1), the command not lower-cased (6). 0.2.1: a stale
+-- upgrade menu at T5 (1), the command not lower-cased (6). 0.4.0: two realms' colours
+-- swapped (3, then it stops), the skills left ungrouped (11), a locked skill left in its realm's colour (2).
+-- 0.5.0: every built tier in one colour (4), the any-realm skills left uncoloured (4).
+-- 0.6.0: tokens coloured by realm instead of tier (3). 0.7.0: the recipe rows in one colour (6).
+-- 0.8.0: a train menu on a locked skill (2), a bare rclick= on a skill (7).
+-- 0.9.0: pending builds ignored (5). 0.2.1: a stale
 -- catalogue page kept when its key is resent shorter (1).
 
 local HERE = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
@@ -156,6 +161,7 @@ local SK_0  = '{ "full": 1, "skills_0": { "reaving": { "rank": 1, "train_abbr": 
 local SK_7_BANKED  = '{ "full": 1, "skills_7": { "augmetics": { "rank": 1, "train_abbr": "dnt", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 0, "train_realm": "Science", "can_train": -1, "to_next": 50, "train_tier": 1, "into": 0 }, "salvaging": { "rank": 1, "train_abbr": "any", "train_cost": 8, "trained": 1, "xp_rank": 4, "unlocked": 1, "train_realm": "any", "can_train": 1, "to_next": -313, "train_tier": 1, "into": 363 } } }'
 -- ...and after ctrain (17 Nov, 16:48)
 local SK_7_TRAINED = '{ "full": 1, "skills_7": { "augmetics": { "rank": 1, "train_abbr": "dnt", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 0, "train_realm": "Science", "can_train": -1, "to_next": 50, "train_tier": 1, "into": 0 }, "salvaging": { "rank": 4, "train_abbr": "any", "train_cost": 20, "trained": 4, "xp_rank": 4, "unlocked": 1, "train_realm": "any", "can_train": 0, "to_next": 47, "train_tier": 1, "into": 153 } } }'
+local SK_3  = '{ "full": 1, "skills_3": { "butchery": { "rank": 1, "train_abbr": "crk", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 1, "train_realm": "Chaos", "can_train": 0, "to_next": 50, "train_tier": 1, "into": 0 }, "armstech": { "rank": 1, "train_abbr": "dnt", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 0, "train_realm": "Science", "can_train": -1, "to_next": 50, "train_tier": 1, "into": 0 } } }'
 local SK_17 = '{ "full": 1, "skills_17": { "quantum-smithing": { "rank": 1, "train_abbr": "dnt", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 1, "train_realm": "Science", "can_train": 0, "to_next": 50, "train_tier": 1, "into": 0 }, "bladesmithing": { "rank": 1, "train_abbr": "wrn", "train_cost": 8, "trained": 1, "xp_rank": 1, "unlocked": 0, "train_realm": "Fantasy", "can_train": -1, "to_next": 50, "train_tier": 1, "into": 0 } } }'
 
 local ST_NONE  = '{ "full": 1, "bldgs": [ ] }'
@@ -166,6 +172,8 @@ local ST_REF14 = '{ "full": 1, "refineries_14": [ "Reactor Core|7|Hyperconductor
 local JOBS_FULL  = '{ "ready": [ ], "full": 1, "pending_builds": [ ], "queue_total": 0, "queues": [ ], "masterwork": [ ], "builds": [ ], "queue_cap": 40 }'
 local JOBS_BUILD = '{ "builds": [ { "tier": 1, "due": 1794924593, "building": "Strip Mines" } ] }'
 local JOBS_DONE  = '{ "builds": [ ] }'
+-- a build asked for and not yet under way (18 Nov, 14:13): the Soul Well, pending
+local JOBS_PENDING = '{ "ready": [ ], "full": 1, "pending_builds": [ { "need": 400, "building": "Soul Well", "realm": "", "global": 1, "token": "", "tier": 1 } ], "queue_total": 0, "queues": [ ], "masterwork": [ ], "builds": [ ], "queue_cap": 40 }'
 
 local MARKET_FULL = '{ "scroll_outbox": [], "scroll_orders": [], "full": 1, "scroll_auctions": [], "auctions": [], "orders": [], "exchanges": [ { "give_qty": 10, "want_token": "chaos_5", "want_qty": 10, "give_token": "fantasy_5", "created": 1794907287, "player": "timmy", "id": 1 } ], "material_orders": [] }'
 
@@ -184,7 +192,7 @@ local function login()
   gmcp("Craft.Statedata", STATE_P1); gmcp("Craft.Statedata", STATE_P2)
   gmcp("Craft.Statedata", STATE_P3); gmcp("Craft.Statedata", STATE_P4)
   gmcp("Craft.Statedata", STATE_G133)
-  gmcp("Craft.Skills", SK_0); gmcp("Craft.Skills", SK_7_BANKED); gmcp("Craft.Skills", SK_17)
+  gmcp("Craft.Skills", SK_0); gmcp("Craft.Skills", SK_3); gmcp("Craft.Skills", SK_7_BANKED); gmcp("Craft.Skills", SK_17)
   gmcp("Craft.Structures", ST_NONE); gmcp("Craft.Structures", ST_REF); gmcp("Craft.Structures", ST_REF14)
   gmcp("Craft.Jobs", JOBS_FULL)
   gmcp("Craft.Market", MARKET_FULL)
@@ -213,17 +221,21 @@ check(has("status", "Queue        0/40"), "status: the production queue")
 check(has("status", "0 built"), "status: an empty bldgs is '0 built', not 'not listed'")
 
 -- every building, built or not (0.2.0): the name is a link
-local T0 = "@{dim,menu=Build Plasma Reactors|cbuild build plasma reactors confirm,click=cbuild info plasma reactors}Plasma Reactors@{}"
+local T0 = "@{#5FA8F5,menu=Build Plasma Reactors|cbuild build plasma reactors confirm,click=cbuild info plasma reactors}Plasma Reactors@{}"
 check(has("status", "  " .. T0 .. "      @{dim}T0@{}"),
   "buildings: one not built is listed at T0; click asks about it, the menu builds it")
 check(has("status", "Soul Well@{}") and has("status", "Logistics Depot@{}"), "buildings: the two global ones are listed")
+check(has("status", "@{#E0605A,menu=Build Flesh Harvesters|") and has("status", "@{#B48CF0,menu=Build Sacred Groves|"),
+  "buildings: a Chaos building is red and a Fantasy one purple (0.4.0)")
+check(has("status", "@{#E8C547,menu=Build Soul Well|"), "buildings: a global building is yellow (0.5.0)")
+check(has("status", "@{dim,menu=Build Fleshworks|"), "buildings: one the feed could not place keeps the panel's own colour")
 check(has("status", "click=cbuild info bone forge}Bone Forge@{}") and has("status", "click=cbuild info crystal refinery}Crystal Refinery@{}"),
   "buildings: the catalogue adds the production buildings and refineries")
 check(has("status", "click=cbuild info fleshworks}Fleshworks@{}"), "buildings: a refinery the catalogue did not name is still listed")
 do
   local s = st("status")
-  local c, f, sc, g, o = s:find("@{dim}Chaos@{}", 1, true), s:find("@{dim}Fantasy@{}", 1, true),
-    s:find("@{dim}Science@{}", 1, true), s:find("@{dim}Global@{}", 1, true), s:find("@{dim}Other@{}", 1, true)
+  local c, f, sc, g, o = s:find("@{#E0605A,bold}Chaos@{}", 1, true), s:find("@{#B48CF0,bold}Fantasy@{}", 1, true),
+    s:find("@{#5FA8F5,bold}Science@{}", 1, true), s:find("@{#E8C547,bold}Global@{}", 1, true), s:find("@{dim}Other@{}", 1, true)
   check(c and f and sc and g and o and c < f and f < sc and sc < g and g < o, "buildings: grouped Chaos, Fantasy, Science, Global, Other")
   local bone, harv = s:find("}Bone Forge@{}", 1, true), s:find("}Flesh Harvesters@{}", 1, true)
   check(bone and harv and c < harv and harv < bone and bone < f, "buildings: a realm's extractors first, then the rest, inside the realm")
@@ -238,17 +250,34 @@ check(has("status", "logistics 15   soul cap 10   soul gain 5   speed 0"), "stat
 
 -- tokens: all three realms, each tier, the zeroes dimmed rather than dropped
 check(has("tokens", "-- Chaos --") and has("tokens", "-- Fantasy --") and has("tokens", "-- Science --"), "tokens: three realms")
-check(has("tokens", "T4 hyper-charged     121"), "tokens: a held token with its count")
+check(has("tokens", "@{#F28C28}T4 hyper-charged     121@{}"), "tokens: a held token with its count, in its tier's colour (0.6.0)")
+check(has("tokens", "@{#E0605A,bold}-- Chaos --@{}") and has("tokens", "@{#B48CF0,bold}-- Fantasy --@{}") and has("tokens", "@{#5FA8F5,bold}-- Science --@{}"),
+  "tokens: each realm's heading in the realm's colour")
 check(has("tokens", "@{dim}T5 quantum"), "tokens: a zero is dimmed, and still listed")
 check(has("summary", "121 tokens"), "summary: the token total")
 
 -- skills: the numbered chunks joined; banked xp ahead of the trained rank
+-- grouped by realm and in the realm's colour (0.4.0): Chaos red, Fantasy purple, Science blue
 local sk = rows("skills")
-check(#sk == 6, "skills: the three chunks are joined into six rows (got " .. #sk .. ")")
-check(sk[1] == "salvaging\tany\t1 (xp 4)\t363/50\t8 any\txp ready",
-  "skills: banked xp shows rank 1 (xp 4), 363 against a threshold of 50, the price, and 'xp ready' first")
-check(sk[#sk]:find("\tlocked$") ~= nil, "skills: locked skills sort last")
-check(has("skills_head", "1 with the xp to train   2 open   3 locked"), "skills: the head counts each kind")
+check(#sk == 12, "skills: the four chunks are joined - eight skills under four headings (got " .. #sk .. ")")
+check(sk[1] == "@{#E0605A,bold}-- Chaos --@{}" and sk[2] == "@{#E0605A,menu=Train butchery|ctrain butchery,click=chelp butchery}butchery@{}@{#E0605A}          1              0/50  8 crk@{}",
+  "skills: Chaos first, its heading and its skill in red (got " .. tostring(sk[2]) .. ")")
+check(sk[3] == "@{#B48CF0,bold}-- Fantasy --@{}", "skills: then Fantasy, in purple")
+check(sk[4] == "@{dim,click=chelp arcana}arcana@{}@{dim}            1              0/50  8 wrn locked@{}", "skills: a locked skill is dim, whatever its realm (got " .. tostring(sk[4]) .. ")")
+check(sk[6] == "@{#5FA8F5,bold}-- Science --@{}" and sk[7] == "@{#5FA8F5,menu=Train quantum-smithing|ctrain quantum-smithing,click=chelp quantum-smithing}quantum-smithing@{}@{#5FA8F5}  1              0/50  8 dnt@{}",
+  "skills: then Science in blue, the open skill ahead of the locked ones (got " .. tostring(sk[7]) .. ")")
+check(sk[8]:find("}armstech@{}", 1, true) ~= nil and sk[9]:find("}augmetics@{}", 1, true) ~= nil, "skills: ...which follow, by name")
+check(sk[10] == "@{#E8C547,bold}-- Any realm --@{}", "skills: the skills any realm's tokens train come last, under their own heading, in yellow (0.5.0)")
+check(sk[11] == "@{#E8C547,menu=Train salvaging|ctrain salvaging,click=chelp salvaging}salvaging@{}@{#E8C547}         1 (xp 4)     363/50  8 any@{}@{success,bold} xp ready@{}",
+  "skills: banked xp shows rank 1 (xp 4), 363 against a threshold of 50, the price, and 'xp ready' first (got " .. tostring(sk[11]) .. ")")
+check(sk[12] == "@{#E8C547,menu=Train reaving|ctrain reaving,click=chelp reaving}reaving@{}@{#E8C547}           1              0/50  8 any@{}", "skills: ...and so is each skill under it")
+check(has("skills_head", "1 with the xp to train   3 open   4 locked"), "skills: the head counts each kind")
+-- the name is a link (0.8.0): click asks, the right-click MENU trains - never a bare right click
+check(has("skills", "@{#E8C547,menu=Train salvaging|ctrain salvaging,click=chelp salvaging}salvaging@{}"),
+  "skills: a skill's name clicks to chelp and its menu trains it")
+check(has("skills", "@{dim,click=chelp arcana}arcana@{}") and not has("skills", "ctrain arcana"), "skills: a locked skill can be read about, and has no train menu")
+check(has("skills", "ctrain quantum-smithing,click=chelp quantum-smithing}"), "skills: a hyphenated name goes out whole")
+check(not has("skills", "rclick="), "skills: training is never one bare right click away")
 check(has("status", "Train        ") and has("status", "salvaging"), "status: the trainable skill is named")
 check(has("summary", "1 to train"), "summary: ...and counted")
 
@@ -260,18 +289,21 @@ check(has("market_head", "1 token exchange(s)") and has("market_head", "scroll o
 
 -- recipes: THE PROPERTY - three pages under one key are all kept
 local rc = rows("recipes")
-check(#rc == 2, "recipes: one row per building (got " .. #rc .. ")")
-check(rc[1] == "Bone Forge\tChaos\t12\t1-100\t", "recipes: all three pages of catalogue_chaos are counted (got " .. tostring(rc[1]) .. ")")
-check(rc[2] == "Crystal Refinery\tFantasy\t10\t1-100\t", "recipes: ...and both pages of a numbered chunk")
+-- grouped by realm, in the realm's colour (0.7.0): a column heading, then a heading and
+-- a row per building for each realm
+check(#rc == 5, "recipes: a column heading, two realm headings, one row per building (got " .. #rc .. ")")
+check(rc[2] == "@{#E0605A,bold}-- Chaos --@{}" and rc[4] == "@{#B48CF0,bold}-- Fantasy --@{}", "recipes: the realms' headings in the realms' colours")
+check(rc[3] == "@{#E0605A}Bone Forge                  12    1-100@{}", "recipes: all three pages of catalogue_chaos are counted, in red (got " .. tostring(rc[3]) .. ")")
+check(rc[5] == "@{#B48CF0}Crystal Refinery            10    1-100@{}", "recipes: ...and both pages of a numbered chunk, in purple (got " .. tostring(rc[5]) .. ")")
 check(has("recipes_head", "22 recipes in 2 buildings"), "recipes: the head totals them and says it is the catalogue")
 
 -- SYNTHETIC (0.2.1): the same key comes back cut into two pages instead of three -
 -- the third page of the old cut must not stay behind and be counted twice
 gmcp("Craft.Recipes", (REC_C_1:gsub('"pages": 3', '"pages": 2')))
 gmcp("Craft.Recipes", (REC_C_2:gsub('"pages": 3', '"pages": 2'))); fire_timers()
-check(rows("recipes")[1] == "Bone Forge\tChaos\t10\t1-100\t", "recipes: a key resent with fewer pages drops the stale one (got " .. tostring(rows("recipes")[1]) .. ")")
+check(rows("recipes")[3] == "@{#E0605A}Bone Forge                  10    1-100@{}", "recipes: a key resent with fewer pages drops the stale one (got " .. tostring(rows("recipes")[3]) .. ")")
 gmcp("Craft.Recipes", REC_C_1); gmcp("Craft.Recipes", REC_C_2); gmcp("Craft.Recipes", REC_C_3); fire_timers()
-check(rows("recipes")[1] == "Bone Forge\tChaos\t12\t1-100\t", "recipes: ...and the full cut comes back whole")
+check(rows("recipes")[3] == "@{#E0605A}Bone Forge                  12    1-100@{}", "recipes: ...and the full cut comes back whole")
 
 -- raw: the sixty all-zero refinery rows and the empty lists say nothing
 check(not has("raw", "Fleshworks") and not has("raw", "Reactor Core"), "raw: an all-zero refinery row is not shown")
@@ -282,14 +314,19 @@ check(has("raw", "materials_chunks_g134 0") and not has("raw", "g133"), "raw: it
 
 -- 3. a token delta is the one realm's array: the others stay
 gmcp("Craft.Statedata", STATE_TOK71); fire_timers()
-check(has("tokens", "T4 hyper-charged      71"), "token delta: the count moves")
+check(has("tokens", "@{#F28C28}T4 hyper-charged      71@{}"), "token delta: the count moves")
 check(has("tokens", "-- Chaos --") and has("tokens", "T5 legendary"), "token delta: the other realms are kept")
 check(has("status", "Storage      0/165"), "token delta: ...and so is page one")
+
+gmcp("Craft.Statedata", STATE_TOK68); fire_timers()
+check(has("tokens", "@{#E6E6E6}T1 dented              4@{}") and has("tokens", "@{#F28C28}T4 hyper-charged      68@{}"),
+  "tokens: tier 1 is white and tier 4 orange - the buildings' tier colours")
+check(has("tokens", "@{dim}T2 scorched            0@{}"), "tokens: ...and one you hold none of is dim whatever its tier")
 
 -- 4. a build: counted down against the clock
 gmcp("Craft.Jobs", JOBS_BUILD); fire_timers()
 check(has("status", "Strip Mines        T1"), "build: listed under construction")
-check(has("status", "  @{warning,click=cbuild info strip mines}Strip Mines@{}          @{dim}T0@{}@{warning}   building T1, 1h 00m@{}"),
+check(has("status", "  @{#5FA8F5,click=cbuild info strip mines}Strip Mines@{}          @{dim}T0@{}@{warning}   building T1, 1h 00m@{}"),
   "build: in the building list it is marked, counts down, and has NO build menu")
 check(has("status", "1h 00m"), "build: an hour to go at the moment it was started")
 check(has("status", "Queue        0/40"), "build: the delta did not cost the queue numbers")
@@ -307,8 +344,8 @@ gmcp("Craft.Jobs", JOBS_DONE); fire_timers()
 check(said("Strip Mines T1 is built"), "finish: a build that leaves the list at its time is announced")
 check(has("status", "@{dim}nothing@{}") and not has("status", "due now"), "finish: nothing is under construction")
 gmcp("Craft.Structures", ST_MINES); fire_timers()
-check(has("status", "  @{success,menu=Upgrade Strip Mines to T2|cbuild build strip mines confirm,click=cbuild info strip mines}Strip Mines@{}          T1")
-  and has("status", "1 built"), "finish: the building is listed at T1, and its menu now upgrades")
+check(has("status", "  @{#5FA8F5,bold,menu=Upgrade Strip Mines to T2|cbuild build strip mines confirm,click=cbuild info strip mines}Strip Mines@{}          @{#E6E6E6}T1@{}")
+  and has("status", "1 built"), "finish: the building is listed at T1 - bold in its realm's colour - and its menu now upgrades")
 check(has("summary", "1 building") and not has("summary", "1 buildings"), "finish: the one-liner counts it")
 
 -- a build that vanishes long before its time was cancelled: not announced
@@ -319,13 +356,31 @@ check(has("status", "Plasma Reactors    T1") and has("status", "59m 59s"), "seco
 gmcp("Craft.Jobs", JOBS_DONE); fire_timers()
 check(not said("is built"), "cancel: a build that leaves the list 59 minutes early is not announced")
 
+-- a pending build (0.9.0): asked for, not yet under way
+gmcp("Craft.Jobs", JOBS_PENDING); fire_timers()
+check(has("status", "Soul Well          T1   @{warning}pending@{}@{dim}  need 400@{}"),
+  "pending: listed under construction as pending, with what it needs")
+check(not has("status", "@{dim}nothing@{}"), "pending: ...so 'nothing' is no longer true")
+check(has("status", "Soul Well@{}            @{dim}T0@{}@{warning}   pending T1@{}@{dim}, need 400@{}"),
+  "pending: marked in the building list too, still at T0")
+check(has("status", "@{#E8C547,menu=Build Soul Well|cbuild build soul well confirm,click=cbuild info soul well}"),
+  "pending: its menu is still there - pending is not under construction")
+check(has("summary", "1 pending"), "pending: the one-liner counts it")
+check(not has("raw", "pending_builds"), "pending: a list the plugin now reads is not on the Raw tab")
+-- SYNTHETIC: a realm's building naming its token - the id becomes the token's name
+gmcp("Craft.Jobs", '{ "pending_builds": [ { "need": 50, "building": "Biolabs", "realm": "Science", "global": 0, "token": "science_4", "tier": 1 } ] }'); fire_timers()
+check(has("status", "need 50 hyper-charged"), "synthetic: a named token is shown by its name")
+check(not has("status", "Soul Well          T1   @{warning}pending"), "synthetic: the pending list is replaced whole by a delta")
+gmcp("Craft.Jobs", '{ "pending_builds": [ ] }'); fire_timers()
+check(has("status", "@{dim}nothing@{}") and not has("summary", "pending"), "pending: gone when the list empties")
+
 -- 6. the skill, trained
 gmcp("Craft.Skills", SK_7_TRAINED); fire_timers()
 sk = rows("skills")
-check(sk[1] == "salvaging\tany\t4\t153/200\t20 any\t", "trained: rank 4, 153 of 200, the new price, no flag (got " .. tostring(sk[1]) .. ")")
-check(#sk == 6, "trained: the resent chunk replaced its two skills and added none")
+check(sk[11] == "@{#E8C547,menu=Train salvaging|ctrain salvaging,click=chelp salvaging}salvaging@{}@{#E8C547}         4           153/200  20 any@{}", "trained: rank 4, 153 of 200, the new price, no flag (got " .. tostring(sk[11]) .. ")")
+check(#sk == 12, "trained: the resent chunk replaced its two skills and added none")
 check(not has("status", "Train        "), "trained: the status page stops asking")
-check(has("skills_head", "0 with the xp to train   3 open"), "trained: the head follows")
+check(has("skills_head", "0 with the xp to train   4 open"), "trained: the head follows")
 
 -- 7. a standing delta carries no realms: they must survive it
 gmcp("Craft.Infodata", INFO_STANDING); fire_timers()
@@ -353,7 +408,28 @@ check(has("raw", "-- Craft.Extra (not named yet) --") and has("raw", "tick_in 30
 
 -- SYNTHETIC: a building at the top tier has nothing left to build
 gmcp("Craft.Structures", '{ "full": 1, "bldgs": [ "Strip Mines|5" ] }'); fire_timers()
-check(has("status", "@{success,click=cbuild info strip mines}Strip Mines@{}          T5"), "synthetic: at T5 there is no upgrade menu")
+check(has("status", "@{#5FA8F5,bold,click=cbuild info strip mines}Strip Mines@{}          @{#FF5FA2,bold}T5@{}"), "synthetic: at T5 there is no upgrade menu")
+gmcp("Craft.Structures", ST_MINES); fire_timers()
+
+-- SYNTHETIC (0.5.0): every tier has a colour of its own, and none is a realm's
+do
+  local seen, distinct = {}, true
+  for t, want in pairs({ [2] = "@{#6CCB5F}T2@{}", [3] = "@{#3FC1C9}T3@{}", [4] = "@{#F28C28}T4@{}" }) do
+    gmcp("Craft.Structures", '{ "full": 1, "bldgs": [ "Strip Mines|' .. t .. '" ] }'); fire_timers()
+    check(has("status", "Strip Mines@{}          " .. want), "synthetic: T" .. t .. " has its own colour")
+  end
+  for _, c in ipairs({ "dim", "#E6E6E6", "#6CCB5F", "#3FC1C9", "#F28C28", "#FF5FA2" }) do
+    if seen[c] or c == "#E0605A" or c == "#B48CF0" or c == "#5FA8F5" or c == "#E8C547" then distinct = false end
+    seen[c] = true
+  end
+  check(distinct, "synthetic: the six tier colours differ from each other and from the realms'")
+  gmcp("Craft.Structures", ST_MINES); fire_timers()
+end
+
+-- SYNTHETIC (0.7.0): a building you own is bold on the Recipes tab and says so
+gmcp("Craft.Structures", '{ "full": 1, "bldgs": [ "Bone Forge|1" ] }'); fire_timers()
+check(rows("recipes")[3] == "@{#E0605A,bold}Bone Forge                  12    1-100@{}@{success,bold} built@{}",
+  "synthetic: a built building's recipe row is bold and marked (got " .. tostring(rows("recipes")[3]) .. ")")
 gmcp("Craft.Structures", ST_MINES); fire_timers()
 
 -- 10. the aliases

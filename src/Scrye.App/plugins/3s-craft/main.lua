@@ -2,7 +2,7 @@
 -- packages. 3Scapes only, any guild: crafting belongs to the character, not to a
 -- guild, so this sits beside 3s-vitals and 3s-merc rather than inside a guild HUD.
 --
--- 0.3.0, and early: the system went live on 16 Nov 2026 and is still being built on the
+-- 0.9.0, and early: the system went live on 16 Nov 2026 and is still being built on the
 -- server, so this is written from four captures of one character (Keyser, 16-17 Nov
 -- 2026) who owns one extractor and has trained one skill. Every field READ below
 -- was seen with a real value; what was only ever seen empty or zero is not guessed
@@ -12,7 +12,8 @@
 -- The plugin never sends a command of its own accord. It reads the feed and draws
 -- it; the only commands it can cause are the two a building's name carries as a
 -- link (0.2.0): 'cbuild info <name>' on a click, and 'cbuild build <name> confirm'
--- from the right-click menu.
+-- from the right-click menu - and the two a skill's name carries (0.8.0): 'chelp <skill>'
+-- on a click, 'ctrain <skill>' from its menu.
 --
 -- Packages consumed, and the three shapes they come in:
 --
@@ -21,7 +22,8 @@
 --                      soul{cap,tier}, storage{cap,tier},
 --                      standing{Realm{drop_rank,drop_extra,drop_bump}}
 --     Craft.Jobs       builds[{building,tier,due}], queue_total, queue_cap, and
---                      ready[] queues[] pending_builds[] masterwork[] (only ever
+--                      pending_builds[{building,tier,need,token,realm,global}], and
+--                      ready[] queues[] masterwork[] (only ever
 --                      seen empty -> Raw tab)
 --     Craft.Market     exchanges[{id,player,give_token,give_qty,want_token,
 --                      want_qty,created}], and auctions[] orders[]
@@ -147,6 +149,19 @@ local KNOWN = {
 }
 local MAX_TIER = 5       -- chelp buildings: "Buildings upgrade from T1 to T5"
 
+-- A realm's colour, wherever a realm's things are listed (0.4.0): Chaos red, Fantasy
+-- purple, Science blue. What belongs to no realm - the global buildings, and the skills
+-- any realm's tokens train - is yellow (0.5.0).
+local ANY_COLOUR = "#E8C547"
+local REALM_COLOUR = { Chaos = "#E0605A", Fantasy = "#B48CF0", Science = "#5FA8F5", Global = ANY_COLOUR }
+local IS_REALM = { Chaos = true, Fantasy = true, Science = true }
+
+-- A building's tier, each in a colour of its own (0.5.0) so what you own reads down the
+-- column: T0 dim (not built), then white, green, teal, orange, and pink for the top tier.
+-- None of them is a realm's colour - the tier sits right beside the realm-coloured name.
+local TIER_COLOUR = { [0] = "dim", "#E6E6E6", "#6CCB5F", "#3FC1C9", "#F28C28", "#FF5FA2,bold" }
+local function tier_label(tier) return col(TIER_COLOUR[tier] or "#FF5FA2,bold", "T" .. tier) end
+
 local function wipe(t) for k in pairs(t) do t[k] = nil end end
 
 -- Merge a payload into a snapshot: top-level keys overwrite, a nested table
@@ -191,6 +206,24 @@ local function token_name(id)
     end
   end
   return S(id)
+end
+
+-- Builds that are asked for and not yet under way (seen 18 Nov 2026):
+--   { building = "Soul Well", tier = 1, need = 400, token = "", realm = "", global = 1 }
+-- "need" is a number of tokens; whether it is the whole price or what is still missing is
+-- not known from one sighting, so it is shown as the server gives it. token and realm were
+-- empty for a global building - a realm's building presumably names its token there.
+local function pending() return type(JOBS.pending_builds) == "table" and JOBS.pending_builds or {} end
+
+local function pending_of(building)
+  for _, p in ipairs(pending()) do if type(p) == "table" and S(p.building) == building then return p end end
+  return nil
+end
+
+-- "need 400", or "need 400 hyper-charged" when the server names the token
+local function need_text(p)
+  local t = S(p.token)
+  return "need " .. comma(p.need) .. (t ~= "" and (" " .. token_name(t)) or "")
 end
 
 local function token_total()
@@ -289,6 +322,9 @@ local function all_buildings()
   for _, b in ipairs(builds()) do
     if not cat_buildings()[S(b.building)] then late[#late + 1] = { "Other", S(b.building) } end
   end
+  for _, p in ipairs(pending()) do
+    if type(p) == "table" and not cat_buildings()[S(p.building)] then late[#late + 1] = { "Other", S(p.building) } end
+  end
   table.sort(late, function(a, b)
     if a[1] ~= b[1] then return a[1] < b[1] end
     return a[2] < b[2]
@@ -308,8 +344,12 @@ end
 -- ('cbuild build <name> confirm'). A MENU and not a bare right click on purpose:
 -- building spends tokens, and a slip of the mouse must not. There is no menu
 -- while the building is under construction or at the top tier.
-local function building_link(name, tier, under)
-  local colour = under and "warning" or (tier > 0 and "success" or "dim")
+-- The colour is the realm's; a building you own is bold in it, so built and not built
+-- still read apart at a glance. A building the feed could not place (Other) is green when
+-- built, dim when not.
+local function building_link(name, tier, under, realm)
+  local colour = REALM_COLOUR[realm] and (REALM_COLOUR[realm] .. (tier > 0 and ",bold" or ""))
+    or (under and "warning" or (tier > 0 and "success" or "dim"))
   -- a name the markup could not carry (it never has been) is shown plain
   if name:find("[,;|@{}=]") then return col(colour, name) end
   local cmd = name:lower()
@@ -395,8 +435,14 @@ local function build_status()
 
   add("")
   add("-- Under construction --")
-  if #builds() == 0 then add(col("dim", "nothing")) end
+  if #builds() == 0 and #pending() == 0 then add(col("dim", "nothing")) end
   for _, b in ipairs(builds()) do add(build_line(b)) end
+  for _, p in ipairs(pending()) do
+    if type(p) == "table" then
+      add(esc(string.format("%-18s T%s   ", S(p.building), S(p.tier)))
+        .. col("warning", "pending") .. col("dim", "  " .. need_text(p)))
+    end
+  end
 
   add("")
   add("-- Buildings --")
@@ -404,13 +450,15 @@ local function build_status()
     .. "   click: cbuild info   right-click: build / upgrade"))
   for _, g in ipairs(all_buildings()) do
     if #g.items > 0 then
-      add(col("dim", g.realm))
+      add(col(REALM_COLOUR[g.realm] and (REALM_COLOUR[g.realm] .. ",bold") or "dim", g.realm))
       for _, name in ipairs(g.items) do
         local tier, b = tier_of(name), build_of(name)
         local pad = string.rep(" ", math.max(1, 21 - #name))
-        local line = "  " .. building_link(name, tier, b ~= nil) .. pad
-          .. (tier > 0 and esc("T" .. tier) or col("dim", "T0"))
+        local line = "  " .. building_link(name, tier, b ~= nil, g.realm) .. pad
+          .. tier_label(tier)
         if b then line = line .. col("warning", "   building T" .. S(b.tier) .. ", " .. span(N(b.due) - now())) end
+        local p = pending_of(name)
+        if p then line = line .. col("warning", "   pending T" .. S(p.tier)) .. col("dim", ", " .. need_text(p)) end
         add(line)
       end
     end
@@ -466,10 +514,14 @@ local function build_tokens()
     for _, t in ipairs(TOKENS[k]) do list[#list + 1] = t end
     table.sort(list, function(a, b) return N(a.level) < N(b.level) end)
     if i > 1 then add("") end
-    add("-- " .. ((list[1] and S(list[1].realm) ~= "") and S(list[1].realm) or cap1(k:match("^tokens_(.*)$"))) .. " --")
+    -- the heading in the realm's colour, and each token in its TIER's colour (0.6.0) - the
+    -- same six the buildings' tiers wear, so "orange" means tier 4 on either tab. A token
+    -- you hold none of stays dim, whatever its tier.
+    local realm = (list[1] and S(list[1].realm) ~= "") and S(list[1].realm) or cap1(k:match("^tokens_(.*)$"))
+    L[#L + 1] = col((REALM_COLOUR[realm] or "accent") .. ",bold", "-- " .. realm .. " --")
     for _, t in ipairs(list) do
       local line = string.format("T%s %-14s %6s", S(t.level), S(t.name), comma(t.qty))
-      add(N(t.qty) > 0 and esc(line) or col("dim", line))
+      add(col(N(t.qty) > 0 and (TIER_COLOUR[N(t.level)] or "accent") or "dim", line))
     end
   end
   scrye.setState(P .. "tokens", table.concat(L, "\n"))
@@ -483,40 +535,83 @@ local function skill_group(s)
   return 2
 end
 
+-- The realm a skill is listed under: the one whose tokens train it. The six that take
+-- any realm's tokens (the three drop skills and the three general ones) come last,
+-- under their own heading.
+local SKILL_GROUPS = { "Chaos", "Fantasy", "Science", "Any realm" }
+local function skill_realm(s)
+  local r = S(s.train_realm)
+  return IS_REALM[r] and r or "Any realm"
+end
+
+-- A skill's name as a link (0.8.0): click asks the game about it ('chelp <skill>'), and
+-- the right button opens a one-entry menu that trains it ('ctrain <skill>'). A menu, as
+-- on a building and for the same reason - training spends tokens. A locked skill has no
+-- menu: there is nothing to train yet.
+local function skill_link(name, colour, locked)
+  if name:find("[,;|@{}=]") then return col(colour, name) end
+  local menu = locked and "" or ("menu=Train " .. name .. "|ctrain " .. name .. ",")
+  return "@{" .. colour .. "," .. menu .. "click=chelp " .. name .. "}" .. name .. "@{}"
+end
+
 local function build_skills()
-  local names = {}
-  for k in pairs(SKILLS) do names[#names + 1] = k end
-  if #names == 0 then
+  local by, total = {}, 0
+  for name, s in pairs(SKILLS) do
+    local r = skill_realm(s)
+    by[r] = by[r] or {}
+    by[r][#by[r] + 1] = name
+    total = total + 1
+  end
+  if total == 0 then
     scrye.setState(P .. "skills_head", "waiting for Craft.Skills...")
     scrye.setState(P .. "skills", "")
     return
   end
-  table.sort(names, function(a, b)
-    local ga, gb = skill_group(SKILLS[a]), skill_group(SKILLS[b])
-    if ga ~= gb then return ga < gb end
-    local ra, rb = N(SKILLS[a].rank), N(SKILLS[b].rank)
-    if ra ~= rb then return ra > rb end
-    local ia, ib = N(SKILLS[a].into), N(SKILLS[b].into)
-    if ia ~= ib then return ia > ib end
-    return a < b
-  end)
   local count = { [0] = 0, [1] = 0, [2] = 0 }
-  local rows = {}
-  for _, k in ipairs(names) do
-    local s = SKILLS[k]
-    local g = skill_group(s)
-    count[g] = count[g] + 1
-    -- the trained rank, and the rank the banked xp has already earned when it is ahead
-    local rank = S(s.rank)
-    if N(s.xp_rank) > N(s.rank) then rank = rank .. " (xp " .. S(s.xp_rank) .. ")" end
-    local xp = comma(s.into) .. "/" .. comma(N(s.into) + N(s.to_next))
-    local cost = S(s.train_cost) .. " " .. S(s.train_abbr)
-    local state = g == 0 and "xp ready" or (g == 2 and "locked" or "")
-    rows[#rows + 1] = table.concat({ k, S(s.train_realm), rank, xp, cost, state }, "\t")
+  local L = {}
+  for _, realm in ipairs(SKILL_GROUPS) do
+    local names = by[realm]
+    if names then
+      -- inside a realm: xp ready first, then what is open (highest rank, then most xp),
+      -- then the locked ones
+      table.sort(names, function(a, b)
+        local ga, gb = skill_group(SKILLS[a]), skill_group(SKILLS[b])
+        if ga ~= gb then return ga < gb end
+        local ra, rb = N(SKILLS[a].rank), N(SKILLS[b].rank)
+        if ra ~= rb then return ra > rb end
+        local ia, ib = N(SKILLS[a].into), N(SKILLS[b].into)
+        if ia ~= ib then return ia > ib end
+        return a < b
+      end)
+      local colour = IS_REALM[realm] and REALM_COLOUR[realm] or ANY_COLOUR
+      if #L > 0 then L[#L + 1] = "" end
+      L[#L + 1] = col(colour .. ",bold", "-- " .. realm .. " --")
+      for _, k in ipairs(names) do
+        local s = SKILLS[k]
+        local g = skill_group(s)
+        count[g] = count[g] + 1
+        -- the trained rank, and the rank the banked xp has already earned when it is ahead
+        local rank = S(s.rank)
+        if N(s.xp_rank) > N(s.rank) then rank = rank .. " (xp " .. S(s.xp_rank) .. ")" end
+        local xp = comma(s.into) .. "/" .. comma(N(s.into) + N(s.to_next))
+        local cost = S(s.train_cost) .. " " .. S(s.train_abbr)
+        -- the name is the link; the padding and the numbers after it are plain text in
+        -- the same colour, so only the word itself is clickable
+        local rest = string.rep(" ", math.max(1, 18 - #k)) .. string.format("%-9s %9s  %s", rank, xp, cost)
+        if g == 2 then
+          -- a locked skill is dim in any realm
+          L[#L + 1] = skill_link(k, "dim", true) .. col("dim", rest .. " locked")
+        else
+          L[#L + 1] = skill_link(k, colour, false) .. col(colour, rest)
+            .. (g == 0 and col("success,bold", " xp ready") or "")
+        end
+      end
+    end
   end
   scrye.setState(P .. "skills_head",
-    count[0] .. " with the xp to train   " .. count[1] .. " open   " .. count[2] .. " locked")
-  scrye.setState(P .. "skills", table.concat(rows, "\n"))
+    count[0] .. " with the xp to train   " .. count[1] .. " open   " .. count[2] .. " locked"
+    .. "   click: chelp   right-click: train")
+  scrye.setState(P .. "skills", table.concat(L, "\n"))
 end
 
 -- ------------------------------------------------------------- Market tab
@@ -579,14 +674,25 @@ local function build_recipes()
     scrye.setState(P .. "recipes", "")
     return
   end
-  local total, rows = 0, {}
+  -- Grouped by realm, each in the realm's colour (0.7.0); the list arrives sorted by realm
+  -- and then by name. A building you own is bold and says so.
+  local total, L, last = 0, {}, nil
+  L[#L + 1] = col("dim", string.format("%-22s %7s  %7s", "Building", "Recipes", "Ranks"))
   for _, b in ipairs(list) do
     total = total + b.n
-    rows[#rows + 1] = table.concat({ b.name, b.realm, tostring(b.n), b.lo .. "-" .. b.hi, owned(b.name) and "built" or "" }, "\t")
+    local colour = REALM_COLOUR[b.realm] or "accent"
+    if b.realm ~= last then
+      last = b.realm
+      L[#L + 1] = ""
+      L[#L + 1] = col(colour .. ",bold", "-- " .. b.realm .. " --")
+    end
+    local built = owned(b.name)
+    L[#L + 1] = col(colour .. (built and ",bold" or ""), string.format("%-22s %7d  %7s", b.name, b.n, b.lo .. "-" .. b.hi))
+      .. (built and col("success,bold", " built") or "")
   end
   scrye.setState(P .. "recipes_head",
     comma(total) .. " recipes in " .. #list .. " buildings - the whole catalogue, not what you know")
-  scrye.setState(P .. "recipes", table.concat(rows, "\n"))
+  scrye.setState(P .. "recipes", table.concat(L, "\n"))
 end
 
 -- ----------------------------------------------------------------- Raw tab
@@ -605,7 +711,7 @@ local function build_raw()
 
   do
     local lines = {}
-    for _, k in ipairs({ "ready", "queues", "pending_builds", "masterwork" }) do
+    for _, k in ipairs({ "ready", "queues", "masterwork" }) do
       if filled(JOBS[k]) then lines[#lines + 1] = k .. " " .. raw(JOBS[k]) end
     end
     section("Craft.Jobs", lines)
@@ -666,6 +772,7 @@ local function summary()
     if not soonest or N(b.due) < N(soonest.due) then soonest = b end
   end
   if soonest then bits[#bits + 1] = "building " .. S(soonest.building) .. " " .. span(N(soonest.due) - now()) end
+  if #pending() > 0 then bits[#bits + 1] = #pending() .. " pending" end
   if filled(JOBS.ready) then bits[#bits + 1] = #JOBS.ready .. " READY" end
   local t = trainable()
   if #t > 0 then bits[#bits + 1] = #t .. " to train" end
@@ -896,8 +1003,9 @@ scrye.addPanel{
     } },
     { title = "Skills", widgets = {
         { type = "label", bind = P .. "skills_head", color = "dim" },
-        { type = "table", bind = P .. "skills",
-          columns = { "Skill", "Realm", "Rank", "XP", "Cost", "" }, align = "llrrrl" },
+        -- a text block, not a table: a table has one colour, and the skills are grouped
+        -- and coloured by realm (0.4.0). Columns: skill, rank, xp, price.
+        { type = "text", bind = P .. "skills" },
     } },
     { title = "Tokens", widgets = { { type = "text", bind = P .. "tokens" } } },
     { title = "Market", widgets = {
@@ -907,8 +1015,8 @@ scrye.addPanel{
     } },
     { title = "Recipes", widgets = {
         { type = "label", bind = P .. "recipes_head", color = "dim" },
-        { type = "table", bind = P .. "recipes",
-          columns = { "Building", "Realm", "Recipes", "Ranks", "" }, align = "llrrl" },
+        -- a text block for the same reason as Skills: grouped and coloured by realm
+        { type = "text", bind = P .. "recipes" },
     } },
     { title = "Raw", widgets = { { type = "text", bind = P .. "raw" } } },
   },
