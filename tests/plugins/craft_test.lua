@@ -1,6 +1,6 @@
 -- Harness for 3s-craft. Every payload below is VERBATIM from the captures
 -- (gmcp-fields-Keyser-20261116-175701, -20261117-141656, -20261117-151653 and
--- -20261117-165051), except the three marked SYNTHETIC: lists the server has only
+-- -20261117-165051; section 14 from -20261120-122625), except those marked SYNTHETIC: lists the server has only
 -- ever sent empty, filled in by hand to prove they reach the Raw tab when it stops.
 --
 -- What this file protects: that a delta merges instead of replacing (a standing
@@ -28,7 +28,19 @@
 -- 0.5.0: every built tier in one colour (4), the any-realm skills left uncoloured (4).
 -- 0.6.0: tokens coloured by realm instead of tier (3). 0.7.0: the recipe rows in one colour (6).
 -- 0.8.0: a train menu on a locked skill (2), a bare rclick= on a skill (7).
--- 0.9.0: pending builds ignored (5). 0.2.1: a stale
+-- 0.9.0: pending builds ignored (5). 0.10.0 (20 Nov): Craft.Market merged plainly so a list's
+-- last page is all of it (6), the same for Craft.Jobs (1), a half-arrived generation of
+-- materials shown (3), a generation numbered lower refused (1), a finished job in the
+-- login snapshot announced (1), no tick while only a queue runs (1), a page's dropped
+-- list kept (1), pages past the end kept (1), a delta kept beside the pages (1), the
+-- pages not forgotten on reconnect (1), known-recipe chunks overwriting (2), the
+-- quality's name not learned (1), a stalled queue silent (1), materials unsorted (2),
+-- the order lists left on the Raw tab (1). 0.11.0: a bare rclick= on a recipe (1), the
+-- spec allowed past 512 (1), the custom quantity ignored (1), names not lower-cased (2).
+-- refineries: the unbuilt listed, the allocation read from the wrong column. 0.12.0: closed
+-- stages listed (2), a bare rclick= on a material (2), names not lower-cased (1), the
+-- extra share ignored (1).
+-- 0.2.1: a stale
 -- catalogue page kept when its key is resent shorter (1).
 
 local HERE = debug.getinfo(1, "S").source:match("^@(.*[/\\])") or "./"
@@ -207,7 +219,7 @@ fresh_client(); dofile(PLUGIN); fire_timers()
 check(panel ~= nil and panel.title == "Crafting", "the panel is registered")
 local titles = {}
 for _, t in ipairs(panel.tabs) do titles[#titles + 1] = t.title end
-check(table.concat(titles, ",") == "Status,Skills,Tokens,Market,Recipes,Raw", "six tabs, in order")
+check(table.concat(titles, ",") == "Status,Materials,Skills,Tokens,Market,Recipes,Raw", "seven tabs, in order")
 check(has("status", "waiting for the Craft.* feed"), "before the feed: the status page says it is waiting")
 check(has("summary", "waiting"), "before the feed: so does the one-liner")
 check(st("skills") == "" and has("skills_head", "waiting"), "before the feed: no skill rows are invented")
@@ -285,7 +297,7 @@ check(has("summary", "1 to train"), "summary: ...and counted")
 local mk = rows("market")
 check(#mk == 1 and mk[1] == "1\ttimmy\t10 legendary\t10 apocalyptic\t3h 48m",
   "market: an exchange reads as who, gives, wants and how old (got " .. tostring(mk[1]) .. ")")
-check(has("market_head", "1 token exchange(s)") and has("market_head", "scroll orders 0"), "market: the empty lists are counted")
+check(has("market_head", "1 token exchange(s)") and has("market_head", "0 scroll order(s)") and has("market_head", "auctions 0"), "market: the empty lists are counted")
 
 -- recipes: THE PROPERTY - three pages under one key are all kept
 local rc = rows("recipes")
@@ -306,11 +318,12 @@ gmcp("Craft.Recipes", REC_C_1); gmcp("Craft.Recipes", REC_C_2); gmcp("Craft.Reci
 check(rows("recipes")[3] == "@{#E0605A}Bone Forge                  12    1-100@{}", "recipes: ...and the full cut comes back whole")
 
 -- raw: the sixty all-zero refinery rows and the empty lists say nothing
-check(not has("raw", "Fleshworks") and not has("raw", "Reactor Core"), "raw: an all-zero refinery row is not shown")
+check(not has("raw", "Fleshworks") and not has("raw", "Reactor Core"), "raw: no refinery row is shown")
 check(not has("raw", "Craft.Jobs") and not has("raw", "Craft.Market"), "raw: an empty list is not shown")
-check(has("raw", "materials_chunks_g133 0"), "raw: the unexplained Statedata key is")
+check(not has("raw", "materials_chunks"), "raw: the chunk count is understood since 0.10.0, and is not on the Raw tab")
+check(has("materials", "nothing in store") and has("materials_head", "0 materials, 0 in store"), "materials: a count of zero chunks is an empty store")
 gmcp("Craft.Statedata", STATE_G134); fire_timers()
-check(has("raw", "materials_chunks_g134 0") and not has("raw", "g133"), "raw: its changing name does not pile up")
+check(has("materials", "nothing in store") and not has("raw", "g134"), "materials: ...and stays one as the generation moves")
 
 -- 3. a token delta is the one realm's array: the others stay
 gmcp("Craft.Statedata", STATE_TOK71); fire_timers()
@@ -397,12 +410,27 @@ check(not has("raw", "Craft.Event"), "event: ...and puts nothing on the Raw tab"
 
 -- 9. SYNTHETIC: what has only been seen empty reaches the Raw tab when it is not
 gmcp("Craft.Event", '{ "id": 10900, "materials": [ { "name": "Iron Ore", "qty": 2 } ] }'); fire_timers()
-check(has("raw", "-- Craft.Event --") and has("raw", "materials [{name=Iron Ore, qty=2}]"), "synthetic: a filled Craft.Event list is shown whole")
-gmcp("Craft.Jobs", '{ "ready": [ { "item": "Smart Alloy", "qty": 1 } ] }'); fire_timers()
-check(has("raw", "ready [{item=Smart Alloy, qty=1}]"), "synthetic: a filled Craft.Jobs.ready is shown whole")
+check(has("materials_head", "last in: +2 Iron Ore") and not has("raw", "Craft.Event"), "synthetic: materials from Craft.Event are named on the Materials tab, not Raw (0.10.0)")
+gmcp("Craft.Event", '{ "id": 10901, "items": [ { "name": "Thing" } ] }'); fire_timers()
+check(has("raw", "-- Craft.Event --") and has("raw", "items [{name=Thing}]"), "synthetic: the Craft.Event list still unseen is shown whole")
+gmcp("Craft.Jobs", '{ "masterwork": [ { "item": "Smart Alloy", "qty": 1 } ] }'); fire_timers()
+check(has("raw", "masterwork [{item=Smart Alloy, qty=1}]"), "synthetic: a filled Craft.Jobs.masterwork is shown whole")
+gmcp("Craft.Jobs", '{ "ready": [ { "name": "Smart Alloy" } ] }'); fire_timers()
 check(has("status", "Ready        ") and has("status", "1 to collect"), "synthetic: ...and the status page says there is something to collect")
-gmcp("Craft.Structures", '{ "full": 1, "refineries_10": [ "Alloy Works|1|Smart Alloy|3|0|12", "Alloy Works|2|Carbon Mesh|0|0|0" ] }'); fire_timers()
-check(has("raw", "Alloy Works|1|Smart Alloy|3|0|12") and not has("raw", "Carbon Mesh"), "synthetic: a refinery row is shown once a number moves, the zero rows still are not")
+-- refineries (0.11.0): "Building|step|Material|allocated %|building tier|max tier". VERBATIM, 20 Nov.
+check(not has("status", "-- Refineries --"), "refineries: no heading while none is built (every row 0|0|0)")
+gmcp("Craft.Structures", '{ "full": 1, "refineries_1": [ "Alloy Works|5|Neural Matrix|0|1|2", "Alloy Works|6|Nanite Gel|0|1|2", "Alloy Works|7|Biosteel|0|1|2", "Alloy Works|8|Gene Mesh|0|1|2" ] }')
+gmcp("Craft.Structures", '{ "full": 1, "refineries_2": [ "Alloy Works|9|Nanoweave|0|1|2", "Alloy Works|10|Singularity Tissue|0|1|2", "Reactor Core|1|Plasma Cell|100|1|2", "Reactor Core|2|Thermal Conduit|0|1|2" ] }'); fire_timers()
+check(has("status", "-- Refineries --") and has("status", "@{accent,bold,click=crefine}Reactor Core@{}       Plasma Cell 100%@{dim}   stages 1-2 of 10@{}"),
+  "refineries: a built one with what it is set to refine, and how much of it")
+gmcp("Craft.Structures", ST_REF14); fire_timers()      -- Reactor Core's tiers 7-10
+check(has("status", "@{accent,bold,click=crefine}Alloy Works@{}        @{dim}no split set@{}@{dim}   stages 1-2 of 10@{}"), "refineries: 0% everywhere is said plainly and is not a warning - the game still works it")
+check(not has("status", "Fleshworks         ") and not has("raw", "Reactor Core|"), "refineries: one that is not built is not listed, and no row is on the Raw tab")
+-- SYNTHETIC: split between two materials
+gmcp("Craft.Structures", '{ "full": 1, "refineries_2": [ "Alloy Works|9|Nanoweave|0|1|2", "Alloy Works|10|Singularity Tissue|0|1|2", "Reactor Core|1|Plasma Cell|60|1|2", "Reactor Core|2|Thermal Conduit|40|1|2" ] }'); fire_timers()
+check(has("status", "Reactor Core@{}       Plasma Cell 60%, Thermal Conduit 40%"), "synthetic: an allocation split in two names both")
+check(has("status", "  @{dim}T2  @{}@{accent,click=crefine}Thermal Conduit@{}       @{success} 40%@{}"), "refinery link: an open stage is listed under its refinery with its share, and a click is crefine")
+check(not has("status", "Ion Capacitor") and not has("status", "crefine allocate"), "refinery link: a stage past the open ones is not listed, and with the realm unknown there is no menu to get wrong")
 gmcp("Craft.Extra", '{ "tick_in": 3087 }'); fire_timers()
 check(has("raw", "-- Craft.Extra (not named yet) --") and has("raw", "tick_in 3087"), "synthetic: a package offered but never sent is shown if it arrives")
 
@@ -468,6 +496,186 @@ check(has("status", "waiting"), "reconnect: no build is left counting down")
 -- 12. a bad payload is ignored, not fatal
 gmcp("Craft.Jobs", "not json"); fire_timers()
 check(has("status", "waiting"), "garbage: ignored")
+
+-- 14. 20 Nov 2026: production, what is ready, materials, orders, known recipes.
+-- Every payload VERBATIM from gmcp-fields-Keyser-20261120-122625 unless marked.
+for _, fn in ipairs(connect_hooks) do fn() end
+fire_timers()
+CLOCK = 1795166088 - 4096          -- the moment the first armour went on the queue
+gmcp("Craft.Statedata", '{ "stock_used": 143, "full": 1, "stock_cap": 360, "pages": 4, "soul_tiers": [ { "count": 70, "cap": 70, "name": "Faint", "tier": 1 }, { "count": 0, "cap": 0, "name": "Bound", "tier": 2 }, { "count": 0, "cap": 0, "name": "Potent", "tier": 3 }, { "count": 0, "cap": 0, "name": "Ascendant", "tier": 4 }, { "count": 0, "cap": 0, "name": "Mythic", "tier": 5 } ], "page": 1, "soul_cap": 70, "souls": 70 }')
+gmcp("Craft.Statedata", '{ "pages": 4, "tokens_science": [ { "level": 1, "realm": "Science", "qty": 0, "name": "dented" }, { "level": 2, "realm": "Science", "qty": 0, "name": "scorched" }, { "level": 3, "realm": "Science", "qty": 0, "name": "calibrated" }, { "level": 4, "realm": "Science", "qty": 48, "name": "hyper-charged" }, { "level": 5, "realm": "Science", "qty": 4, "name": "quantum" } ], "page": 4, "full": 1 }')
+local MAT = {
+  '{ "full": 1, "materials_g34c0": [ { "quality": "crude, poor", "realm": "Science", "qty": 2, "category": "Refined", "best": "crude", "name": "Plasma Cell" }, { "quality": "crude, poor", "realm": "Science", "qty": 8, "category": "Raw", "best": "crude", "name": "Phase Dust" } ] }',
+  '{ "full": 1, "materials_g34c1": [ { "quality": "crude", "realm": "Science", "qty": 1, "category": "Raw", "best": "crude", "name": "Ion Plasma" }, { "quality": "poor", "realm": "Science", "qty": 4, "category": "Raw", "best": "poor", "name": "Stem Cultures" } ] }',
+  '{ "full": 1, "materials_g34c2": [ { "quality": "crude, poor", "realm": "Science", "qty": 7, "category": "Raw", "best": "crude", "name": "Thermal Isotopes" }, { "quality": "poor", "realm": "Science", "qty": 3, "category": "Raw", "best": "poor", "name": "Synaptic Fluid" } ] }',
+  '{ "full": 1, "materials_g34c3": [ { "quality": "poor", "realm": "Science", "qty": 7, "category": "Raw", "best": "poor", "name": "Organic Gel" }, { "quality": "crude, poor", "realm": "Science", "qty": 9, "category": "Raw", "best": "crude", "name": "Reactor Slag" } ] }',
+  '{ "full": 1, "materials_g34c4": [ { "quality": "poor", "realm": "Science", "qty": 6, "category": "Raw", "best": "poor", "name": "Wetware Tissue" }, { "quality": "crude, poor", "realm": "Science", "qty": 6, "category": "Raw", "best": "crude", "name": "Entangled Particles" } ] }',
+  '{ "full": 1, "materials_g34c5": [ { "quality": "crude, poor", "realm": "Science", "qty": 53, "category": "Raw", "best": "crude", "name": "Carbon Ore" }, { "quality": "crude, poor", "realm": "Science", "qty": 7, "category": "Raw", "best": "crude", "name": "Flux Residue" } ] }',
+  '{ "full": 1, "materials_g34c6": [ { "quality": "crude, poor", "realm": "Science", "qty": 6, "category": "Raw", "best": "crude", "name": "Gravity Residue" }, { "quality": "crude, poor", "realm": "Science", "qty": 15, "category": "Raw", "best": "crude", "name": "Titanium Ore" } ] }',
+  '{ "full": 1, "materials_g34c7": [ { "quality": "crude, poor", "realm": "Science", "qty": 9, "category": "Refined", "best": "crude", "name": "Smart Alloy" } ] }',
+}
+for i = 1, 7 do gmcp("Craft.Statedata", MAT[i]) end
+fire_timers()
+check(has("materials_head", "waiting for the materials") and st("materials") == "", "materials: seven of eight chunks and no count is not a list yet")
+gmcp("Craft.Statedata", MAT[8]); fire_timers()
+check(st("materials") == "", "materials: all the chunks, and still no count of them: not yet")
+-- SYNTHETIC: the count for g34 was not among the payloads the capture kept (g96's was: 9)
+gmcp("Craft.Statedata", '{ "full": 1, "materials_chunks_g34": 8 }'); fire_timers()
+local mt = rows("materials")
+check(has("materials_head", "15 materials, 143 in store"), "materials: fifteen of them, and their sum is the storage figure (143)")
+check(mt[2] == "@{accent,bold}-- Raw --@{}" and mt[3] == "@{#5FA8F5}Carbon Ore                53  crude    crude, poor@{}",
+  "materials: raw first, by name, in the realm's colour (got " .. tostring(mt[3]) .. ")")
+check(mt[#mt - 2] == "@{accent,bold}-- Refined --@{}" and mt[#mt] == "@{#5FA8F5}Smart Alloy                9  crude    crude, poor@{}",
+  "materials: then refined (got " .. tostring(mt[#mt]) .. ")")
+check(not has("raw", "materials_"), "materials: none of it is on the Raw tab")
+-- the next generation: the old list stands until the new one is whole (count first this time)
+gmcp("Craft.Statedata", '{ "full": 1, "materials_chunks_g96": 2 }')      -- SYNTHETIC count of 2; the chunks are verbatim
+gmcp("Craft.Statedata", '{ "full": 1, "materials_g96c7": [ { "quality": "crude, poor", "realm": "Science", "qty": 2, "category": "Raw", "best": "crude", "name": "Ion Plasma" }, { "quality": "poor", "realm": "Science", "qty": 3, "category": "Special", "best": "poor", "name": "Science Essence" } ] }'); fire_timers()
+check(has("materials_head", "15 materials"), "materials: a generation half arrived does not replace the list")
+gmcp("Craft.Statedata", (MAT[1]:gsub("g34c0", "g96c0"))); gmcp("Craft.Statedata", (MAT[8]:gsub("g34c7", "g96c1"))); fire_timers()
+check(has("materials_head", "3 materials, 19 in store"), "materials: the new generation replaces the old whole, whichever of count and chunks came first")
+-- SYNTHETIC: the counter starts over (a reboot without a reconnect) - a lower number is still believed
+gmcp("Craft.Statedata", (MAT[8]:gsub("g34c7", "g2c0"))); gmcp("Craft.Statedata", '{ "full": 1, "materials_chunks_g2": 1 }'); fire_timers()
+check(has("materials_head", "1 material, 9 in store"), "synthetic: a generation numbered lower than the last is still shown")
+
+local JOBS20 = '{ "ready": [ ], "full": 1, "pending_builds": [ ], "queue_total": 0, "queues": [ ], "masterwork": [ ], "builds": [ { "tier": 1, "due": 1795161725, "building": "Isotope Separator" }, { "tier": 1, "due": 1795161713, "building": "Chem Synthlab" } ], "queue_cap": 40 }'
+gmcp("Craft.Jobs", JOBS20); gmcp("Craft.Jobs", '{ "builds": [ ] }'); fire_timers()
+check(not has("status", "-- Production --") and not has("status", "-- Ready to collect --"), "production: no heading while nothing is queued or ready")
+gmcp("Craft.Jobs", '{ "queues": [ { "current_due": 1795166088, "current_name": "Armour@smartalloy", "building": "Powersuit Bay", "items": "Armour@smartalloy, Armour@smartalloy, Armour@smartalloy, Armour@smartalloy", "cap": 5, "stalled": 0, "current_id": "armour@smartalloy", "depth": 4 } ], "queue_total": 4 }'); fire_timers()
+check(has("status", "-- Production --") and has("status", "Powersuit Bay      Armour@@smartalloy   @{warning}1h 08m@{}"),
+  "production: the building, what it is making (the @ escaped) and the time left")
+check(has("status", "@{dim}   4/5 queued@{}") and not has("status", "STALLED"), "production: the depth against the cap, and no stall")
+check(has("status", "Queue        4/40") and has("summary", "4 queued"), "production: the totals follow on the status line and the one-liner")
+check(not has("raw", "queues"), "production: the queue is not on the Raw tab any more")
+CLOCK = CLOCK + 96; tick()
+check(has("status", "@{warning}1h 06m@{}"), "production: the tick moves it with no build under way")
+-- SYNTHETIC: stalled has only been seen 0
+gmcp("Craft.Jobs", '{ "queues": [ { "current_due": 1795166088, "current_name": "Armour@smartalloy", "building": "Powersuit Bay", "items": "Armour@smartalloy", "cap": 5, "stalled": 1, "current_id": "armour@smartalloy", "depth": 1 } ] }'); fire_timers()
+check(has("status", "@{warning,bold}  STALLED@{}@{warning} short of materials@{}"), "synthetic: a stalled queue says so, and why")
+-- with the recipe known and the store listed, it says what the job takes and what there is
+gmcp("Craft.Recipes", '{ "full": 1, "known_science": [ { "rank": 1, "skill": 0, "building": "Powersuit Bay", "materials": "2x Smart Alloy", "time": 4176, "name": "Smart Alloy Body Armour", "id": "prod-3102-armour@smartalloy" }, { "rank": 1, "skill": 0, "building": "Powersuit Bay", "materials": "2x Smart Alloy", "time": 4176, "name": "Smart Alloy Cuirass", "id": "prod-3102-breastplate@smartalloy" } ] }')
+gmcp("Craft.Recipes", '{ "full": 1, "known_science_2": [ { "rank": 1, "skill": 0, "building": "Chem Synthlab", "materials": "2x Organic Gel", "time": 3636, "name": "Combat Stim", "id": "prod-3103-stim" }, { "rank": 1, "skill": 0, "building": "Chem Synthlab", "materials": "2x Organic Gel", "time": 3636, "name": "Reflex Stim", "id": "prod-3103-stim_dodge_1" } ] }')
+gmcp("Craft.Statedata", (MAT[1]:gsub("g34c0", "g97c0"))); gmcp("Craft.Statedata", (MAT[8]:gsub("g34c7", "g97c1")))
+gmcp("Craft.Statedata", '{ "full": 1, "materials_chunks_g97": 2 }'); fire_timers()      -- SYNTHETIC count
+check(has("status", "short of materials - needs 2x Smart Alloy (have 9)@{}"), "synthetic: ...naming what the recipe takes beside what is in store")
+
+-- finished: said once, the quality's name learned, and the item listed as ready
+printed = {}
+CLOCK = 1795166088
+gmcp("Craft.Event", '{ "finished": [ { "building": "Powersuit Bay", "quality": 2, "quality_name": "poor", "name": "Smart Alloy Body Armour" } ], "materials": [ ], "id": 6252 }')
+check(said("Powersuit Bay finished Smart Alloy Body Armour (poor)"), "finished: announced as it happens")
+gmcp("Craft.Jobs", '{ "ready": [ { "expires": 1795252488, "quality": 2, "obj": "\\/players\\/skuggis\\/crafting\\/objs\\/crafted\\/gear_armour", "name": "Smart Alloy Body Armour" } ], "queue_total": 3, "queues": [ { "current_due": 1795170184, "current_name": "Armour@smartalloy", "building": "Powersuit Bay", "items": "Armour@smartalloy, Armour@smartalloy, Armour@smartalloy", "cap": 5, "stalled": 0, "current_id": "armour@smartalloy", "depth": 3 } ] }'); fire_timers()
+check(has("status", "-- Ready to collect --") and has("status", "Smart Alloy Body Armour    @{dim}poor@{}@{dim}   expires in 24h 00m@{}"),
+  "ready: the item, its quality by the name Craft.Event gave the number, and when it expires")
+check(has("status", "1 to collect") and has("summary", "1 READY") and not has("raw", "ready"), "ready: counted, and off the Raw tab")
+printed = {}
+gmcp("Craft.Event", '{ "finished": [ { "building": "Powersuit Bay", "quality": 2, "quality_name": "poor", "name": "Smart Alloy Body Armour" } ], "materials": [ ], "full": 1, "id": 7000 }')   -- SYNTHETIC: "full" added
+check(not said("finished"), "synthetic: a finished list in the login snapshot is not announced")
+-- Jobs paged: queues on page 1, ready on page 2
+gmcp("Craft.Jobs", '{ "pages": 2, "queue_total": 2, "page": 1, "queues": [ { "current_due": 1795174280, "current_name": "Armour@smartalloy", "building": "Powersuit Bay", "items": "Armour@smartalloy, Armour@smartalloy", "cap": 5, "stalled": 0, "current_id": "armour@smartalloy", "depth": 2 } ] }')
+gmcp("Craft.Jobs", '{ "pages": 2, "ready": [ { "expires": 1795252488, "quality": 2, "obj": "x", "name": "Smart Alloy Body Armour" }, { "expires": 1795256584, "quality": 2, "obj": "x", "name": "Smart Alloy Body Armour" } ], "page": 2 }'); fire_timers()
+check(has("status", "2 to collect") and has("status", "2/5 queued"), "paged jobs: page 2 does not cost page 1 its queue")
+-- SYNTHETIC: a ready list long enough to run over two pages is both pages
+gmcp("Craft.Jobs", '{ "pages": 3, "ready": [ { "expires": 1795260000, "quality": 2, "obj": "x", "name": "Smart Alloy Boots" } ], "page": 3 }'); fire_timers()
+check(has("status", "3 to collect") and has("status", "Smart Alloy Boots"), "synthetic: a list that runs over two pages of Craft.Jobs is all of it")
+-- the 20 Nov pending build names its token by NAME, and its realm is the number 0
+gmcp("Craft.Jobs", '{ "pending_builds": [ { "need": 400, "building": "Cybernetics Lab", "realm": 0, "global": 0, "token": "dented", "tier": 1 } ] }'); fire_timers()
+check(has("status", "Cybernetics Lab    T1   @{warning}pending@{}@{dim}  need 400 dented@{}"), "pending: a token given by name is shown as it is")
+
+-- the market: one list over two pages
+gmcp("Craft.Market", '{ "full": 1, "pages": 4, "auctions": [ ], "exchanges": [ { "give_qty": 10, "want_token": "chaos_5", "want_qty": 10, "give_token": "fantasy_5", "created": 1794907287, "player": "timmy", "id": 1 }, { "give_qty": 100, "want_token": "chaos_5", "want_qty": 100, "give_token": "fantasy_5", "created": 1795122359, "player": "timmy", "id": 2 } ], "page": 1 }')
+local MK2 = '{ "pages": 4, "page": 2, "material_orders": [ { "type": "sell", "material": 2206, "price": 50, "material_name": "Phoenix Bloom", "qty": 10, "id": 1, "player": "din", "created": 1795141687 }, { "type": "sell", "material": 2203, "price": 50, "material_name": "Frost Petals", "qty": 41, "id": 2, "player": "din", "created": 1795141743 }, { "type": "sell", "material": 2205, "price": 50, "material_name": "Ember Root", "qty": 31, "id": 3, "player": "din", "created": 1795141873 } ], "full": 1 }'
+local MK3 = '{ "pages": 4, "page": 3, "material_orders": [ { "type": "sell", "material": 2206, "price": 50, "material_name": "Phoenix Bloom", "qty": 38, "id": 4, "player": "din", "created": 1795141881 }, { "type": "sell", "material": 2303, "price": 50, "material_name": "Arcane Dust", "qty": 45, "id": 5, "player": "din", "created": 1795141887 } ], "full": 1 }'
+local MK4 = '{ "scroll_orders": [ { "type": "sell", "recipe": "prod-1103-venom_sunder_1", "recipe_name": "Venom Still - Flaking Venom", "price": 100, "player": "zev", "id": 1, "created": 1795139835 } ], "scroll_outbox": [ ], "full": 1, "scroll_auctions": [ ], "pages": 4, "orders": [ ], "page": 4 }'
+gmcp("Craft.Market", MK2); gmcp("Craft.Market", MK3); gmcp("Craft.Market", MK4); fire_timers()
+check(#rows("market") == 2, "market: both exchanges")
+check(has("market_head", "2 token exchange(s)   5 material order(s)   1 scroll order(s)"), "market: material orders on pages 2 AND 3 are all five, not the last page's two")
+local mo = rows("market_orders")
+check(mo[1] == "@{accent,bold}-- Material orders --@{}" and mo[3] == "  1  sell  10 Phoenix Bloom                    50  din        6h 46m",
+  "market: a material order - what, how many, the price, who, how old (got " .. tostring(mo[3]) .. ")")
+check(mo[7] == "  5  sell  45 Arcane Dust                      50  din        6h 43m", "market: ...the fifth, from page 3 (got " .. tostring(mo[7]) .. ")")
+check(mo[8] == "@{accent,bold}-- Scroll orders --@{}" and mo[10] == "  1  sell  Venom Still - Flaking Venom        100  zev        7h 17m",
+  "market: a scroll order by its recipe's name (got " .. tostring(mo[10]) .. ")")
+check(not has("raw", "material_orders") and not has("raw", "scroll_orders"), "market: neither list is on the Raw tab")
+gmcp("Craft.Market", MK2); gmcp("Craft.Market", MK3); gmcp("Craft.Market", MK4); fire_timers()
+check(has("market_head", "5 material order(s)"), "market: the same pages again do not double the list")
+-- a delta has no page and is the whole list
+gmcp("Craft.Market", '{ "exchanges": [ { "give_qty": 100, "want_token": "chaos_5", "want_qty": 100, "give_token": "fantasy_5", "created": 1795122359, "player": "timmy", "id": 2 } ] }'); fire_timers()
+check(#rows("market") == 1 and has("market_head", "5 material order(s)"), "market: an unpaged delta replaces its own list and no other")
+-- SYNTHETIC: an order sells, the scroll orders move up to page 3, and there are three pages
+gmcp("Craft.Market", MK2); gmcp("Craft.Market", (MK4:gsub('"pages": 4', '"pages": 3'):gsub('"page": 4', '"page": 3'))); fire_timers()
+check(has("market_head", "3 material order(s)   1 scroll order(s)"), "synthetic: a page that comes back without a list drops that part of it, and nothing is doubled")
+
+-- known recipes
+gmcp("Craft.Recipes", REC_C_1); gmcp("Craft.Recipes", REC_C_2); gmcp("Craft.Recipes", REC_C_3)
+gmcp("Craft.Recipes", '{ "full": 1, "known_science": [ { "rank": 1, "skill": 0, "building": "Powersuit Bay", "materials": "2x Smart Alloy", "time": 4176, "name": "Smart Alloy Body Armour", "id": "prod-3102-armour@smartalloy" }, { "rank": 1, "skill": 0, "building": "Powersuit Bay", "materials": "2x Smart Alloy", "time": 4176, "name": "Smart Alloy Cuirass", "id": "prod-3102-breastplate@smartalloy" } ] }')
+gmcp("Craft.Recipes", '{ "full": 1, "known_science_2": [ { "rank": 1, "skill": 0, "building": "Chem Synthlab", "materials": "2x Organic Gel", "time": 3636, "name": "Combat Stim", "id": "prod-3103-stim" }, { "rank": 1, "skill": 0, "building": "Chem Synthlab", "materials": "2x Organic Gel", "time": 3636, "name": "Reflex Stim", "id": "prod-3103-stim_dodge_1" } ] }'); fire_timers()
+local kr = rows("recipes")
+check(kr[1] == "@{accent,bold}-- You know --@{}" and kr[2] == "@{#5FA8F5,bold}Chem Synthlab@{}", "known: a heading of their own, then the building in its realm's colour (got " .. tostring(kr[2]) .. ")")
+local STIM = "cmake chem synthlab combat stim "
+check(kr[3] == "  @{#5FA8F5,menu=Make 1|" .. STIM .. "1;Make 2|" .. STIM .. "2;Make 3|" .. STIM .. "3;Make 4|" .. STIM .. "4;Make 5|" .. STIM .. "5,click=crecipes combat stim}Combat Stim@{}@{#5FA8F5}                r1   @{}@{dim}2x Organic Gel   1h 00m@{}", "known: the recipe, its rank, what it takes and how long (got " .. tostring(kr[3]) .. ")")
+check(kr[5] == "@{#5FA8F5,bold}Powersuit Bay@{}" and kr[6]:find("}Smart Alloy Body Armour@{}@{#5FA8F5}    r1   @{}@{dim}2x Smart Alloy   1h 09m", 1, true) ~= nil, "known: both chunks are joined")
+-- 0.11.0: a known recipe is a link - a click reads, the right-click menu makes
+check(has("recipes", "click=crecipes smart alloy body armour}Smart Alloy Body Armour@{}") and has("recipes", "Make 1|cmake powersuit bay smart alloy body armour 1;"),
+  "recipe link: the building and the item go out lower-cased, the quantity last")
+check(not has("recipes", "rclick=") and not has("recipes", "Make 6"), "recipe link: making is never a bare right click, and the menu stops at five")
+printed = {}
+alias("^crafthud qty (\\d+)$", "12"); fire_timers()
+check(has("recipes", ";Make 5|" .. STIM .. "5;Make 12|" .. STIM .. "12,click=") and said("also makes 12"), "crafthud qty 12: a sixth entry on every recipe's menu")
+alias("^crafthud qty (\\d+)$", "3"); fire_timers()
+check(not has("recipes", "Make 12") and has("recipes", "Make 5|"), "crafthud qty 3: one the menu already has adds nothing, and takes the 12 away")
+do
+  local longest = 0
+  for spec in st("recipes"):gmatch("@(%b{})") do if #spec - 2 > longest then longest = #spec - 2 end end
+  check(longest > 100 and longest <= 512, "recipe link: no spec runs past the 512 the parser reads (longest " .. longest .. ")")
+end
+-- SYNTHETIC: a name long enough that five entries would not fit loses the larger ones, never the link
+gmcp("Craft.Recipes", '{ "full": 1, "known_science_9": [ { "rank": 1, "building": "Weapons Fabricator", "materials": "", "time": 0, "name": "' .. string.rep("Very Long Name ", 5) .. 'Rifle", "id": "x-1" }, { "rank": 2, "building": "Weapons Fabricator", "materials": "", "time": 0, "name": "Odd;Name", "id": "x-2" } ] }'); fire_timers()
+do
+  local longest, n = 0, 0
+  for spec in st("recipes"):gmatch("@(%b{})") do if #spec - 2 > longest then longest = #spec - 2 end end
+  for _ in st("recipes"):gmatch("Make %d|cmake weapons fabricator very long") do n = n + 1 end
+  check(longest <= 512 and n >= 1 and n < 5, "synthetic: a very long name keeps its link and drops quantities to fit (" .. n .. " left, longest " .. longest .. ")")
+  check(has("recipes", "@{#5FA8F5}Odd;Name@{}") and not has("recipes", "cmake weapons fabricator odd"), "synthetic: a name that would break the menu grammar is plain text")
+end
+gmcp("Craft.Recipes", '{ "full": 1, "known_science_9": [ ] }'); fire_timers()
+check(has("recipes_head", "4 known   12 recipes in 1 buildings in the catalogue"), "known: the head counts them apart from the catalogue")
+check(has("recipes", "-- The catalogue --") and not has("raw", "known_"), "known: the catalogue follows under its own heading, and nothing is on the Raw tab")
+
+-- refinery links (0.12.0): the realm for the command comes from the store's materials (rows VERBATIM)
+gmcp("Craft.Structures", '{ "full": 1, "refineries": [ "Alloy Works|1|Smart Alloy|0|1|2", "Alloy Works|2|Carbon Mesh|0|1|2", "Alloy Works|3|Circuit Fiber|0|1|2", "Alloy Works|4|Synth Tissue|0|1|2" ] }'); fire_timers()
+local AL = "crefine allocate science carbon mesh "
+check(has("status", "  @{dim}T2  @{}@{#5FA8F5,menu=0%|" .. AL .. "0;20%|" .. AL .. "20;40%|" .. AL .. "40;50%|" .. AL .. "50;60%|" .. AL .. "60;80%|" .. AL .. "80;100%|" .. AL .. "100,click=crefine}Carbon Mesh@{}           @{dim}  0%@{}"),
+  "refinery link: a material's menu allocates - realm and material lower-cased, the share a bare number (the % is only on the label) - and its click is crefine")
+check(has("status", "@{#5FA8F5,bold,click=crefine}Alloy Works@{}") and not has("status", "Circuit Fiber"), "refinery link: the refinery itself is a plain crefine link in its realm's colour; stage 3 is not open")
+check(not has("status", "rclick="), "refinery link: allocating is never a bare right click")
+alias("^crafthud pct (\\d+)$", "35"); fire_timers()
+check(has("status", ";100%|" .. AL .. "100;35%|" .. AL .. "35,click=crefine}"), "crafthud pct 35: one more share on the menu")
+alias("^crafthud pct (\\d+)$", "50"); fire_timers()
+check(not has("status", "35%|"), "crafthud pct 50: a share the menu already has takes the extra one away")
+do
+  local longest = 0
+  for spec in st("status"):gmatch("@(%b{})") do if #spec - 2 > longest then longest = #spec - 2 end end
+  check(longest <= 512, "refinery link: no spec on the status page runs past 512 (longest " .. longest .. ")")
+end
+
+-- SYNTHETIC: the building list cut in two, by a numbered key and by a page (the first message is verbatim)
+gmcp("Craft.Structures", '{ "full": 1, "bldgs": [ "Strip Mines|1", "Plasma Reactors|1", "Biolabs|1", "Quantum Extractors|1", "Weapons Fabricator|1", "Powersuit Bay|1", "Chem Synthlab|1", "Isotope Separator|1", "Alloy Works|1", "Reactor Core|1", "Logistics Depot|1", "Soul Well|1" ] }')
+gmcp("Craft.Structures", '{ "full": 1, "bldgs_1": [ "Cybernetics Lab|1" ] }'); fire_timers()
+check(has("status", "13 built") and has("status", "Cybernetics Lab@{}      @{#E6E6E6}T1@{}") and has("status", "Strip Mines@{}          @{#E6E6E6}T1@{}"),
+  "synthetic: a building list that runs into bldgs_1 is all thirteen")
+check(not has("raw", "bldgs"), "synthetic: ...and bldgs_1 is not on the Raw tab")
+gmcp("Craft.Structures", '{ "full": 1, "pages": 2, "page": 1, "bldgs": [ "Strip Mines|2" ] }')
+gmcp("Craft.Structures", '{ "full": 1, "pages": 2, "page": 2, "bldgs": [ "Biolabs|1" ] }'); fire_timers()
+check(has("status", "3 built") and has("status", "@{#6CCB5F}T2@{}"), "synthetic: ...and one cut into pages keeps every page; page 1 starts the key over")
+
+for _, fn in ipairs(connect_hooks) do fn() end
+fire_timers()
+gmcp("Craft.Structures", '{ "full": 1, "bldgs_1": [ "Cybernetics Lab|1" ] }'); fire_timers()
+check(has("status", "1 built"), "reconnect: no part of the old character's building list is left to be joined on")
+check(st("materials") == "" and st("market_orders") == "" and not has("status", "Production"), "reconnect: the new lists start over too")
+gmcp("Craft.Market", MK3); fire_timers()
+check(has("market_head", "2 material order(s)"), "reconnect: ...with no page of the old character's market left behind")
 
 -- 13. THE PROPERTY: the plugin itself never sends a command - the two it can cause
 -- are links the player clicks

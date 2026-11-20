@@ -2,9 +2,10 @@
 -- packages. 3Scapes only, any guild: crafting belongs to the character, not to a
 -- guild, so this sits beside 3s-vitals and 3s-merc rather than inside a guild HUD.
 --
--- 0.9.0, and early: the system went live on 16 Nov 2026 and is still being built on the
--- server, so this is written from four captures of one character (Keyser, 16-17 Nov
--- 2026) who owns one extractor and has trained one skill. Every field READ below
+-- 0.12.0, and early: the system went live on 16 Nov 2026 and is still being built on the
+-- server, so this is written from seven captures of one character (Keyser, 16-20 Nov
+-- 2026), who by the last had a dozen buildings, a production queue and goods to collect.
+-- Every field READ below
 -- was seen with a real value; what was only ever seen empty or zero is not guessed
 -- at -- it is shown raw on the "Raw" tab under the server's own name, so the next
 -- capture that fills it in can be read straight off the panel.
@@ -13,7 +14,10 @@
 -- it; the only commands it can cause are the two a building's name carries as a
 -- link (0.2.0): 'cbuild info <name>' on a click, and 'cbuild build <name> confirm'
 -- from the right-click menu - and the two a skill's name carries (0.8.0): 'chelp <skill>'
--- on a click, 'ctrain <skill>' from its menu.
+-- on a click, 'ctrain <skill>' from its menu - and the two a known recipe's name carries
+-- (0.11.0): 'crecipes <name>' on a click, 'cmake <building> <name> <qty>' from its menu -
+-- and a refinery's (0.12.0): 'crefine' on a click, and from an open material's menu
+-- 'crefine allocate <realm> <material> <n>'.
 --
 -- Packages consumed, and the three shapes they come in:
 --
@@ -22,18 +26,23 @@
 --                      soul{cap,tier}, storage{cap,tier},
 --                      standing{Realm{drop_rank,drop_extra,drop_bump}}
 --     Craft.Jobs       builds[{building,tier,due}], queue_total, queue_cap, and
---                      pending_builds[{building,tier,need,token,realm,global}], and
---                      ready[] queues[] masterwork[] (only ever
---                      seen empty -> Raw tab)
+--                      pending_builds[{building,tier,need,token,realm,global}],
+--                      queues[{building,current_name,current_id,current_due,items,
+--                      depth,cap,stalled}], ready[{name,quality,expires,obj}], and
+--                      masterwork[] (only ever seen empty -> Raw tab). Paged since
+--                      20 Nov.
 --     Craft.Market     exchanges[{id,player,give_token,give_qty,want_token,
---                      want_qty,created}], and auctions[] orders[]
---                      material_orders[] scroll_auctions[] scroll_orders[]
---                      scroll_outbox[] (only ever seen empty -> Raw tab)
+--                      want_qty,created}], material_orders[{id,type,material_name,
+--                      material,qty,price,player,created}], scroll_orders[{id,type,
+--                      recipe_name,recipe,price,player,created}], and auctions[]
+--                      orders[] scroll_auctions[] scroll_outbox[] (only ever seen
+--                      empty -> Raw tab). Paged, and one list can run over pages.
 --     Craft.Statedata  four pages: stock_used/stock_cap/souls/soul_cap/
 --                      soul_tiers[], then tokens_chaos[], tokens_fantasy[],
 --                      tokens_science[] ({level,realm,qty,name}); a token delta is
---                      the whole realm's array. Also "materials_chunks_g<N>": 0,
---                      where N changes and the value never has -> Raw tab.
+--                      the whole realm's array. And the stored materials, as a
+--                      generation: materials_g<N>c<i>[{name,qty,category,realm,
+--                      quality,best}], then "materials_chunks_g<N>": how many.
 --
 --   chunked catalogues: one list cut across many messages under NUMBERED KEYS,
 --   the whole set repeated every few minutes
@@ -41,18 +50,20 @@
 --                      {rank,trained,xp_rank,into,to_next,can_train,unlocked,
 --                      train_cost,train_tier,train_realm,train_abbr}
 --     Craft.Structures bldgs["Name|tier"], and refineries, refineries_1 ..
---                      refineries_14 of "Building|step|Material|a|b|c" -- a, b
---                      and c were 0 on all sixty rows (no refinery is built) and
---                      are not named here
+--                      refineries_14 of "Building|step|Material|allocated %|
+--                      building tier|max tier" -- all 0 for a refinery not built
 --     Craft.Recipes    catalogue_<realm>, catalogue_<realm>_<N>, each ALSO paged
 --                      (page/pages) under the same key: entries of {name,
 --                      building,tier,rank}. This is the whole catalogue, not what
 --                      the character knows -- it lists tier 5 recipes for
---                      buildings that are not built.
+--                      buildings that are not built. What the character DOES know
+--                      comes as known_<realm>, known_<realm>_<N>: {name,building,
+--                      rank,materials,time,id,skill}.
 --
 --   a counter
---     Craft.Event      {id} every two seconds, counting up; the first carries
---                      finished[], items[], materials[], all empty so far
+--     Craft.Event      {id} every two seconds, counting up; with materials[{name,
+--                      qty}] when some arrive and finished[{building,name,quality,
+--                      quality_name}] when a job is done. items[] is still empty.
 --
 -- Craft.State, Craft.Info and Craft.Extra are OFFERED by the server and have never
 -- sent anything. They are listened for anyway and land on the Raw tab if they do.
@@ -129,10 +140,16 @@ local SKILLS = {}        -- name -> the skill object
 local TOKENS = {}        -- "tokens_science" -> [{level,realm,qty,name}]
 local BLDGS = {}         -- [{name=, tier=}], as the server last listed them
 local have_bldgs = false -- an empty bldgs has arrived: "none built", not "not told"
+local BPARTS = {}        -- "bldgs" / "bldgs_1" -> { [page] = ["Name|tier"] }
 local REFS = {}          -- "refineries_3" -> ["Building|step|Material|a|b|c"]
 local CAT = {}           -- "catalogue_chaos_2" -> { [page] = [entries] }
 local EVENT = {}         -- last id, and the last non-empty finished/items/materials
 local EXTRA = {}         -- package -> { key -> value } for keys this plugin cannot name
+local PARTS = {}         -- snapshot -> key -> { [page] = list } or { delta = list }: see merge_paged
+local MATS = nil         -- the stored materials, once a whole generation has arrived
+local MATGEN = {}        -- generation -> { count = n or nil, chunks = { [i] = [materials] } }
+local KNOWNR = {}        -- "known_science_1" -> { [page] = [recipes] }: what the character can make
+local QNAME = {}         -- a quality's number -> its name, learned from Craft.Event ("poor" for 2)
 local seen_any = false
 local CATB = nil         -- building -> realm, from the catalogue; rebuilt when it changes
 
@@ -173,6 +190,59 @@ local function merge(snap, t)
   end
 end
 
+-- Craft.Jobs and Craft.Market are paged since 20 Nov 2026, and ONE LIST CAN RUN OVER
+-- SEVERAL PAGES under the same key (material_orders came as three rows on page 2 and
+-- two more on page 3), so a plain merge would keep only the last page. Each page of a
+-- list is kept and the snapshot holds them joined. A page that comes back WITHOUT a key
+-- it used to carry drops that part (the list got shorter), and so does a page number
+-- past "pages". A delta carries no page and is the whole list.
+local function merge_paged(snap, t)
+  PARTS[snap] = PARTS[snap] or {}
+  local parts = PARTS[snap]
+  local page, pages = tonumber(t.page), tonumber(t.pages)
+  local touched = {}
+  if page then
+    for k, ps in pairs(parts) do
+      if ps[page] ~= nil and type(t[k]) ~= "table" then ps[page] = nil; touched[k] = true end
+    end
+  end
+  if pages then
+    for k, ps in pairs(parts) do
+      for n in pairs(ps) do
+        if type(n) == "number" and n > pages then ps[n] = nil; touched[k] = true end
+      end
+    end
+  end
+  for k, v in pairs(t) do
+    if k == "full" or k == "page" or k == "pages" then
+      -- paging words, not data
+    elseif type(v) == "table" then
+      if page then
+        parts[k] = parts[k] or {}
+        parts[k].delta = nil
+        parts[k][page] = v
+      else
+        parts[k] = { delta = v }
+      end
+      touched[k] = true
+    else
+      snap[k] = v
+    end
+  end
+  for k in pairs(touched) do
+    local ps = parts[k]
+    if ps.delta then
+      snap[k] = ps.delta
+    else
+      local nums, all = {}, {}
+      for n in pairs(ps) do nums[#nums + 1] = n end
+      table.sort(nums)
+      for _, n in ipairs(nums) do for _, x in ipairs(ps[n]) do all[#all + 1] = x end end
+      snap[k] = all
+    end
+  end
+end
+
 local function extra(pkg, k, v)
   EXTRA[pkg] = EXTRA[pkg] or {}
   EXTRA[pkg][k] = v
@@ -184,6 +254,81 @@ local function builds() return type(JOBS.builds) == "table" and JOBS.builds or {
 local function owned(building)
   for _, b in ipairs(BLDGS) do if b.name == building then return true end end
   return false
+end
+
+-- The refineries, from rows of "Building|material tier|Material|allocated %|building tier|
+-- max tier" (the three numbers named by the game's own coder, 20 Nov 2026). A refinery that
+-- is not built reads 0|0|0 on every row. A refinery's ten materials are tiers 1 to 10
+-- (Joakim: "tier 10 is max"), and max tier is how far up that list this refinery reaches
+-- for now: 2 at building tier 1, which the game prints as "T1 (stages 1-2)".
+local function refineries()
+  local keys, by, order = {}, {}, {}
+  for k in pairs(REFS) do keys[#keys + 1] = k end
+  table.sort(keys, function(a, b) return chunk_no(a) < chunk_no(b) end)
+  for _, k in ipairs(keys) do
+    for _, row in ipairs(REFS[k]) do
+      local name, mtier, material, pct, tier, max = S(row):match("^([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$")
+      if name then
+        local r = by[name]
+        if not r then r = { name = name, tier = 0, max = 0, top = 0, alloc = {}, stages = {} }; by[name] = r; order[#order + 1] = r end
+        r.stages[#r.stages + 1] = { tier = N(mtier), material = material, pct = N(pct) }
+        if N(mtier) > r.top then r.top = N(mtier) end
+        if N(tier) > r.tier then r.tier = N(tier) end
+        if N(max) > r.max then r.max = N(max) end
+        if N(pct) > 0 then r.alloc[#r.alloc + 1] = material .. " " .. S(pct) .. "%" end
+      end
+    end
+  end
+  return order
+end
+
+local function queues() return type(JOBS.queues) == "table" and JOBS.queues or {} end
+local function ready() return type(JOBS.ready) == "table" and JOBS.ready or {} end
+
+-- "poor" for 2 once Craft.Event has said so; "q2" until then
+local function quality_name(q)
+  if q == nil then return "" end
+  return QNAME[N(q)] or ("q" .. S(q))
+end
+
+-- The stored materials. They arrive as a GENERATION: materials_g96c0 .. materials_g96c8,
+-- two materials a message, then "materials_chunks_g96": 9 to say how many there were.
+-- Every change sends a whole new generation under a new number. A generation is shown
+-- only once it is complete, so the list never flickers half-built; "materials_chunks_g<N>": 0
+-- is an empty store.
+local function commit_materials(gen)
+  local g = MATGEN[gen]
+  if not g or not g.count then return end
+  local all = {}
+  for i = 0, g.count - 1 do
+    if type(g.chunks[i]) ~= "table" then return end
+    for _, m in ipairs(g.chunks[i]) do if type(m) == "table" then all[#all + 1] = m end end
+  end
+  MATS = all
+  wipe(MATGEN)       -- whatever else was half here is older: the server sends them in order
+end
+
+-- every recipe the character knows, with its realm taken from the key it came under
+local function known_recipes()
+  local out = {}
+  for key, pages in pairs(KNOWNR) do
+    local realm = cap1(key:match("^known_(%a+)") or "")
+    for _, list in pairs(pages) do
+      for _, r in ipairs(list) do
+        if type(r) == "table" then
+          out[#out + 1] = { realm = realm, building = S(r.building), name = S(r.name), rank = N(r.rank),
+                            materials = S(r.materials), time = N(r.time), id = S(r.id) }
+        end
+      end
+    end
+  end
+  table.sort(out, function(a, b)
+    if a.realm ~= b.realm then return a.realm < b.realm end
+    if a.building ~= b.building then return a.building < b.building end
+    if a.rank ~= b.rank then return a.rank < b.rank end
+    return a.name < b.name
+  end)
+  return out
 end
 
 -- skills with the xp to train, sorted by name
@@ -381,6 +526,8 @@ local function mkadd(L)
 end
 
 -- ------------------------------------------------------------- Status tab
+local ALLOC_PCT = nil     -- an extra share on a material's menu, set with 'crafthud pct <n>'
+
 local function build_line(b)
   local left = N(b.due) - now()
   local when = left > 0 and (col("warning", span(left)) .. col("dim", "  (" .. os.date("%H:%M", N(b.due)) .. ")"))
@@ -430,6 +577,122 @@ local function build_status()
     local t = trainable()
     if #t > 0 then
       add("Train        " .. col("success", table.concat(t, ", ")) .. col("dim", "   xp ready - ctrain"))
+    end
+  end
+
+  -- What the production buildings are making (seen 20 Nov 2026):
+  --   { building, current_name, current_id, current_due, items = "A, A, A", depth, cap, stalled }
+  -- depth counts the job in hand (4 with four names in items).
+  if #queues() > 0 then
+    add("")
+    add("-- Production --")
+    for _, q in ipairs(queues()) do
+      if type(q) == "table" then
+        local left = N(q.current_due) - now()
+        local line = esc(string.format("%-18s ", S(q.building)))
+        if S(q.current_name) == "" then
+          line = line .. col("dim", "idle")
+        else
+          line = line .. esc(S(q.current_name) .. "   ")
+            .. (left > 0 and (col("warning", span(left)) .. col("dim", "  (" .. os.date("%H:%M", N(q.current_due)) .. ")"))
+                          or col("success", "due now"))
+        end
+        line = line .. col("dim", "   " .. S(q.depth) .. "/" .. S(q.cap) .. " queued")
+        add(line)
+        -- stalled: the job cannot start because a material is short (Joakim, 20 Nov 2026:
+        -- one Smart Alloy missing). The feed does not say which, so the known recipe is
+        -- asked what the job takes and the store how much of each there is.
+        if N(q.stalled) ~= 0 then
+          local why = ""
+          for _, r in ipairs(known_recipes()) do
+            if S(q.current_id) ~= "" and r.id:sub(-#S(q.current_id) - 1) == "-" .. S(q.current_id) and r.materials ~= "" then
+              local bits = {}
+              for part in r.materials:gmatch("[^,]+") do
+                part = part:gsub("^%s+", ""):gsub("%s+$", "")
+                local need, name = part:match("^(%d+)x%s+(.+)$")
+                local bit = part
+                if need and MATS then
+                  local got = 0
+                  for _, m in ipairs(MATS) do if S(m.name) == name then got = got + N(m.qty) end end
+                  bit = part .. " (have " .. comma(got) .. ")"
+                end
+                bits[#bits + 1] = bit
+              end
+              why = " - needs " .. table.concat(bits, ", ")
+              break
+            end
+          end
+          add(col("warning,bold", "  STALLED") .. col("warning", " short of materials" .. why))
+        end
+      end
+    end
+  end
+  -- What each refinery you own is set to refine, and which stages it has open. Links
+  -- (0.12.0): the refinery's name and each open material run 'crefine' on a click, and a
+  -- material's right-click MENU sets its share - 'crefine allocate <realm> <material> <n>',
+  -- the number bare: the menu's label says "40%", the command says 40.
+  do
+    local first = true
+    for _, r in ipairs(refineries()) do
+      if r.tier > 0 then
+        if first then
+          add(""); add("-- Refineries --"); first = false
+          add(col("dim", "click: crefine   right-click a material: allocate"))
+        end
+        -- the realm the command needs: the catalogue's for the building, else the realm
+        -- the store gives one of its materials; with neither there is no menu
+        local realm = cat_buildings()[r.name]
+        if not realm and MATS then
+          for _, st in ipairs(r.stages) do
+            for _, m in ipairs(MATS) do if S(m.name) == st.material and S(m.realm) ~= "" then realm = S(m.realm) end end
+          end
+        end
+        local colour = REALM_COLOUR[realm or ""] or "accent"
+        add("@{" .. colour .. ",bold,click=crefine}" .. esc(r.name) .. "@{}" .. string.rep(" ", math.max(1, 19 - #r.name))
+          -- 0% on every stage is not idle: the game's own Alloy Works page read "Working:
+          -- next unit ETA 53m" with 0% beside both open stages (20 Nov 2026). So no warning.
+          .. (#r.alloc > 0 and esc(table.concat(r.alloc, ", ")) or col("dim", "no split set"))
+          .. col("dim", "   stages 1-" .. r.max .. " of " .. r.top))
+        table.sort(r.stages, function(a, b) return a.tier < b.tier end)
+        for _, st in ipairs(r.stages) do
+          if st.tier <= r.max then
+            local link
+            if st.material:find("[,;|@{}=]") then
+              link = col(colour, st.material)
+            else
+              local menu = ""
+              if IS_REALM[realm or ""] then
+                local pcts = { 0, 20, 40, 50, 60, 80, 100 }
+                if ALLOC_PCT then pcts[#pcts + 1] = ALLOC_PCT end
+                local e = {}
+                for _, n in ipairs(pcts) do
+                  e[#e + 1] = n .. "%|crefine allocate " .. realm:lower() .. " " .. st.material:lower() .. " " .. n
+                end
+                menu = "menu=" .. table.concat(e, ";") .. ","
+              end
+              link = "@{" .. colour .. "," .. menu .. "click=crefine}" .. st.material .. "@{}"
+            end
+            add("  " .. col("dim", string.format("T%-3d", st.tier)) .. link
+              .. string.rep(" ", math.max(1, 22 - #st.material))
+              .. col(st.pct > 0 and "success" or "dim", string.format("%3d%%", st.pct)))
+          end
+        end
+      end
+    end
+  end
+  -- What is finished and waiting: { name, quality, expires, obj }. It does not wait for ever.
+  if #ready() > 0 then
+    add("")
+    add("-- Ready to collect --")
+    for _, r in ipairs(ready()) do
+      if type(r) == "table" then
+        local line = esc(string.format("%-26s ", S(r.name))) .. col("dim", quality_name(r.quality))
+        if has(r, "expires") then
+          local left = N(r.expires) - now()
+          line = line .. (left > 0 and col("dim", "   expires in " .. span(left)) or col("warning", "   expired"))
+        end
+        add(line)
+      end
     end
   end
 
@@ -495,6 +758,50 @@ local function build_status()
   end
 
   scrye.setState(P .. "status", table.concat(L, "\n"))
+end
+
+-- ---------------------------------------------------------- Materials tab
+-- { name, qty, category = "Raw"|"Refined"|"Special", realm, quality = "crude, poor", best }.
+-- "best" is shown under the server's own word: it read "crude" beside "crude, poor" while a
+-- finished item of quality 2 was "poor", so which end of the scale it names is not known.
+local function build_materials()
+  local last = ""
+  if filled(EVENT.materials) then
+    local bits = {}
+    for _, m in ipairs(EVENT.materials) do
+      if type(m) == "table" then bits[#bits + 1] = "+" .. comma(m.qty) .. " " .. S(m.name) end
+    end
+    last = "   last in: " .. table.concat(bits, ", ")
+  end
+  if not MATS then
+    scrye.setState(P .. "materials_head", "waiting for the materials (Craft.Statedata)..." .. last)
+    scrye.setState(P .. "materials", "")
+    return
+  end
+  local list, total = {}, 0
+  for _, m in ipairs(MATS) do list[#list + 1] = m; total = total + N(m.qty) end
+  table.sort(list, function(a, b)
+    if S(a.category) ~= S(b.category) then return S(a.category) < S(b.category) end
+    return S(a.name) < S(b.name)
+  end)
+  local L, cat = {}, nil
+  if #list == 0 then
+    L[#L + 1] = col("dim", "nothing in store")
+  else
+    L[#L + 1] = col("dim", string.format("%-22s %5s  %-8s %s", "Material", "Qty", "Best", "Qualities"))
+  end
+  for _, m in ipairs(list) do
+    if S(m.category) ~= cat then
+      cat = S(m.category)
+      L[#L + 1] = ""
+      L[#L + 1] = "@{accent,bold}-- " .. esc(cat) .. " --@{}"
+    end
+    L[#L + 1] = col(REALM_COLOUR[S(m.realm)] or "dim",
+      string.format("%-22s %5s  %-8s %s", S(m.name), comma(m.qty), S(m.best), S(m.quality)))
+  end
+  scrye.setState(P .. "materials_head",
+    #list .. " material" .. (#list == 1 and "" or "s") .. ", " .. comma(total) .. " in store" .. last)
+  scrye.setState(P .. "materials", table.concat(L, "\n"))
 end
 
 -- ------------------------------------------------------------- Tokens tab
@@ -615,10 +922,12 @@ local function build_skills()
 end
 
 -- ------------------------------------------------------------- Market tab
+local MARKET_NAMED = { exchanges = true, material_orders = true, scroll_orders = true }
 local function build_market()
   if next(MARKET) == nil then
     scrye.setState(P .. "market_head", "waiting for Craft.Market...")
     scrye.setState(P .. "market", "")
+    scrye.setState(P .. "market_orders", "")
     return
   end
   local rows = {}
@@ -633,15 +942,38 @@ local function build_market()
       }, "\t")
     end
   end
-  -- the other six lists have only ever arrived empty: counted here, and printed
+  -- Material and scroll orders (seen 20 Nov 2026), under the exchanges as text:
+  --   { id, type = "sell", material_name, material, qty, price, player, created }
+  --   { id, type = "sell", recipe_name, recipe, price, player, created }
+  -- What a price is counted in, and whether it is for one or for the lot, is not in the feed.
+  local L = {}
+  local function orders(title, list, what)
+    if type(list) ~= "table" or #list == 0 then return 0 end
+    if #L > 0 then L[#L + 1] = "" end
+    L[#L + 1] = "@{accent,bold}-- " .. title .. " --@{}"
+    L[#L + 1] = col("dim", string.format("%3s  %-5s %-30s %7s  %-10s %s", "#", "", what, "Price", "Player", "Age"))
+    for _, o in ipairs(list) do
+      if type(o) == "table" then
+        local item = has(o, "material_name") and (comma(o.qty) .. " " .. S(o.material_name)) or S(o.recipe_name)
+        L[#L + 1] = esc(string.format("%3s  %-5s %-30s %7s  %-10s %s", S(o.id), S(o.type), item, comma(o.price),
+          S(o.player), has(o, "created") and span(now() - N(o.created)) or ""))
+      end
+    end
+    return #list
+  end
+  local nm = orders("Material orders", MARKET.material_orders, "Material")
+  local ns = orders("Scroll orders", MARKET.scroll_orders, "Recipe")
+  scrye.setState(P .. "market_orders", table.concat(L, "\n"))
+  -- the other lists have only ever arrived empty: counted here, and printed
   -- whole on the Raw tab the day one of them is not
   local others = {}
   local keys = {}
-  for k, v in pairs(MARKET) do if k ~= "exchanges" and type(v) == "table" then keys[#keys + 1] = k end end
+  for k, v in pairs(MARKET) do if not MARKET_NAMED[k] and type(v) == "table" then keys[#keys + 1] = k end end
   table.sort(keys)
   for _, k in ipairs(keys) do others[#others + 1] = (k:gsub("_", " ")) .. " " .. #MARKET[k] end
   scrye.setState(P .. "market_head",
-    #rows .. " token exchange(s)" .. (#others > 0 and ("   " .. table.concat(others, "   ")) or ""))
+    #rows .. " token exchange(s)   " .. nm .. " material order(s)   " .. ns .. " scroll order(s)"
+    .. (#others > 0 and ("   " .. table.concat(others, "   ")) or ""))
   scrye.setState(P .. "market", table.concat(rows, "\n"))
 end
 
@@ -667,9 +999,28 @@ local function recipe_buildings()
   return order
 end
 
+-- A recipe you know is a link (0.11.0): a click reads about it ('crecipes <name>'), and the
+-- right-click MENU queues it - 'cmake <building> <name> <qty>' for 1 to 5, five being a
+-- building's queue cap, plus the quantity set with 'crafthud qty <n>' when that is another.
+-- Making spends materials, so like building and training it is never a bare right click.
+local MAKE_QTY = nil
+local function recipe_link(r, colour)
+  if (r.name .. r.building):find("[,;|@{}=]") then return col(colour, r.name) end
+  local item, bld = r.name:lower(), r.building:lower()
+  local qtys = { 1, 2, 3, 4, 5 }
+  if MAKE_QTY and MAKE_QTY > 5 then qtys[#qtys + 1] = MAKE_QTY end
+  local entries = {}
+  for _, q in ipairs(qtys) do entries[#entries + 1] = "Make " .. q .. "|cmake " .. bld .. " " .. item .. " " .. q end
+  local click = ",click=crecipes " .. item
+  -- a spec is cut off at 512 characters: drop the larger quantities before that happens
+  while #entries > 1 and #colour + 6 + #table.concat(entries, ";") + #click > 500 do table.remove(entries) end
+  return "@{" .. colour .. ",menu=" .. table.concat(entries, ";") .. click .. "}" .. r.name .. "@{}"
+end
+
 local function build_recipes()
   local list = recipe_buildings()
-  if #list == 0 then
+  local known = known_recipes()
+  if #list == 0 and #known == 0 then
     scrye.setState(P .. "recipes_head", "waiting for Craft.Recipes...")
     scrye.setState(P .. "recipes", "")
     return
@@ -677,6 +1028,24 @@ local function build_recipes()
   -- Grouped by realm, each in the realm's colour (0.7.0); the list arrives sorted by realm
   -- and then by name. A building you own is bold and says so.
   local total, L, last = 0, {}, nil
+  -- What you know (seen 20 Nov 2026): { name, building, rank, materials = "2x Smart Alloy",
+  -- time (seconds), id, skill }. Under its building, in the realm's colour.
+  if #known > 0 then
+    L[#L + 1] = "@{accent,bold}-- You know --@{}"
+    local kb
+    for _, r in ipairs(known) do
+      local colour = REALM_COLOUR[r.realm] or "accent"
+      if r.building ~= kb then
+        kb = r.building
+        L[#L + 1] = col(colour .. ",bold", r.building)
+      end
+      L[#L + 1] = "  " .. recipe_link(r, colour)
+        .. col(colour, string.rep(" ", math.max(1, 27 - #r.name)) .. string.format("r%-3d ", r.rank))
+        .. col("dim", r.materials .. (r.time > 0 and ("   " .. span(r.time)) or ""))
+    end
+    L[#L + 1] = ""
+    L[#L + 1] = "@{accent,bold}-- The catalogue --@{}"
+  end
   L[#L + 1] = col("dim", string.format("%-22s %7s  %7s", "Building", "Recipes", "Ranks"))
   for _, b in ipairs(list) do
     total = total + b.n
@@ -691,7 +1060,8 @@ local function build_recipes()
       .. (built and col("success,bold", " built") or "")
   end
   scrye.setState(P .. "recipes_head",
-    comma(total) .. " recipes in " .. #list .. " buildings - the whole catalogue, not what you know")
+    #known .. " known   " .. comma(total) .. " recipes in " .. #list .. " buildings in the catalogue"
+    .. (#known > 0 and "   click: crecipes   right-click: make" or ""))
   scrye.setState(P .. "recipes", table.concat(L, "\n"))
 end
 
@@ -711,34 +1081,21 @@ local function build_raw()
 
   do
     local lines = {}
-    for _, k in ipairs({ "ready", "queues", "masterwork" }) do
+    for _, k in ipairs({ "masterwork" }) do
       if filled(JOBS[k]) then lines[#lines + 1] = k .. " " .. raw(JOBS[k]) end
     end
     section("Craft.Jobs", lines)
   end
   do
     local lines, keys = {}, {}
-    for k, v in pairs(MARKET) do if k ~= "exchanges" and filled(v) then keys[#keys + 1] = k end end
+    for k, v in pairs(MARKET) do if not MARKET_NAMED[k] and filled(v) then keys[#keys + 1] = k end end
     table.sort(keys)
     for _, k in ipairs(keys) do lines[#lines + 1] = k .. " " .. raw(MARKET[k]) end
     section("Craft.Market", lines)
   end
   do
-    -- a refinery row is worth showing once any of its three numbers is not zero
-    local lines, keys = {}, {}
-    for k in pairs(REFS) do keys[#keys + 1] = k end
-    table.sort(keys, function(a, b) return chunk_no(a) < chunk_no(b) end)
-    for _, k in ipairs(keys) do
-      for _, row in ipairs(REFS[k]) do
-        local a, b, c = S(row):match("|([^|]*)|([^|]*)|([^|]*)$")
-        if a and (N(a) ~= 0 or N(b) ~= 0 or N(c) ~= 0) then lines[#lines + 1] = S(row) end
-      end
-    end
-    section("Craft.Structures refineries (building|step|material|?|?|?)", lines)
-  end
-  do
     local lines = {}
-    for _, k in ipairs({ "finished", "items", "materials" }) do
+    for _, k in ipairs({ "items" }) do
       if has(EVENT, k) then lines[#lines + 1] = k .. " " .. raw(EVENT[k]) end
     end
     section("Craft.Event", lines)
@@ -773,6 +1130,7 @@ local function summary()
   end
   if soonest then bits[#bits + 1] = "building " .. S(soonest.building) .. " " .. span(N(soonest.due) - now()) end
   if #pending() > 0 then bits[#bits + 1] = #pending() .. " pending" end
+  if N(JOBS.queue_total) > 0 then bits[#bits + 1] = comma(JOBS.queue_total) .. " queued" end
   if filled(JOBS.ready) then bits[#bits + 1] = #JOBS.ready .. " READY" end
   local t = trainable()
   if #t > 0 then bits[#bits + 1] = #t .. " to train" end
@@ -786,9 +1144,9 @@ end
 
 local BUILDERS = {
   status = build_status, tokens = build_tokens, skills = build_skills,
-  market = build_market, recipes = build_recipes, raw = build_raw,
+  market = build_market, recipes = build_recipes, raw = build_raw, materials = build_materials,
 }
-local ALL = { "status", "tokens", "skills", "market", "recipes", "raw" }
+local ALL = { "status", "materials", "tokens", "skills", "market", "recipes", "raw" }
 
 flush = function()
   flush_pending = false
@@ -825,18 +1183,22 @@ feed("Craft.Statedata", function(t)
     elseif k == "stock_used" or k == "stock_cap" or k == "souls" or k == "soul_cap" or k == "soul_tiers" then
       STATE[k] = v
     elseif k:find("^materials_chunks_g%d+$") then
-      -- one key whose NAME changes (g1, g133, g168 ...) and whose value never has:
-      -- keep only the latest, or the Raw tab grows a line for every one
-      EXTRA["Craft.Statedata"] = EXTRA["Craft.Statedata"] or {}
-      for old in pairs(EXTRA["Craft.Statedata"]) do
-        if old:find("^materials_chunks_g%d+$") then EXTRA["Craft.Statedata"][old] = nil end
-      end
-      EXTRA["Craft.Statedata"][k] = v
+      -- how many chunks generation N has: with them all here, it becomes the list
+      local gen = N(k:match("g(%d+)$"))
+      MATGEN[gen] = MATGEN[gen] or { chunks = {} }
+      MATGEN[gen].count = N(v)
+      commit_materials(gen)
+    elseif k:find("^materials_g%d+c%d+$") and type(v) == "table" then
+      local gen, i = k:match("g(%d+)c(%d+)$")
+      gen, i = N(gen), N(i)
+      MATGEN[gen] = MATGEN[gen] or { chunks = {} }
+      MATGEN[gen].chunks[i] = v
+      commit_materials(gen)
     else
       extra("Craft.Statedata", k, v)
     end
   end
-end, "status", "tokens", "market", "raw")     -- market: a token's name comes from here
+end, "status", "tokens", "market", "raw", "materials")     -- market: a token's name comes from here
 
 feed("Craft.Skills", function(t)
   for k, v in pairs(t) do
@@ -849,12 +1211,28 @@ feed("Craft.Skills", function(t)
 end, "skills", "status")
 
 feed("Craft.Structures", function(t)
+  local page = N(t.page) > 0 and N(t.page) or 1
   for k, v in pairs(t) do
-    if k == "bldgs" and type(v) == "table" then
+    if (k == "bldgs" or k:find("^bldgs_%d+$")) and type(v) == "table" then
+      -- One message held all twelve buildings on 20 Nov; the thirteenth did not show as
+      -- built, so a longer list is taken to be cut the way every other list here is -
+      -- into bldgs_1, bldgs_2 ... and/or pages under one key. Both are joined.
+      if page == 1 or not BPARTS[k] then BPARTS[k] = {} end
+      BPARTS[k][page] = v
       wipe(BLDGS); have_bldgs = true
-      for _, row in ipairs(v) do
-        local name, tier = S(row):match("^([^|]*)|?(.*)$")
-        BLDGS[#BLDGS + 1] = { name = name, tier = (tier ~= "" and tier or "?") }
+      local keys = {}
+      for key in pairs(BPARTS) do keys[#keys + 1] = key end
+      table.sort(keys, function(a, b) return chunk_no(a) < chunk_no(b) end)
+      for _, key in ipairs(keys) do
+        local pages = {}
+        for n in pairs(BPARTS[key]) do pages[#pages + 1] = n end
+        table.sort(pages)
+        for _, n in ipairs(pages) do
+          for _, row in ipairs(BPARTS[key][n]) do
+            local name, tier = S(row):match("^([^|]*)|?(.*)$")
+            BLDGS[#BLDGS + 1] = { name = name, tier = (tier ~= "" and tier or "?") }
+          end
+        end
       end
     elseif k:find("^refineries") and type(v) == "table" then
       REFS[k] = v
@@ -875,6 +1253,10 @@ feed("Craft.Recipes", function(t)
       if page == 1 or not CAT[k] then CAT[k] = {} end
       CATB = nil
       CAT[k][page] = v            -- the pages share a key: keep each, or page 3 is all that is left
+    elseif k:find("^known_") and type(v) == "table" then
+      -- what the character can make, cut and (should it come to that) paged the same way
+      if page == 1 or not KNOWNR[k] then KNOWNR[k] = {} end
+      KNOWNR[k][page] = v
     elseif k ~= "full" and k ~= "page" and k ~= "pages" then
       extra("Craft.Recipes", k, v)
     end
@@ -893,16 +1275,29 @@ feed("Craft.Jobs", function(t)
       end
     end
   end
-  merge(JOBS, t)
+  merge_paged(JOBS, t)
 end, "status", "raw")
 
-feed("Craft.Market", function(t) merge(MARKET, t) end, "market", "raw")
+feed("Craft.Market", function(t) merge_paged(MARKET, t) end, "market", "raw")
 
 feed("Craft.Event", function(t)
   -- {id} every two seconds: remembered, and not worth a redraw. The three lists
   -- are kept only when they carry something, so the last real event stays readable.
   EVENT.id = t.id
   local news = false
+  -- something came off a production queue: { building, name, quality, quality_name }.
+  -- Said once, as it happens; the snapshot at login ("full") is not news.
+  if type(t.finished) == "table" then
+    for _, f in ipairs(t.finished) do
+      if type(f) == "table" then
+        if has(f, "quality") and S(f.quality_name) ~= "" then QNAME[N(f.quality)] = S(f.quality_name) end
+        if not has(t, "full") then
+          scrye.print(TAG .. col("success", S(f.building) .. " finished " .. S(f.name)
+            .. (S(f.quality_name) ~= "" and (" (" .. S(f.quality_name) .. ")") or "")))
+        end
+      end
+    end
+  end
   for _, k in ipairs({ "finished", "items", "materials" }) do
     if filled(t[k]) then EVENT[k] = t[k]; news = true end
   end
@@ -912,7 +1307,7 @@ feed("Craft.Event", function(t)
     end
   end
   return news
-end, "raw")
+end, "raw", "status", "materials")
 
 -- offered by the server, never yet sent: whatever they turn out to carry is shown
 for _, pkg in ipairs({ "Craft.State", "Craft.Info", "Craft.Extra" }) do
@@ -925,6 +1320,7 @@ end
 scrye.onConnect(function()
   wipe(INFO); wipe(STATE); wipe(JOBS); wipe(MARKET); wipe(SKILLS); wipe(TOKENS)
   wipe(BLDGS); wipe(REFS); wipe(CAT); wipe(EVENT); wipe(EXTRA)
+  wipe(BPARTS); wipe(PARTS); wipe(MATGEN); wipe(KNOWNR); wipe(QNAME); MATS = nil
   have_bldgs = false; seen_any = false; CATB = nil
   for _, s in ipairs(ALL) do dirty[s] = true end
   flush()
@@ -933,7 +1329,7 @@ end)
 -- The countdown: while something is under construction the Status page and the
 -- one-liner are redrawn each second, and not at all otherwise.
 scrye.every(1, function()
-  if #builds() == 0 then return end
+  if #builds() == 0 and #queues() == 0 then return end
   build_status()
   scrye.setState(P .. "summary", summary())
 end)
@@ -987,6 +1383,28 @@ local function print_recipes(what)
   end
 end
 
+local function set_qty(n)
+  n = tonumber(n)
+  if not n then
+    scrye.print(TAG .. esc("a recipe's menu makes 1 to 5" .. (MAKE_QTY and MAKE_QTY > 5 and (", or " .. MAKE_QTY) or "")
+      .. " - 'crafthud qty <n>' adds another quantity to it"))
+    return
+  end
+  MAKE_QTY = (n > 5) and math.floor(n) or nil
+  scrye.print(TAG .. esc(MAKE_QTY and ("a recipe's menu now also makes " .. MAKE_QTY) or "a recipe's menu makes 1 to 5"))
+  dirty.recipes = true; schedule_flush()
+end
+scrye.addAlias{ pattern = "^crafthud pct (\\d+)$", regex = true, run = function(n)
+  n = math.floor(tonumber(n) or -1)
+  local stock = { [0] = true, [20] = true, [40] = true, [50] = true, [60] = true, [80] = true, [100] = true }
+  if n < 0 or n > 100 then scrye.print(TAG .. "a share is 0 to 100"); return end
+  ALLOC_PCT = (not stock[n]) and n or nil
+  scrye.print(TAG .. esc(ALLOC_PCT and ("a refinery material's menu now also offers " .. n .. "%")
+    or "a refinery material's menu offers 0, 20, 40, 50, 60, 80 and 100%"))
+  dirty.status = true; schedule_flush()
+end }
+scrye.addAlias{ pattern = "^crafthud qty$", regex = true, run = function() set_qty(nil) end }
+scrye.addAlias{ pattern = "^crafthud qty (\\d+)$", regex = true, run = function(n) set_qty(n) end }
 scrye.addAlias{ pattern = "^crafthud recipes$", regex = true, run = function() print_recipes("") end }
 scrye.addAlias{ pattern = "^crafthud recipes (.+)$", regex = true, run = function(what) print_recipes(what) end }
 
@@ -1001,6 +1419,10 @@ scrye.addPanel{
         { type = "gauge", text = "Storage", value = P .. "stock", max = P .. "stock_cap", color = "info" },
         { type = "text",  bind = P .. "status" },
     } },
+    { title = "Materials", widgets = {
+        { type = "label", bind = P .. "materials_head", color = "dim" },
+        { type = "text", bind = P .. "materials" },
+    } },
     { title = "Skills", widgets = {
         { type = "label", bind = P .. "skills_head", color = "dim" },
         -- a text block, not a table: a table has one colour, and the skills are grouped
@@ -1012,6 +1434,7 @@ scrye.addPanel{
         { type = "label", bind = P .. "market_head", color = "dim" },
         { type = "table", bind = P .. "market",
           columns = { "#", "Player", "Gives", "Wants", "Age" }, align = "rlllr" },
+        { type = "text", bind = P .. "market_orders" },
     } },
     { title = "Recipes", widgets = {
         { type = "label", bind = P .. "recipes_head", color = "dim" },
