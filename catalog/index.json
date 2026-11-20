@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "7f724bc25a64ea440a9ebb632d3efe63be797a4c",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/7f724bc25a64ea440a9ebb632d3efe63be797a4c/src/Scrye.App/plugins/",
-  "generated": "2026-11-18T13:29:07Z",
+  "ref": "18f6033cfd3a4fdaa8063658ea4fc398081cafa1",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/18f6033cfd3a4fdaa8063658ea4fc398081cafa1/src/Scrye.App/plugins/",
+  "generated": "2026-11-20T14:45:59Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -156,9 +156,9 @@
     {
       "id": "3s-craft",
       "name": "3S Crafting",
-      "version": "0.9.0",
+      "version": "0.12.0",
       "author": "Joakim",
-      "description": "A HUD for the crafting system, fed by the Craft.* GMCP packages (3Scapes only, any guild). Status: storage, souls, the production queue, what is ready to collect, which skills have the xp to train, every building under construction with a live countdown, builds that are pending and what they need, every building there is with its tier (T0 for the ones not built: click one for 'cbuild info <name>', right-click for a menu that builds or upgrades it with 'cbuild build <name> confirm'), realm levels and drop standing, and your bonuses. Skills: all 36 grouped by realm (Chaos red, Fantasy purple, Science blue, any-realm yellow - the buildings wear the same colours, and each tier T0-T5 has a colour of its own) with trained rank, banked xp, the training price and whether they are locked. Tokens: every tier in every realm. Market: the open token exchanges. Recipes: the catalogue by building ('crafthud recipes <building>' prints one). Raw: anything that has arrived non-empty and is not understood yet, under the server's own names - the system is days old and most of its lists have only ever been seen empty. 'crafthud' prints the Status page. Reads the feed; the only commands it can cause are the ones you click: a building's name (cbuild info, and build or upgrade from its right-click menu) and a skill's name (chelp, and ctrain from its right-click menu). Built from four captures (Keyser, 16-17 Nov 2026).",
+      "description": "A HUD for the crafting system, fed by the Craft.* GMCP packages (3Scapes only, any guild). Status: storage, souls, what each production building is making with a live countdown, what is ready to collect and when it expires, which skills have the xp to train, every building under construction with a live countdown, builds that are pending and what they need, every building there is with its tier (T0 for the ones not built: click one for 'cbuild info <name>', right-click for a menu that builds or upgrades it with 'cbuild build <name> confirm'), realm levels and drop standing, and your bonuses. Skills: all 36 grouped by realm (Chaos red, Fantasy purple, Science blue, any-realm yellow - the buildings wear the same colours, and each tier T0-T5 has a colour of its own) with trained rank, banked xp, the training price and whether they are locked. Materials: everything in store by category, with quantity and quality. Tokens: every tier in every realm. Market: the open token exchanges, material orders and scroll orders. Recipes: what you know (materials and time), then the catalogue by building ('crafthud recipes <building>' prints one). Raw: anything that has arrived non-empty and is not understood yet, under the server's own names - the system is days old and most of its lists have only ever been seen empty. 'crafthud' prints the Status page. A finished job is announced in the output. Reads the feed; the only commands it can cause are the ones you click: a building's name (cbuild info, and build or upgrade from its right-click menu) a skill's name (chelp, and ctrain from its right-click menu) and a known recipe's name (crecipes, and 'cmake <building> <name> <qty>' for 1-5 from its right-click menu; 'crafthud qty <n>' adds a larger quantity) and a refinery or one of its open materials (crefine, and 'crefine allocate <realm> <material> <n>' from a material's right-click menu; 'crafthud pct <n>' adds a share of your own). Built from seven captures (Keyser, 16-20 Nov 2026).",
       "mudIds": [
         "*"
       ],
@@ -175,16 +175,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "04acaca19e659aa70c6e262ac701b0d588ceb0c7da856f963fd21ad03dfebaf9",
-          "size": 43259
+          "sha256": "359a065d4fdba0c0a3eed9ef4df1d025b511e90409abe803e66bc6052faace45",
+          "size": 63766
         },
         {
           "path": "plugin.json",
-          "sha256": "e352e815c41e68fae3b1913222a39a495c6b497a5965eee685b8ed567a3e5633",
-          "size": 1787
+          "sha256": "2a2904894e3718ffb34a0b672e19d76a849a7f85436c30b1e9a0ebfed65a0054",
+          "size": 2368
         }
       ],
-      "totalSize": 45046
+      "totalSize": 66134
     },
     {
       "id": "3s-cyborg",
