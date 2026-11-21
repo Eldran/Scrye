@@ -1,0 +1,27 @@
+{
+  "id": "3s-compendium",
+  "name": "3S Compendium",
+  "version": "0.9.0",
+  "author": "Joakim",
+  "description": "A personal hunting log that fills itself in. It listens to Room.Info, Room.Contents, Room.Death, Char.Combat, Char.Vitals and Char.XP and keeps one entry per monster per area: how often you met it, the largest group, the rooms it was in, how many times it died in front of you and how many of those kills were yours - and, for the ones you fought, how long a fight takes (seconds and rounds), what a kill pays in XP, how many hit points it costs when it fights you alone, the lowest it has taken you, and how many fights ended with it still standing. Here: the monsters in the room, each with what the book knows (click a name on any tab and its whole entry opens under it, in the panel; click again to close). Area: every monster recorded in the area you stand in. Best: the areas where you have a measured kill, each with its best monster; click an area's name to open it into its monsters (XP a kill, time, XP per minute of fighting), click again to close it. 'mdb' lists the areas, 'mdb <name>' prints a monster, 'mdb area [name]' an area, 'mdb best [area]' what pays, 'mdb ignore <name>' keeps your own followers out, 'mdb forget <name>' deletes an entry, 'mdb me <name>' says which killer is you (otherwise learned from the first chat line you send, or from a kill). The book is kept per MUD, so every character adds to the same monsters - but the fight numbers (time, XP, hit points, your kills) are kept per character, and you see the ones of the character you are playing, with your others listed beneath in 'mdb <name>'. Levels: an area that is several hunting grounds is kept as one section per level - a room named '... floor <n>' is booked under 'Area [floor n]' (the Megacity), the Sea of Chaos under the number of the last 'setsea <n>' ('sea 62'), and 'mdb level <text>' sets a level by hand anywhere else. Your own part: 'mdb note <name> = <text>' and 'mdb tag <name> = <words>' put a note and tags on a monster (the feed never touches them; 'avoid' and 'danger' show red), the Notes tab and 'mdb tagged [tag]' list them. 'mdb export' writes the whole book to a file in the exports folder and 'mdb import <file>' merges one in, keeping the larger of every count so the same file twice changes nothing. Taken: the lines 'coins (1600): Taken.', '<item>: Taken.' and 'You bind/salvage <n> <thing> from the remains.' are booked to the monster that died last in the room (within 20 seconds), so an entry shows what a pickup of its coins is worth and what has been taken after killing it; the Best tab has a Coins column. On the floor: loot is in the corpse, where no feed shows it, but when a corpse is destroyed its things land on the floor - and those are recorded against the monster ('mdb drops <item>' says who left what). It is what has been seen, not a drop rate. A room in an entry is a link into the mapper: click for the route, right-click to walk there. Other plugins can ask which monsters carry a tag (event mdb.query.tagged, answered with mdb.tagged): 3S Farmer 1.14.0 leaves the ones tagged 'avoid' alone. Reads the feed only: it never sends a command.",
+  "mudIds": [
+    "*"
+  ],
+  "entry": "main.lua",
+  "lang": "lua",
+  "requires": {
+    "scryeApi": ">=1.14 <2.0"
+  },
+  "permissions": [
+    "state.read",
+    "state.write",
+    "timers.manage",
+    "aliases.manage",
+    "triggers.manage",
+    "ui.panels",
+    "storage.private",
+    "storage.shared",
+    "files.export"
+  ],
+  "enabled": true
+}
