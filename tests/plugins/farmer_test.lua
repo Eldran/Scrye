@@ -2692,6 +2692,126 @@ for _ = 1, 15 do tick() end
 check(said("moving on to Woods"), "...which runs out again 30 s after it")
 farm("stop")
 
+-- 58c. ADD THIS AREA (1.12.0). The Settings tab's button - 'farm rota here' - puts the
+--      area you stand in on the rotation by its exact name; nowhere, or in a place with no
+--      name of its own, it says so and adds nothing; twice is once.
+fresh_client() ; load_plugin()
+do
+  local function button(label)
+    for _, w in ipairs(pw()) do
+      if w.type == "buttonrow" then
+        for _, b in ipairs(w.buttons) do if b.text == label then return b.action end end
+      end
+    end
+  end
+  local RL = "plugin.3s-farmer.rotalist"
+  check(button("Add this area") ~= nil, "the panel has an Add this area button")
+  clear() ; button("Add this area")()
+  check(said("not standing in a named area") and not (state[RL] or ""):find("\n", 1, true) and not (state[RL] or ""):find("Farmland", 1, true),
+        "Add this area before any room says why it cannot, and adds nothing")
+  room(U0) ; tick()
+  clear() ; button("Add this area")()
+  check(said("not standing in a named area") and not (state[RL] or ""):find("Unknown", 1, true),
+        "...and the same in an area with no name of its own")
+  room(F1) ; tick()
+  sent = {} ; emitted = {}
+  clear() ; button("Add this area")()
+  check(said("rotation: Farmland") and state[RL] == "Farmland", "Add this area in Farmland puts Farmland on the rotation")
+  check(#sent == 0 and #emitted == 0, "...sending nothing to the MUD and asking the mapper nothing")
+  clear() ; button("Add this area")()
+  check(said("'Farmland' is already in the rotation") and state[RL] == "Farmland", "...and pressed again it is not added twice")
+  room(F2) ; tick() ; room(F3) ; tick() ; room(W4) ; tick()
+  clear() ; farm("rota here")
+  check(said("rotation: Farmland -> Woods") and state[RL] == "Farmland\nWoods", "'farm rota here' is the typed form: the Woods join the list")
+  -- patrolling, it is still the room you stand in that names the area
+  farm("rota del Woods") ; farm("start")
+  clear() ; button("Add this area")()
+  check(said("rotation: Farmland -> Woods"), "on patrol the button adds the area being patrolled")
+  farm("stop")
+end
+
+-- 58d. THE KILL QUOTA (1.13.0). 'farm rota kills <n>': that many kills in an area and the
+--      rotation moves on - no circuit, no idle time; never before the count, never with a
+--      mob of the room still to fight; 0 is off; the count starts again in the next area.
+fresh_client() ; load_plugin()
+farm("after -")
+explore()
+farm("start") ; farm("rota add Farmland") ; farm("rota add Woods") ; farm("rota idle 600") ; farm("rota on")
+clear() ; farm("rota kills 2")
+check(said("rotation moves on after 2 kill(s) in an area"), "'farm rota kills 2' sets the quota and says so")
+check((state["plugin.3s-farmer.rotakillshint"] or ""):find("after 2 kill(s)", 1, true) ~= nil, "...shown on the Settings tab")
+clear() ; farm("rota")
+check(said("after 2 kill(s) in an area, or a full circuit with no kill for 600s"), "'farm rota' names both rules")
+emitted = {}
+contents('{ "full": 1, "items": [ { "name": "Small cur", "type": "monster" }, { "name": "Small cur", "type": "monster" } ] }')
+prompt()                                   -- two curs in the room: kill cur
+state["enemy.name"] = "cur"
+for _ = 1, 3 do tick() end
+state["enemy.name"] = nil
+fire_trigger("dealt the killing blow", "You", "a small cur")
+contents(CUR)
+clear()
+for _ = 1, 5 do tick() end                 -- one kill of two, the second cur still here
+check(not said("moving on") and emitted_ev("map.goto") == nil, "quota: one kill of two moves nothing")
+fire_timers()                              -- the after-kill delay ends: the second cur
+state["enemy.name"] = "cur"
+for _ = 1, 3 do tick() end
+check(not said("moving on"), "quota: mid-fight it waits, whatever the count")
+state["enemy.name"] = nil
+fire_trigger("dealt the killing blow", "You", "a small cur")
+contents(EMPTY)
+clear() ; tick()
+check(not said("moving on"), "quota: reached, it still waits out the after-kill delay")
+fire_timers() ; tick()                     -- the delay ends, the room is empty
+check(said("rotation: 2 kill(s) in Farmland - moving on to Woods"), "quota: the second kill moves on, circuit or no circuit")
+check(emitted_ev("map.goto") ~= nil, "...asking the mapper for the walk")
+-- arriving starts the count again
+room(W4) ; emit("map.walk.arrived", '{ "num": 4 }', "3s-map-gmcp")
+clear()
+for _ = 1, 5 do tick() end
+check(not said("moving on"), "quota: the count starts again in the next area")
+farm("stop")
+-- 0 turns it off: two kills and the idle rule alone decides
+fresh_client() ; load_plugin()
+farm("after -")
+explore()
+farm("start") ; farm("rota add Farmland") ; farm("rota add Woods") ; farm("rota idle 600") ; farm("rota on")
+farm("rota kills 2") ; clear() ; farm("rota kills 0")
+check(said("kill quota off"), "'farm rota kills 0' turns the quota off")
+contents(CUR) ; prompt()
+state["enemy.name"] = "cur" ; tick() ; state["enemy.name"] = nil
+fire_trigger("dealt the killing blow", "You", "a small cur") ; contents(CUR) ; fire_timers()
+state["enemy.name"] = "cur" ; tick() ; state["enemy.name"] = nil
+fire_trigger("dealt the killing blow", "You", "a small cur") ; contents(EMPTY) ; fire_timers()
+clear()
+for _ = 1, 5 do tick() end
+check(not said("moving on"), "quota off: kills alone move nothing")
+farm("stop")
+-- one short of the quota, the room empty and the delay over: nothing moves
+fresh_client() ; load_plugin()
+farm("after -")
+explore()
+farm("start") ; farm("rota add Farmland") ; farm("rota add Woods") ; farm("rota idle 600") ; farm("rota on") ; farm("rota kills 2")
+contents(CUR) ; prompt()
+state["enemy.name"] = "cur" ; tick() ; state["enemy.name"] = nil
+fire_trigger("dealt the killing blow", "You", "a small cur") ; contents(EMPTY) ; fire_timers()
+clear()
+for _ = 1, 5 do tick() end
+check(not said("moving on"), "quota: one short of it, with the room empty, moves nothing")
+farm("stop")
+-- the quota is kept: a reload reads it back
+fresh_client(true) ; load_plugin()
+clear() ; farm("rota")
+check(said("after 2 kill(s) in an area, or "), "the quota survives a reload")
+-- and the idle rule still wants its circuit: the idle time alone, mid-circuit, moves nothing
+fresh_client() ; load_plugin()
+explore()
+farm("start") ; farm("rota add Farmland") ; farm("rota add Woods") ; farm("rota idle 30") ; farm("rota on")
+clear()
+for _ = 1, 40 do tick() end
+check(not said("moving on"), "idle rule: no circuit yet, the idle time alone moves nothing")
+farm("stop")
+
 -- 59. SETTINGS BOXES. Each is the typed command with its arguments.
 fresh_client() ; load_plugin()
 local boxes = {}
@@ -3480,6 +3600,85 @@ for _ = 1, 10 do tick() end                -- past hunt_wait from the first dela
 check(not said("went unanswered") and #sent == 0, "delay: a re-armed delay is waited out too (" .. table.concat(sent, "; ") .. ")")
 fire_timers()
 check(sent[1] == "kill cur", "delay: ...and then the cur still here is swung at (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+
+-- THE COMPENDIUM'S 'AVOID' TAG (1.14.0). The 3S Compendium answers mdb.query.tagged with
+-- mdb.tagged { tag, areas = { <area> = { <key>, ... } } } and broadcasts the same on every
+-- change. A monster tagged 'avoid' there is left alone here, in the area it is tagged in,
+-- by its whole name - and nothing changes when no compendium answers.
+local function avoid_msg(areas) return encode({ tag = "avoid", areas = areas }) end
+local ANGRY = '{ "full": 1, "items": [ { "name": "Small cur {angry}", "type": "monster" } ] }'
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; emitted = {} ; farm("start")
+do
+  local q = emitted_ev("mdb.query.tagged")
+  check(q ~= nil and q.tag == "avoid", "avoid: starting asks the compendium who is tagged 'avoid'")
+end
+clear()
+emit("mdb.tagged", avoid_msg({ Farmland = { "small cur" }, Woods = { "wolf" } }), "3s-compendium")
+check(said("compendium 'avoid' tags - left alone in Farmland: small cur"), "avoid: the answer is announced for the area being farmed")
+check((state["plugin.3s-farmer.excludes"] or ""):find("avoid tag: small cur", 1, true) ~= nil, "avoid: the panel's exclude line names it (" .. tostring(state["plugin.3s-farmer.excludes"]) .. ")")
+sent = {}
+contents(CUR) ; prompt()
+check(no_kill(), "avoid: a tagged monster is not attacked (" .. table.concat(sent, "; ") .. ")")
+clear() ; farm("excludes")
+check(said("tagged 'avoid' in the compendium, so left alone here too: small cur"), "avoid: 'farm excludes' lists it")
+clear()
+emit("mdb.tagged", avoid_msg({ Farmland = { "small cur" }, Woods = { "wolf" } }), "3s-compendium")
+check(not said("compendium"), "avoid: the same list again is not announced twice")
+farm("stop")
+-- the server's {tag} on the name does not hide it
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+emit("mdb.tagged", avoid_msg({ Farmland = { "small cur" } }), "3s-compendium")
+sent = {}
+contents(ANGRY) ; prompt()
+check(no_kill(), "avoid: 'Small cur {angry}' is the tagged small cur (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+-- the whole name, not a fragment; and only in the area it is tagged in
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+emit("mdb.tagged", avoid_msg({ Farmland = { "cur" }, Woods = { "small cur" } }), "3s-compendium")
+sent = {}
+contents(CUR) ; prompt()
+check(sent[1] == "kill cur", "avoid: 'cur' tagged here and 'small cur' tagged in another area do not protect the small cur (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+-- the tag comes off: the list empties and the monster is a target again
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+emit("mdb.tagged", avoid_msg({ Farmland = { "small cur" } }), "3s-compendium")
+clear()
+emit("mdb.tagged", avoid_msg({}), "3s-compendium")
+check(said("nothing is tagged 'avoid' in Farmland any more"), "avoid: losing the tag is announced")
+check((state["plugin.3s-farmer.excludes"] or "") == "", "avoid: and it is off the panel")
+sent = {}
+contents(CUR) ; prompt()
+check(sent[1] == "kill cur", "avoid: an untagged monster is attacked again (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+-- other tags and junk change nothing
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+emit("mdb.tagged", "not json", "3s-compendium")
+emit("mdb.tagged", '{ "tag": "avoid", "areas": { "Farmland": "small cur" } }', "3s-compendium")
+emit("mdb.tagged", encode({ tag = "quest", areas = { Farmland = { "small cur" } } }), "3s-compendium")
+sent = {}
+contents(CUR) ; prompt()
+check(sent[1] == "kill cur", "avoid: junk, a malformed list and another tag protect nobody (" .. table.concat(sent, "; ") .. ")")
+farm("stop")
+-- ...and another tag's list does not wipe the avoid list either
+fresh_client(true) ; load_plugin()
+farm("after -")
+explore() ; farm("start")
+emit("mdb.tagged", avoid_msg({ Farmland = { "small cur" } }), "3s-compendium")
+emit("mdb.tagged", encode({ tag = "quest", areas = {} }), "3s-compendium")
+sent = {}
+contents(CUR) ; prompt()
+check(no_kill(), "avoid: a message about another tag leaves the avoid list as it was (" .. table.concat(sent, "; ") .. ")")
 farm("stop")
 
 print(string.format("%d passed, %d failed", pass, fail))

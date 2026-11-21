@@ -92,15 +92,22 @@ local C = {               -- knobs (persisted)
   seek_burst = 3,         -- steps a search sends at once (1.9.0); 1 = one at a time
 }
 local X = {}              -- excludes: area -> { "name fragment", ... } (persisted)
+local AV = {}             -- avoid (1.14.0): area -> { [monster key] = true }, the monsters
+                          -- tagged 'avoid' in the 3S Compendium ('mdb tag <name> = avoid').
+                          -- Not the farmer's and not stored: asked for at every start
+                          -- (event mdb.query.tagged) and told on every change (mdb.tagged).
+                          -- Without the compendium nobody answers and it stays empty.
 local PT = {}             -- party: real player names (lowercase fragments) who are not
                           -- strangers - their presence does not park the fists (persisted)
 local PF = {}             -- prefer: area -> { "name fragment", ... } in order - the mob to
                           -- attack first when several are in the room (persisted, shared)
 local AL = {}             -- always: mob name fragments attacked even with a stranger in the
                           -- room - the aggro ones that will not let you walk on (persisted, shared)
-local RT = { on = false, areas = {}, idle = 300 }   -- area rotation ('farm rota'): after a
+local RT = { on = false, areas = {}, idle = 300, kills = 0 }   -- area rotation ('farm rota'): after a
                           -- full circuit with no kill for `idle` seconds, travel to the next
-                          -- area in the list and farm there (persisted, private)
+                          -- area in the list and farm there (persisted, private).
+                          -- `kills` > 0 (1.13.0, 'farm rota kills <n>') also moves on once
+                          -- the patrol has made that many kills in the area, empty or not
 local last_kill_at = 0    -- clock stamp of the last killing blow this run
 local TALLY = { kills = 0, first = nil, last = nil, by = {} }   -- every killing blow seen
 -- Char.XP (23 Sep 2026, after Core subscribed to it): { xp, per_hour, gain30, to_spend,
@@ -321,6 +328,7 @@ local function load()
   if ok10 and type(rt) == "table" then
     RT.on = rt.on == true
     RT.idle = tonumber(rt.idle) or RT.idle
+    RT.kills = math.max(0, math.floor(tonumber(rt.kills) or 0))
     RT.areas = {}
     for _, a in ipairs(type(rt.areas) == "table" and rt.areas or {}) do RT.areas[#RT.areas + 1] = tostring(a) end
   end
@@ -435,7 +443,22 @@ local function no_loot(name)
   return false
 end
 
+-- The compendium's key for a name: its tags and article off, lower case, one space between
+-- words - "Wiremouth {angry}" and "the wiremouth" are both "wiremouth". Unlike an exclude
+-- this is the WHOLE name: 'avoid' on the orc chieftain leaves the orcs alone.
+local function avoid_key(name)
+  local k = tostring(name or ""):gsub("%b[]", ""):gsub("%b{}", ""):gsub("%b()", "")
+  k = k:lower():gsub("^%s+", ""):gsub("%s+$", "")
+  k = k:gsub("^the ", ""):gsub("^an? ", "")
+  return (k:gsub("%s+", " "))
+end
+local function is_avoided(name)
+  local av = S.lock and AV[S.lock]
+  return av ~= nil and av[avoid_key(name)] == true
+end
+
 local function is_excluded(name)
+  if is_avoided(name) then return true end
   local low = tostring(name or ""):lower()
   for _, frag in ipairs(NV) do
     if low:find(frag, 1, true) then return true end
@@ -1288,6 +1311,16 @@ end
 
 -- ---------- excludes (stored now, enforced by the phase-3 kill loop) ----------
 local function excludes_here() return S.lock and X[S.lock] or nil end
+-- the compendium's 'avoid' monsters in this area, sorted, or nil when there are none
+local function avoided_here()
+  local av = S.lock and AV[S.lock]
+  if not av then return nil end
+  local list = {}
+  for k in pairs(av) do list[#list + 1] = k end
+  if #list == 0 then return nil end
+  table.sort(list)
+  return list
+end
 
 local function exclude(name)
   if not S.lock then note("not standing in a named area - excludes are per area") return end
@@ -1503,6 +1536,7 @@ local function start()
   end
   S.on = true ; S.paused = false ; S.lock = area ; S.visited = 0 ; S.step = nil
   B.skip = {} ; B.kwidx = {}
+  scrye.emit("mdb.query.tagged", '{ "tag": "avoid" }')   -- the compendium, if it is there, answers at once
   S.swept = false
   S.held_on = nil
   S.started = now ; S.ended = nil
@@ -1894,11 +1928,23 @@ farm_cmd = function(args)
     elseif verb == "rota" then
       local sub, arg = rest:match("^(%S*)%s*(.-)$")
       sub = sub:lower()
+      -- 'farm rota here' / the Add this area button (1.12.0): the area you stand in, by
+      -- the exact name the patrol locks to - which is the name the rotation looks itself
+      -- up by, so a list built this way always knows where in it you are.
+      if sub == "here" then
+        local area = here and G[here] and G[here].area
+        if not named_area(area) then
+          note("rotation: you are not standing in a named area - walk into one, then add it")
+          return
+        end
+        sub, arg = "add", area
+      end
       if rest == "" then
         if #RT.areas == 0 then note("rotation: no areas - 'farm rota add <area>' adds one; 'farm rota on' turns it on")
         else
-          note(string.format("rotation %s - %s; after a full circuit with no kill for %ds the next area is farmed",
-            RT.on and "ON" or "off", table.concat(RT.areas, " -> "), RT.idle))
+          note(string.format("rotation %s - %s; after %sa full circuit with no kill for %ds the next area is farmed",
+            RT.on and "ON" or "off", table.concat(RT.areas, " -> "),
+            RT.kills > 0 and (RT.kills .. " kill(s) in an area, or ") or "", RT.idle))
         end
       elseif sub == "add" and arg ~= "" then
         for _, a in ipairs(RT.areas) do if a:lower() == arg:lower() then note("'" .. a .. "' is already in the rotation") return end end
@@ -1916,8 +1962,16 @@ farm_cmd = function(args)
       elseif sub == "idle" and tonumber(arg) then
         RT.idle = math.max(30, tonumber(arg)) ; dirty = true ; save()
         note("rotation moves on after " .. RT.idle .. "s without a kill (once the circuit is done)")
+      elseif sub == "kills" and tonumber(arg) then
+        -- the kill quota (1.13.0, Joakim 19 Nov 2026: "so its not just going off if the
+        -- area is empty"): that many kills by the patrol in an area and it moves on,
+        -- whatever is still standing; 0 turns it off. The idle rule stays beside it.
+        RT.kills = math.max(0, math.floor(tonumber(arg))) ; dirty = true ; save() ; draw()
+        note(RT.kills > 0
+          and string.format("rotation moves on after %d kill(s) in an area - or sooner, when it is farmed out (%ds without a kill once the circuit is done)", RT.kills, RT.idle)
+          or "rotation kill quota off - it moves on only when an area is farmed out")
       else
-        note("farm rota add <area> | del <area> | on | off | idle <secs>")
+        note("farm rota add <area> | here | del <area> | on | off | idle <secs> | kills <n>")
       end
     elseif verb == "noloot" then
       if rest == "" then
@@ -1984,6 +2038,8 @@ farm_cmd = function(args)
       if ex then note("excluded in " .. S.lock .. ": " .. table.concat(ex, ", "))
       else note(S.lock and ("nothing excluded in " .. S.lock)
                         or "not in a named area - excludes are per area") end
+      local av = avoided_here()
+      if av then note("tagged 'avoid' in the compendium, so left alone here too: " .. table.concat(av, ", ")) end
     elseif verb == "rooms" then
       -- The coverage report: what the fence holds, what the patrol can reach from here,
       -- and what it has visited this run. This is how "it only walks the same rooms" gets
@@ -2037,7 +2093,7 @@ farm_cmd = function(args)
       note("farm exclude <name>   never attack this here (phase 3) - substring match")
       note("farm room <n> avoid|pass|-   never enter that room / walk through but never fight there / clear")
       note("farm include <name>   un-exclude")
-      note("farm excludes   list this area's excludes")
+      note("farm excludes   list this area's excludes (and the compendium's 'avoid' tags here)")
       note("farm party [<name>|-<name>]   real players whose presence is not a stranger's")
       note("farm mine [<name>|-<name>]    killers whose kills count as yours (default: hirdmadr, your hird)")
       note("farm never [<name>|-<name>]   mobs never attacked anywhere - guild followers go here")
@@ -2048,7 +2104,7 @@ farm_cmd = function(args)
       note("farm rooms      this area's rooms: reachable, visited this run, or cut off")
       note("farm prefer <name> | -<name>   fought first in this area (in the order added)")
       note("farm always <name> | -<name>   attacked even with a stranger in the room")
-      note("farm rota add|del <area> | on|off | idle <s>   farm areas in turn once one is farmed out")
+      note("farm rota add|del <area> | here | on|off | idle <s> | kills <n>   farm areas in turn: on to the next once one is farmed out, or after <n> kills in it ('here' adds the area you stand in; kills 0 = off)")
       note("farm log [all|<place>]   the kill log, all time; 'farm log session [all|<place>]' this session only")
       note("farm log view all|session   which of the two the panel shows; 'farm log clear [here|session]'")
       note("farm after add|del|-  farm noloot <name>  farm limit 45m|50k  farm sp <floor>")
@@ -2401,14 +2457,26 @@ scrye.every(1, function()
   -- Area rotation: the circuit done and nothing killed for RT.idle seconds, the area is
   -- farmed out for now - ask the mapper for a walk to the next one in the list; the
   -- patrol starts there on arrival. Never mid-fight, never while resting or parking.
-  if S.on and not S.seek and RT.on and #RT.areas > 0 and S.swept and not S.paused and not B.resting and not B.parking
-     and not (S.fighting or B.hunting or in_combat()) and (now - last_kill_at) >= RT.idle then
-    local cur = 0
-    for i, a in ipairs(RT.areas) do if a:lower() == tostring(S.lock):lower() then cur = i end end
-    local nxt = RT.areas[cur % #RT.areas + 1]
-    if nxt and nxt:lower() ~= tostring(S.lock):lower() then
-      note(string.format("rotation: no kill in %s for %ds since the circuit - moving on to %s", S.lock, RT.idle, nxt))
-      travel(nxt)
+  -- The kill quota ('farm rota kills <n>', 1.13.0) is a second way out: the patrol's own
+  -- kills in this area (B.kills, zeroed at every start) reaching it moves on with no
+  -- circuit and no idle time asked - between fights like the other, and the hunt holds
+  -- through the after-kill delay and the rest of the room's mobs, so the looting is done.
+  if S.on and not S.seek and RT.on and #RT.areas > 0 and not S.paused and not B.resting and not B.parking
+     and not (S.fighting or B.hunting or in_combat()) then
+    local quota = RT.kills > 0 and B.kills >= RT.kills
+    local idle = S.swept and (now - last_kill_at) >= RT.idle
+    if quota or idle then
+      local cur = 0
+      for i, a in ipairs(RT.areas) do if a:lower() == tostring(S.lock):lower() then cur = i end end
+      local nxt = RT.areas[cur % #RT.areas + 1]
+      if nxt and nxt:lower() ~= tostring(S.lock):lower() then
+        if quota then
+          note(string.format("rotation: %d kill(s) in %s - moving on to %s", B.kills, S.lock, nxt))
+        else
+          note(string.format("rotation: no kill in %s for %ds since the circuit - moving on to %s", S.lock, RT.idle, nxt))
+        end
+        travel(nxt)
+      end
     end
   end
   -- The run limit: reached, the patrol finishes what it is fighting, then parks in the
@@ -2493,6 +2561,7 @@ local function roster_rows()
     if B.hunting and B.target and B.target.name == name then verdict = "fighting"
     elseif here and RR[here] == "pass" then verdict = "pass room"
     elseif in_party(name) then verdict = "party"
+    elseif is_avoided(name) then verdict = "avoid tag"
     elseif is_excluded(name) then verdict = "excluded"
     elseif B.skip[name] then verdict = "gave up"
     elseif not keyword(name) then verdict = "no keyword"
@@ -2560,7 +2629,9 @@ draw = function()
       string.format("%s (%s)", (G[S.route[#S.route]] and G[S.route[#S.route]].name or "?"):sub(1, 22),
         B.retreat and "rest room" or S.led and "mobs in sight" or "stalest") or "-"),
     "Waiting\t" .. (blocker() or "-"),
-    "Rotation\t" .. ((RT.on and #RT.areas > 0) and (table.concat(RT.areas, " > ") .. (S.on and S.swept
+    "Rotation\t" .. ((RT.on and #RT.areas > 0) and (table.concat(RT.areas, " > ")
+        .. (S.on and RT.kills > 0 and string.format(" (%d of %d kills)", B.kills, RT.kills) or "")
+        .. (S.on and S.swept
         and string.format(" (%ds without a kill moves on)", math.max(0, RT.idle - (now - last_kill_at))) or "")) or "-"),
     "Limit\t" .. ((C.limit_secs > 0 or C.limit_kills > 0) and
       ((C.limit_secs > 0 and (math.max(0, C.limit_secs - session_secs()) // 60 .. "m left") or "")
@@ -2607,6 +2678,9 @@ draw = function()
     scrye.setState(P .. "rotalist", #RT.areas > 0 and table.concat(RT.areas, "\n") or "(none - add an area below)")
     scrye.setState(P .. "rotahint", #RT.areas > 0 and (RT.on and "rotation ON - click an area to drop it" or "rotation off ('farm rota on') - click an area to drop it")
       or "areas farmed in turn - 'farm rota on' turns it on")
+    scrye.setState(P .. "rotakillshint", RT.kills > 0
+      and string.format("moves on after %d kill(s) in an area, or when it is farmed out (0 = off)", RT.kills)
+      or "moves on only when an area is farmed out - set a number of kills to move on after")
   end
   -- the kill log, most killed first: row index -> kl_rows[index]
   -- ...for the place you stand in (1.5.0: one log per area and floor)
@@ -2640,7 +2714,9 @@ draw = function()
   -- the leg being walked, for the map to light: "num,num,..." (empty = nothing to light)
   scrye.setState(P .. "route", (S.on and S.route) and table.concat(S.route, ",") or "")
   local ex = excludes_here()
-  scrye.setState(P .. "excludes", ex and ("excluded here: " .. table.concat(ex, ", ")) or "")
+  local av = avoided_here()
+  scrye.setState(P .. "excludes", (ex and ("excluded here: " .. table.concat(ex, ", ")) or "")
+    .. ((ex and av) and " - " or "") .. (av and ("avoid tag: " .. table.concat(av, ", ")) or ""))
   -- The two lists as tables, one name per row, so they can be read - and clicked away.
   -- Row index -> name is the table's own order, which is the lists' own order.
   scrye.setState(P .. "neverlist", #NV > 0 and table.concat(NV, "\n") or "(nothing - click a mob's row, right-click, 'Never attack anywhere')")
@@ -2860,10 +2936,20 @@ build_panel = function(m)
           local a = RT.areas[index]
           if a then farm_cmd("rota del " .. a) end
         end },
+      { type = "buttonrow", buttons = {
+        { text = "Add this area", action = function() farm_cmd("rota here") end },
+      } },
       { type = "input", text = "rota add <area>", bind = P .. "rotabox",
         onSubmit = function(text)
           text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
           if text ~= "" then scrye.setState(P .. "rotabox", "") ; farm_cmd("rota add " .. text) end
+        end },
+      -- the kill quota: how many kills in an area before the rotation moves on (0 = off)
+      { type = "label", bind = P .. "rotakillshint", color = "dim" },
+      { type = "input", text = "rota kills <n> (kills per area)", bind = P .. "rotakillsbox",
+        onSubmit = function(text)
+          text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+          if text ~= "" then scrye.setState(P .. "rotakillsbox", "") ; farm_cmd("rota kills " .. text) end
         end },
       -- Settings, as boxes: each is the typed command with its arguments, so the panel and
       -- the commands cannot disagree; the box shows the current value once set.
@@ -3002,6 +3088,31 @@ end)
 -- order the client fans the burst out - the one-beat timer this used to need is gone.
 -- Idempotent with our own Room.Info hook: the second copy of an arrival is not a move.
 scrye.on("map.room", function(data) on_room_info(data) end)
+
+-- The compendium's 'avoid' list (1.14.0): its answer to the question asked at start, and
+-- its own broadcast whenever a monster gains or loses the tag. Each message is the WHOLE
+-- list for the tag, so it replaces what was held.
+scrye.on("mdb.tagged", function(data)
+  local ok, d = pcall(scrye.json.decode, data or "")
+  if not ok or type(d) ~= "table" or tostring(d.tag or ""):lower() ~= "avoid" then return end
+  local before = table.concat(avoided_here() or {}, ", ")
+  AV = {}
+  if type(d.areas) == "table" then
+    for area, keys in pairs(d.areas) do
+      if type(keys) == "table" then
+        local set = {}
+        for _, k in ipairs(keys) do if type(k) == "string" and k ~= "" then set[k] = true end end
+        if next(set) ~= nil then AV[tostring(area)] = set end
+      end
+    end
+  end
+  local after = table.concat(avoided_here() or {}, ", ")
+  if S.on and after ~= before then
+    note(after ~= "" and ("compendium 'avoid' tags - left alone in " .. S.lock .. ": " .. after)
+                      or ("compendium: nothing is tagged 'avoid' in " .. S.lock .. " any more"))
+  end
+  draw()
+end)
 
 scrye.on("map.walk.arrived", function()
   if not T.going then return end
