@@ -10,6 +10,9 @@
 -- The after-kill delay's watchdog stamp is B.breath_until = math.max(B.breath_until, now +
 -- C.breath); a plain `now + C.breath` differs only when a breath is armed while a LONGER
 -- one is still pending - the delay lowered mid-breath - which no test stages.
+-- load()'s KLGEN bump (1.14.2) guards a draw() that ran before the stored log was read;
+-- none does today - load() is the chunk's last act before the first draw - so dropping it
+-- changes nothing a test can see.
 
 -- Run from anywhere: paths are resolved relative to THIS file, which sits
 -- beside the plugin it tests.
@@ -290,6 +293,14 @@ do
     if w.type == "buttonrow" and type(w.buttons) ~= "table" then bad = bad + 1 end
   end
   check(bad == 0, "every widget has a `type` the host knows; buttonrows carry `buttons`")
+  -- 1.14.1: the HP and Enemy bars are 3S Vitals' to show; the farmer keeps its Target row
+  local gauges, target = 0, false
+  for _, w in ipairs(pw()) do
+    if w.type == "gauge" or w.type == "progress" then gauges = gauges + 1 end
+    if w.type == "value" and w.text == "Target: " then target = true end
+  end
+  check(gauges == 0, "the panel draws no HP or enemy bar - the vitals plugin has them (" .. gauges .. ")")
+  check(target, "the Target row is still on the panel")
 end
 
 -- 1c. The buttons DO what they say, and the counters count.
@@ -3280,6 +3291,66 @@ fire_trigger("dealt the killing blow", "You", "a small cur")
 check(kl_state():find("Small cur\t1\t2s\t", 1, true) ~= nil,
       "the session log times the fight too (" .. kl_state():gsub("\n", "|") .. ")")
 farm("stop")
+
+-- THE LOG'S ROWS ARE BUILT ONCE PER CHANGE (1.14.2), not on every draw: with 1,500 names in
+-- one place the sort cost 4 ms on every Char.Combat round. These are the changes the cached
+-- rows must still follow when neither the place nor the view moved.
+-- ...a session log cleared while it is the one on show
+fresh_client() ; load_plugin()
+room(M30)
+farm("log view session")
+fire_trigger("dealt the killing blow", "You", "the Rat")
+check(kl_state():find("Rat\t1\t", 1, true) ~= nil, "cache: a kill shows in the session view (" .. kl_state() .. ")")
+farm("log clear session")
+check(kl_state():find("no kills here this session", 1, true) ~= nil,
+      "cache: 'farm log clear session' empties the session view on show (" .. kl_state() .. ")")
+-- ...a fight's time that lands after the kill was counted: Room.Death under a name the
+-- farmer does not know as yours counts it, the "You dealt" line then makes it the patrol's
+fresh_client() ; load_plugin()
+explore()
+farm("start")
+contents(CUR)
+prompt()                           -- 'kill cur'
+tick() ; tick()
+death("Keyser", "Small cur", 1)
+check(kl_state():find("Small cur\t1\t-\t", 1, true) ~= nil, "cache: counted, not yet timed (" .. kl_state():gsub("\n", "|") .. ")")
+fire_trigger("dealt the killing blow", "You", "a small cur")
+check(kl_state():find("Small cur\t1\t2s\t", 1, true) ~= nil,
+      "cache: the fight's time shows once the kill turns out to be the patrol's (" .. kl_state():gsub("\n", "|") .. ")")
+farm("stop")
+-- ...combat rounds in between change nothing, and the next kill still shows at once
+fresh_client() ; load_plugin()
+room(M30)
+fire_trigger("dealt the killing blow", "You", "the Rat")
+local before_rows = kl_state()
+for i = 1, 5 do combat('{ "target": "you", "rounds": ' .. i .. ', "attacker": "Rat", "attacker_hp": 50 }') end
+check(kl_state() == before_rows and before_rows:find("Rat\t1\t", 1, true) ~= nil, "cache: combat rounds leave the log's rows as they were")
+fire_trigger("dealt the killing blow", "You", "the Rat")
+check(kl_state():find("Rat\t2\t", 1, true) ~= nil, "cache: the next kill is on the panel at once")
+
+-- THE PANEL LISTS THE TOP 50 (1.15.0, Joakim 25 Nov 2026); 'farm log' still prints them all.
+fresh_client() ; load_plugin()
+room(M30)
+for i = 1, 50 do fire_trigger("dealt the killing blow", "You", string.format("Mob %02d", i)) end
+do
+  local _, lines = kl_state():gsub("[^\n]+", "")
+  check(lines == 50 and not kl_place():find("top", 1, true), "top 50: fifty mobs are all listed, with no note (" .. lines .. ", " .. kl_place() .. ")")
+end
+for i = 51, 60 do fire_trigger("dealt the killing blow", "You", string.format("Mob %02d", i)) end
+fire_trigger("dealt the killing blow", "You", "Mob 60")     -- the newest name, killed twice: it leads
+do
+  local rows, lines = kl_state(), 0
+  for _ in rows:gmatch("[^\n]+") do lines = lines + 1 end
+  check(lines == 50, "top 50: sixty mobs show as fifty rows (" .. lines .. ")")
+  check(rows:find("^Mob 60\t2\t") ~= nil, "top 50: most killed first, so a mob past the cut that pulls ahead comes onto the panel")
+  check(rows:find("Mob 49\t1\t", 1, true) ~= nil and rows:find("Mob 50\t", 1, true) == nil,
+        "top 50: the cut falls after the 49 next names (ties by name)")
+  check(kl_place():find("top 50 of 60 ('farm log' prints all)", 1, true) ~= nil, "top 50: the heading says how many there are (" .. kl_place() .. ")")
+end
+clear() ; farm("log")
+check(said("(60 mob(s))") and said("Mob 55"), "top 50: 'farm log' prints every mob")
+farm("log view session")
+check(kl_place():find("top 50 of 60 ('farm log session' prints all)", 1, true) ~= nil, "top 50: the session view names its own command (" .. kl_place() .. ")")
 
 -- 6 Oct: after a kill the patrol swung at three tag-variant guards and the mob it had
 -- just killed, one "There is no X here" each, because the refreshed Room.Contents had not

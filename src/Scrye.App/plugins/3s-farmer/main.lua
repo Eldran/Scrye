@@ -166,6 +166,13 @@ local SKL = {}            -- the same log for THIS session only (since Scrye loa
                           -- like the tally) - never persisted (1.6.0)
 local KLV = "all"         -- which log the panel shows: "all" (all time) or "session" (persisted)
 local kl_rows = {}        -- panel row index -> name, for the log table
+-- The log's rows are sorted and formatted only when the log changed (1.14.2). draw() runs on
+-- every Char.Combat round, and with a long log - 1,500 names in one place - sorting it there
+-- cost 4 ms a round (.profile, 25 Nov 2026). Every write to KL / SKL bumps KLGEN; the rows
+-- are rebuilt when it, the place or the view differs from what they were built for.
+local KLGEN = 0
+local KL_SHOW = 50        -- the panel lists this many, most killed first; 'farm log' prints them all (1.15.0)
+local kl_built = { key = nil, rows = "", place = "" }
 local T = {               -- travel ('farm go', phase 4 - never persisted)
   going = nil,            -- the area we asked the mapper to walk us to
   quiet = nil,            -- the nobody-answered timer, cancelled by any walk event
@@ -305,6 +312,7 @@ local function load()
       end
     end
   end
+  KLGEN = KLGEN + 1
   ME = tostring(scrye.store.get("me") or "")
   do
     local raw = scrye.store.get("mine")
@@ -1846,14 +1854,14 @@ farm_cmd = function(args)
       local sl = low:match("^session%s*(.-)$")
       if sl then LOG, which, low = SKL, "kill log this session", sl ; rest = rest:gsub("^%S+%s*", "") end
       if low == "clear" and not sl then
-        KL = {} ; SKL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; dirty = true ; save() ; draw()
+        KL = {} ; SKL = {} ; KLGEN = KLGEN + 1 ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; dirty = true ; save() ; draw()
         note("kill log (every place) and tally cleared")
       elseif low == "clear here" and not sl then
         local place = place_of(here)
-        KL[place] = nil ; SKL[place] = nil ; dirty = true ; save() ; draw()
+        KL[place] = nil ; SKL[place] = nil ; KLGEN = KLGEN + 1 ; dirty = true ; save() ; draw()
         note("kill log for " .. place .. " cleared")
       elseif low == "clear" or low == "clear session" then   -- 'farm log clear session' / 'farm log session clear'
-        SKL = {} ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; draw()
+        SKL = {} ; KLGEN = KLGEN + 1 ; TALLY = { kills = 0, by = {} } ; RECENT = {} ; draw()
         note("this session's kill log and tally cleared (the all-time log is kept)")
       elseif low == "view" or low == "view all" or low == "view session" then
         if low ~= "view" then KLV = low == "view session" and "session" or "all" ; dirty = true ; save() ; draw() end
@@ -2214,6 +2222,7 @@ local function tally(killer, kl)
   se.kills = se.kills + 1
   SKL[place][kl] = se
   e.sess = se
+  KLGEN = KLGEN + 1
   dirty = true
   -- The XP this kill was worth: Char.XP's xp now, a breath after the blow (the kill's
   -- own award lands just after it), minus xp when the fight began - every hit pays, so
@@ -2225,6 +2234,7 @@ local function tally(killer, kl)
     scrye.after(1, function()
       e.xp = XP.xp - base
       se.xp = e.xp
+      KLGEN = KLGEN + 1
       if not XP.fight0 then XP.fight0 = XP.xp end
       dirty = true
       draw()
@@ -2243,6 +2253,7 @@ local function own_kill(e, victim)
       x.secs = x.secs + secs
       x.timed = (x.timed or 0) + 1
     end
+    KLGEN = KLGEN + 1
   end
   B.kills = B.kills + 1
   last_kill_at = now
@@ -2685,15 +2696,19 @@ draw = function()
   -- the kill log, most killed first: row index -> kl_rows[index]
   -- ...for the place you stand in (1.5.0: one log per area and floor)
   local place = place_of(here)
-  local LOG = KLV == "session" and SKL or KL
-  local t = LOG[place] or {}
-  kl_rows = {}
-  for name in pairs(t) do kl_rows[#kl_rows + 1] = name end
-  table.sort(kl_rows, function(a, b)
-    if t[a].kills ~= t[b].kills then return t[a].kills > t[b].kills end
-    return a < b
-  end)
-  do
+  local kl_key = KLV .. "\0" .. KLGEN .. "\0" .. place
+  if kl_built.key ~= kl_key then
+    local LOG = KLV == "session" and SKL or KL
+    local t = LOG[place] or {}
+    kl_rows = {}
+    for name in pairs(t) do kl_rows[#kl_rows + 1] = name end
+    table.sort(kl_rows, function(a, b)
+      if t[a].kills ~= t[b].kills then return t[a].kills > t[b].kills end
+      return a < b
+    end)
+    -- the panel's share: a thousand-row table is not read, and it is the client that lays it out
+    local logged = #kl_rows
+    for i = logged, KL_SHOW + 1, -1 do kl_rows[i] = nil end
     local rows = {}
     for _, name in ipairs(kl_rows) do
       local e = t[name]
@@ -2702,13 +2717,20 @@ draw = function()
         timed > 0 and ((e.secs // timed) .. "s") or "-",
         e.xp and big(e.xp) or "-")
     end
-    scrye.setState(P .. "killlog", #rows > 0 and table.concat(rows, "\n")
-      or (KLV == "session" and "(no kills here this session)\t\t\t" or "(no kills logged here yet)\t\t\t"))
     local others = 0
     for p2, t2 in pairs(LOG) do if p2 ~= place and next(t2) then others = others + 1 end end
-    scrye.setState(P .. "klplace", (KLV == "session" and "Kill log, this session: " or "Kill log: ") .. place
+    kl_built.key = kl_key
+    kl_built.rows = #rows > 0 and table.concat(rows, "\n")
+      or (KLV == "session" and "(no kills here this session)\t\t\t" or "(no kills logged here yet)\t\t\t")
+    kl_built.place = (KLV == "session" and "Kill log, this session: " or "Kill log: ") .. place
+      .. (logged > KL_SHOW and string.format(" - top %d of %d ('farm log%s' prints all)", KL_SHOW, logged,
+                                             KLV == "session" and " session" or "") or "")
       .. (others > 0 and string.format(" (%d other place%s - 'farm log %sall')", others, others == 1 and "" or "s",
-                                       KLV == "session" and "session " or "") or ""))
+                                       KLV == "session" and "session " or "") or "")
+  end
+  do
+    scrye.setState(P .. "killlog", kl_built.rows)
+    scrye.setState(P .. "klplace", kl_built.place)
     scrye.setState(P .. "klview", KLV == "session" and "Showing: this session" or "Showing: all time")
   end
   -- the leg being walked, for the map to light: "num,num,..." (empty = nothing to light)
@@ -2782,9 +2804,7 @@ build_panel = function(m)
       } },
       { type = "input", width = 30, text = "seek <player>", bind = P .. "seekbox",
         onSubmit = function(t) farm_cmd("seek " .. tostring(t or "")) end },
-      { type = "gauge", text = "HP", value = P .. "hp", max = 100, dim = true },
-      -- the enemy's health straight from Char.Combat (the vitals plugin binds the same path)
-      { type = "gauge", text = "Enemy", value = "char.combat.attacker_hp", max = 100 },
+      -- No HP or enemy-health bars here (1.14.1): 3S Vitals shows both, from the same feeds.
       { type = "value", text = "Target: ", bind = P .. "target" },
       { type = "table", bind = P .. "roster", separator = "\t", columns = { "Mob", "N", "Verdict" },
         align = { "left", "right", "left" },
