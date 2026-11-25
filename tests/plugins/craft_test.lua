@@ -40,6 +40,9 @@
 -- refineries: the unbuilt listed, the allocation read from the wrong column. 0.12.0: closed
 -- stages listed (2), a bare rclick= on a material (2), names not lower-cased (1), the
 -- extra share ignored (1).
+-- 0.13.0 (25 Nov): a generation of jobs shown before it is whole, chunks of one kind
+-- overwriting each other, the old generation's lists kept, the chunks not forgotten on
+-- reconnect, the stalled item not found by name, Craft.State left on the Raw tab.
 -- 0.2.1: a stale
 -- catalogue page kept when its key is resent shorter (1).
 
@@ -676,6 +679,102 @@ check(has("status", "1 built"), "reconnect: no part of the old character's build
 check(st("materials") == "" and st("market_orders") == "" and not has("status", "Production"), "reconnect: the new lists start over too")
 gmcp("Craft.Market", MK3); fire_timers()
 check(has("market_head", "2 material order(s)"), "reconnect: ...with no page of the old character's market left behind")
+
+-- 15. 25 Nov 2026: Craft.Jobs as generations of numbered chunks; Craft.State and Craft.Info
+-- as mirrors; Craft.Effects. Payloads VERBATIM from gmcp-fields-Keyser-20261125-162232
+-- unless marked.
+for _, fn in ipairs(connect_hooks) do fn() end
+fire_timers()
+CLOCK = 1795620120           -- 25 Nov 2026 16:22 Stockholm, when the capture was taken
+local G28 = {
+  [==[{ "full": 1, "jobs_28_1_9_r": [ { "expires": 1795695331, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Vibro-Knife" }, { "expires": 1795695666, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795695828, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Gauntlets" } ] }]==],
+  [==[{ "full": 1, "jobs_28_2_9_r": [ { "expires": 1795699178, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795699315, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" }, { "expires": 1795699946, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Cuirass" } ] }]==],
+  [==[{ "full": 1, "jobs_28_3_9_r": [ { "expires": 1795702512, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/brew", "name": "Reflex Stim" }, { "expires": 1795702752, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795703361, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" } ] }]==],
+  [==[{ "full": 1, "jobs_28_4_9_r": [ { "expires": 1795704058, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Cuirass" } ] }]==],
+  [==[{ "full": 1, "jobs_28_5_9_p": [ { "need": 800, "building": "Quantum Extractors", "realm": 0, "global": 0, "token": "scorched", "tier": 2 } ] }]==],
+  [==[{ "full": 1, "jobs_28_6_9_q": [ { "current_due": 1795620928, "current_name": "Plasma Cell Sidearm", "building": "Weapons Fabricator", "items": "Plasma Cell Sidearm, Plasma Cell Chain-Axe, Plasma Cell Chain-Axe, Plasma Cell Chain-Axe", "cap": 5, "stalled": 0, "current_id": "sidearm@plasmacell", "depth": 4 } ] }]==],
+  [==[{ "full": 1, "jobs_28_7_9_q": [ { "current_due": 1795623254, "current_name": "Smart Alloy Cuirass", "building": "Powersuit Bay", "items": "Smart Alloy Cuirass, Smart Alloy Gauntlets, Smart Alloy Gauntlets, Smart Alloy Gauntlets", "cap": 5, "stalled": 0, "current_id": "breastplate@smartalloy", "depth": 4 } ] }]==],
+  [==[{ "full": 1, "jobs_28_8_9_q": [ { "current_due": 1795628660, "current_name": "Reflex Stim", "building": "Chem Synthlab", "items": "Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim", "cap": 5, "stalled": 0, "current_id": "stim_dodge_1", "depth": 5 }, { "current_due": 0, "current_name": "", "building": "Cybernetics Lab", "items": "Smart Alloy Ring of Might, Smart Alloy Ring of Might", "cap": 5, "stalled": 1, "current_id": "", "depth": 2 } ] }]==],
+  [==[{ "full": 1, "jobs_28_9_9_l": [ 15, 40 ] }]==],
+}
+local G29 = {
+  [==[{ "full": 1, "jobs_29_1_9_r": [ { "expires": 1795695331, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Vibro-Knife" }, { "expires": 1795695666, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795695828, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Gauntlets" } ] }]==],
+  [==[{ "full": 1, "jobs_29_2_9_r": [ { "expires": 1795699178, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795699315, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" }, { "expires": 1795699946, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Cuirass" } ] }]==],
+  [==[{ "full": 1, "jobs_29_3_9_r": [ { "expires": 1795702512, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/brew", "name": "Reflex Stim" }, { "expires": 1795702752, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795703361, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" } ] }]==],
+  [==[{ "full": 1, "jobs_29_7_9_q": [ { "current_due": 1795623254, "current_name": "Smart Alloy Cuirass", "building": "Powersuit Bay", "items": "Smart Alloy Cuirass, Smart Alloy Gauntlets, Smart Alloy Gauntlets, Smart Alloy Gauntlets", "cap": 5, "stalled": 0, "current_id": "breastplate@smartalloy", "depth": 4 } ] }]==],
+  [==[{ "full": 1, "jobs_29_8_9_q": [ { "current_due": 1795628660, "current_name": "Reflex Stim", "building": "Chem Synthlab", "items": "Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim", "cap": 5, "stalled": 0, "current_id": "stim_dodge_1", "depth": 5 }, { "current_due": 0, "current_name": "", "building": "Cybernetics Lab", "items": "Smart Alloy Ring of Might, Smart Alloy Ring of Might", "cap": 5, "stalled": 1, "current_id": "", "depth": 2 } ] }]==],
+  [==[{ "full": 1, "jobs_29_9_9_l": [ 15, 40 ] }]==],
+}
+local G2A = {
+  [==[{ "full": 1, "jobs_2a_1_9_r": [ { "expires": 1795695331, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Vibro-Knife" }, { "expires": 1795695666, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795695828, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Gauntlets" } ] }]==],
+  [==[{ "full": 1, "jobs_2a_2_9_r": [ { "expires": 1795699178, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795699315, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" }, { "expires": 1795699946, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Cuirass" } ] }]==],
+  [==[{ "full": 1, "jobs_2a_3_9_r": [ { "expires": 1795702512, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/brew", "name": "Reflex Stim" }, { "expires": 1795702752, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/crafted_accessory", "name": "Smart Alloy Ring of Might" }, { "expires": 1795703361, "quality": 2, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_weapon", "name": "Plasma Cell Sidearm" } ] }]==],
+  [==[{ "full": 1, "jobs_2a_4_9_r": [ { "expires": 1795704058, "quality": 1, "obj": "\/players\/skuggis\/crafting\/objs\/crafted\/gear_armour", "name": "Smart Alloy Cuirass" } ] }]==],
+  [==[{ "full": 1, "jobs_2a_5_9_q": [ { "current_due": 1795620928, "current_name": "Plasma Cell Sidearm", "building": "Weapons Fabricator", "items": "Plasma Cell Sidearm, Plasma Cell Chain-Axe, Plasma Cell Chain-Axe, Plasma Cell Chain-Axe", "cap": 5, "stalled": 0, "current_id": "sidearm@plasmacell", "depth": 4 } ] }]==],
+  [==[{ "full": 1, "jobs_2a_6_9_q": [ { "current_due": 1795623254, "current_name": "Smart Alloy Cuirass", "building": "Powersuit Bay", "items": "Smart Alloy Cuirass, Smart Alloy Gauntlets, Smart Alloy Gauntlets, Smart Alloy Gauntlets", "cap": 5, "stalled": 0, "current_id": "breastplate@smartalloy", "depth": 4 } ] }]==],
+  [==[{ "full": 1, "jobs_2a_7_9_q": [ { "current_due": 1795628660, "current_name": "Reflex Stim", "building": "Chem Synthlab", "items": "Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim, Reflex Stim", "cap": 5, "stalled": 0, "current_id": "stim_dodge_1", "depth": 5 }, { "current_due": 0, "current_name": "", "building": "Cybernetics Lab", "items": "Smart Alloy Ring of Might, Smart Alloy Ring of Might", "cap": 5, "stalled": 1, "current_id": "", "depth": 2 } ] }]==],
+  [==[{ "full": 1, "jobs_2a_8_9_b": [ { "tier": 2, "due": 1795634340, "building": "Quantum Extractors" } ] }]==],
+  [==[{ "full": 1, "jobs_2a_9_9_l": [ 15, 40 ] }]==],
+}
+for i = 1, 8 do gmcp("Craft.Jobs", G28[i]) end; fire_timers()
+check(not has("status", "-- Production --") and not has("status", "to collect"), "jobs: eight chunks of nine change nothing")
+gmcp("Craft.Jobs", G28[9]); fire_timers()
+check(has("status", "Queue        15/40") and has("summary", "15 queued   10 READY"), "jobs: the ninth chunk makes the generation whole - the l chunk is [queued, cap]")
+check(has("status", "Weapons Fabricator Plasma Cell Sidearm   @{warning}13m 28s@{}") and has("status", "Chem Synthlab      Reflex Stim   @{warning}2h 22m@{}") and has("status", "5/5 queued"),
+  "jobs: the q chunks (three of them) are one list of four queues")
+check(has("status", "10 to collect") and has("status", "Smart Alloy Cuirass        @{dim}q1@{}@{dim}   expires in 23h 18m@{}"), "jobs: the r chunks (four of them) are one list of ten, the tenth from the fourth chunk")
+check(has("status", "Quantum Extractors T2   @{warning}pending@{}@{dim}  need 800 scorched@{}") and has("summary", "1 pending"), "jobs: the p chunk is the pending build")
+check(has("status", "Cybernetics Lab    @{dim}waiting: @{}Smart Alloy Ring of Might@{dim}   2/5 queued@{}") and has("status", "@{warning,bold}  STALLED@{}@{warning} short of materials@{}"),
+  "stalled, as the server sends it: no job in hand, so the first of its items is what waits")
+check(not has("raw", "jobs_") and not has("raw", "Craft.Jobs"), "jobs: no chunk is on the Raw tab")
+for _, m in ipairs(G29) do gmcp("Craft.Jobs", m) end; fire_timers()
+check(has("summary", "1 pending") and not has("status", "3h 57m"), "jobs: six chunks of the next generation leave the last whole one standing")
+for i = 9, 1, -1 do gmcp("Craft.Jobs", G2A[i]) end; fire_timers()
+check(has("status", "Quantum Extractors T2   @{warning}3h 57m@{}") and has("summary", "building Quantum Extractors 3h 57m") and not has("status", "pending"),
+  "jobs: a later generation, its chunks arriving backwards, replaces everything - the pending build is now a build (b chunk)")
+check(has("status", "10 to collect") and has("status", "Queue        15/40"), "jobs: ...and nothing is doubled or lost")
+CLOCK = CLOCK + 120; tick()
+check(has("status", "Weapons Fabricator Plasma Cell Sidearm   @{warning}11m 28s@{}"), "jobs: the tick still counts the queues down")
+-- SYNTHETIC: the stalled job's recipe is known, by the NAME in items (there is no current_id to go by)
+gmcp("Craft.Recipes", '{ "full": 1, "known_science": [ { "rank": 1, "skill": 0, "building": "Cybernetics Lab", "materials": "2x Smart Alloy, 1x Plasma Cell", "time": 3600, "name": "Smart Alloy Ring of Might", "id": "prod-3105-ring_might@smartalloy" } ] }'); fire_timers()
+check(has("status", "short of materials - needs 2x Smart Alloy, 1x Plasma Cell@{}"), "synthetic: a stalled queue with no current_id finds its recipe by the item's name")
+-- SYNTHETIC: the build is gone from the next generation once its time is up - built; and a kind never seen
+printed = {}
+CLOCK = 1795634340
+gmcp("Craft.Jobs", '{ "full": 1, "jobs_2b_1_3_q": [ ] }')
+gmcp("Craft.Jobs", '{ "full": 1, "jobs_2b_3_3_l": [ 0, 40 ] }'); fire_timers()
+check(not said("is built") and has("status", "10 to collect"), "synthetic: two chunks of three: nothing yet, and nothing announced")
+gmcp("Craft.Jobs", '{ "full": 1, "jobs_2b_2_3_m": [ { "name": "Thing" } ] }'); fire_timers()
+check(said("Quantum Extractors T2 is built"), "synthetic: a build absent from a whole generation, at its due time, is announced")
+check(not has("status", "to collect") and not has("status", "-- Production --") and has("status", "Queue        0/40"), "synthetic: a kind absent from a generation is an empty list")
+check(has("raw", "-- Craft.Jobs") and has("raw", "kind m [{name=Thing}]"), "synthetic: a chunk kind not seen before is shown whole on the Raw tab")
+-- SYNTHETIC: the named lists of before 25 Nov are still read
+gmcp("Craft.Jobs", '{ "queue_total": 1, "ready": [ { "name": "Old Style", "quality": 2, "expires": 1795700000 } ] }'); fire_timers()
+check(has("status", "1 to collect") and has("status", "Old Style"), "synthetic: the old named lists still work beside the new chunks")
+gmcp("Craft.Jobs", '{ "masterwork": [ { "item": "Relic" } ] }'); fire_timers()
+check(has("raw", "masterwork [{item=Relic}]"), "synthetic: ...an old list with no chunk kind of its own included")
+gmcp("Craft.Jobs", '{ "full": 1, "jobs_2c_1_1_l": [ 0, 40 ] }'); fire_timers()
+check(not has("raw", "masterwork") and not has("raw", "kind m") and not has("status", "Old Style"), "synthetic: a whole generation leaves nothing of what came before it")
+
+-- Craft.State and Craft.Info are Craft.Statedata and Craft.Infodata under a second name
+gmcp("Craft.State", '{ "pages": 4, "page": 2, "tokens_chaos": [ { "level": 1, "realm": "Chaos", "qty": 3, "name": "cracked" }, { "level": 2, "realm": "Chaos", "qty": 2, "name": "splintered" }, { "level": 3, "realm": "Chaos", "qty": 1271, "name": "seething" }, { "level": 4, "realm": "Chaos", "qty": 60, "name": "imploded" }, { "level": 5, "realm": "Chaos", "qty": 0, "name": "apocalyptic" } ], "full": 1 }')
+gmcp("Craft.State", '{ "stock_used": 335, "full": 1, "stock_cap": 600, "pages": 4, "soul_tiers": [ { "count": 100, "cap": 100, "name": "Faint", "tier": 1 }, { "count": 0, "cap": 0, "name": "Bound", "tier": 2 }, { "count": 0, "cap": 0, "name": "Potent", "tier": 3 }, { "count": 0, "cap": 0, "name": "Ascendant", "tier": 4 }, { "count": 0, "cap": 0, "name": "Mythic", "tier": 5 } ], "page": 1, "soul_cap": 100, "souls": 100 }'); fire_timers()
+check(has("tokens", "seething") and has("tokens", "1,271"), "Craft.State: read as Craft.Statedata is - the tokens arrive")
+check(not has("raw", "Craft.State") and not has("raw", "tokens_chaos") and not has("raw", "soul_tiers"), "Craft.State: ...and none of it lands on the Raw tab")
+gmcp("Craft.Info", '{ "full": 1, "bonuses": { "speed": 6, "soul_gain": 25, "logistics": 150, "soul_cap": 50 }, "realms": { "Chaos": { "bonus": 2, "license": 0, "level": 1, "xp": 0 }, "Science": { "bonus": 2, "license": 0, "level": 1, "xp": 0 }, "Fantasy": { "bonus": 2, "license": 0, "level": 1, "xp": 0 } }, "soul": { "cap": 100, "tier": 1 }, "storage": { "cap": 600, "tier": 2 }, "standing": { "Chaos": { "drop_rank": 17, "drop_extra": 8, "drop_bump": 4 }, "Science": { "drop_rank": 15, "drop_extra": 7, "drop_bump": 3 }, "Fantasy": { "drop_rank": 10, "drop_extra": 5, "drop_bump": 2 } } }'); fire_timers()
+check(not has("raw", "Craft.Info") and not has("raw", "bonuses"), "Craft.Info: read as Craft.Infodata is, and not on the Raw tab")
+-- Craft.Effects: nothing while its lists are empty
+gmcp("Craft.Effects", '{ "cooldowns": [ ], "full": 1, "active": [ ] }'); fire_timers()
+check(not has("raw", "Craft.Effects"), "Craft.Effects: two empty lists are not shown")
+gmcp("Craft.Effects", '{ "active": [ { "name": "Reflex Stim", "left": 600 } ] }'); fire_timers()      -- SYNTHETIC
+check(has("raw", "Craft.Effects") and has("raw", "Reflex Stim"), "synthetic: a filled Craft.Effects list is shown whole on the Raw tab")
+gmcp("Craft.Effects", '{ "active": [ ] }'); fire_timers()      -- SYNTHETIC
+check(not has("raw", "Craft.Effects"), "synthetic: ...and goes again when it empties")
+for i = 1, 8 do gmcp("Craft.Jobs", G28[i]) end
+for _, fn in ipairs(connect_hooks) do fn() end
+fire_timers()
+gmcp("Craft.Jobs", G28[9]); fire_timers()
+check(not has("status", "15/40"), "reconnect: no chunk of the old character's jobs is left to complete a generation")
 
 -- 13. THE PROPERTY: the plugin itself never sends a command - the two it can cause
 -- are links the player clicks

@@ -2,8 +2,8 @@
 -- packages. 3Scapes only, any guild: crafting belongs to the character, not to a
 -- guild, so this sits beside 3s-vitals and 3s-merc rather than inside a guild HUD.
 --
--- 0.12.0, and early: the system went live on 16 Nov 2026 and is still being built on the
--- server, so this is written from seven captures of one character (Keyser, 16-20 Nov
+-- 0.13.0, and early: the system went live on 16 Nov 2026 and is still being built on the
+-- server, so this is written from eight captures of one character (Keyser, 16-25 Nov
 -- 2026), who by the last had a dozen buildings, a production queue and goods to collect.
 -- Every field READ below
 -- was seen with a real value; what was only ever seen empty or zero is not guessed
@@ -30,7 +30,8 @@
 --                      queues[{building,current_name,current_id,current_due,items,
 --                      depth,cap,stalled}], ready[{name,quality,expires,obj}], and
 --                      masterwork[] (only ever seen empty -> Raw tab). Paged since
---                      20 Nov.
+--                      20 Nov. SINCE 25 NOV none of those names: generations of
+--                      numbered chunks, jobs_<gen>_<i>_<n>_<kind> (see commit_jobs).
 --     Craft.Market     exchanges[{id,player,give_token,give_qty,want_token,
 --                      want_qty,created}], material_orders[{id,type,material_name,
 --                      material,qty,price,player,created}], scroll_orders[{id,type,
@@ -145,6 +146,7 @@ local REFS = {}          -- "refineries_3" -> ["Building|step|Material|a|b|c"]
 local CAT = {}           -- "catalogue_chaos_2" -> { [page] = [entries] }
 local EVENT = {}         -- last id, and the last non-empty finished/items/materials
 local EXTRA = {}         -- package -> { key -> value } for keys this plugin cannot name
+local JOBGEN = {}        -- generation -> { n = 9, chunks = { [i] = { kind = "q", list = {...} } } }: see commit_jobs
 local PARTS = {}         -- snapshot -> key -> { [page] = list } or { delta = list }: see merge_paged
 local MATS = nil         -- the stored materials, once a whole generation has arrived
 local MATGEN = {}        -- generation -> { count = n or nil, chunks = { [i] = [materials] } }
@@ -590,8 +592,11 @@ local function build_status()
       if type(q) == "table" then
         local left = N(q.current_due) - now()
         local line = esc(string.format("%-18s ", S(q.building)))
+        -- a queue that cannot start has no job in hand (25 Nov 2026: current_name "",
+        -- current_id "", current_due 0, stalled 1): what waits is the first of its items
+        local first_item = (S(q.items):match("^%s*([^,]+)") or ""):gsub("%s+$", "")
         if S(q.current_name) == "" then
-          line = line .. col("dim", "idle")
+          line = line .. (first_item ~= "" and (col("dim", "waiting: ") .. esc(first_item)) or col("dim", "idle"))
         else
           line = line .. esc(S(q.current_name) .. "   ")
             .. (left > 0 and (col("warning", span(left)) .. col("dim", "  (" .. os.date("%H:%M", N(q.current_due)) .. ")"))
@@ -605,7 +610,8 @@ local function build_status()
         if N(q.stalled) ~= 0 then
           local why = ""
           for _, r in ipairs(known_recipes()) do
-            if S(q.current_id) ~= "" and r.id:sub(-#S(q.current_id) - 1) == "-" .. S(q.current_id) and r.materials ~= "" then
+            if r.materials ~= "" and ((S(q.current_id) ~= "" and r.id:sub(-#S(q.current_id) - 1) == "-" .. S(q.current_id))
+                or (S(q.current_id) == "" and first_item ~= "" and r.name == first_item)) then
               local bits = {}
               for part in r.materials:gmatch("[^,]+") do
                 part = part:gsub("^%s+", ""):gsub("%s+$", "")
@@ -1172,9 +1178,14 @@ local function feed(pkg, fn, ...)
   end)
 end
 
-feed("Craft.Infodata", function(t) merge(INFO, t) end, "status")
+-- Craft.Info and Craft.State carry the same messages as Craft.Infodata and
+-- Craft.Statedata since 25 Nov 2026 (81 of each, payload for payload). Both names are
+-- read by the one handler: taking a message twice changes nothing.
+for _, pkg in ipairs({ "Craft.Infodata", "Craft.Info" }) do
+  feed(pkg, function(t) merge(INFO, t) end, "status")
+end
 
-feed("Craft.Statedata", function(t)
+local function on_state(t)
   for k, v in pairs(t) do
     if k == "full" or k == "page" or k == "pages" then
       -- paging words, not data
@@ -1198,7 +1209,10 @@ feed("Craft.Statedata", function(t)
       extra("Craft.Statedata", k, v)
     end
   end
-end, "status", "tokens", "market", "raw", "materials")     -- market: a token's name comes from here
+end
+for _, pkg in ipairs({ "Craft.Statedata", "Craft.State" }) do
+  feed(pkg, on_state, "status", "tokens", "market", "raw", "materials")     -- market: a token's name comes from here
+end
 
 feed("Craft.Skills", function(t)
   for k, v in pairs(t) do
@@ -1263,19 +1277,81 @@ feed("Craft.Recipes", function(t)
   end
 end, "recipes", "status")      -- status: the catalogue names the production buildings
 
-feed("Craft.Jobs", function(t)
-  -- a build that was on the list, is not any more, and was due: it finished.
-  -- (One that vanishes long before its time was cancelled, and is not announced.)
-  if type(t.builds) == "table" then
-    local still = {}
-    for _, b in ipairs(t.builds) do if type(b) == "table" then still[S(b.building)] = true end end
-    for _, b in ipairs(builds()) do
-      if not still[S(b.building)] and N(b.due) - now() <= 60 then
-        scrye.print(TAG .. col("success", S(b.building) .. " T" .. S(b.tier) .. " is built"))
-      end
+-- a build that was on the list, is not any more, and was due: it finished.
+-- (One that vanishes long before its time was cancelled, and is not announced.)
+local function announce_built(new_builds)
+  local still = {}
+  for _, b in ipairs(new_builds) do if type(b) == "table" then still[S(b.building)] = true end end
+  for _, b in ipairs(builds()) do
+    if not still[S(b.building)] and N(b.due) - now() <= 60 then
+      scrye.print(TAG .. col("success", S(b.building) .. " T" .. S(b.tier) .. " is built"))
     end
   end
-  merge_paged(JOBS, t)
+end
+
+-- Craft.Jobs since 25 Nov 2026: no named lists any more. Everything comes as a GENERATION
+-- of numbered chunks, one key a message:
+--     jobs_<gen>_<i>_<n>_<kind>      "jobs_2a_7_9_q" = generation 2a (hex), chunk 7 of 9
+-- with the kind in the last letter:
+--     r  ready to collect   [{name,quality,expires,obj}]
+--     q  production queues  [{building,current_name,current_id,current_due,items,depth,cap,stalled}]
+--     p  pending builds     [{building,tier,need,token,realm,global}]
+--     b  builds under way   [{building,tier,due}]
+--     l  the totals         [queued, cap]   ([15, 40] beside queue depths of 4+4+5+2)
+-- A list too long for one chunk runs over several of the same kind (ten ready items came
+-- as r, r, r, r), and a kind with nothing in it is simply absent - so a whole generation
+-- is the whole truth, and it replaces everything once its last chunk is here. Half a
+-- generation changes nothing. A kind not listed above is kept for the Raw tab.
+local JOB_KIND = { r = "ready", q = "queues", p = "pending_builds", b = "builds" }
+local function commit_jobs(gen)
+  local g = JOBGEN[gen]
+  if not g then return false end
+  for i = 1, g.n do if not g.chunks[i] then return false end end
+  local new = { ready = {}, queues = {}, pending_builds = {}, builds = {} }
+  local odd = {}
+  for i = 1, g.n do
+    local c = g.chunks[i]
+    if c.kind == "l" then
+      new.queue_total, new.queue_cap = c.list[1], c.list[2]
+    else
+      local into = new[JOB_KIND[c.kind] or ""]
+      if not into then odd[c.kind] = odd[c.kind] or {}; into = odd[c.kind] end
+      for _, x in ipairs(c.list) do into[#into + 1] = x end
+    end
+  end
+  announce_built(new.builds)
+  wipe(JOBS); PARTS[JOBS] = nil
+  for k, v in pairs(new) do JOBS[k] = v end
+  EXTRA["Craft.Jobs"] = nil
+  for kind, list in pairs(odd) do extra("Craft.Jobs", "kind " .. kind, list) end
+  wipe(JOBGEN)       -- whatever else was half here is older
+  return true
+end
+
+feed("Craft.Jobs", function(t)
+  local old, changed = {}, false
+  for k, v in pairs(t) do
+    local gen, i, n, kind = k:match("^jobs_(%x+)_(%d+)_(%d+)_(%a+)$")
+    if gen and type(v) == "table" then
+      i, n = N(i), N(n)
+      if i >= 1 and i <= n then
+        JOBGEN[gen] = JOBGEN[gen] or { n = n, chunks = {} }
+        JOBGEN[gen].chunks[i] = { kind = kind, list = v }
+        if commit_jobs(gen) then changed = true end
+      end
+    elseif k ~= "full" then
+      old[k] = v
+    end
+  end
+  -- the named lists of before 25 Nov, should a server still send them
+  local named = false
+  for k in pairs(old) do if k ~= "page" and k ~= "pages" then named = true end end
+  if named then
+    if type(old.builds) == "table" then announce_built(old.builds) end
+    merge_paged(JOBS, old)
+    changed = true
+  end
+  return changed
 end, "status", "raw")
 
 feed("Craft.Market", function(t) merge_paged(MARKET, t) end, "market", "raw")
@@ -1310,17 +1386,29 @@ feed("Craft.Event", function(t)
 end, "raw", "status", "materials")
 
 -- offered by the server, never yet sent: whatever they turn out to carry is shown
-for _, pkg in ipairs({ "Craft.State", "Craft.Info", "Craft.Extra" }) do
+for _, pkg in ipairs({ "Craft.Extra" }) do
   feed(pkg, function(t)
     for k, v in pairs(t) do extra(pkg, k, v) end
   end, "raw")
 end
 
+-- Craft.Effects (first seen 25 Nov 2026): { active = [], cooldowns = [] }, both empty so
+-- far. A list is shown whole on the Raw tab the day it holds something, and not before.
+feed("Craft.Effects", function(t)
+  for k, v in pairs(t) do
+    if k ~= "full" then
+      EXTRA["Craft.Effects"] = EXTRA["Craft.Effects"] or {}
+      EXTRA["Craft.Effects"][k] = filled(v) and v or nil
+      if next(EXTRA["Craft.Effects"]) == nil then EXTRA["Craft.Effects"] = nil end
+    end
+  end
+end, "raw")
+
 -- A new connection may be another character: everything starts over.
 scrye.onConnect(function()
   wipe(INFO); wipe(STATE); wipe(JOBS); wipe(MARKET); wipe(SKILLS); wipe(TOKENS)
   wipe(BLDGS); wipe(REFS); wipe(CAT); wipe(EVENT); wipe(EXTRA)
-  wipe(BPARTS); wipe(PARTS); wipe(MATGEN); wipe(KNOWNR); wipe(QNAME); MATS = nil
+  wipe(BPARTS); wipe(PARTS); wipe(JOBGEN); wipe(MATGEN); wipe(KNOWNR); wipe(QNAME); MATS = nil
   have_bldgs = false; seen_any = false; CATB = nil
   for _, s in ipairs(ALL) do dirty[s] = true end
   flush()
