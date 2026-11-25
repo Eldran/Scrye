@@ -162,7 +162,7 @@ A plugin is a folder with a `plugin.json` manifest and an entry script:
 }
 ```
 
-The **plugin API is versioned independently of the client** (currently 1.24, and versioned as the
+The **plugin API is versioned independently of the client** (currently 1.25, and versioned as the
 `Scrye.PluginContracts` assembly), so a plugin declares what it needs and an incompatible build
 refuses it with a clear message instead of failing mysteriously mid-script. `permissions` are declarations shown to the user before they enable a
 plugin — informational today, not a sandbox; see the guide for what actually is and isn't bounded.
@@ -170,7 +170,7 @@ plugin — informational today, not a sandbox; see the guide for what actually i
 Plugins are loaded from `plugins/` next to the executable and from your user plugins folder (`%APPDATA%/Scrye/plugins` on Windows, `~/.config/Scrye/plugins` on Linux and macOS), and are enabled per character. The ones that ship with Scrye, nearly all for [3Scapes](https://www.3scapes.org/):
 
 - **Getting around** — `3s-map-gmcp`, the automapper (rooms by the number the server gives them, with an auto-explore sweep, fast walk and a 3D view of every level); `3s-farmer`, an area farming bot that also searches an area for a player; `3s-stepper`, recorded routes; `3s-chaossea`, the chaos-sea bot, with `3s-pathfinder` doing its path search in Rust compiled to WebAssembly; and `3k-chaossea`, the classic bot kept for 3K-3Kingdoms.
-- **Guild HUDs** — the Viking guild as four plugins (`3s-viking-status-gmcp` for the settlement, `3s-viking-world` for the fleet, `3s-viking-kingdom` for the dynasty, `3s-viking-fx` for effect timers) plus `3s-raid-gmcp`, the auto-raider; and one each for Changeling, Cyborg, Gentech, Juggernaut and Mage, and `3s-merc` for a hired mercenary.
+- **Guild HUDs** — the Viking guild as four plugins (`3s-viking-status-gmcp` for the settlement, `3s-viking-world` for the fleet, `3s-viking-kingdom` for the dynasty, `3s-viking-fx` for effect timers) plus `3s-raid-gmcp`, the auto-raider; and one each for Changeling, Cyborg, Elemental, Gentech, Juggernaut and Mage, and `3s-merc` for a hired mercenary.
 - **Everyday** — `3s-chat`, every channel and tell in one capture pane with name watching; `3s-vitals`, compact gauges; `3s-craft`, a HUD for the crafting system (storage, builds, skills, tokens, the token market); `3s-compendium`, a hunting log that fills itself in — where each monster lives, how long a fight with it takes on each of your characters, what a kill pays in XP and coins, and your own notes and tags.
 
 HUD panels are **declarative** — a plugin describes widgets and binds them to state paths, and the host renders them:

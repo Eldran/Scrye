@@ -971,6 +971,7 @@ doesn't exist on 3K, so nothing was left for them to read.)
 | `cyb` | 3S Cyborg |
 | `jug` | 3S Juggernaut |
 | `gt` · `gtsys` | 3S Gentech |
+| `elhud` | 3S Elemental |
 | `mhud` | 3S Mercenary |
 | `mage` | 3S Mage |
 | `vfx` | Viking Effects |
@@ -1843,6 +1844,35 @@ still owed before the next level, and the same as a percent), `reset_pct` (the t
 clock), `phase_rank` (how far your experiments are phased — raised with research credits), and
 `rush` (a healing power, so it now sits with the systems that toggle). Two are still unnamed and still in the block: **`dgexp`** and
 **`illuminated`**. If you play Gentech and recognise either, that block is where to look.
+
+---
+
+### 3S Elemental — `elhud`
+
+The Elemental guild HUD, from the guild's GMCP feed. Four tabs:
+
+- **Status** — your title, form and size; **Energy**, **Vortex** and the **Reset** clock as
+  bars, the reset with the time until it turns; every defence (negation, barrier, wave, siphon,
+  engulfed, diffused, dissipated) with what it is covering while it is up, and the energy
+  shield; your **charges** — blasts, waves and natural convergence, which the reset clock gives
+  back, then engulfs and shrouds, which come back at the daily reset — a spent one in red; and
+  the panic setting.
+- **Energy** — the gexp still owed for the next guild level and how long that takes at the pace
+  of the last ten minutes, the lifetime / used / to spend / link totals, and what this session
+  has gained.
+- **Skills** — every skill against its total and what its next level costs. A skill at its
+  total is light green; one you can afford to raise is yellow; one you cannot is orange and
+  says how much energy is missing. **Click a skill** for `info <skill>`; **right-click** one
+  that can still grow to `enhance` it.
+- **Setup** — panic hp and action, resolve, the emit power output, prismatic emission,
+  equipollent and consistency.
+
+`elhud` prints the Status page into the output window.
+
+A character that `gswap`s keeps its last elemental figures on the panel, with a line saying
+which guild it is in now; another guild's packages are never read as an elemental's. The energy
+maximum follows your wisdom and is only sent at login, so after a wisdom change the pool can
+read above its maximum until you next log in.
 
 ---
 
