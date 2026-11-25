@@ -81,6 +81,8 @@
 -- last, when that was in this room and no more than 20 seconds ago:
 --   coins (1600): Taken.                              coins, with the amount
 --   <anything else>: Taken.                           an item picked up
+--   Kresh Coat: Ok.                                   the same, as items print it (0.10.1,
+--                                                     Keyser's log of 22 Nov 2026)
 --   You bind 1 Faint soul from the remains.           \ what a guild or the crafting
 --   You salvage 1 Hyper-charged Science Token from the remains.   / system takes from it
 -- So a monster's entry shows what a pickup of its coins is worth on average and what has
@@ -109,6 +111,7 @@
 --   mdb best [area]     what pays: the monsters with a measured kill, best XP first
 --                       (the Best tab is the same by area: click an area to open or close it)
 --   mdb drops <item>    which monsters have given it (taken after a kill, or left on the floor)
+--   mdb items [word|-]  search the Items tab for a word; '-' (or nothing) shows everything
 --   mdb note <name> = <text>   your note on it ('=' with nothing after it clears)
 --   mdb tag <name> = <words>   your tags on it (likewise)     mdb tagged [tag]
 --   mdb export          the book to a file      mdb import [file]   merge one in
@@ -132,6 +135,7 @@ local XP_SETTLE = 1       -- the kill's own XP award lands just after the blow
 local BEST_ROWS = 30      -- monsters shown under one opened area on the Best tab
 local NOTE_MAX = 200      -- characters in a note
 local TAG_MAX = 8         -- tags on an entry
+local ITEM_ROWS = 40      -- items shown under one opened area on the Items tab
 local NOTES_ROWS = 40     -- entries on the Notes tab
 local LOOT_WAIT = 2        -- seconds after a death before its drops are read
 local LOOT_CAP = 20       -- different items remembered per entry
@@ -593,7 +597,7 @@ local function took_item(name, qty)
   touch(area)
 end
 
--- "<thing>: Taken." - coins carry their amount in brackets
+-- "<thing>: Taken." or "<thing>: Ok." - coins carry their amount in brackets
 local function on_taken(what)
   what = trim(what)
   local amount = what:lower():match("^coins?%s*%((%d+)%)$")
@@ -1054,6 +1058,96 @@ local function best_lines(area, rows)
   return out
 end
 
+-- The Items tab (0.10.0): everything a monster has given, by area. Coins, what was taken
+-- after a kill and what was left on the floor are one list here, an item a line with how
+-- often it came and from whom. With no search it is one line per area, opened by a click
+-- like the Best tab. With a search ('Search items' box, or 'mdb items <word>') only the
+-- items whose name contains the word are shown, every area that has one already opened -
+-- so "sword" answers both which monsters and which areas.
+local ITEM_OPEN = {}      -- area -> true: opened on the Items tab
+local QUERY = ""          -- the search in force, as a key ("sword"); "" shows everything
+
+-- One monster's items as { key = { name=, n= } }, coins included. A thing seen on the
+-- floor and then picked up is one thing, not two: where both lists have it, the larger
+-- count stands.
+local function items_of(e)
+  local items = {}
+  local function add(key, name, n)
+    if n <= 0 then return end
+    local it = items[key]
+    if it then it.n = math.max(it.n, n) else items[key] = { name = name, n = n } end
+  end
+  for k, l in pairs(type(e.loot) == "table" and e.loot or {}) do add(k, tostring(l.name or k), N(l.n)) end
+  for k, l in pairs(type(e.take) == "table" and e.take or {}) do add(k, tostring(l.name or k), N(l.n)) end
+  add("coins", "Coins", N(e.coinn))
+  return items
+end
+
+-- the areas that hold items matching 'query' ("" = all): { area=, items = { { key, name, n, mobs } } }
+local function item_areas(query)
+  local areas = {}
+  for area, t in pairs(BOOK) do
+    local by = {}
+    for mkey, e in pairs(t) do
+      for key, it in pairs(items_of(e)) do
+        if query == "" or key:find(query, 1, true) then
+          local row = by[key]
+          if not row then row = { key = key, name = it.name, n = 0, mobs = {} } ; by[key] = row end
+          row.n = row.n + it.n
+          row.mobs[#row.mobs + 1] = { key = mkey, e = e, n = it.n }
+        end
+      end
+    end
+    local list = {}
+    for _, row in pairs(by) do
+      table.sort(row.mobs, function(p, q) if p.n ~= q.n then return p.n > q.n end return p.key < q.key end)
+      list[#list + 1] = row
+    end
+    if #list > 0 then
+      table.sort(list, function(p, q) return natural(p.key) < natural(q.key) end)
+      areas[#areas + 1] = { area = area, items = list }
+    end
+  end
+  table.sort(areas, function(p, q) return natural(p.area) < natural(q.area) end)
+  return areas
+end
+
+local function items_tab_lines()
+  local areas = item_areas(QUERY)
+  local out = {}
+  if QUERY ~= "" then
+    local n = 0
+    for _, a in ipairs(areas) do n = n + #a.items end
+    out[#out + 1] = "search: @{bold}" .. esc(QUERY) .. "@{}@{dim}  " .. n .. (n == 1 and " item in " or " items in ") .. #areas
+      .. (#areas == 1 and " area" or " areas") .. "@{}  @{accent,click=mdb items -}[show all]@{}"
+  end
+  if #areas == 0 then
+    out[#out + 1] = QUERY ~= "" and "@{dim}nothing a monster has given has that in its name@{}"
+      or "@{dim}no items yet - they are booked when you take something after a kill, or a monster leaves it on the floor@{}"
+    return out
+  end
+  for _, a in ipairs(areas) do
+    local open = QUERY ~= "" or ITEM_OPEN[a.area] == true   -- a search opens every area it finds something in
+    out[#out + 1] = (QUERY == "" and ("@{accent,bold,click=mdb ifold " .. a.area .. "}" .. (open and "- " or "+ ") .. esc(a.area) .. "@{}")
+                                  or ("@{bold}" .. esc(a.area) .. "@{}"))
+      .. "@{dim}  " .. #a.items .. (#a.items == 1 and " item" or " items") .. "@{}"
+    if open then
+      for i = 1, math.min(ITEM_ROWS, #a.items) do
+        local row = a.items[i]
+        local from = {}
+        for j = 1, math.min(4, #row.mobs) do from[#from + 1] = link(row.mobs[j].e, a.area) end
+        out[#out + 1] = "  " .. esc(row.name) .. " @{dim}" .. row.n .. "x  from@{} " .. table.concat(from, "@{dim},@{} ")
+          .. (#row.mobs > 4 and ("@{dim} +" .. (#row.mobs - 4) .. " more@{}") or "")
+        for _, m in ipairs(row.mobs) do detail(out, a.area, m.e, "  ") end
+      end
+      if #a.items > ITEM_ROWS then
+        out[#out + 1] = "@{dim}  ... " .. (#a.items - ITEM_ROWS) .. " more: search for part of the name@{}"
+      end
+    end
+  end
+  return out
+end
+
 -- The Best tab (0.6.0): one line per area - how many monsters have a measured kill there
 -- and the best of them - and a click on the area's name opens it into its monsters, best
 -- XP first; another click closes it. Which areas are open is kept for the session only.
@@ -1135,6 +1229,7 @@ local function refresh()
   scrye.setState(P .. "area", HERE.num and table.concat(area_lines(area), "\n") or "@{dim}waiting for Room.Info@{}")
   scrye.setState(P .. "best", table.concat(best_tab_lines(), "\n"))
   scrye.setState(P .. "notes", table.concat(notes_lines(nil, NOTES_ROWS), "\n"))
+  scrye.setState(P .. "items", table.concat(items_tab_lines(), "\n"))
   PANEL = false
 end
 
@@ -1435,6 +1530,14 @@ local function cmd_tagged(arg)
   end
 end
 
+-- the Items tab's search: from its box or 'mdb items <word>'; "" or "-" shows everything
+local function set_query(text)
+  text = trim(text)
+  QUERY = (text == "-") and "" or mob_key(text)
+  scrye.setState(P .. "itembox", QUERY)
+  view_dirty = true
+end
+
 -- 'mdb drops <item>': who has given it - taken after a kill, or left on the floor
 local function cmd_drops(what)
   what = mob_key(what)
@@ -1451,6 +1554,9 @@ local function cmd_drops(what)
         if k:find(what, 1, true) then
           hits[#hits + 1] = { area = area, e = e, item = tostring(l.name or k), n = N(l.n), how = "taken" }
         end
+      end
+      if N(e.coinn) > 0 and ("coins"):find(what, 1, true) then
+        hits[#hits + 1] = { area = area, e = e, item = "Coins", n = N(e.coinn), how = "taken" }
       end
     end
   end
@@ -1708,6 +1814,7 @@ local HELP = {
   "mdb level [text|-]  the level of the area you stand in: show, set, or clear",
   "mdb best [area]     what pays: measured kills, best XP first",
   "mdb drops <item>    which monsters have given it (taken after a kill, or left on the floor)",
+  "mdb items [word|-]  search the Items tab for a word; '-' shows everything again",
   "mdb note <name> = <text>   your note on it (nothing after '=' clears it)",
   "mdb tag <name> = <words>   your tags on it; 'avoid' and 'danger' show red",
   "mdb tagged [tag]    everything with that tag (no tag: the tags in use)",
@@ -1750,6 +1857,13 @@ local function dispatch(rest)
   elseif (word == "note" or word == "tag") and arg ~= "" then cmd_yours(word, arg)
   elseif word == "tagged" then cmd_tagged(arg)
   elseif word == "drops" then cmd_drops(arg)
+  elseif word == "items" then
+    set_query(arg)
+    note(QUERY ~= "" and ("the Items tab shows what has '" .. esc(QUERY) .. "' in its name - 'mdb items -' shows everything again")
+                      or "the Items tab shows everything")
+  elseif word == "ifold" and arg ~= "" then
+    -- a click on an area's name on the Items tab: open it, or close it. Silent.
+    if BOOK[arg] then ITEM_OPEN[arg] = (not ITEM_OPEN[arg]) or nil ; view_dirty = true end
   elseif word == "export" and arg == "" then cmd_export()
   elseif word == "import" then cmd_import(arg)
   elseif word == "ignore" and arg == "" then
@@ -1808,6 +1922,8 @@ scrye.onGmcp("Comm.Channel.Text", function(json)
 end)
 scrye.addTrigger{ pattern = [[^You dealt the killing blow to (.+)\.]], regex = true, run = on_blow }
 scrye.addTrigger{ pattern = [[^(.+): Taken\.\s*$]], regex = true, run = on_taken }
+-- an item taken from a corpse answers "<item>: Ok." ("Kresh Coat: Ok.") where coins say "Taken."
+scrye.addTrigger{ pattern = [[^(.+): Ok\.\s*$]], regex = true, run = on_taken }
 scrye.addTrigger{ pattern = [[^You (?:bind|salvage) (\d+) (.+) from the remains\.]], regex = true, run = on_remains }
 
 if scrye.onCommand then scrye.onCommand(on_command) end
@@ -1834,6 +1950,11 @@ scrye.addPanel{
     { title = "Best", widgets = {
         { type = "label", text = "XP a kill, by area - click an area to open it", color = "dim" },
         { type = "text", bind = P .. "best" },
+    } },
+    { title = "Items", widgets = {
+        { type = "input", width = 24, text = "Search items", bind = P .. "itembox",
+          onSubmit = function(text) set_query(text) ; refresh() end },
+        { type = "text", bind = P .. "items" },
     } },
     { title = "Notes", widgets = { { type = "text", bind = P .. "notes" } } },
   },

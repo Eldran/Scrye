@@ -180,6 +180,9 @@ local function line(s)
     elseif t.pattern:find("Taken", 1, true) then
       local what = s:match("^(.+): Taken%.%s*$")
       if what then t.run(what) end
+    elseif t.pattern:find(": Ok", 1, true) then
+      local what = s:match("^(.+): Ok%.%s*$")
+      if what then t.run(what) end
     elseif t.pattern:find("from the remains", 1, true) then
       local n, what = s:match("^You bind (%d+) (.+) from the remains%.")
       if not n then n, what = s:match("^You salvage (%d+) (.+) from the remains%.") end
@@ -213,9 +216,9 @@ end
 
 -- 1. nothing yet
 fresh_client()
-check(panel ~= nil and panel.title == "Compendium" and #panel.tabs == 4, "the panel has four tabs")
+check(panel ~= nil and panel.title == "Compendium" and #panel.tabs == 5, "the panel has five tabs")
 do
-  local known = { value = 1, text = 1, label = 1, gauge = 1, list = 1, table = 1 }
+  local known = { value = 1, text = 1, label = 1, gauge = 1, list = 1, table = 1, input = 1 }
   local bad = 0
   for _, t in ipairs(panel.tabs) do for _, w in ipairs(t.widgets) do if not known[w.type] or not (w.bind or w.text) then bad = bad + 1 end end end
   check(bad == 0, "every widget has a type the host knows and a bind or a text")
@@ -1563,6 +1566,145 @@ check(said("1 fight measured: 12s and 6 rounds"), "'mdb <name>' still prints the
 typed("mdb forget troll confirm")
 view()
 check(not has(st("area"), "1 fight measured") and not has(st("area"), "Troll"), "forgetting the opened monster leaves nothing behind")
+
+-- ---------------------------------------------------------------- 0.10.0: the Items tab
+-- 58. everything monsters have given, by area; a search narrows it and opens what it finds
+local function item_box()
+  for _, t in ipairs(panel.tabs) do
+    if t.title == "Items" then for _, w in ipairs(t.widgets) do if w.type == "input" then return w end end end
+  end
+end
+fresh_client()
+view()
+check(has(st("items"), "no items yet"), "an empty book says how items get there")
+check(item_box() ~= nil and item_box().bind == "plugin.3s-compendium.itembox" and type(item_box().onSubmit) == "function", "the Items tab has a search box")
+do
+  local function loot(num, room_name, area, mob, lines)
+    room(num, room_name, area)
+    contents({ { mob, "monster", 1 } })
+    death(mob, "Keyser")
+    for _, l in ipairs(lines) do line(l) end
+    tick()
+  end
+  loot(1, "Hall floor 10", "Megacity", "Wiremouth guard", { "coins (100): Taken.", "a rusty sword: Taken." })
+  loot(1, "Hall floor 10", "Megacity", "Wiremouth guard", { "a rusty sword: Taken." })
+  loot(1, "Hall floor 10", "Megacity", "Dagger Jack", { "a rusty sword: Taken.", "a dagger: Taken." })
+  loot(2, "Hall floor 30", "Megacity", "Wiremouth captain", { "a Sword of flame: Taken.", "You bind 1 Faint soul from the remains." })
+  loot(3, "Den", "Caves", "a bat", { "a bat wing: Taken." })
+  room(4, "Pit", "Caves")                  -- and one left on the floor by a destroyed corpse
+  floor({ { "a troll", 1 } }, {})
+  death("a troll", "Keyser")
+  floor({}, { { "A broadsword", 1 } })
+  CLOCK = CLOCK + 3 ; tick()
+  line("A broadsword: Taken.") ; tick()    -- seen on the floor and then picked up: still one sword
+end
+view()
+do
+  local it = st("items")
+  check(has(it, "click=mdb ifold Caves}+ Caves@{}@{dim}  2 items") and has(it, "+ Megacity [floor 10]@{}@{dim}  3 items") and has(it, "+ Megacity [floor 30]@{}@{dim}  2 items"),
+        "closed: one line an area, with how many different items (" .. it .. ")")
+  check(not has(it, "sword") and not has(it, "Sword"), "and no item shows until an area is opened")
+  check(it:find("+ Caves", 1, true) < it:find("+ Megacity [floor 10]", 1, true) and it:find("+ Megacity [floor 10]", 1, true) < it:find("+ Megacity [floor 30]", 1, true),
+        "areas by name, an area's levels in order")
+end
+typed("mdb ifold Megacity [floor 10]")
+check(#printed == 0, "opening an area prints nothing")
+do
+  local it = st("items")
+  check(has(it, "- Megacity [floor 10]"), "the area is open")
+  check(has(it, "Rusty sword @{dim}3x  from@{} @{accent,click=mdb view Megacity [floor 10]|wiremouth guard}Wiremouth guard@{}@{dim},@{} @{accent,click=mdb view Megacity [floor 10]|dagger jack}Dagger Jack@{}"),
+        "an item is one line: how often in all, and from whom, most often first (" .. it .. ")")
+  check(has(it, "Coins @{dim}1x  from@{}") and has(it, "Dagger @{dim}1x  from@{}"), "coins are an item like the others")
+  check(it:find("  Coins", 1, true) < it:find("  Dagger", 1, true) and it:find("  Dagger", 1, true) < it:find("  Rusty sword", 1, true), "items by name")
+  check(not has(it, "Sword of flame") and not has(it, "Bat wing"), "the other areas stay closed")
+end
+typed("mdb ifold Megacity [floor 10]")
+check(has(st("items"), "+ Megacity [floor 10]") and not has(st("items"), "Rusty sword"), "a second click closes it")
+-- the search box
+item_box().onSubmit("  Sword ")
+do
+  local it = st("items")
+  check(has(it, "search: @{bold}sword@{}@{dim}  3 items in 3 areas@{}  @{accent,click=mdb items -}[show all]@{}"), "a search says what it found (" .. it .. ")")
+  check(has(it, "@{bold}Caves@{}") and has(it, "Broadsword @{dim}1x  from@{}") and has(it, "click=mdb view Caves|troll}Troll"), "what was left on the floor is found too, with its area")
+  check(has(it, "@{bold}Megacity [floor 10]@{}") and has(it, "Rusty sword @{dim}3x") and has(it, "@{bold}Megacity [floor 30]@{}") and has(it, "Sword of flame @{dim}1x"),
+        "every area with a match is shown opened")
+  check(not has(it, "Dagger @{dim}") and not has(it, "Bat wing") and not has(it, "Coins") and not has(it, "Faint soul"), "and only the matching items")
+  check(not has(it, "click=mdb ifold"), "a search result is not folded")
+  check(state["plugin.3s-compendium.itembox"] == "sword", "the box keeps the search")
+end
+typed("mdb view Megacity [floor 30]|wiremouth captain")
+check(has(st("items"), "taken after a kill: Faint soul") and has(st("items"), ",bold,click=mdb view Megacity [floor 30]|wiremouth captain}"), "a clicked monster opens under its item here as well")
+typed("mdb view Megacity [floor 30]|wiremouth captain")
+item_box().onSubmit("unicorn")
+check(has(st("items"), "search: @{bold}unicorn@{}") and has(st("items"), "nothing a monster has given has that in its name"), "a search with no match says so")
+typed("mdb items -")
+check(said("the Items tab shows everything") and has(st("items"), "+ Caves") and not has(st("items"), "search:") and state["plugin.3s-compendium.itembox"] == "", "'mdb items -' (the [show all] link) clears it")
+typed("mdb items soul")
+check(said("the Items tab shows what has 'soul' in its name") and has(st("items"), "Faint soul @{dim}1x") and not has(st("items"), "sword"), "'mdb items <word>' searches from the command line")
+item_box().onSubmit("")
+check(not has(st("items"), "search:") and has(st("items"), "+ Megacity [floor 30]"), "an empty search shows everything")
+typed("mdb drops coins")
+check(said("Coins @{dim}1x taken@{}") and said("Wiremouth guard"), "mdb drops finds coins too")
+-- more items than an opened area shows
+fresh_client()
+room(1, "Vault", "Bank") ; contents({ { "a teller", "monster", 1 } })
+death("a teller", "Keyser")
+for i = 1, 20 do line("gem " .. string.format("%02d", i) .. ": Taken.") end
+tick()
+room(1, "Vault", "Bank") ; contents({ { "a guard", "monster", 1 } })
+death("a guard", "Keyser")
+for i = 21, 40 do line("gem " .. string.format("%02d", i) .. ": Taken.") end
+tick()
+room(1, "Vault", "Bank") ; contents({ { "a clerk", "monster", 1 } })
+death("a clerk", "Keyser")
+line("gem 41: Taken.") ; line("gem 42: Taken.")
+tick()
+typed("mdb ifold Bank")
+do
+  local rows = 0
+  for l in st("items"):gmatch("[^\n]+") do if l:find("  Gem ", 1, true) then rows = rows + 1 end end
+  check(rows == 40 and has(st("items"), "... 2 more: search for part of the name"), "40 items under an area, the rest counted (" .. rows .. ")")
+end
+
+-- ---------------------------------------------------------------- 0.10.1: "<item>: Ok."
+-- 59. Keyser's log of 22 Nov 2026, in its order: a kill whose items answer "Ok."
+fresh_client()
+room(500, "Lair", "Chaos Wastes") ; contents({ { "Kresh", "monster", 1 } })
+death("Kresh", "Keyser")
+for _, l in ipairs({
+  "Keyser dealt the killing blow to Kresh.",
+  "You salvage 1 Cracked Chaos Token from the remains.",
+  "You've killed Kresh.",
+  "HP:6197/6197 SP:303/310 PU:7751/7800(3900) CPC:10000/10000",
+  "[G2N:60%][56%] E:none",
+  "Stabby solemnly lays the foe to rest.",
+  "The coffin is full! The corpse was not wrapped.",
+  "[[ Tactical Enhancement Termination in 21 mins 2 secs ]]",
+  "[[ You are Stabilized ]]",
+  "[>      Reclamation Complete [590 PU].     <]",
+  "[> Power Unit Recharge Complete. <]",
+  "Kresh Coat: Ok.",
+  "Kresh Claws: Ok.",
+  "There is no corpse here.",
+  "Your insidious inspiration fades.",
+}) do line(l) end
+tick()
+local kr = book("Chaos Wastes").kresh
+do
+  local n = 0
+  for _ in pairs(kr.take or {}) do n = n + 1 end
+  check(n == 3, "three things were taken from Kresh, and nothing else in the log is one (" .. n .. ")")
+end
+check(kr.take["kresh coat"] ~= nil and kr.take["kresh coat"].name == "Kresh Coat" and kr.take["kresh claws"] ~= nil, "'Kresh Coat: Ok.' and 'Kresh Claws: Ok.' are items taken")
+check(kr.take["cracked chaos token"] ~= nil and kr.coins == nil, "the salvage is there, and no coins were invented")
+typed("mdb drops kresh c")
+check(said("Kresh Claws @{dim}1x taken@{}") and said("Kresh Coat @{dim}1x taken@{}"), "mdb drops finds them")
+typed("mdb ifold Chaos Wastes")
+check(has(st("items"), "Kresh Coat @{dim}1x  from@{}") and has(st("items"), "click=mdb view Chaos Wastes|kresh}Kresh"), "and so does the Items tab")
+CLOCK = CLOCK + 30
+line("A rusty key: Ok.")
+tick()
+check(book("Chaos Wastes").kresh.take["rusty key"] == nil, "an 'Ok.' long after the kill is not booked")
 
 print(pass .. " passed, " .. fail .. " failed")
 os.exit(fail == 0 and 0 or 1)
