@@ -113,7 +113,22 @@ public class ColorGridView : Control
     public static readonly StyledProperty<ICommand?> MenuChoiceCommandProperty =
         AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(MenuChoiceCommand));
 
+    /// <summary>Optional command run while the grid is dragged with the left button (plugin API
+    /// 1.25's colorgrid <c>onDrag</c>), with a <see cref="GridCell"/> whose Col/Row are the whole
+    /// tiles moved since the last report, in grid indices (a weave tile is two). When set, a left
+    /// click is fired on RELEASE and only when the pointer stayed within a few pixels.</summary>
+    public static readonly StyledProperty<ICommand?> DragCommandProperty =
+        AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(DragCommand));
+
+    /// <summary>Optional command run per mouse wheel notch over the grid (plugin API 1.25's
+    /// colorgrid <c>onWheel</c>), with the cell under the pointer (-1,-1 when none) and Ch
+    /// '+' (away from the user) or '-'. When set, the grid keeps the wheel.</summary>
+    public static readonly StyledProperty<ICommand?> WheelCommandProperty =
+        AvaloniaProperty.Register<ColorGridView, ICommand?>(nameof(WheelCommand));
+
     public ICommand? CellCommand { get => GetValue(CellCommandProperty); set => SetValue(CellCommandProperty, value); }
+    public ICommand? DragCommand { get => GetValue(DragCommandProperty); set => SetValue(DragCommandProperty, value); }
+    public ICommand? WheelCommand { get => GetValue(WheelCommandProperty); set => SetValue(WheelCommandProperty, value); }
     public ICommand? HoverCommand { get => GetValue(HoverCommandProperty); set => SetValue(HoverCommandProperty, value); }
     public ICommand? ContextCommand { get => GetValue(ContextCommandProperty); set => SetValue(ContextCommandProperty, value); }
     public string LabelChars { get => GetValue(LabelCharsProperty); set => SetValue(LabelCharsProperty, value); }
@@ -364,7 +379,8 @@ public class ColorGridView : Control
 
         // When interactive, fill a transparent background so the whole grid is hit-testable
         // (a bare Control only receives pointer events where it has drawn something).
-        if (CellCommand is not null || HoverCommand is not null || ContextCommand is not null)
+        if (CellCommand is not null || HoverCommand is not null || ContextCommand is not null
+            || DragCommand is not null || WheelCommand is not null)
             context.FillRectangle(Brushes.Transparent, new Rect(Bounds.Size));
 
         if (Weave) { RenderWeave(context, rows, palette); return; }
@@ -550,7 +566,8 @@ public class ColorGridView : Control
             && change.GetNewValue<IReadOnlyList<Scrye.Core.Plugins.MenuEntry>?>() is { Count: > 0 } menu)
             PluginMenu.Show(this, menu, MenuChoiceCommand);
         if (change.Property == CellCommandProperty || change.Property == HoverCommandProperty
-            || change.Property == ContextCommandProperty)
+            || change.Property == ContextCommandProperty || change.Property == DragCommandProperty
+            || change.Property == WheelCommandProperty)
             InvalidateVisual();   // toggle hit-test background
     }
 
@@ -587,6 +604,7 @@ public class ColorGridView : Control
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
+        if (_pressing) { DragTo(e.GetPosition(this)); return; }   // no hover while a button is down
         ICommand? cmd = HoverCommand;
         if (cmd is null) return;
 
@@ -623,10 +641,115 @@ public class ColorGridView : Control
         ICommand? cmd = props.IsLeftButtonPressed ? CellCommand
             : props.IsRightButtonPressed ? ContextCommand
             : null;
+        // A draggable grid (API 1.25) holds its left click until release: the press may turn
+        // out to be the start of a drag, and a drag must not walk you to where it began.
+        if (props.IsLeftButtonPressed && DragCommand is not null)
+        {
+            _pressing = true;
+            _dragging = false;
+            _pressAt = _dragLast = at;
+            _dragX = _dragY = 0;
+            _pressCell = CellAt(at);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
         if (cmd is null) return;
 
         if (CellAt(at) is not { } hit) return;
         if (cmd.CanExecute(hit)) cmd.Execute(hit);
         e.Handled = true;
+    }
+
+    // ---- drag and wheel (API 1.25) -------------------------------------------------------
+
+    /// <summary>Pixels the pointer may wander while pressed and still count as a click.</summary>
+    private const double DragSlop = 4;
+
+    private bool _pressing, _dragging;
+    private Point _pressAt, _dragLast;
+    private GridCell? _pressCell;
+    private double _dragX, _dragY;      // pixels dragged and not yet reported as whole tiles
+    private double _wheelAcc;           // wheel delta not yet reported (touchpads send fractions)
+
+    /// <summary>The distance from one tile to the next: a cell, or a weave node plus its edge.</summary>
+    private double TilePitch()
+    {
+        string[] rows = Rows(GridText);
+        if (Weave)
+        {
+            (double node, double edge) = WeaveCellsFor(rows, Bounds.Width);
+            return node + edge;
+        }
+        return CellFor(rows, Bounds.Width);
+    }
+
+    private void DragTo(Point p)
+    {
+        if (!_dragging)
+        {
+            if (Math.Abs(p.X - _pressAt.X) < DragSlop && Math.Abs(p.Y - _pressAt.Y) < DragSlop) return;
+            _dragging = true;
+            Cursor = new Cursor(StandardCursorType.SizeAll);
+        }
+        _dragX += p.X - _dragLast.X;
+        _dragY += p.Y - _dragLast.Y;
+        _dragLast = p;
+        double pitch = TilePitch();
+        if (pitch <= 0) return;
+        int sx = (int)(_dragX / pitch), sy = (int)(_dragY / pitch);   // whole tiles, toward zero
+        if (sx == 0 && sy == 0) return;
+        _dragX -= sx * pitch;
+        _dragY -= sy * pitch;
+        int unit = Weave ? 2 : 1;
+        var report = new GridCell(sx * unit, sy * unit, '\0');
+        ICommand? cmd = DragCommand;
+        if (cmd is not null && cmd.CanExecute(report)) cmd.Execute(report);
+    }
+
+    private void EndPress()
+    {
+        _pressing = false;
+        _dragging = false;
+        _pressCell = null;
+        _hoverCol = _hoverRow = -1;      // the map moved under the pointer: re-report on next move
+        Cursor = null;
+    }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        base.OnPointerReleased(e);
+        if (!_pressing) return;
+        bool dragged = _dragging;
+        GridCell? hit = _pressCell;
+        EndPress();
+        e.Pointer.Capture(null);
+        e.Handled = true;
+        if (dragged || hit is not { } cell) return;
+        ICommand? cmd = CellCommand;
+        if (cmd is not null && cmd.CanExecute(cell)) cmd.Execute(cell);
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        if (_pressing) EndPress();       // focus stolen mid-press: neither a click nor more drag
+    }
+
+    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    {
+        base.OnPointerWheelChanged(e);
+        ICommand? cmd = WheelCommand;
+        if (cmd is null) return;
+        e.Handled = true;                // the wheel zooms this grid; it does not scroll the panel
+        _wheelAcc += e.Delta.Y;
+        while (Math.Abs(_wheelAcc) >= 1)
+        {
+            int sign = Math.Sign(_wheelAcc);
+            _wheelAcc -= sign;
+            GridCell? hit = CellAt(e.GetPosition(this));
+            var report = new GridCell(hit?.Col ?? -1, hit?.Row ?? -1, sign > 0 ? '+' : '-');
+            if (cmd.CanExecute(report)) cmd.Execute(report);
+        }
     }
 }

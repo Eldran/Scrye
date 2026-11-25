@@ -315,6 +315,67 @@ public sealed class PluginRuntimeApiTests : IDisposable
         Assert.Equal("-1,-1,", host.State["hover"]);
     }
 
+    // ---- colorgrid onDrag / onWheel (API 1.25) -------------------------------
+
+    /// <summary>A drag and a wheel are callbacks of their own, each with its own id beside the
+    /// click and the hover, called with the tiles moved and with the notch's cell and way.</summary>
+    [Fact]
+    public void DragAndWheelGetTheirOwnActionIds()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = LoadLua("dragwheel", """
+            scrye.addPanel{
+              title = "Map",
+              widgets = { { type = "colorgrid", bind = "g", weave = true,
+                            onClick = function(c, r, ch) scrye.setState("click", c .. "," .. r) end,
+                            onHover = function(c, r, ch) scrye.setState("hover", c .. "," .. r) end,
+                            onDrag  = function(dc, dr) scrye.setState("drag", dc .. "," .. dr) end,
+                            onWheel = function(c, r, way) scrye.setState("wheel", c .. "," .. r .. "," .. way) end } },
+            }
+            """, host);
+
+        WidgetSpec grid = Assert.Single(Assert.Single(host.Panels).Widgets);
+        Assert.False(string.IsNullOrEmpty(grid.DragAction));
+        Assert.False(string.IsNullOrEmpty(grid.WheelAction));
+        Assert.Equal(4, new[] { grid.Action, grid.HoverAction, grid.DragAction, grid.WheelAction }.Distinct().Count());
+
+        rt.InvokeCellAction(grid.DragAction!, -2, 4, "");
+        Assert.Equal("-2,4", host.State["drag"]);
+        rt.InvokeCellAction(grid.WheelAction!, 6, 2, "+");
+        Assert.Equal("6,2,+", host.State["wheel"]);
+        Assert.False(host.State.ContainsKey("click"));   // neither one is a click
+        Assert.False(host.State.ContainsKey("hover"));
+
+        // a grid without them has neither - an older plugin's grid is untouched
+        var plain = new FakeHost();
+        LoadLua("plaingrid", """scrye.addPanel{ title = "M", widgets = { { type = "colorgrid", bind = "g" } } }""", plain);
+        WidgetSpec g2 = Assert.Single(Assert.Single(plain.Panels).Widgets);
+        Assert.Null(g2.DragAction);
+        Assert.Null(g2.WheelAction);
+    }
+
+    /// <summary>The JS runtime reads them the same way.</summary>
+    [Fact]
+    public void JsDragAndWheel()
+    {
+        var host = new FakeHost();
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("jsdrag", """
+            scrye.addPanel({
+              title: "Map",
+              widgets: [ { type: "colorgrid", bind: "g",
+                           onDrag: function (dc, dr) { scrye.setState("drag", dc + "," + dr); },
+                           onWheel: function (c, r, way) { scrye.setState("wheel", c + "," + r + "," + way); } } ],
+            });
+            """, lang: "js"), host);
+        rt.Load();
+
+        WidgetSpec grid = Assert.Single(Assert.Single(host.Panels).Widgets);
+        rt.InvokeCellAction(grid.DragAction!, 1, -1, "");
+        Assert.Equal("1,-1", host.State["drag"]);
+        rt.InvokeCellAction(grid.WheelAction!, -1, -1, "-");
+        Assert.Equal("-1,-1,-", host.State["wheel"]);
+    }
+
     // ---- colorgrid image tiles (API 1.17) -------------------------------------
 
     /// <summary>The `images` map reaches the WidgetSpec with each path resolved against the
@@ -749,5 +810,155 @@ public sealed class PluginRuntimeApiTests : IDisposable
             scrye.setState("r", tostring(path) .. "|" .. tostring(err))
             """, host);
         Assert.Equal("nil|this Scrye has no exports folder", host.State["r"]);
+    }
+
+    // ---- .profile: what the runtimes report to the profiler ---------------------
+
+    private static ProfileRow? ProfileRowOf(PluginDiagnostics d, string id, ProfileKind kind, string what, string? detail = null)
+    {
+        foreach (ProfileRow r in d.Profiler.Rows())
+            if (r.PluginId == id && r.Kind == kind && r.What == what && r.Detail == detail) return r;
+        return null;
+    }
+
+    [Fact]
+    public void LuaHandlersApiCallsAndPatternsEachGetAProfileRow()
+    {
+        var host = new FakeHost();
+        var diag = new PluginDiagnostics(_ => { });
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("prof", """
+            scrye.onLine(function(l) scrye.setState("line", l) end)
+            scrye.onGmcp(function(json, pkg) scrye.store.set("k", pkg) end)
+            scrye.addTrigger{ pattern = "^You kill (\\w+)", regex = true, run = function(who) scrye.send("loot " .. who) end }
+            scrye.addTrigger{ pattern = "never matches *", send = "x" }
+            scrye.addAlias{ pattern = "gg", run = function() scrye.send("grin") end }
+            scrye.on("tick", function() end)
+            scrye.after(0.25, function() scrye.print("late") end)
+            """), host, diag);
+        rt.Load();
+
+        rt.ProcessLine("You kill orc");
+        rt.ProcessLine("nothing here");
+        rt.DispatchGmcp("Char.Vitals", "{}");
+        rt.DispatchGmcp("Room.Info", "{}");
+        rt.DispatchGmcp("Room.Info", "{}");
+        rt.ProcessInput("gg");
+        rt.DispatchPluginEvent("tick", "", "other");
+        rt.Tick(0.3);
+        Assert.Equal(new[] { "loot orc", "grin" }, host.Sent);
+
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "load")!.Value.Calls);
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Handler, "onLine")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "onGmcp", "Char.Vitals")!.Value.Calls);
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Handler, "onGmcp", "Room.Info")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "trigger", "^You kill (\\w+)")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "alias", "gg")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "on:tick")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Handler, "after", "0.25s")!.Value.Calls);
+        // every pattern is tried on every line, matching or not; a send-only rule has no handler row
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Match, "trigger", "^You kill (\\w+)")!.Value.Calls);
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Match, "trigger", "never matches *")!.Value.Calls);
+        Assert.Null(ProfileRowOf(diag, "prof", ProfileKind.Handler, "trigger", "never matches *"));
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Match, "alias", "gg")!.Value.Calls);
+        // scrye.* calls, sub-tables by their full name
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Api, "setState")!.Value.Calls);
+        Assert.Equal(3, ProfileRowOf(diag, "prof", ProfileKind.Api, "store.set")!.Value.Calls);
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Api, "send")!.Value.Calls);
+        Assert.Equal(2, ProfileRowOf(diag, "prof", ProfileKind.Api, "addTrigger")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "prof", ProfileKind.Api, "print")!.Value.Calls);
+
+        // a handler's total holds the calls it made; its own time does not
+        ProfileRow line = ProfileRowOf(diag, "prof", ProfileKind.Handler, "onLine")!.Value;
+        ProfileRow set = ProfileRowOf(diag, "prof", ProfileKind.Api, "setState")!.Value;
+        Assert.True(line.TotalMs >= set.TotalMs);
+        Assert.Equal(line.TotalMs - set.TotalMs, line.SelfMs, 6);
+    }
+
+    [Fact]
+    public void AnEmitThatRunsAnotherPluginsHandlerIsThatPluginsTime()
+    {
+        var host = new FakeHost();
+        var diag = new PluginDiagnostics(_ => { });
+        IPluginRuntime a = PluginRuntimeFactory.Create(WritePlugin("pa", """
+            scrye.onCommand(function(c) scrye.emit("work", c) end)
+            """), host, diag);
+        IPluginRuntime b = PluginRuntimeFactory.Create(WritePlugin("pb", """
+            scrye.on("work", function() local n = 0 for i = 1, 200000 do n = n + i end scrye.setState("n", tostring(n)) end)
+            """), host, diag);
+        a.Load();
+        b.Load();
+        host.EventSink = (source, name, data) => b.DispatchPluginEvent(name, data, source);
+
+        a.DispatchCommand("go");
+        Assert.True(host.State.ContainsKey("n"));
+
+        ProfileRow cmd = ProfileRowOf(diag, "pa", ProfileKind.Handler, "onCommand")!.Value;
+        ProfileRow emit = ProfileRowOf(diag, "pa", ProfileKind.Api, "emit")!.Value;
+        ProfileRow work = ProfileRowOf(diag, "pb", ProfileKind.Handler, "on:work")!.Value;
+        Assert.True(cmd.TotalMs >= emit.TotalMs && emit.TotalMs >= work.TotalMs);
+        // the loop is pb's: pa's own time (script + the emit call itself) excludes it
+        Assert.Equal(emit.TotalMs - work.TotalMs, emit.SelfMs, 6);
+        Assert.True(work.SelfMs > cmd.SelfMs + emit.SelfMs);
+    }
+
+    [Fact]
+    public void AFailingHandlerStillClosesItsProfileSpan()
+    {
+        var host = new FakeHost();
+        var diag = new PluginDiagnostics(_ => { });
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("bad", """
+            scrye.onCommand(function(c) if c == "boom" then error("no") end scrye.setState("ok", c) end)
+            """), host, diag);
+        rt.Load();
+
+        rt.DispatchCommand("boom");
+        rt.DispatchCommand("fine");
+
+        Assert.Equal(2, ProfileRowOf(diag, "bad", ProfileKind.Handler, "onCommand")!.Value.Calls);
+        Assert.Equal(0, diag.Profiler.Enter());   // nothing left open
+    }
+
+    [Fact]
+    public void ProfilingOffAddsNoRowsAndARuntimeWithoutDiagnosticsStillRuns()
+    {
+        var host = new FakeHost();
+        var diag = new PluginDiagnostics(_ => { });
+        diag.Profiler.Enabled = false;
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("quiet", """
+            scrye.onLine(function(l) scrye.setState("line", l) end)
+            scrye.addTrigger{ pattern = "x", run = function() end }
+            """), host, diag);
+        rt.Load();
+        rt.ProcessLine("x");
+        Assert.Empty(diag.Profiler.Rows());
+
+        IPluginRuntime bare = LoadLua("bare", """
+            scrye.onLine(function(l) scrye.setState("bare", l) end)
+            scrye.addTrigger{ pattern = "x", run = function() scrye.send("y") end }
+            """, host);
+        bare.ProcessLine("x");
+        Assert.Equal("x", host.State["bare"]);
+        Assert.Contains("y", host.Sent);
+    }
+
+    [Fact]
+    public void JsHandlersAndPatternsGetProfileRows()
+    {
+        var host = new FakeHost();
+        var diag = new PluginDiagnostics(_ => { });
+        IPluginRuntime rt = PluginRuntimeFactory.Create(WritePlugin("jsprof", """
+            scrye.onLine(function (l) { scrye.setState("line", l); });
+            scrye.onGmcp(function (json, pkg) { scrye.setState("pkg", pkg); });
+            scrye.addTrigger({ pattern: "hello", run: function () { scrye.send("hi"); } });
+            """, "js"), host, diag);
+        rt.Load();
+
+        rt.ProcessLine("hello");
+        rt.DispatchGmcp("Char.Vitals", "{}");
+
+        Assert.Equal(1, ProfileRowOf(diag, "jsprof", ProfileKind.Handler, "onLine")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "jsprof", ProfileKind.Handler, "onGmcp", "Char.Vitals")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "jsprof", ProfileKind.Handler, "trigger", "hello")!.Value.Calls);
+        Assert.Equal(1, ProfileRowOf(diag, "jsprof", ProfileKind.Match, "trigger", "hello")!.Value.Calls);
     }
 }

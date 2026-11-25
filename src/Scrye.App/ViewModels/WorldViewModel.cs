@@ -1687,6 +1687,7 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
             case ".mip": HandleMipCommand(arg); return true;
             case ".gmcp": HandleGmcpCommand(arg); return true;
             case ".mxp": HandleMxpCommand(arg); return true;
+            case ".profile": HandleProfileCommand(arg); return true;
             case ".import": HandleImportCommand(arg); return true;
             case ".reconnect": _ = ReconnectAsync(); return true;
             case ".ts" or ".timestamps":
@@ -1695,6 +1696,41 @@ public sealed class WorldViewModel : ViewModelBase, IAsyncDisposable
                 return true;
             default: return false;
         }
+    }
+
+    /// <summary>
+    /// <c>.profile</c> — where the plugins' time goes: a line per plugin (script / client calls /
+    /// pattern matching), then the costliest handlers, <c>scrye.*</c> calls and trigger patterns.
+    /// <c>.profile 30</c> shows more rows, <c>.profile all</c> every row, <c>.profile 3s-map</c>
+    /// or <c>.profile addPanel</c> only what matches; <c>.profile reset</c> starts the window
+    /// over, <c>.profile off</c> / <c>on</c> stops and starts the measuring.
+    ///
+    /// <para>The numbers are since the world opened (or the last reset), so the way to read a
+    /// fight is: <c>.profile reset</c>, fight, <c>.profile</c>.</para>
+    /// </summary>
+    private void HandleProfileCommand(string arg)
+    {
+        switch (arg.Trim().ToLowerInvariant())
+        {
+            case "on" or "off":
+                bool on = arg.Trim().Equals("on", StringComparison.OrdinalIgnoreCase);
+                _session.Post(() => _plugins.Diagnostics.Profiler.Enabled = on);
+                AppendSystem(on ? "plugin profiling ON" : "plugin profiling off - '.profile' still shows what was gathered");
+                return;
+            case "reset":
+                _session.Post(() => _plugins.Diagnostics.Profiler.Reset());
+                AppendSystem("plugin profile cleared - measuring from now");
+                return;
+            case "help" or "?":
+                AppendSystem("usage: .profile [rows|all] [text] | .profile reset | .profile on|off");
+                return;
+        }
+        PluginProfiler.ParseReportArgs(arg, out int top, out string? filter);
+        _session.Post(() =>
+        {
+            IReadOnlyList<string> lines = _plugins.Diagnostics.Profiler.Report(top, filter);
+            Dispatcher.UIThread.Post(() => { foreach (string l in lines) AppendSystem(l); });
+        });
     }
 
     /// <summary>

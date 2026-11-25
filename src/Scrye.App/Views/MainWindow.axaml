@@ -514,6 +514,8 @@
                                                                                 CellCommand="{Binding CellCommand}"
                                                                                 HoverCommand="{Binding HoverCommand}"
                                                                                 ContextCommand="{Binding ContextCommand}"
+                                                                                DragCommand="{Binding DragCommand}"
+                                                                                WheelCommand="{Binding WheelCommand}"
                                                                                 LabelChars="{Binding LabelChars}"
                                                                                 Icons="{Binding Icons}"
                                                                                 Images="{Binding Images}"

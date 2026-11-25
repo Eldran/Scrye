@@ -27,6 +27,7 @@ let tokenRequired = true;
 
 let ws = null;
 let sessionId = null;
+const sessions = new Map();     // sessionId -> {sessionId, connected, character, world}, desktop order
 let lastSeq = -1;
 let state = {};                 // path -> {kind, text}
 let atBottom = true;
@@ -1020,16 +1021,11 @@ function submit() {
 function handle(msg) {
   switch (msg.type) {
     case 'session.list': {
-      const sel = $('session');
-      sel.innerHTML = '';
-      for (const s of msg.sessions) {
-        const o = document.createElement('option');
-        o.value = s.sessionId;
-        o.textContent = (s.character || s.sessionId) + (s.connected ? '' : ' (offline)');
-        sel.appendChild(o);
-      }
+      sessions.clear();
+      for (const s of msg.sessions) sessions.set(s.sessionId, s);
+      renderSessions();
       if (store.session && msg.sessions.some(s => s.sessionId === store.session)) {
-        sel.value = store.session;
+        $('session').value = store.session;
         subscribe(store.session);      // remembered from last time; go straight in
       } else {
         $('setup').classList.remove('hidden');
@@ -1056,6 +1052,8 @@ function handle(msg) {
       updateChatBadge();
       applyBatch(msg.output);
       renderVitals();
+      if (msg.session && msg.session.sessionId) sessions.set(msg.session.sessionId, msg.session);
+      renderSessions();
       setWho(msg.session);
       $('setup').classList.add('hidden');
       break;
@@ -1084,13 +1082,64 @@ function handle(msg) {
       renderPanels();
       break;
     case 'session.state':
+      // Sent for every world, not just the watched one, so the pickers stay current: a
+      // world opened after this device connected shows up here first.
+      sessions.set(msg.sessionId, { sessionId: msg.sessionId, connected: msg.connected,
+                                    character: msg.character, world: msg.world });
+      renderSessions();
       if (msg.sessionId === sessionId) setWho(msg);
       break;
     case 'error':
       note(`${msg.code}: ${msg.detail}`, 'err');
-      if (msg.code === 'unknownSession') $('setup').classList.remove('hidden');
+      if (msg.code === 'unknownSession') {
+        // The world was closed on the desktop (a close only ever announces "offline").
+        if (sessionId) sessions.delete(sessionId);
+        renderSessions();
+        $('setup').classList.remove('hidden');
+      }
       break;
   }
+}
+
+// Both pickers — the setup sheet's dropdown and the switcher under the character name —
+// are drawn from the one map, so they cannot disagree.
+function renderSessions() {
+  const sel = $('session');
+  const keep = sel.value;
+  sel.innerHTML = '';
+  const host = $('switch');
+  host.innerHTML = '';
+  for (const s of sessions.values()) {
+    const name = s.character || s.sessionId;
+
+    const o = document.createElement('option');
+    o.value = s.sessionId;
+    o.textContent = name + (s.connected ? '' : ' (offline)');
+    sel.appendChild(o);
+
+    const b = document.createElement('button');
+    if (s.sessionId === sessionId) b.className = 'cur';
+    const dot = document.createElement('i');
+    if (s.connected) dot.className = 'on';
+    b.appendChild(dot);
+    b.appendChild(document.createTextNode(name));
+    if (s.world && s.world !== name) {
+      const w = document.createElement('span');
+      w.textContent = s.world;
+      b.appendChild(w);
+    }
+    b.addEventListener('click', () => {
+      host.classList.add('hidden');
+      if (s.sessionId !== sessionId) subscribe(s.sessionId);
+    });
+    host.appendChild(b);
+  }
+  if (sessions.has(sessionId)) sel.value = sessionId;
+  else if (sessions.has(keep)) sel.value = keep;
+
+  const multi = sessions.size > 1;
+  $('who').classList.toggle('multi', multi);
+  if (!multi) host.classList.add('hidden');
 }
 
 function setWho(s) {
@@ -1179,6 +1228,16 @@ $('cmd').addEventListener('keydown', e => {
   if (e.key === 'ArrowUp') { e.preventDefault(); recall(); }
 });
 $('menu').addEventListener('click', () => $('setup').classList.toggle('hidden'));
+// Tap the character name to switch world; a tap anywhere else puts the list away.
+$('who').addEventListener('click', e => {
+  if (sessions.size < 2) return;
+  e.stopPropagation();
+  renderSessions();
+  $('switch').classList.toggle('hidden');
+});
+document.addEventListener('click', e => {
+  if (!$('switch').contains(e.target)) $('switch').classList.add('hidden');
+});
 $('notify').addEventListener('click', toggleNotifications);
 pushState().catch(() => {});   // never let a capability probe break startup
 

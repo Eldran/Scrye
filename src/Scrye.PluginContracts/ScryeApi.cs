@@ -240,7 +240,14 @@ public static class ScryeApi
     //      The mapper is why: a level is a flat grid, and an ant hole is floors on floors.
     //      Additive: a pre-1.24 host would draw an unknown widget as a blank label, so plugins
     //      check scrye.api before using it.
-    public static readonly Version Current = new(1, 24);
+    // 1.25 colorgrid `onDrag(dcol, drow)` and `onWheel(col, row, "+"|"-")`: a left-drag over a
+    //      grid reports how far it moved in whole tiles (in the grid's own indices, so a weave
+    //      grid's steps come in twos), and each wheel notch reports which way and over which
+    //      cell. A grid with onDrag clicks on release, and only if the pointer stayed put; a
+    //      grid with onWheel keeps the wheel instead of scrolling the panel. Desktop only, like
+    //      onHover. The mapper's flat map is why: drag it to look around, wheel to zoom.
+    //      Additive: an older host ignores both fields and the grid behaves as before.
+    public static readonly Version Current = new(1, 25);
 
     /// <summary>The API version as it appears in manifests and diagnostics ("1.5").</summary>
     public static string CurrentText => $"{Current.Major}.{Current.Minor}";

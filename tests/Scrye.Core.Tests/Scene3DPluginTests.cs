@@ -83,7 +83,10 @@ public sealed class Scene3DPluginTests
 
         WidgetSpec scene = Assert.IsType<WidgetSpec>(Find(host.Panels[^1], "scene3d"));
         Assert.Equal("plugin.3s-map-gmcp.scene3d", scene.Bind);
-        Assert.Equal("colorgrid", Assert.Single(scene.Children!).Type);
+        WidgetSpec flat = Assert.Single(scene.Children!);
+        Assert.Equal("colorgrid", flat.Type);
+        Assert.False(string.IsNullOrEmpty(flat.DragAction));                    // 1.25: drag the flat map
+        Assert.False(string.IsNullOrEmpty(flat.WheelAction));                   // ...and zoom it
         Assert.False(string.IsNullOrEmpty(scene.Action));
         Assert.False(string.IsNullOrEmpty(scene.HoverAction));
         Assert.False(string.IsNullOrEmpty(scene.ContextAction));

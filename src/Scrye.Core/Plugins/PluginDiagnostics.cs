@@ -107,6 +107,10 @@ public sealed class PluginDiagnostics
         public int Hidden;                                        // error lines not shown this window
     }
 
+    /// <summary>Where each plugin's time goes, per handler / API call / pattern - the
+    /// <c>.profile</c> report. The runtimes feed it; see <see cref="PluginProfiler"/>.</summary>
+    public PluginProfiler Profiler { get; } = new();
+
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Action<string> _report;
 
@@ -252,6 +256,7 @@ public sealed class PluginDiagnostics
     public void Reset(string pluginId)
     {
         _entries.Remove(pluginId);
+        Profiler.Reset(pluginId);
         Publish();
     }
 

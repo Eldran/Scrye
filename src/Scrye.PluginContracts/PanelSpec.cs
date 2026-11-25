@@ -221,6 +221,29 @@ public sealed record WidgetSpec
     /// enrichment only does not apply here.</para>
     /// </summary>
     public string? ContextAction { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.25): an opaque action id the host calls back with while the
+    /// grid is dragged with the left button - <c>(dcol, drow, "")</c>, how far the pointer has
+    /// moved since the last report in whole tiles, counted in the grid's own indices (a weave
+    /// grid's tile is two indices, so its steps come in twos). Right and down are positive, so
+    /// a map that wants its contents to follow the pointer moves its view the other way.
+    /// Set by the runtime from the widget's <c>onDrag</c> function, not by authors.
+    ///
+    /// <para>A grid with a drag callback fires its left click on RELEASE, and only when the
+    /// pointer did not travel: a drag is not a click. Desktop only, like hover - the companion
+    /// never fires it - so it may move a view and must not gate anything else.</para>
+    /// </summary>
+    public string? DragAction { get; init; }
+
+    /// <summary>
+    /// <c>colorgrid</c> only (API 1.25): an opaque action id the host calls back with per mouse
+    /// wheel notch over the grid - <c>(col, row, "+")</c> for a notch away from the user (zoom
+    /// in), <c>"-"</c> towards, with the cell under the pointer (<c>-1, -1</c> when between
+    /// rows). While a grid has one, the wheel over it is the grid's and no longer scrolls the
+    /// panel. Desktop only, like hover. Set by the runtime from <c>onWheel</c>.
+    /// </summary>
+    public string? WheelAction { get; init; }
 }
 
 /// <summary>One tab in a tabbed panel: a title and its widgets.</summary>

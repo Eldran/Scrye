@@ -702,6 +702,8 @@ public sealed class WasmPluginRuntime : IPluginRuntime
         string? actionId = ActionRef(w, created, "action") ?? ActionRef(w, created, "onClick") ?? ActionRef(w, created, "onSubmit");
         string? hoverId = ActionRef(w, created, "onHover");
         string? contextId = ActionRef(w, created, "onRightClick");   // 1.9: secondary activation
+        string? dragId = ActionRef(w, created, "onDrag");             // 1.25: drag a grid
+        string? wheelId = ActionRef(w, created, "onWheel");           // 1.25: wheel over a grid
 
         Dictionary<string, string>? palette = null;
         if (w.TryGetProperty("palette", out JsonElement pal) && pal.ValueKind == JsonValueKind.Object)
@@ -767,6 +769,8 @@ public sealed class WasmPluginRuntime : IPluginRuntime
             Action = actionId,
             HoverAction = hoverId,
             ContextAction = contextId,
+            DragAction = dragId,
+            WheelAction = wheelId,
             Children = children,
         };
     }

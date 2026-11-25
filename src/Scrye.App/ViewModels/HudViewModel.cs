@@ -519,6 +519,20 @@ public sealed class HudViewModel : IDisposable
                             cell.Ch.ToString(), menu => vm.PendingMenu = menu));
                     vm.MenuChoice = new RelayCommand<string>(cmd => _runCommand?.Invoke(cmd, false));
                 }
+                if (!string.IsNullOrEmpty(w.DragAction))
+                {
+                    // onDrag (1.25): (dcol, drow, "") - tiles moved since the last report
+                    string dragId = w.DragAction;
+                    vm.DragCommand = new RelayCommand<Controls.GridCell>(cell =>
+                        _invokeCellAction?.Invoke(pluginId, dragId, cell.Col, cell.Row, "", null));
+                }
+                if (!string.IsNullOrEmpty(w.WheelAction))
+                {
+                    // onWheel (1.25): (col, row, "+"|"-") per notch, the cell under the pointer
+                    string wheelId = w.WheelAction;
+                    vm.WheelCommand = new RelayCommand<Controls.GridCell>(cell =>
+                        _invokeCellAction?.Invoke(pluginId, wheelId, cell.Col, cell.Row, cell.Ch.ToString(), null));
+                }
                 BindText(w.Bind, s => vm.GridText = s, subs);
                 return vm;
             }
@@ -1348,6 +1362,14 @@ public sealed class ColorGridWidgetViewModel : ViewModelBase, IReThemable
 
     /// <summary>Runs a chosen menu entry's command as if the user typed it (API 1.18).</summary>
     public System.Windows.Input.ICommand? MenuChoice { get; set; }
+
+    /// <summary>Set when the colorgrid has an onDrag callback (API 1.25) — bound to
+    /// ColorGridView.DragCommand. Fired with (dcol, drow) per whole tile dragged.</summary>
+    public System.Windows.Input.ICommand? DragCommand { get; set; }
+
+    /// <summary>Set when the colorgrid has an onWheel callback (API 1.25) — bound to
+    /// ColorGridView.WheelCommand. Fired per notch with (col, row, '+'|'-').</summary>
+    public System.Windows.Input.ICommand? WheelCommand { get; set; }
 
     private IReadOnlyList<Scrye.Core.Plugins.MenuEntry>? _pendingMenu;
     /// <summary>The onRightClick callback's returned menu (API 1.18), pushed from the invoke

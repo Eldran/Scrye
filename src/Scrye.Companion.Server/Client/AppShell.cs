@@ -50,6 +50,22 @@ internal static class AppShell
   #dot { width:8px; height:8px; border-radius:50%; background:var(--bad); flex:0 0 auto; }
   #dot.on { background:var(--accent); }
   #who { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* More than one world open: the name is the switcher's handle. */
+  #who.multi::after { content:" \25BE"; color:var(--dim); font-weight:400; }
+
+  /* ---- session switcher (drops from the character name) ---- */
+  #switch { position:fixed; left:8px; top:calc(var(--top) + 38px); z-index:9; min-width:190px;
+            max-width:85vw; background:var(--panel); border:1px solid var(--line);
+            border-radius:10px; padding:4px; box-shadow:0 8px 24px rgba(0,0,0,.55); }
+  #switch.hidden { display:none; }
+  #switch button { display:flex; align-items:center; gap:8px; width:100%; text-align:left;
+                   background:none; border:0; color:var(--fg); font:inherit; padding:11px 10px;
+                   border-radius:7px; }
+  #switch button.cur { background:var(--tok-panelalt); font-weight:600; }
+  #switch button i { width:8px; height:8px; border-radius:50%; background:var(--bad); flex:0 0 auto; }
+  #switch button i.on { background:var(--accent); }
+  #switch button span { margin-left:auto; padding-left:12px; color:var(--dim); font-size:12px;
+                        font-weight:400; }
   #vitals { margin-left:auto; display:flex; gap:10px; align-items:center; font-size:13px; }
   .vital { display:flex; align-items:center; gap:5px; }
   .vital b { font-weight:600; color:var(--dim); font-size:11px; letter-spacing:.06em; }
@@ -227,6 +243,8 @@ internal static class AppShell
     <div id="pad"></div>
   </footer>
 </div>
+
+<div id="switch" class="hidden"></div>
 
 <div id="setup">
   <div class="card">

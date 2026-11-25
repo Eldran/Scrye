@@ -22,11 +22,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
         public string? Send;
         public JsValue? Run;
         public int Lines = 1;                          // >1: matches over that many lines, newest last
+        public PluginProfiler.Slot? RunSlot;           // profile rows: the callback, and the matching
+        public PluginProfiler.Slot? MatchSlot;
     }
 
     private readonly PluginDescriptor _descriptor;
     private readonly IPluginHost _host;
     private readonly PluginDiagnostics? _diagnostics;
+    private readonly PluginProfiler? _prof;
     private readonly Engine _engine;
 
     private readonly List<JsValue> _lineHooks = new();
@@ -80,6 +83,10 @@ public sealed class JsPluginRuntime : IPluginRuntime
         _descriptor = descriptor;
         _host = host;
         _diagnostics = diagnostics;
+        // .profile: handlers and pattern matching are timed like the Lua runtime's. The scrye.*
+        // calls are not split out here (the API is one anonymous object, not a table of
+        // bindings), so a JS handler's own time includes the client calls it makes.
+        _prof = diagnostics?.Profiler;
         // Default Jint Engine is sandboxed: no CLR access, no file/network, and we never
         // call AllowClr(). Only the scrye API object is reachable from script.
         _engine = new Engine(o => o
@@ -117,7 +124,10 @@ public sealed class JsPluginRuntime : IPluginRuntime
         for (int i = 0; i < _triggers.Count; i++)
         {
             PluginRule t = _triggers[i];
+            bool timed = t.MatchSlot is not null && _prof!.Enabled;
+            long t0 = timed ? _prof!.Now() : 0;
             MatchResult? m = _recent.Match(t.Pattern, t.Lines, text, out _);
+            if (timed) _prof!.Leaf(t.MatchSlot!, _prof.Now() - t0);
             if (m is not null) Apply(t, m);
         }
         return (gag, current != text ? current : null);
@@ -129,7 +139,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
     {
         for (int i = 0; i < _aliases.Count; i++)
         {
-            MatchResult? m = _aliases[i].Pattern.Match(text);
+            PluginRule a = _aliases[i];
+            bool timed = a.MatchSlot is not null && _prof!.Enabled;
+            long t0 = timed ? _prof!.Now() : 0;
+            MatchResult? m = a.Pattern.Match(text);
+            if (timed) _prof!.Leaf(a.MatchSlot!, _prof.Now() - t0);
             if (m is null) continue;
             Apply(_aliases[i], m);
             return (true, null);
@@ -142,7 +156,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         if (rule.Send is not null)
             AutomationEngine.ForEachLine(Template.Expand(rule.Send, m, _vars), _host.Send);
         if (rule.Run is not null)
-            Safe("rule", () => _engine.Invoke(rule.Run!, m.Wildcards.Cast<object>().ToArray()));
+            Safe("rule", () => _engine.Invoke(rule.Run!, m.Wildcards.Cast<object>().ToArray()), null, rule.RunSlot);
     }
 
     /// <summary>Fire <c>onChannel</c> hooks for a structured MIP chat message.</summary>
@@ -152,7 +166,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             (string chan, JsValue fn) = _channelHooks[i];
             if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
-                Safe("onChannel", () => _engine.Invoke(fn, channel, message));
+                Safe("onChannel", () => _engine.Invoke(fn, channel, message), channel);
         }
     }
 
@@ -162,7 +176,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             (string pkg, JsValue fn) = _gmcpHooks[i];
             if (pkg.Length == 0 || string.Equals(pkg, package, StringComparison.OrdinalIgnoreCase))
-                Safe("onGmcp", () => _engine.Invoke(fn, json, package));
+                Safe("onGmcp", () => _engine.Invoke(fn, json, package), package);
         }
     }
 
@@ -306,7 +320,7 @@ public sealed class JsPluginRuntime : IPluginRuntime
         {
             if (IsFn(fn))
                 _subscriptions.Add(_host.WatchState(path, (p, v) =>
-                    Safe("watch", () => _engine.Invoke(fn, v, p))));
+                    Safe("watch", () => _engine.Invoke(fn, v, p), path)));
         }),
 
         // routing + alerts (parity with trigger CapturePane / Sound / Notify)
@@ -507,8 +521,11 @@ public sealed class JsPluginRuntime : IPluginRuntime
 
         try
         {
+            bool trigger = ReferenceEquals(into, _triggers);
             into.Add(new PluginRule
             {
+                RunSlot = IsFn(run) ? _prof?.For(Id, ProfileKind.Handler, trigger ? "trigger" : "alias", pattern) : null,
+                MatchSlot = _prof?.For(Id, ProfileKind.Match, trigger ? "trigger" : "alias", pattern),
                 Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1,
                                               matchTimeout: CompiledPattern.PluginMatchTimeout),
                 Send = Str(def, "send"),
@@ -523,7 +540,8 @@ public sealed class JsPluginRuntime : IPluginRuntime
     private double AddTimer(double seconds, JsValue fn, bool repeat)
     {
         if (!IsFn(fn)) return 0;
-        int id = _timers.Add(seconds, repeat, () => Safe(repeat ? "every" : "after", () => _engine.Invoke(fn)));
+        string every = seconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "s";
+        int id = _timers.Add(seconds, repeat, () => Safe(repeat ? "every" : "after", () => _engine.Invoke(fn), every));
         return id;
     }
 
@@ -655,6 +673,17 @@ public sealed class JsPluginRuntime : IPluginRuntime
             _actions[hoverId] = hover;
             _buildingActions?.Add(hoverId);
         }
+        // 'onDrag' and 'onWheel' (colorgrid, 1.25): same (col, row, char) invoke path.
+        string? dragId = null, wheelId = null;
+        foreach (string key in new[] { "onDrag", "onWheel" })
+        {
+            JsValue fn = Get(w, key);
+            if (!IsFn(fn)) continue;
+            string id = "a" + _nextActionId++;
+            _actions[id] = fn;
+            _buildingActions?.Add(id);
+            if (key == "onDrag") dragId = id; else wheelId = id;
+        }
         // 'onRightClick' (colorgrid / button / buttonrow, 1.9): the secondary activation.
         // 'onRowMenu' (list/table, 1.18): the same slot in row clothing — fired through the
         // choice path by a right-clicked row; its return may be a context menu.
@@ -693,6 +722,8 @@ public sealed class JsPluginRuntime : IPluginRuntime
             Action = actionId,
             HoverAction = hoverId,
             ContextAction = contextId,
+            DragAction = dragId,
+            WheelAction = wheelId,
             Children = children,
         };
     }
@@ -746,8 +777,14 @@ public sealed class JsPluginRuntime : IPluginRuntime
     // plugin must never take down line processing) but no longer swallow the *fact* of it:
     // diagnostics counts consecutive failures and the manager quarantines a plugin that is
     // failing on every line rather than letting it print the same error forever.
-    private void Safe(string what, Action action)
+    private void Safe(string what, Action action, string? detail = null, PluginProfiler.Slot? slot = null)
     {
+        int span = -1;
+        if (_prof is { Enabled: true })
+        {
+            slot ??= _prof.For(Id, ProfileKind.Handler, what, detail);
+            span = _prof.Enter();
+        }
         try
         {
             action();
@@ -758,21 +795,13 @@ public sealed class JsPluginRuntime : IPluginRuntime
             if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {ex.Message}");
             _diagnostics?.RecordFailure(Id, what, ex.Message);
         }
+        finally { if (span >= 0) _prof!.Leave(span, slot!); }
     }
 
     private JsValue? SafeCall(string what, JsValue fn, params object[] args)
     {
-        try
-        {
-            JsValue result = _engine.Invoke(fn, args);
-            _diagnostics?.RecordSuccess(Id);
-            return result;
-        }
-        catch (Exception ex)
-        {
-            if (_diagnostics?.ShouldPrintError(Id) ?? true) _host.Print(Id, $"{what} error: {ex.Message}");
-            _diagnostics?.RecordFailure(Id, what, ex.Message);
-            return null;
-        }
+        JsValue? result = null;
+        Safe(what, () => result = _engine.Invoke(fn, args));
+        return result;
     }
 }

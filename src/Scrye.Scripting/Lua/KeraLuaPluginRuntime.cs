@@ -31,11 +31,18 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         public string? Send;
         public int Run = NoRef;
         public int Lines = 1;                          // >1: matches over that many lines, newest last
+        public PluginProfiler.Slot? RunSlot;           // profile rows: the callback, and the matching
+        public PluginProfiler.Slot? MatchSlot;
     }
 
     private readonly PluginDescriptor _descriptor;
     private readonly IPluginHost _host;
     private readonly PluginDiagnostics? _diagnostics;
+    // Where this plugin's time goes (.profile): every call into Lua and every scrye.* call
+    // out of it is a span. Null without diagnostics (a bare runtime in a test).
+    private readonly PluginProfiler? _prof;
+    private readonly PluginProfiler.Slot? _lineSlot;
+    private string _apiPrefix = "";   // "store." while BuildApi binds scrye.store, for the row names
     private readonly LuaHost _lua;
 
     private readonly List<int> _lineHooks = new();
@@ -79,6 +86,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         _descriptor = descriptor;
         _host = host;
         _diagnostics = diagnostics;
+        _prof = diagnostics?.Profiler;
+        _lineSlot = _prof?.For(Id, ProfileKind.Handler, "onLine");
         _lua = new LuaHost();
         LuaSandbox.Apply(_lua);
         _lua.EnableDispatchBudget();   // a spinning hook aborts + reports instead of freezing the loop
@@ -90,7 +99,9 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     public void Load()
     {
         string code = File.ReadAllText(_descriptor.EntryPath);
-        _lua.DoText(code, Id);
+        int span = _prof?.Enter() ?? -1;
+        try { _lua.DoText(code, Id); }
+        finally { if (span >= 0) _prof!.Leave(span, _prof.For(Id, ProfileKind.Handler, "load")); }
     }
 
     // ---- dispatch (IPluginRuntime) -------------------------------------------
@@ -104,7 +115,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             _lua.PushRef(_lineHooks[i]);
             l.PushString(current);
-            if (!PCallReporting("onLine", 1, 1)) continue;
+            if (!PCallReporting("onLine", 1, 1, _lineSlot)) continue;
             if (l.Type(-1) == LuaType.Boolean && !l.ToBoolean(-1)) gag = true;    // return false -> gag
             else if (l.Type(-1) == LuaType.String) current = l.ToString(-1, false); // return "text" -> rewrite
             l.Pop(1);
@@ -114,7 +125,10 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         for (int i = 0; i < _triggers.Count; i++)
         {
             PluginRule t = _triggers[i];
+            bool timed = t.MatchSlot is not null && _prof!.Enabled;
+            long t0 = timed ? _prof!.Now() : 0;
             MatchResult? m = _recent.Match(t.Pattern, t.Lines, text, out _);
+            if (timed) _prof!.Leaf(t.MatchSlot!, _prof.Now() - t0);
             if (m is not null) Apply(t, m);
         }
         return (gag, current != text ? current : null);
@@ -124,7 +138,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     {
         for (int i = 0; i < _aliases.Count; i++)
         {
-            MatchResult? m = _aliases[i].Pattern.Match(text);
+            PluginRule a = _aliases[i];
+            bool timed = a.MatchSlot is not null && _prof!.Enabled;
+            long t0 = timed ? _prof!.Now() : 0;
+            MatchResult? m = a.Pattern.Match(text);
+            if (timed) _prof!.Leaf(a.MatchSlot!, _prof.Now() - t0);
             if (m is null) continue;
             Apply(_aliases[i], m);
             return (true, null);
@@ -148,7 +166,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             }
             _lua.PushRef(rule.Run);
             foreach (string w in wildcards) _lua.State.PushString(w);
-            PCallReporting("rule", wildcards.Count, 0);
+            PCallReporting("rule", wildcards.Count, 0, rule.RunSlot);
         }
     }
 
@@ -158,7 +176,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             (string chan, int fn) = _channelHooks[i];
             if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
-                CallRef("onChannel", fn, channel, message);
+                CallRefAs("onChannel", channel, fn, channel, message);
         }
     }
 
@@ -168,7 +186,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             (string chan, int fn) = _relayHooks[i];
             if (chan.Length == 0 || string.Equals(chan, channel, StringComparison.OrdinalIgnoreCase))
-                CallRef("onRelay", fn, sourceWorld, channel, message);
+                CallRefAs("onRelay", channel, fn, sourceWorld, channel, message);
         }
     }
 
@@ -178,7 +196,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         {
             (string pkg, int fn) = _gmcpHooks[i];
             if (pkg.Length == 0 || string.Equals(pkg, package, StringComparison.OrdinalIgnoreCase))
-                CallRef("onGmcp", fn, json, package);
+                CallRefAs("onGmcp", package, fn, json, package);
         }
     }
 
@@ -260,12 +278,16 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// <summary>Call a referenced function with simple args (string/long/double/bool),
     /// discarding results. Errors are reported, never thrown — one bad plugin must never
     /// take down line processing — and counted for quarantine.</summary>
-    private void CallRef(string what, int fnRef, params object?[] args)
+    private void CallRef(string what, int fnRef, params object?[] args) => CallRefAs(what, null, fnRef, args);
+
+    /// <summary><see cref="CallRef"/> with a <paramref name="detail"/> for the profile row: the
+    /// GMCP package, the channel, the watched path - what tells two handlers of one kind apart.</summary>
+    private void CallRefAs(string what, string? detail, int fnRef, params object?[] args)
     {
         _lua.PushRef(fnRef);
         NativeLua l = _lua.State;
         foreach (object? a in args) PushSimple(l, a);
-        PCallReporting(what, args.Length, 0);
+        PCallReporting(what, args.Length, 0, null, detail);
     }
 
     /// <summary>Like <see cref="CallRef"/>, but reads ONE result as a context menu (API 1.18):
@@ -312,9 +334,22 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
     /// <summary>pcall + the Safe/SafeCall accounting: success/failure recorded to
     /// diagnostics, failures printed to the world. True = results are on the stack.</summary>
-    private bool PCallReporting(string what, int nargs, int nresults)
+    private bool PCallReporting(string what, int nargs, int nresults,
+                                PluginProfiler.Slot? slot = null, string? detail = null)
     {
-        if (_lua.PCall(nargs, nresults, out string? error))
+        // The span covers the whole call: the script's own time is what is left after the
+        // scrye.* calls it makes (each its own span) are taken out.
+        int span = -1;
+        if (_prof is { Enabled: true })
+        {
+            slot ??= _prof.For(Id, ProfileKind.Handler, what, detail);
+            span = _prof.Enter();
+        }
+        bool ok;
+        string? error;
+        try { ok = _lua.PCall(nargs, nresults, out error); }
+        finally { if (span >= 0) _prof!.Leave(span, slot!); }
+        if (ok)
         {
             _diagnostics?.RecordSuccess(Id);
             return true;
@@ -363,10 +398,14 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
     /// runs under <see cref="LuaHost.Protect"/> against the calling state.</summary>
     private void Bind(string name, Func<NativeLua, int> body)
     {
+        PluginProfiler? prof = _prof;
+        PluginProfiler.Slot? slot = prof?.For(Id, ProfileKind.Api, _apiPrefix + name);
         _lua.PushCallback(ptr =>
         {
             NativeLua l = NativeLua.FromIntPtr(ptr);
-            return LuaHost.Protect(l, () => body(l), msg => BindError(name, msg));
+            int span = prof?.Enter() ?? -1;
+            try { return LuaHost.Protect(l, () => body(l), msg => BindError(name, msg)); }
+            finally { if (span >= 0) prof!.Leave(span, slot!); }
         });
         _lua.State.SetField(-2, name);
     }
@@ -407,7 +446,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             {
                 cl.PushCopy(2);
                 int fn = cl.Ref(LuaRegistry.Index);   // registry is shared across threads
-                _subscriptions.Add(_host.WatchState(path, (p, v) => CallRef("watch", fn, v, p)));
+                _subscriptions.Add(_host.WatchState(path, (p, v) => CallRefAs("watch", path, fn, v, p)));
             }
             return 0;
         });
@@ -450,6 +489,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // scrye.json (1.6): encode(value) -> json | nil,err ; decode(json) -> value | nil,err
         l.NewTable();
+        _apiPrefix = "json.";
         Bind("encode", cl =>
         {
             try
@@ -480,6 +520,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             }
         });
         l.SetField(-2, "json");
+        _apiPrefix = "";
 
         // scrye.onLine(function(line) ... end)  — return false to gag, a string to rewrite
         Bind("onLine", cl => AddHook(cl, _lineHooks));
@@ -497,6 +538,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         // persistent per-plugin storage (scrye.store)
         l.NewTable();
+        _apiPrefix = "store.";
         Bind("get", cl =>
         {
             string? v = _host.StoreGet(Id, LuaHost.ArgString(cl, 1));
@@ -534,6 +576,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             return 1;
         });
         l.SetField(-2, "store");
+        _apiPrefix = "";
 
         // MUD-shared storage (scrye.shared, 1.14) - the same surface as scrye.store, backed
         // by the host's shared root. On a host with no shared backing every get returns nil
@@ -542,6 +585,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         // (the table always exists on this runtime; the FALLBACK idiom is for scripts that
         // must also run on hosts predating 1.14, where scrye.shared is absent entirely).
         l.NewTable();
+        _apiPrefix = "shared.";
         Bind("get", cl =>
         {
             string? v = _host.SharedGet(Id, LuaHost.ArgString(cl, 1));
@@ -578,6 +622,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             return 1;
         });
         l.SetField(-2, "shared");
+        _apiPrefix = "";
 
         // The exports folder (scrye.exports, 1.21): a file by NAME in %APPDATA%/Scrye/exports,
         // nothing else on disk. Lua convention for failure - nil plus the reason - because a
@@ -587,6 +632,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
         //     local text, err = scrye.exports.read("friend-map.json")
         //     for _, name in ipairs(scrye.exports.list()) do ... end
         l.NewTable();
+        _apiPrefix = "exports.";
         Bind("write", cl =>
         {
             try { cl.PushString(_host.ExportWrite(Id, LuaHost.ArgString(cl, 1), LuaHost.ArgString(cl, 2))); return 1; }
@@ -611,6 +657,7 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             return 1;
         });
         l.SetField(-2, "exports");
+        _apiPrefix = "";
 
         // scrye.addPanel{...} — same rebuild-retires-old-callbacks scheme as MoonSharp,
         // plus Unref so the abandoned closures are actually collectable.
@@ -697,9 +744,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             cl.PushCopy(2);
             int fn = cl.Ref(LuaRegistry.Index);
             int id = 0;
-            id = _timers.Add(LuaHost.ArgNumber(cl, 1), repeat, () =>
+            double seconds = LuaHost.ArgNumber(cl, 1);
+            string every = seconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "s";
+            id = _timers.Add(seconds, repeat, () =>
             {
-                CallRef(repeat ? "every" : "after", fn);
+                CallRefAs(repeat ? "every" : "after", every, fn);
                 if (!repeat) ReleaseTimer(id);   // spent (no-op if it cancelled itself meanwhile)
             });
             _timerRefs[id] = fn;
@@ -744,8 +793,11 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
 
         try
         {
+            bool trigger = ReferenceEquals(into, _triggers);
             into.Add(new PluginRule
             {
+                RunSlot = run == NoRef ? null : _prof?.For(Id, ProfileKind.Handler, trigger ? "trigger" : "alias", pattern),
+                MatchSlot = _prof?.For(Id, ProfileKind.Match, trigger ? "trigger" : "alias", pattern),
                 Pattern = new CompiledPattern(pattern, isRegex, ignoreCase, multiLine: lines > 1,
                                               matchTimeout: CompiledPattern.PluginMatchTimeout),
                 Send = Field(cl, 1, "send"),
@@ -867,6 +919,22 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             _buildingActions?.Add(hoverId);
         }
         else cl.Pop(1);
+
+        // 'onDrag' and 'onWheel' (colorgrid, 1.25): pointer callbacks of their own, through the
+        // same (col, row, ch) invoke path - a drag's tiles moved, a wheel notch's cell and way.
+        string? dragId = null, wheelId = null;
+        foreach (string key in new[] { "onDrag", "onWheel" })
+        {
+            RawField(cl, w, key);
+            if (cl.IsFunction(-1))
+            {
+                string id = "a" + _nextActionId++;
+                _actions[id] = cl.Ref(LuaRegistry.Index);              // pops
+                _buildingActions?.Add(id);
+                if (key == "onDrag") dragId = id; else wheelId = id;
+            }
+            else cl.Pop(1);
+        }
 
         // 'onRightClick' (colorgrid / button / buttonrow, 1.9) is a THIRD callback: the
         // secondary activation — right-click on the desktop, long-press on the phone.
@@ -1023,6 +1091,8 @@ public sealed class KeraLuaPluginRuntime : IPluginRuntime
             Action = actionId,
             HoverAction = hoverId,
             ContextAction = contextId,
+            DragAction = dragId,
+            WheelAction = wheelId,
             Children = children,
         };
     }
