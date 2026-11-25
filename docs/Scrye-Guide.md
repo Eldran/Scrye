@@ -1003,6 +1003,15 @@ the steps already sent behind it still land, and then the walk stops and says wh
 up. Switch it with the **Fast walk** button on the Map tab or `mapg fast on|off`. An explore
 always goes one step at a time.
 
+**Zooming and dragging the flat map** (1.22.0). Scroll the mouse wheel over the map to show more
+or fewer rooms — six steps from 13 to 41 rooms across, zooming on the spot under the pointer — and
+drag the map to look around the area instead of only at the part you stand in. **Fit**, on the
+Map tab, sizes and places the map to show the whole level you're looking at in one go. A map you
+dragged away stays where you put it while you walk inside it, and comes back to you when you walk
+out of it or onto another map; **Center** always brings it back (and undoes a Fit). The zoom step is
+kept per character. Dragging and the wheel need Scrye with plugin API 1.25; on an older Scrye, Fit
+and `mapg zoom` still work.
+
 **The 3D view** (1.19.0, needs Scrye with plugin API 1.24). `mapg view 3d`, or the **3D**
 button on the Map tab, shows every level of the map you're on at once: rooms as points at their
 places on the map, stairs as vertical lines, an unexplored exit as a small `?` and a door to
@@ -1036,6 +1045,7 @@ still stops the walk, and an explore (`mapg explore`) still stops the moment a f
 | `mapg go <number>` | Actually walk it. |
 | `mapg stop` | Stop a walk in progress. |
 | `mapg view 2d` / `3d` | The map flat, one level at a time, or every level at once in 3D (needs Scrye with plugin API 1.24; the Map tab's **3D** button too). The phone always shows 2D. |
+| `mapg zoom in` / `out` / `fit` / `reset` / `1`–`6` | How much of the flat map shows: a step in or out, the whole level you're looking at (the Map tab's **Fit** button), back to the default (21 rooms across, on you), or a step by number. `mapg zoom` alone says how it is. The mouse wheel over the map zooms too, and you can drag the map to look around. |
 | `mapg fast on` / `off` / `<n>` | Fast walk: keep *n* steps (default 3, up to 6) on their way at once; `off`, or 1, sends one at a time. The Map tab's **Fast walk** button switches it too. |
 | `mapg explore` | Name the nearest room that still has an unexplored exit, and print the route. |
 | `mapg explore go` | Same, but walk there. |
@@ -2303,7 +2313,7 @@ Omitting `requires` entirely means "load me anywhere", which is what every plugi
 this field existed does. That's fine for simple plugins; declare a range once you depend on
 something specific.
 
-**Current API version: 1.24.** Recent history: 1.2 added inline colour markup in `scrye.print`/
+**Current API version: 1.25.** Recent history: 1.2 added inline colour markup in `scrye.print`/
 `scrye.capture`; 1.3 markup in `text` widgets, colorgrid `labels`, and bound buttonrows; 1.4 the
 manifest `data` map (`scrye.data.<key>`); 1.5 `scrye.onIdle`. **1.6 is the automapper batch**, all
 additive: `scrye.onCommand` (observe every outgoing command), `scrye.json` (encode/decode),
@@ -2338,7 +2348,9 @@ and read in Scrye's exports folder (see [Files the user keeps](#files-the-user-k
 **1.22 adds `solo` on `scrye.addPanel`**, a panel that stays out of books;
 **1.23 adds `width` on `input`**, a field N characters wide beside its Set button;
 **1.24 adds the `scene3d` widget**, a map in 3D with a 2D stand-in (see the
-[widget reference](#hud-widget-reference)), and `scrye.api`, the API version as a string.
+[widget reference](#hud-widget-reference)), and `scrye.api`, the API version as a string;
+**1.25 adds `onDrag` and `onWheel` on `colorgrid`**, so a map can be dragged to look around and
+zoomed with the mouse wheel.
 
 ## Permissions
 
@@ -2617,7 +2629,7 @@ Each widget is a table with a `type`. Common fields: `text` (a label/prefix), `b
 | `button` | A clickable button. | `text`, `action = function() ... end`, `onRightClick = function() ... end` *(1.9)*, `color` *(1.13 — colours the label, so a button can show the STATE of what it controls)* |
 | `buttonrow` | Several buttons side by side (equal width). | `buttons = { {text=, action=, onRightClick=, color=}, ... }` |
 | `input` | An inline text field; **Enter** or the **Set** button submits. | `text` (label), `bind` (seed value), `onSubmit = function(text) ... end`, `width = N` *(1.23 — the field is N characters wide and sits beside its Set button; the labels of a panel's sized inputs share a column so the boxes line up. Unset, it stretches across the row)* |
-| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
+| `colorgrid` | A clickable grid of characters, colored by a palette. | `bind` (grid string), `palette = { ["#"]="#RRGGBB", ... }`, `onClick = function(col, row, ch) ... end`, `onHover = function(col, row, ch) ... end` *(1.6)*, `onRightClick = function(col, row, ch) ... end` *(1.9)*, `onDrag = function(dcol, drow) ... end` *(1.25)*, `onWheel = function(col, row, way) ... end` *(1.25)*, `weave = true` *(1.7 — even cells are tiles, odd cells draw `-` `\|` `/` `\` `x` as thin connector lines)*, `icons = { ["char"] = "glyph", ... }` *(1.8 — micro-icons; see the glyph vocabulary above)*, `cell = N` *(1.8 — cell-size ceiling in px, default 12, clamped 3–64)* |
 | `list` | A dynamic list of rows: `label`, or `label \t value` with the value right‑aligned and dimmed. Grows and shrinks with the bound value. | `bind`; `separator` (default tab); `color` |
 | `table` | The same rows split into columns, with optional headers and per‑column alignment. | `bind`, `columns = {...}`, `align = "llr"`, `separator`; `color` |
 | `barlist` | A list of labelled bars from one bound value — a compact way to show several quantities against a common maximum. Rows are `label \t caption \t value \t max \t refined [\t tooltip [\t stages]]`; anything else in the bound value draws as plain text, so headers still work. | `bind`; `color` |
@@ -2660,6 +2672,7 @@ Notes:
 - `value`/`max` on gauges/progress accept a **state path** or a **literal number** (e.g. `max = 100`).
 - `colorgrid` `onClick` gives you the clicked cell's `col`, `row`, and character — map that back to your data.
 - `colorgrid` `onHover` *(1.6)* fires when the pointer moves onto a **different** cell (never per pixel), and once with `(-1, -1, "")` when it leaves the grid so you can clear whatever you were previewing. Hover is desktop-only — the companion's touch screen never fires it — so use it to *enrich* (a room-name readout beside the map), never for anything `onClick` can't also reach.
+- `colorgrid` `onDrag` and `onWheel` *(1.25)*. While the user drags the grid with the left button, `onDrag(dcol, drow)` reports how far the pointer has moved since the last call, in whole tiles counted in the grid's own indices (a `weave` grid's tile is two indices, so its steps come in twos); right and down are positive, so to make the contents follow the pointer, move your view the *other* way. A grid with `onDrag` fires its `onClick` when the button is **released**, and only if the pointer stayed put — a drag is never a click. `onWheel(col, row, way)` fires once per wheel notch with the cell under the pointer (`-1, -1` between rows) and `way` = `"+"` (away from the user: zoom in) or `"-"`; while a grid has it, the wheel over the grid is the grid's and does not scroll the panel. Both are desktop-only, like `onHover`: the phone never fires them, so a plugin should offer the same through a button or a command. The automapper's flat map uses them to drag and zoom.
 - **`onRightClick` *(1.9)* is a second action, not a variant of the first.** A right-click runs it and `onClick` does *not* also fire; a left click runs `onClick` and never this. It works on `colorgrid` (same `col, row, ch` as `onClick`), `button` and `buttonrow` (no arguments). Unlike `onHover` it may gate real behaviour, because the companion maps a **long-press (~500 ms)** onto it — so anything reachable by right-click on the desktop is reachable by touch on the phone. Use it for the secondary thing a cell or button obviously affords: left-click a map square to travel there, right-click to inspect it.
 - **Behaviour change in 1.9:** colorgrid cell clicks used to fire `onClick` on *any* pointer button, so a right-click silently ran it. Left click now runs `onClick` and nothing else. If a plugin relied on that, it was relying on an accident.
 - **`barlist` bars can show a quality breakdown, not just a fill.** Past `max`, the `refined` field splits the fill into raw (amber, left) and refined (green, right). The optional seventh field takes that further: `qty,pct;qty,pct;…` **rawest first** draws one segment per stage — width is how many units sit at that quality, colour is where that quality falls on the amber→green ramp — so the intermediate stages are visible instead of averaged into one split. A row without it renders exactly as before. The sixth field is a hover tooltip (`\n` becomes a line break); the phone can't fire hover, so don't put anything essential only there.
@@ -2755,6 +2768,54 @@ it delays that world's output.
 
 If the Plugins panel shows a plugin that simply won't turn on, check the row: an API‑range
 mismatch is reported there explicitly rather than looking like a plugin that quietly does nothing.
+
+### Where the time goes — `.profile`
+
+The 50 ms warning only speaks when one call is slow, and only names the plugin. `.profile`
+answers the next question: which handler, and was it the script or something it asked Scrye to
+do. Every callback into a plugin, every `scrye.*` call out of it and every trigger or alias
+pattern tried against a line is timed, all the time.
+
+| Command | What it does |
+|---|---|
+| `.profile` | A line per plugin, then the 15 costliest rows. |
+| `.profile 30` / `.profile all` | More rows, or every row. |
+| `.profile <text>` | Only rows whose plugin or name contains the text: `.profile 3s-map`, `.profile addPanel`, `.profile onGmcp Room.Info`. A number can follow: `.profile 3s-map 30`. |
+| `.profile reset` | Zero everything and measure from now. |
+| `.profile off` / `on` | Stop and start measuring. Off keeps what was gathered. |
+
+```
+* plugin profile: 1567 ms in plugins over 12m 30s = 0.21% of the time
+*   plugin              total     script     client      match
+*   3s-map-gmcp        912 ms     301 ms     588 ms    23.0 ms
+*   3s-compendium      655 ms     540 ms    98.0 ms    17.0 ms
+*   top 15 of 212 by own time:
+*         own  with calls     calls        avg        max  where
+*      512 ms      512 ms       340    1.5 ms    9.2 ms  3s-map-gmcp  scrye.addPanel
+*      301 ms      889 ms       341    2.6 ms   14.1 ms  3s-map-gmcp  onGmcp Room.Info
+*   ...
+```
+
+How to read it:
+
+- **script / client / match** split a plugin's time into its own Lua, the `scrye.*` calls it
+  made, and Scrye matching its patterns. A plugin that is mostly *client* is asking for
+  something expensive (rebuilding a panel on every message, writing the store in a loop); one
+  that is mostly *script* has the cost in its own code; *match* is the price of its patterns.
+- **own** is the time spent in that row and nowhere deeper; **with calls** includes everything
+  it set off. In the example the `Room.Info` handler took 889 ms in all, but 588 of that was
+  the calls it made. Own times add up to the header's total, so nothing is counted twice.
+- **Rows are named by what tells them apart:** `onGmcp` by package, `onChannel` by channel,
+  `watch` by path, `on:<event>` by event, `trigger` and `alias` by pattern, timers by their
+  interval (`every 0.5s`), `load` for running the entry script. `match trigger <pattern>` is
+  the matching of that pattern, tried on every line; `trigger <pattern>` is its `run`
+  callback, counted only when it matched.
+- **The numbers run since the world opened** (or the last reset, or the plugin's last reload).
+  To read one fight: `.profile reset`, fight, `.profile`.
+
+Measuring costs about 75 ns per span, which for a hundred triggers is some 8 µs per line.
+`.profile off` removes even that. JavaScript plugins get the handler and match rows but not the
+per-`scrye.*` split (their own time includes the client calls); wasm plugins are not profiled.
 
 ## Installing, reloading, packaging
 

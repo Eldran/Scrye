@@ -116,6 +116,10 @@ your session, subscribe. Reaching it through the Tailscale proxy authenticates y
 identity, so there is nothing to type: the token screen only appears when the server says a
 token is needed (plain loopback, or no Tailscale).
 
+With more than one world open on the PC, the character name in the top bar gets a small
+arrow: tap it to switch to another character. The phone shows one world at a time and
+remembers the last one you picked.
+
 A real certificate means **no browser warning**, and more importantly a genuine *secure
 context*, which is what a service worker needs. That is the whole reason this step exists
 before the installable PWA (design §7.1, §8.1).
