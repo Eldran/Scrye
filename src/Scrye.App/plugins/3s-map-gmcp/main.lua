@@ -100,8 +100,9 @@ local WALK_CAP   = 200    -- steps a single walk may take
 local WALK_WAIT  = 10     -- seconds to wait for a step to land before giving up
 
 -- The room viewport, and the woven grid it becomes: rooms sit on even
--- (0-based) cells and the connectors between them on the odd ones. Same
--- numbers as the shipped 3s-map, so the two panels are the same size.
+-- (0-based) cells and the connectors between them on the odd ones. 21 by 15
+-- is the default zoom; since 1.22.0 the wheel and 'mapg zoom' change all four
+-- (HL.view_size), so everything that reads them follows the zoom.
 local COLS, ROWS   = 21, 15
 local HALF_C, HALF_R = COLS // 2, ROWS // 2
 local TCOLS, TROWS = COLS * 2 - 1, ROWS * 2 - 1
@@ -1565,8 +1566,11 @@ draw = function()
   local me = L.at[here]
   local z = view_z or me.z
   L.marks = {}          -- '>' markers drawn this time: cell -> the off-map room they point at
-  draw_x0 = me.x - HALF_C
-  draw_y0 = me.y + HALF_R
+  do  -- the window: on you, or where a drag or a zoom moved it (HL.view_centre)
+    local cx, cy = HL.view_centre(L, me)
+    draw_x0 = cx - HALF_C
+    draw_y0 = cy + HALF_R
+  end
   draw_z  = z
 
   local grid = {}
@@ -1669,6 +1673,10 @@ draw = function()
   local bits = { label, L.placed .. " room(s)" }
   if L.displaced > 0 then bits[#bits + 1] = L.displaced .. " displaced (!)" end
   if view_z then bits[#bits + 1] = "level " .. z .. (z == me.z and "" or " (not yours)") end
+  if HL.zoom ~= HL.ZOOM_DEFAULT then
+    bits[#bits + 1] = HL.zoom and string.format("zoom %d/%d", HL.zoom, #HL.ZOOMS) or "zoomed to fit"
+  end
+  if HL.pan.dx ~= 0 or HL.pan.dy ~= 0 then bits[#bits + 1] = "moved off you (Center)" end
   if hidden > 0 then
     bits[#bits + 1] = hidden .. " other section(s) of this level hidden ('mapg sections all')"
   end
@@ -3254,6 +3262,7 @@ scrye.addAlias{
       note("level " .. (view_z or mine) .. (view_z and " (use 'mapg level' to come back)" or ""))
     elseif verb == "fast" then HL.fast_cmd(rest)
     elseif verb == "view" then HL.view_cmd(rest)
+    elseif verb == "zoom" then HL.zoom_cmd(rest)
     elseif verb == "sections" then
       if rest == "all" or rest == "near" then
         all_sections = rest == "all"
@@ -3319,6 +3328,7 @@ scrye.addAlias{
       note("mapg level up|down   look at another level; 'mapg level' comes back")
       note("mapg sections all|near   draw every part of a level, or (default) only the part(s) nearest yours")
       note("mapg view 2d|3d   the map flat, one level at a time, or every level at once in 3D (the Map tab's 3D button)")
+      note("mapg zoom in|out|fit|reset|1-6   how much of the flat map shows (the wheel over the map; drag it to look around)")
       note("mapg redraw       lay the current map out again from the links")
       note("mapg export       the whole map as a file to share, plus a picture of this map (SVG)")
       note("mapg export <area> just that area's rooms; 'mapg export svg' just the picture")
@@ -3661,12 +3671,196 @@ HL.PALETTE3D = (function()
   return t
 end)()
 
+-- ---------- zoom and drag (1.22.0, Scrye plugin API 1.25) ----------
+-- The flat map was a fixed window, 21 rooms by 15, centred on you. Now the window's size is
+-- a zoom level - the wheel over the map, or 'mapg zoom' - and dragging the map moves the
+-- window off you to look around; Fit sizes and places it to show the whole level you are
+-- looking at. A moved window stays where you put it while you walk, as long as you are
+-- still in it; step out of it, or onto another map, and it comes back to you. Center always
+-- does (and undoes a Fit). The zoom level is kept per character; a Fit is not.
+HL.ZOOMS = { { 13, 9 }, { 17, 11 }, { 21, 15 }, { 27, 19 }, { 33, 23 }, { 41, 29 } }
+HL.ZOOM_DEFAULT = 3
+HL.zoom = HL.ZOOM_DEFAULT       -- index into ZOOMS; nil while a Fit size is up
+HL.pan = { dx = 0, dy = 0 }     -- window centre minus where you stand (layout units);
+                                -- seed, mx, my: the map and your square at the last drawing
+
+function HL.view_size(cols, rows)
+  COLS, ROWS = cols, rows
+  HALF_C, HALF_R = COLS // 2, ROWS // 2
+  TCOLS, TROWS = COLS * 2 - 1, ROWS * 2 - 1
+end
+
+-- The window's centre for this drawing (see above for when it follows you).
+function HL.view_centre(L, me)
+  local pn = HL.pan
+  if pn.seed ~= L.seed then
+    pn.dx, pn.dy = 0, 0
+  elseif pn.mx and (pn.mx ~= me.x or pn.my ~= me.y) and (pn.dx ~= 0 or pn.dy ~= 0) then
+    -- you moved: the window stays on the same place while you are still in it
+    local dx, dy = pn.mx + pn.dx - me.x, pn.my + pn.dy - me.y
+    local inside = dx <= HALF_C and dx >= HALF_C - COLS + 1
+               and dy >= -HALF_R and dy <= ROWS - 1 - HALF_R
+    if inside then pn.dx, pn.dy = dx, dy else pn.dx, pn.dy = 0, 0 end
+  end
+  pn.seed, pn.mx, pn.my = L.seed, me.x, me.y
+  return me.x + pn.dx, me.y + pn.dy
+end
+
+-- The extent of the rooms the last drawing showed (the level, the sections drawn).
+function HL.level_bounds(L)
+  local x0, x1, y0, y1
+  for num in pairs(L.shown or {}) do
+    local p = L.at[num]
+    if p then
+      x0 = x0 and math.min(x0, p.x) or p.x ; x1 = x1 and math.max(x1, p.x) or p.x
+      y0 = y0 and math.min(y0, p.y) or p.y ; y1 = y1 and math.max(y1, p.y) or p.y
+    end
+  end
+  return x0, x1, y0, y1
+end
+
+-- Put the window's centre at (cx, cy), kept over the map: dragging can look past the
+-- edge of the rooms, never off into nothing.
+function HL.pan_to(L, me, cx, cy)
+  local x0, x1, y0, y1 = HL.level_bounds(L)
+  if x0 then
+    cx = math.max(x0, math.min(x1, cx))
+    cy = math.max(y0, math.min(y1, cy))
+  end
+  local pn = HL.pan
+  pn.dx, pn.dy = cx - me.x, cy - me.y
+  pn.seed, pn.mx, pn.my = L.seed, me.x, me.y
+end
+
+-- onDrag: the pointer moved dcol, drow grid indices (two to a room on this woven grid);
+-- the map follows the pointer, so the window moves the other way.
+function HL.drag(dcol, drow)
+  local L = current_layout()
+  local me = L and L.at[here]
+  if not me then return end
+  local function rooms_of(v)
+    v = math.floor(tonumber(v) or 0)
+    return v >= 0 and v // 2 or -((-v) // 2)
+  end
+  local mx, my = rooms_of(dcol), rooms_of(drow)
+  if mx == 0 and my == 0 then return end
+  HL.pan_to(L, me, me.x + HL.pan.dx - mx, me.y + HL.pan.dy + my)   -- north is up: rows grow south
+  draw()
+end
+
+-- The zoom level nearest the window as it is (a Fit size is between levels).
+function HL.zoom_nearest()
+  local best, bd = HL.ZOOM_DEFAULT, math.huge
+  for i, z in ipairs(HL.ZOOMS) do
+    local d = math.abs(z[1] - COLS)
+    if d < bd then best, bd = i, d end
+  end
+  return best
+end
+
+-- Zoom to level idx. Given the grid cell the wheel turned over, the spot under the pointer
+-- stays under it - zoom in on the corner you are looking at, not on yourself.
+function HL.zoom_set(idx, col, row)
+  local L = current_layout()
+  local me = L and L.at[here]
+  local ax, ay, fx, fy
+  col, row = tonumber(col), tonumber(row)
+  if me and col and row and col >= 0 and row >= 0 then
+    ax, ay = draw_x0 + col / 2, draw_y0 - row / 2
+    fx, fy = (col / 2) / math.max(1, COLS - 1), (row / 2) / math.max(1, ROWS - 1)
+  end
+  HL.zoom = idx
+  HL.view_size(HL.ZOOMS[idx][1], HL.ZOOMS[idx][2])
+  scrye.store.set("zoom", tostring(idx))
+  if ax then
+    local x0 = math.floor(ax - fx * (COLS - 1) + 0.5)
+    local y0 = math.floor(ay + fy * (ROWS - 1) + 0.5)
+    HL.pan_to(L, me, x0 + HALF_C, y0 - HALF_R)
+  end
+  draw()
+end
+
+-- onWheel: "+" (away from you) zooms in - fewer rooms, bigger squares.
+function HL.wheel(col, row, way)
+  local idx = HL.zoom or HL.zoom_nearest()
+  local new = idx + (way == "+" and -1 or 1)
+  if new < 1 or new > #HL.ZOOMS then return end
+  HL.zoom_set(new, col, row)
+end
+
+-- Fit: the window sized and placed to show the whole level you are looking at, with a
+-- square to spare on each side for the ways out. The squares shrink with the width only,
+-- so a tall, narrow map is widened rather than drawn as a long column of big squares;
+-- past the largest zoom it centres on the middle of the level and you drag for the rest.
+function HL.fit()
+  local L = current_layout()
+  local me = L and L.at[here]
+  if not me then note("we are not anywhere yet - walk one room first") ; return end
+  local x0, x1, y0, y1 = HL.level_bounds(L)
+  if not x0 then note("nothing drawn to fit - 'mapg draw on' first") ; return end
+  local w, h = x1 - x0 + 3, y1 - y0 + 3
+  local maxc = HL.ZOOMS[#HL.ZOOMS][1]
+  local cols = math.max(w, HL.ZOOMS[1][1])
+  local rows = math.max(h, HL.ZOOMS[1][2])
+  if rows > cols * 1.4 then cols = math.ceil(rows / 1.4) end
+  cols = math.min(cols, maxc)
+  rows = math.min(rows, math.ceil(cols * 1.4))
+  HL.zoom = nil
+  HL.view_size(cols, rows)
+  local left = cols >= w and (x0 - 1 - (cols - w) // 2) or ((x0 + x1) // 2 - HALF_C)
+  local top  = rows >= h and (y1 + 1 + (rows - h) // 2) or ((y0 + y1) // 2 + HALF_R)
+  local pn = HL.pan
+  pn.dx, pn.dy = left + HALF_C - me.x, top - HALF_R - me.y
+  pn.seed, pn.mx, pn.my = L.seed, me.x, me.y
+  draw()
+end
+
+-- Center: back to you, and out of a Fit to the zoom level you keep.
+function HL.recentre()
+  HL.pan.dx, HL.pan.dy = 0, 0
+  if not HL.zoom then
+    local idx = math.floor(tonumber(scrye.store.get("zoom")) or HL.ZOOM_DEFAULT)
+    if not HL.ZOOMS[idx] then idx = HL.ZOOM_DEFAULT end
+    HL.zoom = idx
+    HL.view_size(HL.ZOOMS[idx][1], HL.ZOOMS[idx][2])
+  end
+end
+
+-- 'mapg zoom [in|out|fit|reset|<1-6>]'
+function HL.zoom_cmd(rest)
+  rest = tostring(rest or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+  local n = tonumber(rest)
+  if rest == "" then
+    note(string.format("zoom %s - %d by %d rooms%s. 'mapg zoom in|out|fit|reset|1-%d'",
+         HL.zoom and (HL.zoom .. "/" .. #HL.ZOOMS) or "fit", COLS, ROWS,
+         (HL.pan.dx ~= 0 or HL.pan.dy ~= 0) and ", moved off you" or "", #HL.ZOOMS))
+  elseif rest == "in" or rest == "out" then
+    local idx = HL.zoom or HL.zoom_nearest()
+    local new = idx + (rest == "in" and -1 or 1)
+    if new < 1 or new > #HL.ZOOMS then note("already zoomed all the way " .. rest) ; return end
+    HL.zoom_set(new)
+  elseif n and HL.ZOOMS[n] and n == math.floor(n) then
+    HL.zoom_set(n)
+  elseif rest == "fit" then
+    HL.fit()
+  elseif rest == "reset" then
+    HL.pan.dx, HL.pan.dy = 0, 0
+    HL.zoom_set(HL.ZOOM_DEFAULT)
+  else
+    note("mapg zoom in|out|fit|reset|1-" .. #HL.ZOOMS)
+  end
+end
+
 function HL.map_widget()
   local grid = { type = "colorgrid", bind = P .. "grid", palette = PALETTE, labels = TILE_MARKS,
     icons = TILE_ICONS, weave = true,
     onHover = function(col, row) peek(col, row) end,
     onClick = function(col, row) HL.click_room(peek(col, row)) end,
-    onRightClick = function(col, row) return HL.menu_for(peek(col, row)) end }
+    onRightClick = function(col, row) return HL.menu_for(peek(col, row)) end,
+    -- Scrye 1.25: drag the map to look around, the wheel zooms (an older Scrye ignores both,
+    -- and 'mapg zoom' / the Fit button still work there)
+    onDrag = function(dcol, drow) HL.drag(dcol, drow) end,
+    onWheel = function(col, row, way) HL.wheel(col, row, way) end }
   if not HL.has3d then return grid end
   -- the 3D view (host API 1.24) with the grid as its 2D stand-in: the host draws the grid
   -- while the scene is empty (the 2D setting), and the phone always draws the grid
@@ -3771,7 +3965,8 @@ scrye.addPanel{
             view_z = (view_z or L.at[here].z) - 1 ; draw() end },
         -- Center: back to your own level - and in 3D, the camera back to its starting angle
         { text = "Center", action = function()
-            view_z = nil ; HL.view_token = HL.view_token + 1 ; draw() end },
+            view_z = nil ; HL.recentre() ; HL.view_token = HL.view_token + 1 ; draw() end },
+        { text = "Fit",    action = function() HL.fit() end },
         { text = "Explore", action = function() explore_start(true) end },
         { text = "Stop",   action = function()
             -- a sweep is always mid-walk (probe or route), so walk_stop is the whole
@@ -4356,6 +4551,10 @@ drawing = scrye.store.get("drawing") ~= "0"
 all_sections = scrye.store.get("sections") == "all"
 HL.fast = scrye.store.get("fast") ~= "0"
 HL.view3d = HL.has3d and scrye.store.get("view3d") == "1"
+do
+  local zi = math.floor(tonumber(scrye.store.get("zoom")) or HL.ZOOM_DEFAULT)
+  if HL.ZOOMS[zi] then HL.zoom = zi ; HL.view_size(HL.ZOOMS[zi][1], HL.ZOOMS[zi][2]) end
+end
 HL.fast_n = math.max(1, math.min(HL.FAST_MAX, math.floor(tonumber(scrye.store.get("fast_n")) or HL.fast_n)))
 HL.tools_label()
 load()

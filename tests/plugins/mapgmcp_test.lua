@@ -4302,5 +4302,133 @@ do
 end
 fresh_client() ; load_plugin()
 
+-- ============================================================
+-- ZOOM AND DRAG (1.22.0, Scrye plugin API 1.25): the flat map's window can be dragged off
+-- you to look around, zoomed with the wheel, fitted to the whole level, and Center brings
+-- it back.
+do
+  -- rooms 101..130 in a row west to east; exits name room numbers, so shift them too
+  local function R(n)
+    local ex = {}
+    if n > 1 then ex[#ex + 1] = '"w": ' .. (100 + n - 1) end
+    if n < 30 then ex[#ex + 1] = '"e": ' .. (100 + n + 1) end
+    return string.format('{ "num": %d, "name": "Line %d", "area": "Line", "exits": { %s } }',
+                         100 + n, n, table.concat(ex, ", "))
+  end
+  local function width() return #(grid_rows()[1] or "") end
+  local function peek_at(col, row) return state["plugin.3s-map-gmcp.peek"] end
+
+  fresh_client() ; load_plugin()
+  for n = 1, 30 do room(R(n)) end
+  cmd("w") ; room(R(29))
+  for n = 28, 1, -1 do cmd("w") ; room(R(n)) end          -- standing in Line 1, the west end
+  local mapw = panel.tabs[1].widgets[2]
+  check(type(mapw.onDrag) == "function" and type(mapw.onWheel) == "function",
+        "zoom: the map widget asks for drag and wheel callbacks")
+  check(width() == 41, "zoom: the default window is 21 rooms wide (41 woven cells)")
+  local r0, c0 = find_char("@")
+  check(c0 == 21, "zoom: ...with you in the middle")
+
+  -- drag: the map follows the pointer (two indices to a room); the window moves the other way
+  mapw.onDrag(-4, 0)                       -- pointer two rooms to the left
+  local r1, c1 = find_char("@")
+  check(r1 == r0 and c1 == c0 - 4, "zoom: dragging left moves the map, and you on it, two rooms left")
+  check(status_line():find("moved off you", 1, true), "zoom: ...and the status line says the window is off you")
+  -- a click lands on the room drawn there, not on the room that was there before the drag
+  clear()
+  mapw.onClick(c1 - 1 + 8, r1 - 1)          -- four rooms east of you, as drawn now
+  check(said("Line 5"), "zoom: a click after a drag finds the room drawn under it")
+  -- drag far past the east end: the window stops over the map's last room
+  mapw.onDrag(-400, 0)
+  check(find_char("@") == nil, "zoom: dragged far enough, you are off the window")
+  mapw.onHover(20, r1 - 1)                  -- the middle of the window
+  check((peek_at() or ""):find("130", 1, true), "zoom: ...which stops with the map's end in its middle, never off into nothing")
+  mapw.onDrag(0, 4)                         -- down, on a one-row map: nowhere to go
+  mapw.onHover(20, r1 - 1)
+  check((peek_at() or ""):find("130", 1, true), "zoom: ...and cannot be dragged off the map up or down either")
+
+  -- you walk out of a moved window: it comes back to you
+  cmd("e") ; room(R(2))
+  local r2, c2 = find_char("@")
+  check(c2 == 21 and not status_line():find("moved off you", 1, true),
+        "zoom: walking while out of the window brings it back to you")
+  -- you walk inside a moved window: it stays where it was
+  mapw.onDrag(-4, 0)
+  local _, ca = find_char("@")
+  cmd("e") ; room(R(3))
+  local _, cb = find_char("@")
+  check(cb == ca + 2 and status_line():find("moved off you", 1, true),
+        "zoom: walking inside a moved window leaves it where it was - you move on it")
+
+  -- Center: back to you
+  clear() ; panel.tabs[1].widgets[3].buttons[3].action()
+  check(select(2, find_char("@")) == 21 and not status_line():find("moved off you", 1, true),
+        "zoom: Center puts the window back on you")
+
+  -- the wheel: '-' out, '+' in, kept per character, stops at the ends
+  mapw.onWheel(-1, -1, "-")
+  check(width() == 53 and store["zoom"] == "4", "zoom: the wheel towards you zooms out a level (27 rooms), and it is kept")
+  check(status_line():find("zoom 4/6", 1, true), "zoom: ...and the status line says so")
+  mapw.onWheel(-1, -1, "+") ; mapw.onWheel(-1, -1, "+")
+  check(width() == 33 and store["zoom"] == "2", "zoom: away from you zooms in (17 rooms)")
+  mapw.onWheel(-1, -1, "+") ; mapw.onWheel(-1, -1, "+")
+  check(width() == 25, "zoom: in stops at the closest level (13 rooms)")
+  for _ = 1, 9 do mapw.onWheel(-1, -1, "-") end
+  check(width() == 81, "zoom: out stops at the widest (41 rooms)")
+  mapg("zoom reset")
+  check(width() == 41 and store["zoom"] == "3", "zoom: 'mapg zoom reset' is the default again")
+
+  -- zooming in over your own square keeps you in the middle; over a room further east the
+  -- window follows the pointer there
+  local rr, cc = find_char("@")
+  mapw.onWheel(cc - 1, rr - 1, "+")
+  check(select(2, find_char("@")) == 17 and not status_line():find("moved off you", 1, true),
+        "zoom: zooming in over yourself keeps you in the middle")
+  mapg("zoom reset")
+  rr, cc = find_char("@")
+  mapw.onHover(cc - 1 + 16, rr - 1)
+  local under = peek_at()
+  mapw.onWheel(cc - 1 + 16, rr - 1, "+")    -- eight rooms east of you
+  check(status_line():find("moved off you", 1, true), "zoom: zooming in over a room east of you moves the window that way")
+  local rn, cn = find_char("@")             -- fewer rows now: your row moved up too
+  mapw.onHover(cn - 1 + 16, rn - 1)
+  check(peek_at() == under, "zoom: ...and that room stays under the pointer")
+
+  -- Fit: the whole level in one window
+  local kept = store["zoom"]
+  mapg("zoom fit")
+  check(width() == 2 * 32 - 1, "zoom: fit sizes the window to the level - 30 rooms and one square each side")
+  check(status_line():find("zoomed to fit", 1, true), "zoom: ...and says it is fitted")
+  rr = find_char("@")
+  mapw.onHover(2, rr - 1)                   -- the first room square of the row
+  check((peek_at() or ""):find("101", 1, true), "zoom: ...with the west end at the left")
+  mapw.onHover(2 * 30, rr - 1)
+  check((peek_at() or ""):find("130", 1, true), "zoom: ...and the east end at the right")
+  check(store["zoom"] == kept, "zoom: a fit is not kept as the zoom level")
+  panel.tabs[1].widgets[3].buttons[3].action()      -- Center
+  check(width() == 2 * 17 - 1 and not status_line():find("fit", 1, true), "zoom: Center comes out of a fit to the kept level")
+  panel.tabs[1].widgets[3].buttons[4].action()      -- the Fit button
+  check(width() == 63, "zoom: the Map tab's Fit button fits too")
+
+  -- the command
+  clear() ; mapg("zoom")
+  check(said("zoom fit - 32 by 9 rooms"), "zoom: 'mapg zoom' says how it is")
+  mapg("zoom 5")
+  check(width() == 65 and store["zoom"] == "5", "zoom: 'mapg zoom 5' picks a level")
+  clear() ; mapg("zoom 9")
+  check(said("mapg zoom in|out|fit|reset|1-6"), "zoom: a level that is not one gets the usage")
+  clear() ; mapg("help")
+  check(said("mapg zoom"), "zoom: help lists 'mapg zoom'")
+
+  -- kept per character, across a reload
+  fresh_client(true) ; load_plugin()
+  room(R(3))
+  check(width() == 65, "zoom: the zoom level survives a reload")
+  store["zoom"] = "77"
+  fresh_client(true) ; load_plugin() ; room(R(3))
+  check(width() == 41, "zoom: a stored level that is not one is ignored")
+end
+fresh_client() ; load_plugin()
+
 print(string.format("%d passed, %d failed", pass, fail))
 os.exit(fail == 0 and 0 or 1)
