@@ -972,6 +972,7 @@ doesn't exist on 3K, so nothing was left for them to read.)
 | `jug` | 3S Juggernaut |
 | `gt` · `gtsys` | 3S Gentech |
 | `elhud` | 3S Elemental |
+| `bshud` | 3S Bladesinger |
 | `mhud` | 3S Mercenary |
 | `mage` | 3S Mage |
 | `vfx` | Viking Effects |
@@ -1415,7 +1416,7 @@ A Viking gets HP / Seid / Vig / Rad by their own named keys. A **Cyborg** gets H
 power is the resource and heat is what stops you spending it. A **Gentech** gets HP / PU / CPC, its
 two guild pools. A **Mage** gets HP / SP / Umbra / Conc — SP is real for a mage, spells cost it, so it
 keeps its bar and the two guild pools follow. A **Juggernaut** gets HP / SP / Heat / Stim, heat and stims
-as the percents the guild feed sends. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
+as the percents the guild feed sends. An **Elemental** gets HP / SP / Energy, the guild pool. A **Bladesinger** gets HP / SP / Nekra / Sokra, its two guild pools. None of these have anything in common with each other beyond the package name. **Every other guild** gets HP / SP plus its two guild
 pools, labelled with the server's own names for them — so any guild's bars come out right without
 the plugin having to know that guild exists. On GMCP the Viking and generic sets carry a fifth
 gauge, **Coffin**; the Cyborg set carries it as its fourth.
@@ -1428,6 +1429,8 @@ gauge, **Coffin**; the Cyborg set carries it as its fourth.
 | `vitals guild gentech` | Pin the Gentech set regardless. |
 | `vitals guild mage` | Pin the Mage set regardless. |
 | `vitals guild juggernaut` | Pin the Juggernaut set regardless. |
+| `vitals guild elemental` | Pin the Elemental set regardless. |
+| `vitals guild bladesinger` | Pin the Bladesinger set regardless. |
 | `vitals guild generic` | Pin the generic set regardless. |
 
 The **Settings** tab has the same choices as buttons, and says which set is active, which feed it's
@@ -1873,6 +1876,31 @@ A character that `gswap`s keeps its last elemental figures on the panel, with a 
 which guild it is in now; another guild's packages are never read as an elemental's. The energy
 maximum follows your wisdom and is only sent at login, so after a wisdom change the pool can
 read above its maximum until you next log in.
+
+---
+
+### 3S Bladesinger — `bshud`
+
+The Bladesinger guild HUD, from the guild's GMCP feed. Four tabs:
+
+- **Status** — your guild level; the **Nekra** and **Sokra** pools as bars; the **Blur reset**
+  and **Portal reset** clocks, each with the time until it turns — the first gives your Blur
+  charges back, the second the Portal power's uses; **Regeneration**, a row each for hp, sp,
+  nekra and sokra: what the runes on your gear give, the most of it you can use, and what is
+  therefore in use — a row whose runes give more than the max says by how much, in amber, since
+  that much is wasted; and the evade setting, when one is set.
+- **Guild** — how far into the guild level you are, the gxp earned and still owed, how long the
+  rest takes at the pace of the last ten minutes, and what this session has gained.
+- **Runes** — runes prepared and inscribed, then every rune by name with how many you hold. A
+  count that has moved since the plugin loaded says by how much: green up, amber down.
+- **Setup** — the evade and evade 2 settings, and any field the guild sends that the plugin has
+  no row for yet, under the server's own name.
+
+`bshud` prints the Status page into the output window.
+
+The two clocks are timed from what the server sends, so the time left appears after about
+twenty seconds of watching. A character that `gswap`s keeps its last bladesinger figures on the
+panel, with a line saying which guild it is in now.
 
 ---
 
