@@ -1,8 +1,8 @@
 {
   "format": 1,
-  "ref": "v1.11.0",
-  "base": "https://raw.githubusercontent.com/Eldran/Scrye/v1.11.0/src/Scrye.App/plugins/",
-  "generated": "2026-11-25T16:49:56Z",
+  "ref": "ca77c462c34399bf2be4ee63a83cc1af282231ed",
+  "base": "https://raw.githubusercontent.com/Eldran/Scrye/ca77c462c34399bf2be4ee63a83cc1af282231ed/src/Scrye.App/plugins/",
+  "generated": "2026-11-26T16:26:02Z",
   "plugins": [
     {
       "id": "3k-chaossea",
@@ -42,6 +42,39 @@
         }
       ],
       "totalSize": 59924
+    },
+    {
+      "id": "3s-bladesinger",
+      "name": "3S Bladesinger",
+      "version": "0.1.0",
+      "author": "Joakim",
+      "description": "The Bladesinger guild HUD, fed by the Guild.State, Guild.Info and Guild.Extra GMCP packages (3Scapes only). Tabs: Status (guild level, the Nekra and Sokra pools as bars, the Blur reset and Portal reset clocks with the time until each turns - the first gives the Blur charges back, the second the Portal power's uses - the regeneration your runes give for hp / sp / nekra / sokra against the most you can use, with anything over the max called out, and the evade setting when one is set), Guild (how far into the guild level you are, the gxp earned and still owed, how long the rest takes at the pace of the last ten minutes, and what this session has gained), Runes (runes prepared and inscribed, and every rune with how many you hold and how that has changed since the plugin loaded) and Setup (the evade and evade 2 settings, and any field the plugin has no row for). 'bshud' prints the Status page into the output window. Another guild's same-named packages are ignored, and after a gswap the panel says which guild the character is in now. 0.1.0 (26 Nov 2026): built from one capture of a level 50 bladesinger.",
+      "mudIds": [
+        "*"
+      ],
+      "lang": "lua",
+      "requires": ">=1.3 <2.0",
+      "permissions": [
+        "state.read",
+        "state.write",
+        "timers.manage",
+        "aliases.manage",
+        "ui.panels"
+      ],
+      "folder": "3s-bladesinger",
+      "files": [
+        {
+          "path": "main.lua",
+          "sha256": "65596587ec2bf7d053f616e26fe9440497f9fa2649d89663cedf9b97a4d80234",
+          "size": 22781
+        },
+        {
+          "path": "plugin.json",
+          "sha256": "429ed278463c11c68cee8fa2ec1666d1db2299dd62d9a421a62b6d28f881b298",
+          "size": 1492
+        }
+      ],
+      "totalSize": 24273
     },
     {
       "id": "3s-changeling",
@@ -756,9 +789,9 @@
     {
       "id": "3s-vitals",
       "name": "3S Vitals",
-      "version": "2.2.0",
+      "version": "2.4.0",
       "author": "Joakim",
-      "description": "Compact vitals HUD: stat gauges plus the current enemy and its health, now with a Settings tab. Works on both feeds: GMCP (3Scapes - Char.Vitals + Guild.State, enemy from Char.Combat, plus a Coffin gauge) and MIP (3K, or 3S with MIP on - the classic character./vik./enemy. paths). A Viking gets HP / Seid / Vig / Rad by their drift-proof named keys; every other guild gets HP / SP plus its two guild pools labelled with the server's own names for them (guild.info gp1_name/gp2_name), so any guild's bars come out right without the plugin knowing the guild. A Cyborg gets HP / Power / Heat, a Gentech HP / PU / CPC, a Mage HP / SP / Umbra / Conc (2.1.0), and a Juggernaut HP / SP / Heat / Stim (2.2.0). Settings pins Auto / Viking / Cyborg / Gentech / Mage / Juggernaut / Generic ('vitals guild ...' works too).",
+      "description": "Compact vitals HUD: stat gauges plus the current enemy and its health, now with a Settings tab. Works on both feeds: GMCP (3Scapes - Char.Vitals + Guild.State, enemy from Char.Combat, plus a Coffin gauge) and MIP (3K, or 3S with MIP on - the classic character./vik./enemy. paths). A Viking gets HP / Seid / Vig / Rad by their drift-proof named keys; every other guild gets HP / SP plus its two guild pools labelled with the server's own names for them (guild.info gp1_name/gp2_name), so any guild's bars come out right without the plugin knowing the guild. A Cyborg gets HP / Power / Heat, a Gentech HP / PU / CPC, a Mage HP / SP / Umbra / Conc (2.1.0), a Juggernaut HP / SP / Heat / Stim (2.2.0), an Elemental HP / SP / Energy (2.3.0), and a Bladesinger HP / SP / Nekra / Sokra (2.4.0). Settings pins Auto / Viking / Cyborg / Gentech / Mage / Juggernaut / Elemental / Bladesinger / Generic ('vitals guild ...' works too).",
       "mudIds": [
         "*"
       ],
@@ -775,16 +808,16 @@
       "files": [
         {
           "path": "main.lua",
-          "sha256": "e87fb66e928cfc8af57f8eccfd9aa82ebc3365cc826fab1d3a720198adfeee42",
-          "size": 14238
+          "sha256": "5fcbe330705d1638bf12fd57617b0c10e4700878af41be401f57b39645032424",
+          "size": 16850
         },
         {
           "path": "plugin.json",
-          "sha256": "ceb92bd0414d2ca26803b99af96c496226430405a4dee9ffbc142faf4005c7ac",
-          "size": 1180
+          "sha256": "3c3ac6c2ae5f3576aa59d67def1d8c1d394ec8bf7525419f2f570bd9a5fcfc1c",
+          "size": 1292
         }
       ],
-      "totalSize": 15418
+      "totalSize": 18142
     }
   ]
 }
