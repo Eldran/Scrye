@@ -1,7 +1,7 @@
 -- Harness for 3s-vitals 2.0. State values mirror the 27-28 Aug captures (a viking
 -- under GMCP: char.vitals hp 6323/6333, guild.state.points vitka 5852/7152; the
 -- Char.Combat enemy "a growing misfigured cur" at 85%); the non-viking guild is
--- SYNTHETIC (an elemental with server-named Mana/Focus pools) - no capture from
+-- SYNTHETIC (a made-up "bard" with server-named Mana/Focus pools) - no capture from
 -- another guild exists yet, which is exactly why the generic set takes its labels
 -- from guild.info rather than a table in the plugin.
 --
@@ -117,7 +117,7 @@ check(panel_builds == builds, "no rebuild while nothing changed")
 -- GMCP, another guild (SYNTHETIC): the server names the pools itself
 fresh_client(); dofile(PLUGIN)
 state["char.vitals.hp"] = "1200"
-state["guild.state.guild"] = "elemental"
+state["guild.state.guild"] = "bard"
 state["guild.info.gp1_name"] = "Mana"
 state["guild.info.gp2_name"] = "Focus"
 prompt()
@@ -169,7 +169,7 @@ do
   local labels = {}
   for _, b in ipairs(btns or {}) do labels[#labels + 1] = b.text end
   local joined = table.concat(labels, ",")
-  check(joined == "Auto,Viking,Cyborg,Gentech,Mage,Juggernaut,Generic",
+  check(joined == "Auto,Viking,Cyborg,Gentech,Mage,Juggernaut,Elemental,Bladesinger,Generic",
     "settings: a button per guild set, Auto first (got " .. joined .. ")")
 end
 btns[2].action()   -- "Viking"
@@ -297,6 +297,105 @@ do
   check(mode():find("Juggernaut", 1, true) ~= nil, "juggernaut: the Settings line names the set")
   set_alias("juggernaut")
   check(mode():find("pinned", 1, true) ~= nil, "juggernaut: 'vitals guild juggernaut' pins it")
+end
+
+-- =====================================================================
+-- Elemental (Keyser's captures, 25 Nov 2026): energy is on Guild.Info
+do
+  fresh_client(); dofile(PLUGIN)
+  state["char.vitals.hp"] = 3193
+  state["char.vitals.maxhp"] = 3534
+  state["char.vitals.sp"] = 759
+  state["char.vitals.maxsp"] = 759
+  state["guild.state.guild"] = "elemental"
+  state["guild.info.energy"] = 1524
+  state["guild.info.max_energy"] = 1576
+  prompt()
+  check(gauge("Energy") ~= nil and gauge("Energy").value == "guild.info.energy" and gauge("Energy").max == "guild.info.max_energy",
+    "elemental: energy is bound to guild.info, with its own max")
+  check(gauge("SP") ~= nil and gauge("HP") ~= nil and gauge("Coffin") ~= nil, "elemental: HP, SP and Coffin")
+  check(gauge("GP1") == nil and gauge("Mana") == nil and gauge("PU") == nil and gauge("Heat") == nil, "elemental: not the generic set, nor another guild's")
+  check(mode():find("Elemental", 1, true) ~= nil and mode():find("auto", 1, true) ~= nil, "elemental: the Settings line names the set (" .. mode() .. ")")
+  -- the gswap: the same character as a gentech gets the gentech bars, and back again
+  state["guild.state.guild"] = "gentech"
+  prompt()
+  check(gauge("PU") ~= nil and gauge("Energy") == nil, "elemental: after a gswap to gentech the bars follow")
+  state["guild.state.guild"] = "elemental"
+  prompt()
+  check(gauge("Energy") ~= nil and gauge("PU") == nil, "elemental: and back")
+  set_alias("generic")
+  check(gauge("Energy") == nil, "elemental: 'vitals guild generic' still overrides")
+  set_alias("elemental")
+  check(gauge("Energy") ~= nil and mode():find("pinned", 1, true) ~= nil, "elemental: 'vitals guild elemental' pins it")
+  do
+    local pat = ""
+    for _, a in ipairs(aliases) do if tostring(a.pattern):find("^%^vitals guild ") then pat = a.pattern end end
+    check(pat:find("|elemental|", 1, true) ~= nil, "elemental: the alias takes 'vitals guild elemental' (" .. pat .. ")")
+  end
+  -- on MIP there is no known shape: the pin falls back to generic, not to nothing
+  fresh_client(); dofile(PLUGIN)
+  set_alias("elemental")
+  check(gauge("HP") ~= nil and gauge("Energy") == nil and mode():find("Generic", 1, true) ~= nil, "elemental: pinned on MIP falls back to the generic set")
+end
+
+-- =====================================================================
+-- Bladesinger (Erebseth's capture, 26 Nov 2026): nekra and sokra are on Guild.State
+do
+  fresh_client(); dofile(PLUGIN)
+  state["char.vitals.hp"] = 1634
+  state["char.vitals.maxhp"] = 1634
+  state["char.vitals.sp"] = 1091
+  state["char.vitals.maxsp"] = 1106
+  state["guild.state.guild"] = "bladesinger"
+  state["guild.state.nekra"] = 4444
+  state["guild.state.nekra_max"] = 5100
+  state["guild.state.sokra"] = 3700
+  state["guild.state.sokra_max"] = 3700
+  prompt()
+  check(gauge("Nekra") ~= nil and gauge("Nekra").value == "guild.state.nekra" and gauge("Nekra").max == "guild.state.nekra_max",
+    "bladesinger: nekra is bound to guild.state, with its own max")
+  check(gauge("Sokra") ~= nil and gauge("Sokra").value == "guild.state.sokra" and gauge("Sokra").max == "guild.state.sokra_max",
+    "bladesinger: sokra likewise")
+  do
+    local order = {}
+    for _, g in ipairs(gauges()) do order[#order + 1] = g.text end
+    check(table.concat(order, ",") == "HP,SP,Nekra,Sokra,Coffin,Enemy", "bladesinger: HP, SP, the two pools, Coffin, then the enemy (" .. table.concat(order, ",") .. ")")
+  end
+  check(gauge("GP1") == nil and gauge("Energy") == nil and gauge("Seid") == nil and gauge("Heat") == nil, "bladesinger: not the generic set, nor another guild's")
+  check(mode():find("Bladesinger", 1, true) ~= nil and mode():find("auto", 1, true) ~= nil, "bladesinger: the Settings line names the set (" .. mode() .. ")")
+  -- another guild on the same host is unaffected, and a swap is followed
+  state["guild.state.guild"] = "elemental"
+  prompt()
+  check(gauge("Energy") ~= nil and gauge("Nekra") == nil, "bladesinger: an elemental still gets the elemental set")
+  state["guild.state.guild"] = "bladesinger"
+  prompt()
+  check(gauge("Nekra") ~= nil and gauge("Energy") == nil, "bladesinger: and back")
+  set_alias("generic")
+  check(gauge("Nekra") == nil, "bladesinger: 'vitals guild generic' still overrides")
+  set_alias("bladesinger")
+  check(gauge("Nekra") ~= nil and store["guild"] == "bladesinger" and mode():find("pinned", 1, true) ~= nil, "bladesinger: 'vitals guild bladesinger' pins it")
+  do
+    local pat = ""
+    for _, a in ipairs(aliases) do if tostring(a.pattern):find("^%^vitals guild ") then pat = a.pattern end end
+    check(pat:find("|bladesinger|", 1, true) ~= nil, "bladesinger: the alias takes 'vitals guild bladesinger' (" .. pat .. ")")
+  end
+  -- the Settings button drives the same path
+  fresh_client(); dofile(PLUGIN)
+  state["char.vitals.hp"] = 1634
+  for _, tab in ipairs(panel.tabs) do
+    if tab.title == "Settings" then
+      for _, w in ipairs(tab.widgets) do
+        if w.type == "buttonrow" then
+          for _, b in ipairs(w.buttons) do if b.text == "Bladesinger" then b.action() end end
+        end
+      end
+    end
+  end
+  check(gauge("Nekra") ~= nil and store["guild"] == "bladesinger", "bladesinger: the button pins the set")
+  -- on MIP there is no known shape: the pin falls back to generic, not to nothing
+  fresh_client(); dofile(PLUGIN)
+  set_alias("bladesinger")
+  check(gauge("HP") ~= nil and gauge("Nekra") == nil and mode():find("Generic", 1, true) ~= nil, "bladesinger: pinned on MIP falls back to the generic set")
 end
 
 print(string.format("vitals_test: %d passed, %d failed", pass, fail))

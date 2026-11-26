@@ -135,6 +135,42 @@ local function juggernaut_set(gmcp)
   return nil   -- no MIP shape seen for this guild
 end
 
+-- Elemental (captures: Keyser, Joakim's own, 25 Nov 2026). Energy is the guild pool, and
+-- it lives on Guild.INFO, not Guild.State: energy on every tick, max_energy only in the
+-- whole message at login - which the state store keeps, because Guild.Info speaks in
+-- snapshots and deltas. The maximum follows wisdom, so after a wisdom change the pool can
+-- read over it until the next login; the gauge draws what it is told. SP is real and moves
+-- in a fight, so it keeps its bar.
+local function elemental_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",     "char.vitals.maxhp"      },
+      { "SP",     "char.vitals.sp",     "char.vitals.maxsp"      },
+      { "Energy", "guild.info.energy",  "guild.info.max_energy"  },
+      { "Coffin", "char.vitals.coffin", "char.vitals.coffin_max" },
+    }
+  end
+  return nil   -- no MIP shape seen for this guild
+end
+
+-- Bladesinger (capture: Erebseth, Joakim's own, 26 Nov 2026). Nekra and sokra are the guild
+-- pools, both on Guild.State with their own max - the max only in the whole message at
+-- login, which the state store keeps, because Guild.State speaks in snapshots and deltas
+-- for this guild. Nekra is the one that drains in a fight (26 a tick in the capture). SP is
+-- real and moves, so it keeps its bar; it can sit above its max (1,314 of 882 at login).
+local function bladesinger_set(gmcp)
+  if gmcp then
+    return {
+      { "HP",     "char.vitals.hp",     "char.vitals.maxhp"      },
+      { "SP",     "char.vitals.sp",     "char.vitals.maxsp"      },
+      { "Nekra",  "guild.state.nekra",  "guild.state.nekra_max"  },
+      { "Sokra",  "guild.state.sokra",  "guild.state.sokra_max"  },
+      { "Coffin", "char.vitals.coffin", "char.vitals.coffin_max" },
+    }
+  end
+  return nil   -- no MIP shape seen for this guild
+end
+
 local function generic_set(gmcp, gp1, gp2)
   if gmcp then
     return {
@@ -196,10 +232,12 @@ local function build(set, gmcp, why)
               { text = "Gentech", action = function() set_pref("gentech") end },
               { text = "Mage",    action = function() set_pref("mage") end },
               { text = "Juggernaut", action = function() set_pref("juggernaut") end },
+              { text = "Elemental", action = function() set_pref("elemental") end },
+              { text = "Bladesinger", action = function() set_pref("bladesinger") end },
               { text = "Generic", action = function() set_pref("generic") end },
           } },
           { type = "label", color = "dim",
-            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, Mage gets HP/SP/Umbra/Conc, Juggernaut gets HP/SP/Heat/Stim, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|mage|juggernaut|generic' works too.)" },
+            text = "Auto reads the feed (guild.state.guild / the vik.* keys). Viking gets HP/Seid/Vig/Rad, Cyborg gets HP/Power/Heat, Gentech gets HP/PU/CPC, Mage gets HP/SP/Umbra/Conc, Juggernaut gets HP/SP/Heat/Stim, Elemental gets HP/SP/Energy, Bladesinger gets HP/SP/Nekra/Sokra, and Generic labels the GP bars with the server's own names for your guild. ('vitals guild auto|viking|cyborg|gentech|mage|juggernaut|elemental|bladesinger|generic' works too.)" },
       } },
     },
   }
@@ -216,20 +254,23 @@ local function apply()
   -- also carries `guild` for a cyborg but NOT for a viking, so it is not a
   -- dependable source - noted rather than used.)
   local gname = gmcp and (scrye.getState("guild.state.guild") or ""):lower() or ""
-  local is_viking, is_cyborg, is_gentech, is_mage, is_jugg
+  local is_viking, is_cyborg, is_gentech, is_mage, is_jugg, is_elem, is_blade
   if gmcp then
     is_viking = gname == "viking"
     is_cyborg = gname == "cyborg"
     is_gentech = gname == "gentech"
     is_mage = gname == "mage"
     is_jugg = gname == "juggernaut"
+    is_elem = gname == "elemental"
+    is_blade = gname == "bladesinger"
   else
     is_viking = (scrye.getState("vik.mseid") or "") ~= ""
   end
   local choice = pref
   if choice == "auto" then
     choice = (is_viking and "viking") or (is_cyborg and "cyborg")
-          or (is_gentech and "gentech") or (is_mage and "mage") or (is_jugg and "juggernaut") or "generic"
+          or (is_gentech and "gentech") or (is_mage and "mage") or (is_jugg and "juggernaut")
+          or (is_elem and "elemental") or (is_blade and "bladesinger") or "generic"
   end
 
   -- A guild with no GMCP has no known shape, so it falls through to generic
@@ -239,9 +280,17 @@ local function apply()
   if choice == "gentech" and not gentech_set(gmcp) then choice = "generic" end
   if choice == "mage"    and not mage_set(gmcp)    then choice = "generic" end
   if choice == "juggernaut" and not juggernaut_set(gmcp) then choice = "generic" end
+  if choice == "elemental" and not elemental_set(gmcp) then choice = "generic" end
+  if choice == "bladesinger" and not bladesinger_set(gmcp) then choice = "generic" end
 
   local set, why
-  if choice == "juggernaut" then
+  if choice == "bladesinger" then
+    set = bladesinger_set(gmcp)
+    why = "Bladesinger"
+  elseif choice == "elemental" then
+    set = elemental_set(gmcp)
+    why = "Elemental"
+  elseif choice == "juggernaut" then
     set = juggernaut_set(gmcp)
     why = "Juggernaut"
   elseif choice == "mage" then
@@ -286,7 +335,7 @@ set_pref = function(v)
 end
 
 scrye.addAlias{
-  pattern = "^vitals guild (auto|viking|cyborg|gentech|mage|juggernaut|generic)$", regex = true,
+  pattern = "^vitals guild (auto|viking|cyborg|gentech|mage|juggernaut|elemental|bladesinger|generic)$", regex = true,
   run = function(v) set_pref(v) end,
 }
 
